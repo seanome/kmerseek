@@ -6,7 +6,7 @@ from click.testing import CliRunner
 from kmerseek.main import cli
 
 
-def test_hello_world(bcl2_first25):
+def test_index(bcl2_first25):
     runner = CliRunner()
     result = runner.invoke(cli, ["index", bcl2_first25])
     assert result.exit_code == 0
