@@ -8,7 +8,7 @@ import pandas as pd
 
 from .sig2kmer import get_kmers
 from .uniprot import get_domains
-from .sketch import sketch
+from .sketch import sketch, make_sketch_kws
 
 
 protein_moltypes = "protein", "dayhoff", "hp"
@@ -60,32 +60,49 @@ def stitch_together_species_hp_kmers(
     return pd.Series([start, end, to_print], index=["start", "end", "matches"])
 
 
+def search(query_sig, target_rocksdb, output, moltype, ksize, scaled):
+
+    sourmash_plugin_branchwater.do_multisearch(
+        query_sig,
+        target_rocksdb,
+        0,  # threshold=0 to show all matches, even with only 1 k-mer
+        ksize,
+        scaled,
+        moltype,
+        False,  # No Average nucleotide identity (ANI) calculation
+        True,  # Yes, calculate probability of overlap between target and query
+        False,  # Don't output ALL comparisons, only the onse with at least a match
+        output,
+    )
+
+
 @click.command()
+@click.argument("query_fasta")
+@click.argument("target_rocksdb")
+@click.argument("target_kmers")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--output", default="search.csv")
 def search(
     query_fasta,
-    target_sig,
+    target_rocksdb,
     target_kmers,
-    ksize=24,
     moltype="hp",
+    ksize=24,
     scaled=5,
-    search_output="search.csv",
+    output="search.csv",
 ):
-    sketch_kwargs = dict(ksize=ksize, moltype=moltype, scaled=scaled)
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
-    # Set defaults for search
-    search_params = (
-        dict(sketch_kwargs)
-        .update("threshold", 0)
-        .update("prob_significant_overlap", True)
-        .update("output_path", search_output)
-    )
-    # Can this be async?
     query_sig = sketch(query_fasta, **sketch_kwargs)
+
+    # Can this be async relative to the search? It can happen simultaneously
     query_kmers = get_kmers(query_sig, query_fasta, **sketch_kwargs)
 
-    sourmash_plugin_branchwater.do_multisearch(query_sig, target_sig, **search_params)
+    search(query_sig, target_rocksdb, output, **sketch_kwargs)
 
-    results = pd.read_csv(search_output)
+    results = pd.read_csv(output)
 
     results_with_kmers = results.join(query_kmers).join(target_kmers)
 

@@ -4,7 +4,7 @@ import pandas as pd
 
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
-from .sketch import sketch
+from .sketch import sketch, make_sketch_kws
 from .sig2kmer import get_kmers
 
 
@@ -47,7 +47,7 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
 def index(fasta, moltype="hp", ksize=24, scaled=5):
-    sketch_keywords = dict(moltype=moltype, ksize=ksize, scaled=scaled)
+    sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
     sig = sketch(fasta, **sketch_keywords)
 
     kmers = get_kmers(sig, fasta, **sketch_keywords)

@@ -3,6 +3,10 @@ import os
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
 
+def make_sketch_kws(moltype, ksize, scaled):
+    return dict(ksize=ksize, moltype=moltype, scaled=scaled)
+
+
 def _make_manysketch_csv(fasta):
     csv = f"{fasta}.manysketch.csv"
     basename = os.path.basename(fasta)
