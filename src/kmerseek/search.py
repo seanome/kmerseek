@@ -1,9 +1,5 @@
-import csv
-import os
-
 import click
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
-import sourmash
 import pandas as pd
 
 from .sig2kmer import get_kmers

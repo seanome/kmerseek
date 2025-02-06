@@ -5,15 +5,12 @@ k-mers and sequences that match a hashval in the signature file.
 
 Cribbed from https://github.com/dib-lab/sourmash/pull/724/
 """
-import sys
-import argparse
+
 import sourmash
 from sourmash.minhash import hash_murmur
 import screed
 import csv
-from sourmash.logging import notify, error
-from sourmash.cli.utils import add_construct_moltype_args, add_ksize_arg
-from sourmash.sourmash_args import calculate_moltype
+from sourmash.logging import notify
 
 NOTIFY_EVERY_BP = int(1e5)
 
