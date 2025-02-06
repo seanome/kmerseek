@@ -1,4 +1,3 @@
-
 # ! /usr/bin/env python3
 """
 Given a signature file and a collection of sequences, output all of the
@@ -17,7 +16,6 @@ from sourmash.cli.utils import add_construct_moltype_args, add_ksize_arg
 from sourmash.sourmash_args import calculate_moltype
 
 NOTIFY_EVERY_BP = int(1e5)
-
 
 
 def degenerate_protein_chatgpt(sequence, moltype):
@@ -165,6 +163,7 @@ def get_matching_hashes_in_file(
                 return m, n
     return m, n
 
+
 def _setup_kmer_writer(sig):
     output_kmers = f"{sig}.kmers.csv"
 
@@ -183,7 +182,7 @@ def _setup_kmer_writer(sig):
     return output_kmers, kmerout_fp, kmerout_w
 
 
-def get_kmers(sig, fasta, moltype, ksize, scale):
+def get_kmers(sig, fasta, moltype, ksize, scaled):
     # Scale is not used, but is accepted for ease of keyword argument sharing
 
     output_kmers, kmerout_fp, kmerout_w = _setup_kmer_writer(sig)

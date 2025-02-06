@@ -2,7 +2,7 @@ import csv
 import os
 
 import click
-import sourmash_plugin_branchwater
+from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 import sourmash
 import pandas as pd
 
@@ -12,6 +12,7 @@ from .sketch import sketch
 
 
 protein_moltypes = "protein", "dayhoff", "hp"
+
 
 def show_results(results_per_gene):
     for gene, match in results_per_gene:
@@ -31,7 +32,7 @@ def show_results(results_per_gene):
 
 
 def single_stitch_together_kmers(kmer_series):
-    stitched = ''
+    stitched = ""
     for i, kmer in enumerate(kmer_series):
         if i == 0:
             stitched = kmer
@@ -59,9 +60,8 @@ def stitch_together_species_hp_kmers(
     return pd.Series([start, end, to_print], index=["start", "end", "matches"])
 
 
-
 @click.command()
-def main(
+def search(
     query_fasta,
     target_sig,
     target_kmers,
