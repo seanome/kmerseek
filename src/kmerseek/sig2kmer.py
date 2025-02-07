@@ -161,9 +161,12 @@ def get_matching_hashes_in_file(
     return m, n
 
 
-def _setup_kmer_writer(sig):
-    output_kmers = f"{sig}.kmers.csv"
+def _make_kmer_filename(sig):
+    return f"{sig}.kmers.csv"
 
+
+def _setup_kmer_writer(sig):
+    output_kmers = _make_kmer_filename(sig)
     kmerout_fp = open(output_kmers, "wt")
     kmerout_w = csv.writer(kmerout_fp)
     kmerout_w.writerow(

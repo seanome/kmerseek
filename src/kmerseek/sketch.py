@@ -17,9 +17,14 @@ def _make_manysketch_csv(fasta):
     return csv
 
 
-def sketch(fasta, moltype, ksize, scaled):
-    param_string = f"{moltype},k={ksize},scaled={scaled}"
+def _make_sigfile(fasta, moltype, ksize, scaled):
     sigfile = f"{fasta}.{moltype}.k{ksize}.scaled{scaled}.sig.zip"
+    return sigfile
+
+
+def sketch(fasta, moltype, ksize, scaled):
+    param_string = f"{moltype},k={ksize},scaled={scaled},abund"
+    sigfile = _make_sigfile(fasta, moltype, ksize, scaled)
 
     csv = _make_manysketch_csv(fasta)
     sourmash_plugin_branchwater.do_manysketch(
