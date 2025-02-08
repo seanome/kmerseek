@@ -63,7 +63,7 @@ def stitch_together_species_hp_kmers(
 
 def do_manysearch(query, target, output, ksize, scaled, moltype):
     query_siglist = _make_siglist_file(query.sig)
-    target_siglist = _make_siglist_file(target.rocksdb)
+    target_siglist = _make_siglist_file(target.sig)
     sourmash_plugin_branchwater.do_manysearch(
         query_siglist,
         target_siglist,
@@ -77,11 +77,12 @@ def do_manysearch(query, target, output, ksize, scaled, moltype):
     )
 
 
-def do_multisearch(query_sig, target_rocksdb, output, moltype, ksize, scaled):
+def do_multisearch(query, target, output, moltype, ksize, scaled):
 
     sourmash_plugin_branchwater.do_multisearch(
-        query_sig,
-        target_rocksdb,
+        query.sig,
+        # TODO: Figure out why target.rocksdb isn't working
+        target.sig,
         0,  # threshold=0 to show all matches, even with only 1 k-mer
         ksize,
         scaled,
@@ -99,9 +100,9 @@ class KmerseekResults:
 
     def __init__(
         self,
-        output_csv,
-        query,
-        target,
+        output_csv: str,
+        query: KmerseekQuery,
+        target: KmerseekIndex,
     ):
         self.output_csv = output_csv
         self.query = query
@@ -165,5 +166,10 @@ def search(
 
     if search_type == "multisearch":
         do_multisearch(query, target, output, **sketch_kwargs)
+        results = KmerseekResults(output, query, target)
+
     elif search_type == "manysearch":
         do_manysearch(query, target, output, **sketch_kwargs)
+        results = KmerseekResults(output, query, target)
+        # results.compute_tf_idf()
+        # results.compute_prob_overlap()

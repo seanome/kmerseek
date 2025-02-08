@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+import os
 
 import click
 from sourmash.logging import notify
@@ -16,8 +16,12 @@ class KmerseekIndex(KmerseekEntity):
 
     @property
     def rocksdb(self):
-        if not hasattr(self, "_kmers_csv"):
-            self._rocksdb = make_rocksdb_index(self.sig, **self.sketch_keywords)
+        if not hasattr(self, "_rocksdb"):
+            # rocksdb = _make_rocksdb_filename(self.sig)
+            # if not os.path.exists(rocksdb):
+            self._rocksdb = make_rocksdb_index(self.sig, **self.sketch_kws)
+            # else:
+            #     self._rocksdb = rocksdb
         return self._rocksdb
 
 
@@ -67,8 +71,11 @@ def index(fasta, moltype="hp", ksize=24, scaled=5):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
-    sig = sketch(fasta, **sketch_keywords)
+    kmerseek_index.sig
+    kmerseek_index.kmers_csv
+    kmerseek_index.rocksdb
+    # sig = sketch(fasta, **sketch_keywords)
 
-    kmers = get_kmers(sig, fasta, **sketch_keywords)
+    # kmers = get_kmers(sig, fasta, **sketch_keywords)
 
-    rocksdb = make_rocksdb_index(sig, **sketch_keywords)
+    # rocksdb = make_rocksdb_index(sig, **sketch_keywords)

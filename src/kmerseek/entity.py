@@ -3,7 +3,7 @@ import os
 import polars as pl
 
 from .sketch import sketch, _make_sigfile
-from .sig2kmer import get_kmers, _make_kmer_filename
+from .sig2kmer import get_kmers_cli, _make_kmer_filename
 
 
 class KmerseekEntity:
@@ -25,18 +25,18 @@ class KmerseekEntity:
     def kmers_csv(self):
         """String of k-mer csv filename"""
         if not hasattr(self, "_kmers_csv"):
-            kmers_csv = os.path.exists(_make_kmer_filename(self.sig))
-            if not kmers_csv:
-                self._kmers_csv = get_kmers(self.sig, self.fasta, **self.sketch_kws)
-            else:
-                self._kmers_csv = kmers_csv
+            # kmers_csv = os.path.exists(_make_kmer_filename(self.sig))
+            # if not kmers_csv:
+            self._kmers_csv = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
+            # else:
+            #     self._kmers_csv = kmers_csv
         return self._kmers_csv
 
     @property
-    def kmers(self):
+    def kmers_lazyframe(self):
         """Polars LazyFrame of all the kmers"""
-        if not hasattr(self, "_kmers_csv"):
-            self._kmers_csv = get_kmers(self.sig, self.fasta, **self.sketch_kws)
+        # if not hasattr(self, "_kmers_csv"):
+        #     self._kmers_csv = get_kmers(self.sig, self.fasta, **self.sketch_kws)
         if not hasattr(self, "_kmers"):
             self._kmers = pl.scan_csv(self._kmers_csv)
         return self._kmers

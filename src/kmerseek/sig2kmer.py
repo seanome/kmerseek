@@ -7,10 +7,12 @@ Cribbed from https://github.com/dib-lab/sourmash/pull/724/
 """
 
 import sourmash
+from sourmash import MinHash
 from sourmash.minhash import hash_murmur
 import screed
 import csv
 from sourmash.logging import notify
+
 
 NOTIFY_EVERY_BP = int(1e5)
 
@@ -79,7 +81,9 @@ def revise_ksize(ksize, moltype, input_is_protein):
         return ksize
 
 
-def get_kmers_for_hashvals(sequence, hashvals, ksize, moltype, input_is_protein):
+def get_kmers_for_hashvals(
+    sequence, hashvals, ksize, moltype, input_is_protein, n_kmers_in_sequence, minhash
+):
     "Return k-mers from 'sequence' that yield hashes in 'hashvals'."
     # uppercase!
     sequence = sequence.upper()
@@ -96,7 +100,14 @@ def get_kmers_for_hashvals(sequence, hashvals, ksize, moltype, input_is_protein)
         # NOTE: we do not avoid non-ACGT characters, because those k-mers,
         # when hashed, shouldn't match anything that sourmash outputs.
         hashval = hash_murmur(kmer_encoded)
+        print(
+            f"kmer_encoded: {kmer_encoded}, kmer_in_seq: {kmer_in_seq}, hashval: {hashval}"
+        )
+        import pdb
+
+        pdb.set_trace()
         if hashval in hashvals:
+            n_kmers_in_sequence += 1
             yield kmer_encoded, kmer_in_seq, hashval, start
 
 
@@ -104,6 +115,7 @@ def get_matching_hashes_in_file(
     filename,
     ksize,
     moltype,
+    minhash,
     input_is_protein,
     hashes,
     found_kmers,
@@ -129,12 +141,24 @@ def get_matching_hashes_in_file(
             )
             watermark += NOTIFY_EVERY_BP
 
+        n_kmers_in_sequence = 0
         # now do the hard work of finding the matching k-mers!
         for kmer_encoded, kmer_in_seq, hashval, i in get_kmers_for_hashvals(
-            record.sequence, hashes, ksize, moltype, input_is_protein
+            record.sequence,
+            hashes,
+            ksize,
+            moltype,
+            input_is_protein,
+            n_kmers_in_sequence,
+            minhash,
         ):
             found_kmers += 1
-            # found_kmers.append([kmer_in_seq, kmer_encoded, hashval, record["name"]])
+
+            if n_kmers_in_sequence != len(hashes):
+                raise ValueError(
+                    f"Did not find all hashvals in sequence k-mers. Found "
+                    f"only {n_kmers_in_sequence} k-mers out of {len(hashes)}"
+                )
 
             # write out sequence
             if seqout_fp:
@@ -156,6 +180,7 @@ def get_matching_hashes_in_file(
                     ]
                 )
 
+            n_kmers_in_sequence = 0
             if first:
                 return m, n
     return m, n
@@ -167,7 +192,7 @@ def _make_kmer_filename(sig):
 
 def _setup_kmer_writer(sig):
     output_kmers = _make_kmer_filename(sig)
-    kmerout_fp = open(output_kmers, "wt")
+    kmerout_fp = open(output_kmers, "w")
     kmerout_w = csv.writer(kmerout_fp)
     kmerout_w.writerow(
         [
@@ -184,6 +209,8 @@ def _setup_kmer_writer(sig):
 
 def get_kmers(sig, fasta, moltype, ksize, scaled):
     # Scale is not used, but is accepted for ease of keyword argument sharing
+    print("\n--- get_kmers ---")
+    print(f"Getting all k-mers from file {sig}")
 
     output_kmers, kmerout_fp, kmerout_w = _setup_kmer_writer(sig)
 
@@ -193,25 +220,95 @@ def get_kmers(sig, fasta, moltype, ksize, scaled):
     ).pop()
     query_hashvals = set(sigobj.minhash.hashes.keys())
     query_ksize = sigobj.minhash.ksize
+    new_minhash = MinHash(
+        n=0,
+        ksize=sigobj.minhash.ksize,
+        hp=sigobj.minhash.hp,
+        dayhoff=sigobj.minhash.dayhoff,
+        is_protein=sigobj.minhash.is_protein,
+        scaled=scaled,
+    )
+
+    import pdb
+
+    pdb.set_trace()
+
+    print(f"query_ksize: {query_ksize}")
+    print(f"ksize: {ksize}")
 
     # TODO: Simplify and remove all the tracking numbers, e.g. number residues loaded, kmers found, etc.
     # I really don't like how this relies on so many parameters for tracking how far we've
     # progressed through the files. I wish this function was massively simpler, not accepting any of the
     # keyword arguments initialized with a 0
+    n = 0
+    found_kmers = 0
+    n_seq = 0
+    m = 0
     get_matching_hashes_in_file(
         fasta,
         query_ksize,
         moltype,
+        new_minhash,
         input_is_protein=True,
         hashes=query_hashvals,
         found_kmers=0,
-        m=0,  # bp in found sequences
-        n=0,  # bp loaded
-        n_seq=0,
+        m=m,  # bp in found sequences
+        n=n,  # bp loaded
+        n_seq=n_seq,
         seqout_fp=None,
         kmerout_w=kmerout_w,
         watermark=int(NOTIFY_EVERY_BP),
     )
 
-    kmerout_fp.close()
+    notify(
+        "read {} bp, found {} kmers matching hashvals\nwrote to {}",
+        n,
+        found_kmers,
+        output_kmers,
+    )
     return output_kmers
+
+
+class Args:
+    """Dummy class to call what is normally a command line function from Python"""
+
+    def __init__(self, sig, fasta, moltype, ksize, scaled):
+        self.signatures = [sig]  # List of signature files
+        self.sequences = [fasta]  # List of sequence files
+        self.ksize = ksize
+        self.quiet = False
+        self.force = False
+        self.moltype = moltype
+        self.translate = False
+        self.check_sequence = True
+        self.save_kmers = None
+        self.save_sequences = None
+        self.picklist = None
+        self.scaled = scaled
+        self.dna = False
+        self.skipm1n3 = False
+        self.skipm2n3 = False
+        self.from_file = False
+
+        self.dayhoff = False
+        self.hp = False
+        self.protein = False
+        if moltype == "protein":
+            self.protein = True
+        elif moltype == "dayhoff":
+            self.dayhoff = True
+        elif moltype == "hp":
+            self.hp = True
+
+
+def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
+    # Example usage:
+    args = Args(
+        sig=sig,
+        fasta=fasta,
+        moltype=moltype,  # or "dna", "dayhoff", "hp"
+        ksize=ksize,
+        scaled=scaled,
+    )
+
+    sourmash.sig.__main__.kmers(args)
