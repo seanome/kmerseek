@@ -98,6 +98,8 @@ def add_encoding_to_kmers_pl(
 
 def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
     # Create a temporary file for kmers CSV
+    # TODO: Could potentially run out of temporary disk space but ...
+    # maybe can stream the output to a parquet file?
     with tempfile.NamedTemporaryFile(suffix=".csv", delete=False) as tmp_kmers:
         args = Args(
             sig=sig,
