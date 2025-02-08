@@ -4,9 +4,9 @@ import click
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 import pandas as pd
 
-from .sig2kmer import get_kmers, _make_kmer_filename
+from .sig2kmer import _make_kmer_filename
 from .uniprot import get_domains
-from .sketch import sketch, make_sketch_kws
+from .sketch import make_sketch_kws
 from .index import KmerseekIndex, _make_siglist_file
 from .query import KmerseekQuery
 
@@ -161,6 +161,8 @@ def search(
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
     query = KmerseekQuery(query_fasta, **sketch_kwargs)
+    # Get kmers
+    _ = query.kmers_csv
 
     target = KmerseekIndex(target_fasta, **sketch_kwargs)
 

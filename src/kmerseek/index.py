@@ -7,8 +7,7 @@ import pandas as pd
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
 from .entity import KmerseekEntity
-from .sketch import sketch, make_sketch_kws
-from .sig2kmer import get_kmers
+from .sketch import make_sketch_kws
 
 
 class KmerseekIndex(KmerseekEntity):
@@ -71,9 +70,7 @@ def index(fasta, moltype="hp", ksize=24, scaled=5):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
-    kmerseek_index.sig
-    kmerseek_index.kmers_csv
-    kmerseek_index.rocksdb
+    _ = (kmerseek_index.sig, kmerseek_index.kmers_csv, kmerseek_index.rocksdb)
     # sig = sketch(fasta, **sketch_keywords)
 
     # kmers = get_kmers(sig, fasta, **sketch_keywords)
