@@ -17,7 +17,7 @@ class Args:
         self.sequences = [fasta]  # List of sequence files
         self.ksize = ksize
         self.quiet = False
-        self.force = False
+        self.force = True
         self.moltype = moltype
         self.translate = False
         self.check_sequence = True
@@ -51,4 +51,7 @@ def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
         scaled=scaled,
     )
 
+    # TODO: this "works" but calls what's normally a CLI as a Python method...
+    # would love for this to be just a regular Python method that you could
+    # feed sigs and fastas to
     sourmash.sig.__main__.kmers(args)
