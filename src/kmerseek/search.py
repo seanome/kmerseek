@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-
+import logging
 import click
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 import pandas as pd
@@ -11,45 +11,55 @@ from .sketch import make_sketch_kws
 from .index import KmerseekIndex, _make_siglist_file
 from .query import KmerseekQuery
 
-protein_moltypes = "protein", "dayhoff", "hp"
+# Set up logger
+logger = logging.getLogger(__name__)
+
+
+def setup_logging(debug_mode: bool):
+    """Configure logging based on debug mode."""
+    log_level = logging.DEBUG if debug_mode else logging.INFO
+    logging.basicConfig(
+        level=log_level,
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+    )
 
 
 def show_results(results_per_gene):
     for gene, match in results_per_gene:
-        # This function currently doesn't do anything, just here for
         domains = get_domains(gene, match.target_start, match.target_end)
 
-        print(
+        logger.info(
             f"Found {match.query_name}:{match.query_start}-{match.query_end} "
             f"in {match.target_name}:{match.target_start}-{match.target_end}"
         )
         if domains:
             for domain in domains:
-                print(f"Found: {domain.name} in {domain.start}-{domain.end}")
-        print(match.query_seq)
-        print(match.hp_kmer)
-        print(match.target_seq)
+                logger.info(f"Found: {domain.name} in {domain.start}-{domain.end}")
+        logger.info(match.query_seq)
+        logger.info(match.hp_kmer)
+        logger.info(match.target_seq)
 
 
 def single_stitch_together_kmers(kmers: pl.Series, i_kmers: pl.Series):
     stitched = ""
-    print(f"Input kmers: {kmers}")
-    print(f"Input i_kmers: {i_kmers}")
+    logger.debug(f"Input kmers: {kmers}")
+    logger.debug(f"Input i_kmers: {i_kmers}")
 
     for i, (i_kmer, kmer) in enumerate(zip(i_kmers, kmers)):
-        print(f"Processing kmer {i}: position={i_kmer}, kmer={kmer}")
+        logger.debug(f"Processing kmer {i}: position={i_kmer}, kmer={kmer}")
         if i == 0:
             stitched = kmer
             prev_i_kmer = i_kmer
-            print(f"First kmer: {stitched}")
+            logger.debug(f"First kmer: {stitched}")
         else:
             kmer_slice = i_kmer - prev_i_kmer
-            print(f"Slice size: {kmer_slice}")
+            logger.debug(f"Slice size: {kmer_slice}")
             stitched += kmer[-kmer_slice:]
-            print(f"After adding slice: {stitched}")
+            logger.debug(f"After adding slice: {stitched}")
         prev_i_kmer = i_kmer
 
-    print(f"Final stitched sequence: {stitched}")
+    logger.debug(f"Final stitched sequence: {stitched}")
     return stitched
 
 
@@ -61,21 +71,24 @@ def stitch_kmers_in_query_match_pair(
     start_match="start_match",
     start_query="start_query",
 ) -> pl.DataFrame:
-    print("\nProcessing new group:")
-    print(f"Input dataframe:\n{df}")
+    logger.debug("\nProcessing new group:")
+    logger.debug(f"Input dataframe:\n{df}")
 
     df = df.sort(start_query, descending=False)
-    print(f"Sorted dataframe:\n{df}")
+    logger.debug(f"Sorted dataframe:\n{df}")
+
+    match_name = df["match_name"][0]
+    query_name = df["query_name"][0]
 
     query = single_stitch_together_kmers(df[kmer_query], df[start_match])
     alphabet = single_stitch_together_kmers(df[kmer_alphabet], df[start_query])
     match = single_stitch_together_kmers(df[kmer_match], df[start_match])
 
-    print(f"query: {query}")
-    print(f"alpha: {alphabet}")
-    print(f"match: {match}")
+    logger.debug(f"query: {query}")
+    logger.debug(f"alpha: {alphabet}")
+    logger.debug(f"match: {match}")
 
-    # All these lengths should be the same -> if not, something whent wrong
+    # All these lengths should be the same -> if not, something went wrong
     assert len(query) == len(alphabet)
     assert len(alphabet) == len(match)
 
@@ -86,9 +99,16 @@ def stitch_kmers_in_query_match_pair(
     match_end = match_start + length
     query_end = query_start + length
 
-    to_print = f"query: {query}\n" f"alpha: {alphabet}\n" f"match: {match}"
+    to_print = (
+        f"query: {query} ({query_start}-{query_end})\n"
+        f"alpha: {alphabet}\n"
+        f"match: {match} ({match_start}-{match_end})"
+    )
+
     stitched_output = pl.DataFrame(
         {
+            "match_name": [match_name],
+            "query_name": [query_name],  # Add this line
             "query_start": [query_start],
             "query_end": [query_end],
             "query": [query],
@@ -205,13 +225,15 @@ class KmerseekResults:
     def stitch_kmers_per_gene(self):
         # Define the schema for the output of stitch_kmers_in_query_match_pair
         output_schema = {
+            "match_name": pl.Utf8,
+            "query_name": pl.Utf8,  # Add schema for query_name
             "query_start": pl.UInt32,
             "query_end": pl.UInt32,
             "query": pl.Utf8,
             "match_start": pl.UInt32,
             "match_end": pl.UInt32,
             "match": pl.Utf8,
-            "combined": pl.Utf8,
+            "to_print": pl.Utf8,
         }
 
         self.per_gene_stitched_kmers = (
@@ -228,7 +250,8 @@ class KmerseekResults:
             # import pdb
 
             # pdb.set_trace()
-            print(f"\n{row['match_name']}")
+            print(f"\n---\nQuery Name: {row['query_name']}")
+            print(f"Match Name: {row['match_name']}")
             print(row["to_print"])
 
 
@@ -240,6 +263,7 @@ class KmerseekResults:
 @click.option("--ksize", default=24)
 @click.option("--scaled", default=5)
 @click.option("--output", default="kmerseek_search.csv")
+@click.option("--debug", is_flag=True, help="Enable debug logging")
 def search(
     query_fasta,
     target_fasta,
@@ -247,12 +271,23 @@ def search(
     ksize=24,
     scaled=5,
     output="kmerseek_search.csv",
+    debug=False,
 ):
+    """Search for k-mers in target sequences."""
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    logger.debug("Starting search with parameters:")
+    logger.debug(f"Query FASTA: {query_fasta}")
+    logger.debug(f"Target FASTA: {target_fasta}")
+    logger.debug(f"Moltype: {moltype}")
+    logger.debug(f"K-size: {ksize}")
+    logger.debug(f"Scaled: {scaled}")
+    logger.debug(f"Output: {output}")
 
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
     query = KmerseekQuery(query_fasta, **sketch_kwargs)
-    # Get kmers for the query
     _ = query.kmers_pq
 
     target = KmerseekIndex(target_fasta, **sketch_kwargs)
@@ -260,7 +295,6 @@ def search(
     do_multisearch(query, target, output, **sketch_kwargs)
     results = KmerseekResults(output, query, target)
 
-    # There's probably a way more Pythonic way of doing this
     results.join_query_target_kmers()
     results.join_results_kmers()
     results.stitch_kmers_per_gene()
