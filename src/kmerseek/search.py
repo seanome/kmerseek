@@ -31,35 +31,74 @@ def show_results(results_per_gene):
         print(match.target_seq)
 
 
-def single_stitch_together_kmers(kmers: Iterable[str], i_kmers: Iterable[int]):
+def single_stitch_together_kmers(kmers: pl.Series, i_kmers: pl.Series):
     stitched = ""
+    print(f"Input kmers: {kmers}")
+    print(f"Input i_kmers: {i_kmers}")
+
     for i, (i_kmer, kmer) in enumerate(zip(i_kmers, kmers)):
+        print(f"Processing kmer {i}: position={i_kmer}, kmer={kmer}")
         if i == 0:
             stitched = kmer
             prev_i_kmer = i_kmer
+            print(f"First kmer: {stitched}")
         else:
             kmer_slice = i_kmer - prev_i_kmer
+            print(f"Slice size: {kmer_slice}")
             stitched += kmer[-kmer_slice:]
+            print(f"After adding slice: {stitched}")
+        prev_i_kmer = i_kmer
+
+    print(f"Final stitched sequence: {stitched}")
     return stitched
 
 
-def stitch_together_species_hp_kmers(
-    df,
+def stitch_kmers_in_query_match_pair(
+    df: pl.LazyFrame,
+    kmer_match="kmer_match",
+    kmer_alphabet="encoded",
     kmer_query="kmer_query",
-    kmer_hp="kmer_hp",
-    kmer_found="kmer_found",
-    i_query="i_query",
-):
-    df = df.sort_values(i_query)
-    query_stitched = single_stitch_together_kmers(df[kmer_query])
-    hp_stitched = single_stitch_together_kmers(df[kmer_hp])
-    found_stitched = single_stitch_together_kmers(df[kmer_found])
-    start = df.i_query.min()
-    end = start + len(found_stitched)
-    to_print = (
-        f"botryllus: {query_stitched}\nhp: {hp_stitched}\nhuman: {found_stitched}"
+    start_match="start_match",
+    start_query="start_query",
+) -> pl.DataFrame:
+    print("\nProcessing new group:")
+    print(f"Input dataframe:\n{df}")
+
+    df = df.sort(start_query, descending=False)
+    print(f"Sorted dataframe:\n{df}")
+
+    query = single_stitch_together_kmers(df[kmer_query], df[start_match])
+    alphabet = single_stitch_together_kmers(df[kmer_alphabet], df[start_query])
+    match = single_stitch_together_kmers(df[kmer_match], df[start_match])
+
+    print(f"query: {query}")
+    print(f"alpha: {alphabet}")
+    print(f"match: {match}")
+
+    # All these lengths should be the same -> if not, something whent wrong
+    assert len(query) == len(alphabet)
+    assert len(alphabet) == len(match)
+
+    length = len(query)
+
+    match_start = df[start_match].min()
+    query_start = df[start_query].min()
+    match_end = match_start + length
+    query_end = query_start + length
+
+    to_print = f"query: {query}\n" f"alpha: {alphabet}\n" f"match: {match}"
+    stitched_output = pl.DataFrame(
+        {
+            "query_start": [query_start],
+            "query_end": [query_end],
+            "query": [query],
+            "match_start": [match_start],
+            "match_end": [match_end],
+            "match": [match],
+            "to_print": [to_print],
+        }
     )
-    return pd.Series([start, end, to_print], index=["start", "end", "matches"])
+    return stitched_output
 
 
 # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
@@ -101,14 +140,13 @@ def do_multisearch(query, target, output, moltype, ksize, scaled):
 
 
 class KmerseekResults:
-    merge_results_search_on = ["match_name", "query_name", "query_filename"]
-    merge_results_kmers_on = [
+    join_results_search_on = ["match_name", "query_name"]
+    join_results_kmers_on = [
         "sequence_name_match",
         "sequence_name_query",
-        "sequence_file_query",
     ]
 
-    merge_query_target_kmers_on = ["encoded", "hashval"]
+    join_query_target_kmers_on = ["encoded", "hashval"]
 
     def __init__(
         self,
@@ -121,8 +159,12 @@ class KmerseekResults:
         self.target = target
         self.results = self.read_results()
 
+    def read_results(self):
+        df = pl.scan_csv(self.output_csv)
+        return df
+
     def filter_target_kmers_in_results(self):
-        # This might not actually be necessary since merge_query_target_kmers
+        # This might not actually be necessary since join_query_target_kmers
         # would do the filter implicitly by only taking the inner matches
         self.target_kmers_in_results = self.target.kmers_lazyframe.filter(
             pl.col("sequence_name").is_in(self.results["match_name"])
@@ -132,10 +174,10 @@ class KmerseekResults:
         cols_to_rename = ["kmer", "start", "sequence_name", "sequence_file"]
 
         renamer = {x: f"{x}{suffix}" for x in cols_to_rename}
-        kmers_renamed = kmers.rename(renamer).sort(self.merge_query_target_kmers_on)
+        kmers_renamed = kmers.rename(renamer).sort(self.join_query_target_kmers_on)
         return kmers_renamed
 
-    def merge_query_target_kmers(self):
+    def join_query_target_kmers(self):
 
         query_kmers_prepped = self._prep_kmers_for_merging(
             self.query.kmers_lazyframe, "_query"
@@ -144,33 +186,50 @@ class KmerseekResults:
             self.target.kmers_lazyframe, "_match"
         )
 
-        import pdb
-
-        pdb.set_trace()
         # No collect yet
-        self.kmers = query_kmers_prepped.merge_sorted(
-            target_kmers_prepped,
-            key=self.merge_query_target_kmers_on,
+        self.kmers = query_kmers_prepped.join(
+            target_kmers_prepped, on=self.join_query_target_kmers_on
         )
 
     def compute_tf_idf(self):
         raise NotImplementedError()
 
-    def merge_results_kmers(self):
+    def join_results_kmers(self):
 
         self.results_with_kmers = self.results.join(
             self.kmers,
-            left_on=self.merge_fastgather_on,
-            right_on=self.merge_kmers_on,
+            left_on=self.join_results_search_on,
+            right_on=self.join_results_kmers_on,
         )
 
-    def read_results(self):
-        return pl.scan_csv(self.output_csv)
+    def stitch_kmers_per_gene(self):
+        # Define the schema for the output of stitch_kmers_in_query_match_pair
+        output_schema = {
+            "query_start": pl.UInt32,
+            "query_end": pl.UInt32,
+            "query": pl.Utf8,
+            "match_start": pl.UInt32,
+            "match_end": pl.UInt32,
+            "match": pl.Utf8,
+            "combined": pl.Utf8,
+        }
+
+        self.per_gene_stitched_kmers = (
+            self.results_with_kmers.group_by("match_name")
+            .map_groups(stitch_kmers_in_query_match_pair, schema=output_schema)
+            .sort(["query_start", "query_end"])
+        ).collect()
 
     def show_results_per_gene(self):
-        results_per_gene = self.results_with_kmers.groupby("gene")
+        cols = self.per_gene_stitched_kmers.columns
+        for row_data in self.per_gene_stitched_kmers.iter_rows():
+            # Each row is a single match
+            row = dict(zip(cols, row_data))
+            # import pdb
 
-        show_results(results_per_gene)
+            # pdb.set_trace()
+            print(f"\n{row['match_name']}")
+            print(row["to_print"])
 
 
 # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
@@ -201,5 +260,8 @@ def search(
     do_multisearch(query, target, output, **sketch_kwargs)
     results = KmerseekResults(output, query, target)
 
-    results.merge_query_target_kmers()
-    results.merge_results_kmers()
+    # There's probably a way more Pythonic way of doing this
+    results.join_query_target_kmers()
+    results.join_results_kmers()
+    results.stitch_kmers_per_gene()
+    results.show_results_per_gene()
