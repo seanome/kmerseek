@@ -3,6 +3,7 @@ from collections.abc import Iterable
 import click
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 import pandas as pd
+import polars as pl
 
 from .sig2kmer import _make_kmer_filename
 from .uniprot import get_domains
@@ -147,9 +148,6 @@ class KmerseekResults:
 @click.option("--ksize", default=24)
 @click.option("--scaled", default=5)
 @click.option("--output", default="kmerseek_search.csv")
-@click.option(
-    "--search-type", default="multisearch", help="either 'multisearch' or 'manysearch'"
-)
 def search(
     query_fasta,
     target_fasta,
@@ -157,7 +155,6 @@ def search(
     ksize=24,
     scaled=5,
     output="kmerseek_search.csv",
-    search_type="multisearch",
 ):
 
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
@@ -170,3 +167,16 @@ def search(
 
     do_multisearch(query, target, output, **sketch_kwargs)
     results = KmerseekResults(output, query, target)
+
+    target_kmers_in_results = target.kmers_lazyframe.filter(
+        pl.col("read_name").is_in(results["match_name"])
+    )
+
+    merge_on = ["kmer_in_alphabet", "hashval"]
+
+    query_target_kmers = query.kmers_lazyframe.merge(
+        target_kmers_in_results,
+        left_on=merge_on,
+        right_on=merge_on,
+        suffixes=("_query", "_match"),
+    ).collect()
