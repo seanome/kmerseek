@@ -70,7 +70,7 @@ def index(fasta, moltype="hp", ksize=24, scaled=5):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
-    _ = (kmerseek_index.sig, kmerseek_index.kmers_pq, kmerseek_index.rocksdb)
+    _ = (kmerseek_index.sig, kmerseek_index.kmers_pq)
     # sig = sketch(fasta, **sketch_keywords)
 
     # kmers = get_kmers(sig, fasta, **sketch_keywords)
