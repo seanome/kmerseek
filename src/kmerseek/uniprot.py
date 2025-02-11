@@ -2,6 +2,7 @@
 Parse JSON file from UniProt
 """
 
+
 def get_domains(gene, start, end):
     """For the gene provided, find overlapping regions
 
