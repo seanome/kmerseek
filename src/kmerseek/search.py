@@ -253,7 +253,6 @@ class KmerseekResults:
             print(row["to_print"])
 
 
-# TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
 @click.command()
 @click.argument("query_fasta")
 @click.argument("target_fasta")
@@ -290,7 +289,8 @@ def search(
 
     target = KmerseekIndex(target_fasta, **sketch_kwargs)
 
-    do_multisearch(query, target, output, **sketch_kwargs)
+    # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
+    do_manysearch(query, target, output, **sketch_kwargs)
     results = KmerseekResults(output, query, target)
 
     results.join_query_target_kmers()
