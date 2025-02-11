@@ -1,4 +1,3 @@
-import logging
 import click
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 import pandas as pd
@@ -8,19 +7,7 @@ from .uniprot import get_domains
 from .sketch import make_sketch_kws
 from .index import KmerseekIndex, _make_siglist_file
 from .query import KmerseekQuery
-
-# Set up logger
-logger = logging.getLogger(__name__)
-
-
-def setup_logging(debug_mode: bool):
-    """Configure logging based on debug mode."""
-    log_level = logging.DEBUG if debug_mode else logging.INFO
-    logging.basicConfig(
-        level=log_level,
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        datefmt="%Y-%m-%d %H:%M:%S",
-    )
+from .logging import setup_logging, logger
 
 
 def show_results(results_per_gene):
