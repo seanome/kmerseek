@@ -22,21 +22,15 @@ class KmerseekEntity:
         return self._sig
 
     @property
-    def kmers_csv(self):
+    def kmers_pq(self):
         """String of k-mer csv filename"""
-        if not hasattr(self, "_kmers_csv"):
-            # kmers_csv = os.path.exists(_make_kmer_filename(self.sig))
-            # if not kmers_csv:
-            self._kmers_csv = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
-            # else:
-            #     self._kmers_csv = kmers_csv
-        return self._kmers_csv
+        if not hasattr(self, "_kmers_pq"):
+            self._kmers_pq = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
+        return self._kmers_pq
 
     @property
     def kmers_lazyframe(self):
         """Polars LazyFrame of all the kmers"""
-        # if not hasattr(self, "_kmers_csv"):
-        #     self._kmers_csv = get_kmers(self.sig, self.fasta, **self.sketch_kws)
         if not hasattr(self, "_kmers"):
-            self._kmers = pl.scan_csv(self._kmers_csv)
+            self._kmers = pl.scan_parquet(self.kmers_pq)
         return self._kmers
