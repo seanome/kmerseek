@@ -65,6 +65,9 @@ def stitch_together_species_hp_kmers(
 # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
 def do_manysearch(query, target, output, ksize, scaled, moltype):
     query_siglist = _make_siglist_file(query.sig)
+
+    # TODO: Figure out why target.rocksdb isn't working
+    # https://github.com/seanome/kmerseek/issues/4
     target_siglist = _make_siglist_file(target.sig)
     sourmash_plugin_branchwater.do_manysearch(
         query_siglist,
@@ -84,6 +87,7 @@ def do_multisearch(query, target, output, moltype, ksize, scaled):
     sourmash_plugin_branchwater.do_multisearch(
         query.sig,
         # TODO: Figure out why target.rocksdb isn't working
+        # https://github.com/seanome/kmerseek/issues/4
         target.sig,
         0,  # threshold=0 to show all matches, even with only 1 k-mer
         ksize,
