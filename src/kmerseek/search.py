@@ -1,11 +1,9 @@
-from collections.abc import Iterable
 import logging
 import click
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 import pandas as pd
 import polars as pl
 
-from .sig2kmer import _make_kmer_filename
 from .uniprot import get_domains
 from .sketch import make_sketch_kws
 from .index import KmerseekIndex, _make_siglist_file
