@@ -91,6 +91,9 @@ def add_encoding_to_kmers_pl(kmers, moltype):
     return kmers_with_encoding
 
 
+# TODO: Probably move this to `sourmash sig kmers` itself
+# i.e. to here: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/sig/__main__.py#L1087
+# https://github.com/seanome/kmerseek/issues/5
 def add_start_position_to_kmers_pl(kmers, fasta):
     sequences = {}
     with screed.open(fasta) as records:
