@@ -101,8 +101,14 @@ def do_multisearch(query, target, output, moltype, ksize, scaled):
 
 
 class KmerseekResults:
-    merge_fastgather_on = ["match_name", "query_name", "query_filename"]
-    merge_kmers_on = ["read_name_match", "read_name_query", "filename_query"]
+    merge_results_search_on = ["match_name", "query_name", "query_filename"]
+    merge_results_kmers_on = [
+        "sequence_name_match",
+        "sequence_name_query",
+        "sequence_file_query",
+    ]
+
+    merge_query_target_kmers_on = ["encoded", "hashval"]
 
     def __init__(
         self,
@@ -113,30 +119,53 @@ class KmerseekResults:
         self.output_csv = output_csv
         self.query = query
         self.target = target
+        self.results = self.read_results()
 
-    def merge_kmers(self):
-        merge_on = ["kmer_in_alphabet", "hashval"]
+    def filter_target_kmers_in_results(self):
+        # This might not actually be necessary since merge_query_target_kmers
+        # would do the filter implicitly by only taking the inner matches
+        self.target_kmers_in_results = self.target.kmers_lazyframe.filter(
+            pl.col("sequence_name").is_in(self.results["match_name"])
+        )
 
-        self.kmers = self.query.kmers.merge(
-            self.target.kmers,
-            left_on=merge_on,
-            right_on=merge_on,
-            suffixes=("_query", "_match"),
+    def _prep_kmers_for_merging(self, kmers, suffix):
+        cols_to_rename = ["kmer", "start", "sequence_name", "sequence_file"]
+
+        renamer = {x: f"{x}{suffix}" for x in cols_to_rename}
+        kmers_renamed = kmers.rename(renamer).sort(self.merge_query_target_kmers_on)
+        return kmers_renamed
+
+    def merge_query_target_kmers(self):
+
+        query_kmers_prepped = self._prep_kmers_for_merging(
+            self.query.kmers_lazyframe, "_query"
+        )
+        target_kmers_prepped = self._prep_kmers_for_merging(
+            self.target.kmers_lazyframe, "_match"
+        )
+
+        import pdb
+
+        pdb.set_trace()
+        # No collect yet
+        self.kmers = query_kmers_prepped.merge_sorted(
+            target_kmers_prepped,
+            key=self.merge_query_target_kmers_on,
         )
 
     def compute_tf_idf(self):
-        pass
+        raise NotImplementedError()
 
     def merge_results_kmers(self):
 
         self.results_with_kmers = self.results.join(
-            self.query_target_kmers,
+            self.kmers,
             left_on=self.merge_fastgather_on,
             right_on=self.merge_kmers_on,
         )
 
     def read_results(self):
-        self.results = pd.read_csv(self.output)
+        return pl.scan_csv(self.output_csv)
 
     def show_results_per_gene(self):
         results_per_gene = self.results_with_kmers.groupby("gene")
@@ -165,22 +194,12 @@ def search(
 
     query = KmerseekQuery(query_fasta, **sketch_kwargs)
     # Get kmers for the query
-    _ = query.kmers_csv
+    _ = query.kmers_pq
 
     target = KmerseekIndex(target_fasta, **sketch_kwargs)
 
     do_multisearch(query, target, output, **sketch_kwargs)
     results = KmerseekResults(output, query, target)
 
-    target_kmers_in_results = target.kmers_lazyframe.filter(
-        pl.col("read_name").is_in(results["match_name"])
-    )
-
-    merge_on = ["kmer_in_alphabet", "hashval"]
-
-    query_target_kmers = query.kmers_lazyframe.merge(
-        target_kmers_in_results,
-        left_on=merge_on,
-        right_on=merge_on,
-        suffixes=("_query", "_match"),
-    ).collect()
+    results.merge_query_target_kmers()
+    results.merge_results_kmers()
