@@ -61,6 +61,7 @@ def stitch_together_species_hp_kmers(
     return pd.Series([start, end, to_print], index=["start", "end", "matches"])
 
 
+# TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
 def do_manysearch(query, target, output, ksize, scaled, moltype):
     query_siglist = _make_siglist_file(query.sig)
     target_siglist = _make_siglist_file(target.sig)
@@ -138,6 +139,7 @@ class KmerseekResults:
         show_results(results_per_gene)
 
 
+# TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
 @click.command()
 @click.argument("query_fasta")
 @click.argument("target_fasta")
@@ -161,17 +163,10 @@ def search(
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
     query = KmerseekQuery(query_fasta, **sketch_kwargs)
-    # Get kmers
+    # Get kmers for the query
     _ = query.kmers_csv
 
     target = KmerseekIndex(target_fasta, **sketch_kwargs)
 
-    if search_type == "multisearch":
-        do_multisearch(query, target, output, **sketch_kwargs)
-        results = KmerseekResults(output, query, target)
-
-    elif search_type == "manysearch":
-        do_manysearch(query, target, output, **sketch_kwargs)
-        results = KmerseekResults(output, query, target)
-        # results.compute_tf_idf()
-        # results.compute_prob_overlap()
+    do_multisearch(query, target, output, **sketch_kwargs)
+    results = KmerseekResults(output, query, target)
