@@ -9,5 +9,4 @@ jobs:
       - uses: actions/checkout@v4
       - uses: psf/black@stable
         with:
-          src: "./src/python"
           options: "--check --verbose"
