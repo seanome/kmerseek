@@ -4,28 +4,44 @@ import polars as pl
 
 from .sketch import sketch, _make_sigfile
 from .sig2kmer import get_kmers_cli, _make_kmer_filename
+from .logging import logger
 
 
 class KmerseekEntity:
     """Base class to be inherited by KmerseekQuery and KmerseekIndex"""
 
-    def __init__(self, fasta, moltype, ksize, scaled):
+    def __init__(self, fasta, moltype, ksize, scaled, force=False):
         # These are all filenames of where the data is stored
         self.fasta = fasta
         self.sketch_kws = dict(moltype=moltype, ksize=ksize, scaled=scaled)
+        self.force = force
 
     @property
     def sig(self):
         """String of k-mer signature filename"""
         if not hasattr(self, "_sig"):
-            self._sig = sketch(self.fasta, **self.sketch_kws)
+            sigfile = _make_sigfile(self.fasta, **self.sketch_kws)
+            if self.force or not os.path.exists(sigfile):
+                self._sig = sketch(self.fasta, **self.sketch_kws)
+            else:
+                logger.info(
+                    f"Found signature file {sigfile}, skipping! Re-make with '--force'"
+                )
+                self._sig = sigfile
         return self._sig
 
     @property
     def kmers_pq(self):
         """String of k-mer csv filename"""
         if not hasattr(self, "_kmers_pq"):
-            self._kmers_pq = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
+            pq = _make_kmer_filename(self.sig)
+            if self.force or not os.path.exists(pq):
+                self._kmers_pq = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
+            else:
+                logger.info(
+                    f"Found k-mer parquet {pq}, skipping! Re-make with '--force'"
+                )
+                self._kmers_pq = pq
         return self._kmers_pq
 
     @property
