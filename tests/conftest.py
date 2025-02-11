@@ -46,3 +46,11 @@ def bcl2_rocksdb(index_folder):
         index_folder,
         "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.hp.k15.scaled5.sig.zip.rocksdb",
     )
+
+
+@pytest.fixture
+def bcl2_hp_k16_sig_zip(index_folder):
+    return os.path.join(
+        index_folder,
+        "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.hp.k16.scaled5.sig.zip",
+    )
