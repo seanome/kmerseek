@@ -31,3 +31,8 @@ def test_index(bcl2_first25):
     # May need to `.sort_values()` to make sure `head()` and `tail()` work
     # https://github.com/seanome/kmerseek/issues/3
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.kmers.pq")
+
+    assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist")
+    with open(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist") as f:
+        assert f.readlines() == [f"{bcl2_first25}.hp.k24.scaled5.sig.zip"]
+
