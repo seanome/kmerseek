@@ -2,8 +2,8 @@
 name = "kmerseek"
 version = "0.1.0"
 description = "Efficient protein domain annotation search with reduced amino acid k-mers"
-authors = [{name = "Olga Botvinnik", email = "olga@seanome.org"}]
-dependencies = ["sourmash", "sourmash_plugin_branchwater", "pandas", "click"]
+authors = [{ name = "Olga Botvinnik", email = "olga@seanome.org" }]
+dependencies = ["sourmash", "sourmash_plugin_branchwater", "polars", "click"]
 
 [build-system]
 requires = ["hatchling"]
