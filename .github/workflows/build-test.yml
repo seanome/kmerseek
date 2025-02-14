@@ -32,7 +32,7 @@ jobs:
         miniforge-version: latest
         use-mamba: true
         mamba-version: "*"
-        activate-environment: sourmash_dev
+        activate-environment: kmerseek-dev
         auto-activate-base: false
 #        use-only-tar-bz2: true
 
