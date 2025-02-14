@@ -48,7 +48,7 @@ jobs:
 
     - name: install dependencies 2
       shell: bash -l {0}
-      run: mamba install polars sourmash sourmash_plugin_branchwater click pytest
+      run: mamba install polars sourmash sourmash_plugin_branchwater click pytest pandas
 
     - name: build
       shell: bash -l {0}
