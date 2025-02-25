@@ -67,7 +67,42 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
 def index(fasta, moltype="hp", ksize=24, scaled=5):
+    index_sketch(fasta, moltype, ksize, scaled)
+    index_kmers_pq(fasta, moltype, ksize, scaled)
+    index_rocksdb(fasta, moltype, ksize, scaled)
+
+
+@click.command()
+@click.argument("fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", type=int, default=24)
+@click.option("--scaled", type=int, default=5)
+def index_sketch(fasta, moltype="hp", ksize=24, scaled=5):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
-    _ = (kmerseek_index.sig, kmerseek_index.kmers_pq, kmerseek_index.rocksdb)
+    _ = kmerseek_index.sig
+
+
+@click.command()
+@click.argument("fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", type=int, default=24)
+@click.option("--scaled", type=int, default=5)
+def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5):
+    sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
+
+    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    _ = kmerseek_index.kmers_pq
+
+
+@click.command()
+@click.argument("fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", type=int, default=24)
+@click.option("--scaled", type=int, default=5)
+def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5):
+    sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
+
+    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    _ = kmerseek_index.rocksdb
