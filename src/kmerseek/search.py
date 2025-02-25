@@ -122,12 +122,11 @@ def do_manysearch(query, target, output, ksize, scaled, moltype):
         moltype,
         output,
         False,  # Don't ignore abundance
-        False,  # Don't output ALL comparisons, only the onse with at least a match
+        False,  # Don't output ALL comparisons, only the ones with at least a match
     )
 
 
 def do_multisearch(query, target, output, moltype, ksize, scaled):
-
     sourmash_plugin_branchwater.do_multisearch(
         query.sig,
         # TODO: Figure out why target.rocksdb isn't working
@@ -183,7 +182,6 @@ class KmerseekResults:
         return kmers_renamed
 
     def join_query_target_kmers(self):
-
         query_kmers_prepped = self._prep_kmers_for_merging(
             self.query.kmers_lazyframe, "_query"
         )
@@ -200,7 +198,6 @@ class KmerseekResults:
         raise NotImplementedError()
 
     def join_results_kmers(self):
-
         self.results_with_kmers = self.results.join(
             self.kmers,
             left_on=self.join_results_search_on,
