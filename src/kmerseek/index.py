@@ -14,7 +14,7 @@ class KmerseekIndex(KmerseekEntity):
         if not hasattr(self, "_rocksdb"):
             # rocksdb = _make_rocksdb_filename(self.sig)
             # if not os.path.exists(rocksdb):
-            self._rocksdb = make_rocksdb_index(self.sig, **self.sketch_kws)
+            self._rocksdb = make_rocksdb_index(self.sketch, **self.sketch_kws)
             # else:
             #     self._rocksdb = rocksdb
         return self._rocksdb
@@ -88,7 +88,7 @@ def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
-    _ = kmerseek_index.sig
+    _ = kmerseek_index.sketch
 
 
 @click.command()
