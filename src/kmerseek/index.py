@@ -1,9 +1,5 @@
-import os
-
 import click
 from sourmash.logging import notify
-import pandas as pd
-
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
 from .entity import KmerseekEntity
@@ -41,7 +37,7 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 
     siglist = _make_siglist_file(sig)
 
-    # Colros set to false because that's what the sourmash_plugin_branchwater code does
+    # Colors set to false because that's what the sourmash_plugin_branchwater code does
     colors = False
 
     # internal storage is false: don't store the signatures in the index, since the signatures are
@@ -54,7 +50,7 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
         scaled,
         moltype,
         output,
-        colors,  # colors - currently must be false?
+        colors,
         internal_storage,
     )
     if status == 0:
@@ -66,8 +62,9 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-def index(fasta, moltype="hp", ksize=24, scaled=5):
+@click.option("--force", is_flag=True)
+def index(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
-    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
     _ = (kmerseek_index.sig, kmerseek_index.kmers_pq, kmerseek_index.rocksdb)
