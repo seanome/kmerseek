@@ -1,7 +1,4 @@
-import os
-
 from click.testing import CliRunner
-
 
 from kmerseek.main import cli
 
@@ -10,6 +7,7 @@ def test_search(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
     runner = CliRunner()
     result = runner.invoke(cli, ["search", "--ksize", "16", ced9, bcl2_first25])
     assert result.exit_code == 0
+
     assert (
         """---
 Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
