@@ -2,9 +2,9 @@ import os
 
 import polars as pl
 
-from .sketch import sketch, _make_sigfile
-from .sig2kmer import get_kmers_cli, _make_kmer_filename
 from .logging import logger
+from .sig2kmer import get_kmers_cli, _make_kmer_filename
+from .sketch import sketch, _make_sigfile
 
 
 class KmerseekEntity:
@@ -22,6 +22,8 @@ class KmerseekEntity:
         if not hasattr(self, "_sig"):
             sigfile = _make_sigfile(self.fasta, **self.sketch_kws)
             if self.force or not os.path.exists(sigfile):
+                if os.path.exists(sigfile):
+                    logger.info(f"Found {sigfile} file, but re-making with '--force'")
                 self._sig = sketch(self.fasta, **self.sketch_kws)
             else:
                 logger.info(
@@ -36,6 +38,8 @@ class KmerseekEntity:
         if not hasattr(self, "_kmers_pq"):
             pq = _make_kmer_filename(self.sig)
             if self.force or not os.path.exists(pq):
+                if os.path.exists(pq):
+                    logger.info(f"Found {pq} file, but re-making with '--force'")
                 self._kmers_pq = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
             else:
                 logger.info(
