@@ -79,6 +79,7 @@ def stitch_kmers_in_query_match_pair(
 
     length = len(query)
 
+    # 0-based, open intervals (same as Python indexing)
     match_start = df[start_match].min()
     query_start = df[start_query].min()
     match_end = match_start + length
