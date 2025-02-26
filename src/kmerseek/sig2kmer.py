@@ -115,6 +115,8 @@ def add_start_position_to_kmers_pl(
             ]
         )
 
+    # TODO: Asked how this could be more efficient here:
+    # https://stackoverflow.com/questions/79470417/how-to-add-a-group-specific-index-to-a-polars-dataframe-with-an-expression-inste
     sequences_with_start = (
         (
             sequences.group_by("sequence").map_groups(
@@ -167,7 +169,8 @@ def postprocess_kmers(
         ksize, kmers_with_encoding, in_fasta
     )
 
-    kmers_with_encoding_and_starts.sink_parquet(out_pq)
+    # TODO: Could this be sink_parquet and be properly streaming?
+    kmers_with_encoding_and_starts.collect(streaming=True).write_parquet(out_pq)
 
 
 def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
