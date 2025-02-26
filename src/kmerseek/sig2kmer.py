@@ -6,16 +6,23 @@ k-mers and sequences that match a hashval in the signature file.
 Cribbed from https://github.com/dib-lab/sourmash/pull/724/
 """
 
-from typing import Literal
 from tempfile import NamedTemporaryFile
+from typing import Literal
 
-import sourmash
 import polars as pl
 import screed
+import sourmash
 
 
 def _make_kmer_filename(sig):
     return f"{sig}.kmers.pq"
+
+
+def kmerize(sequence, ksize):
+    if ksize <= 0:
+        return []
+    kmers = [sequence[i : (i + ksize)] for i in range(len(sequence) - ksize + 1)]
+    return kmers
 
 
 # TODO: maybe add this to sourmash.sig.__main__.kmers because it's useful to us,
@@ -74,7 +81,6 @@ class Args:
 
 
 def add_encoding_to_kmers_pl(kmers, moltype):
-
     # Apply encoding using a UDF (User Defined Function)
     if moltype == "hp" or moltype == "dayhoff":
         kmers_with_encoding = kmers.with_columns(
@@ -94,25 +100,46 @@ def add_encoding_to_kmers_pl(kmers, moltype):
 # TODO: Probably move this to `sourmash sig kmers` itself
 # i.e. to here: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/sig/__main__.py#L1087
 # https://github.com/seanome/kmerseek/issues/5
-def add_start_position_to_kmers_pl(kmers, fasta):
-    sequences = {}
+def add_start_position_to_kmers_pl(
+    ksize: int, kmers_with_encoding: pl.LazyFrame, fasta: str
+):
     with screed.open(fasta) as records:
-        for record in records:
-            sequences[record["name"]] = record["sequence"]
+        sequences = pl.LazyFrame(
+            [
+                {
+                    "sequence_name": record["name"],
+                    "sequence": record["sequence"],
+                    "length": len(record["sequence"]),
+                }
+                for record in records
+            ]
+        )
 
-    def find_start(row):
-        sequence = sequences[row["sequence_name"]]
-        kmer = row["kmer"]
-        return sequence.index(kmer)
-
-    # Add start column using map expression
-    kmers_with_start = kmers.with_columns(
-        pl.struct(["sequence_name", "kmer"])
-        # Return unsigned integer32, range of 0 to 4,294,967,295
-        # Don't expect protein sequences to be larger than 1 million really
-        # position should always be positive, error if not
-        .map_elements(find_start, return_dtype=pl.UInt32).alias("start")
+    sequences_with_start = (
+        (
+            sequences.group_by("sequence").map_groups(
+                lambda group_df: group_df.with_columns(
+                    kmer=pl.col("sequence").repeat_by("length")
+                )
+                .explode("kmer")
+                .with_row_index(),
+                schema={
+                    "kmer": pl.String,
+                    "index": pl.UInt32,
+                    "sequence": pl.String,
+                    "sequence_name": pl.String,
+                },
+            )
+        )
+        .with_columns(pl.col("kmer").str.slice("index", ksize))
+        .filter(pl.col("kmer").str.len_chars() == ksize)
+        .rename({"index": "start"})
     )
+
+    kmers_with_start = sequences_with_start.select(
+        ["sequence_name", "kmer", "start"]
+    ).join(kmers_with_encoding, on=["sequence_name", "kmer"])
+
     return kmers_with_start
 
 
@@ -121,6 +148,7 @@ def postprocess_kmers(
     in_fasta: str,
     moltype: Literal["hp", "dayhoff", "protein"],
     out_pq: str,
+    ksize: int,
 ):
     """Add moltype-encoded version and start positions for each kmer
 
@@ -136,7 +164,7 @@ def postprocess_kmers(
 
     kmers_with_encoding = add_encoding_to_kmers_pl(kmers, moltype)
     kmers_with_encoding_and_starts = add_start_position_to_kmers_pl(
-        kmers_with_encoding, in_fasta
+        ksize, kmers_with_encoding, in_fasta
     )
 
     kmers_with_encoding_and_starts.sink_parquet(out_pq)
@@ -145,7 +173,7 @@ def postprocess_kmers(
 def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
     # Create a temporary file for kmers CSV
     # TODO: Could potentially run out of temporary disk space but ...
-    # maybe can stream the output to a parquet file?
+    # maybe can stream the output to a parquet file / polars lazyframe?
     with NamedTemporaryFile(suffix=".csv") as tmp_kmers, NamedTemporaryFile(
         suffix=".fasta"
     ) as tmp_fasta:
@@ -171,6 +199,6 @@ def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
         out_pq = _make_kmer_filename(sig)
 
         # Process the temp CSV file
-        postprocess_kmers(tmp_kmers.name, tmp_fasta.name, moltype, out_pq)
+        postprocess_kmers(tmp_kmers.name, tmp_fasta.name, moltype, out_pq, ksize)
 
         return out_pq
