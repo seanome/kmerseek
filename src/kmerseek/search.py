@@ -1,13 +1,16 @@
-import click
-from sourmash_plugin_branchwater import sourmash_plugin_branchwater
-import pandas as pd
-import polars as pl
+import os
+import sys
+from tempfile import NamedTemporaryFile
 
-from .uniprot import get_domains
-from .sketch import make_sketch_kws
+import click
+import polars as pl
+from sourmash_plugin_branchwater import sourmash_plugin_branchwater
+
 from .index import KmerseekIndex, _make_siglist_file
-from .query import KmerseekQuery
 from .logging import setup_logging, logger
+from .query import KmerseekQuery
+from .sketch import make_sketch_kws, MOLTYPES
+from .uniprot import get_domains
 
 
 def show_results(results_per_gene):
@@ -86,7 +89,9 @@ def stitch_kmers_in_query_match_pair(
     query_end = query_start + length
 
     to_print = (
-        f"query: {query} ({query_start}-{query_end})\n"
+        f"\n---\nQuery Name: {query_name}"
+        f"\nMatch Name: {match_name}"
+        f"\nquery: {query} ({query_start}-{query_end})\n"
         f"alpha: {alphabet}\n"
         f"match: {match} ({match_start}-{match_end})"
     )
@@ -123,12 +128,11 @@ def do_manysearch(query, target, output, ksize, scaled, moltype):
         moltype,
         output,
         False,  # Don't ignore abundance
-        False,  # Don't output ALL comparisons, only the onse with at least a match
+        False,  # Don't output ALL comparisons, only the ones with at least a match
     )
 
 
 def do_multisearch(query, target, output, moltype, ksize, scaled):
-
     sourmash_plugin_branchwater.do_multisearch(
         query.sig,
         # TODO: Figure out why target.rocksdb isn't working
@@ -140,7 +144,7 @@ def do_multisearch(query, target, output, moltype, ksize, scaled):
         moltype,
         False,  # No Average nucleotide identity (ANI) calculation
         True,  # Yes, calculate probability of overlap between target and query
-        False,  # Don't output ALL comparisons, only the onse with at least a match
+        False,  # Don't output ALL comparisons, only the ones with at least a match
         output,
     )
 
@@ -184,7 +188,6 @@ class KmerseekResults:
         return kmers_renamed
 
     def join_query_target_kmers(self):
-
         query_kmers_prepped = self._prep_kmers_for_merging(
             self.query.kmers_lazyframe, "_query"
         )
@@ -201,7 +204,6 @@ class KmerseekResults:
         raise NotImplementedError()
 
     def join_results_kmers(self):
-
         self.results_with_kmers = self.results.join(
             self.kmers,
             left_on=self.join_results_search_on,
@@ -229,16 +231,12 @@ class KmerseekResults:
         ).collect()
 
     def show_results_per_gene(self):
-        cols = self.per_gene_stitched_kmers.columns
-        for row_data in self.per_gene_stitched_kmers.iter_rows():
-            # Each row is a single match
-            row = dict(zip(cols, row_data))
-            # import pdb
-
-            # pdb.set_trace()
-            print(f"\n---\nQuery Name: {row['query_name']}")
-            print(f"Match Name: {row['match_name']}")
-            print(row["to_print"])
+        print(
+            self.per_gene_stitched_kmers.select(pl.col("to_print")).write_csv(
+                quote_style="never", include_header=False
+            ),
+            file=sys.stderr,
+        )
 
 
 @click.command()
@@ -247,16 +245,27 @@ class KmerseekResults:
 @click.option("--moltype", default="hp")
 @click.option("--ksize", default=24)
 @click.option("--scaled", default=5)
-@click.option("--output", default="kmerseek_search.csv")
+@click.option(
+    "--output", default=None, help="If not specified, then output results to stdout"
+)
+@click.option(
+    "--sourmash-search-csv",
+    default=None,
+    help=(
+        "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
+        "Mostly for debugging purposes"
+    ),
+)
 @click.option("--debug", is_flag=True, help="Enable debug logging")
 def search(
-    query_fasta,
-    target_fasta,
-    moltype="hp",
-    ksize=24,
-    scaled=5,
-    output="kmerseek_search.csv",
-    debug=False,
+    query_fasta: str,
+    target_fasta: str,
+    moltype: MOLTYPES = "hp",
+    ksize: int = 24,
+    scaled: int = 5,
+    output: str | None = None,
+    sourmash_search_csv: str | None = None,
+    debug: bool = False,
 ):
     """Search for k-mers in target sequences."""
     # Set up logging based on debug flag
@@ -277,11 +286,35 @@ def search(
 
     target = KmerseekIndex(target_fasta, **sketch_kwargs)
 
-    # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
-    do_manysearch(query, target, output, **sketch_kwargs)
-    results = KmerseekResults(output, query, target)
+    temp_file = None
 
-    results.join_query_target_kmers()
-    results.join_results_kmers()
-    results.stitch_kmers_per_gene()
-    results.show_results_per_gene()
+    csv_path, temp_file = create_sourmash_search_output(sourmash_search_csv, temp_file)
+
+    try:
+        # Run the search with the appropriate CSV file
+        do_manysearch(query, target, csv_path, **sketch_kwargs)
+        results = KmerseekResults(csv_path, query, target)
+
+        # Process results
+        results.join_query_target_kmers()
+        results.join_results_kmers()
+        results.stitch_kmers_per_gene()
+        results.show_results_per_gene()
+
+        results.per_gene_stitched_kmers.write_csv(output)
+
+    finally:
+        # Clean up temporary file if we created one
+        if temp_file and os.path.exists(csv_path):
+            os.unlink(csv_path)
+
+
+def create_sourmash_search_output(sourmash_search_csv, temp_file):
+    if sourmash_search_csv is None:
+        # Create a temporary file that will be automatically cleaned up
+        temp_file = NamedTemporaryFile(suffix=".csv", delete=False)
+        csv_path = temp_file.name
+        temp_file.close()  # Close but don't delete yet
+    else:
+        csv_path = sourmash_search_csv
+    return csv_path, temp_file
