@@ -1,7 +1,7 @@
 import os
 
-from click.testing import CliRunner
 import polars as pl
+from click.testing import CliRunner
 
 from kmerseek.main import cli
 
@@ -31,6 +31,11 @@ def test_index(bcl2_first25):
     # May need to `.sort_values()` to make sure `head()` and `tail()` work
     # https://github.com/seanome/kmerseek/issues/3
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.kmers.pq")
+    kmers_true = pl.read_parquet(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.kmers.true.pq")
+
+    kmers_test = pl.read_parquet(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.kmers.pq")
+    assert kmers_test.shape == (1712, 6)
+    assert kmers_test.equals(kmers_true)
 
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist")
     with open(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist") as f:
