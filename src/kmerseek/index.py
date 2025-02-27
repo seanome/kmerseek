@@ -62,7 +62,11 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-@click.option("--force", is_flag=True)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
+)
 def index(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
