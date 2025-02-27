@@ -123,4 +123,3 @@ def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
     _ = kmerseek_index.rocksdb
-
