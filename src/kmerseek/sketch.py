@@ -1,13 +1,16 @@
 import os
+from typing import Literal
 
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
+MOLTYPES = Literal["hp", "dayhoff", "protein"]
 
-def make_sketch_kws(moltype, ksize, scaled):
+
+def make_sketch_kws(moltype: MOLTYPES, ksize: int, scaled: int):
     return dict(ksize=ksize, moltype=moltype, scaled=scaled)
 
 
-def _make_manysketch_csv(fasta):
+def _make_manysketch_csv(fasta: str):
     csv = f"{fasta}.manysketch.csv"
     basename = os.path.basename(fasta)
     with open(csv, "w") as f:
@@ -17,12 +20,12 @@ def _make_manysketch_csv(fasta):
     return csv
 
 
-def _make_sigfile(fasta, moltype, ksize, scaled):
+def _make_sigfile(fasta: str, moltype: MOLTYPES, ksize: int, scaled: int):
     sigfile = f"{fasta}.{moltype}.k{ksize}.scaled{scaled}.sig.zip"
     return sigfile
 
 
-def sketch(fasta, moltype, ksize, scaled):
+def sketch(fasta: str, moltype: MOLTYPES, ksize: int, scaled: int):
     param_string = f"{moltype},k={ksize},scaled={scaled},abund"
     sigfile = _make_sigfile(fasta, moltype, ksize, scaled)
 

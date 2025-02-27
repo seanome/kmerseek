@@ -1,14 +1,14 @@
 import os
 
-from click.testing import CliRunner
 import polars as pl
+from click.testing import CliRunner
 
 from kmerseek.main import cli
 
 
 def test_index(bcl2_first25):
     runner = CliRunner()
-    result = runner.invoke(cli, ["index", bcl2_first25])
+    result = runner.invoke(cli, ["index", "--force", bcl2_first25])
     assert result.exit_code == 0
 
     # Make sure all the files got created
@@ -31,6 +31,17 @@ def test_index(bcl2_first25):
     # May need to `.sort_values()` to make sure `head()` and `tail()` work
     # https://github.com/seanome/kmerseek/issues/3
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.kmers.pq")
+    kmers_true = pl.read_parquet(f"{bcl2_first25}.hp.k24.scaled5.sig.TRUE.zip.kmers.pq")
+    # Sort by sequence name and kmer start position
+    kmers_true = kmers_true.sort(["sequence_name", "start"]).select(
+        ["sequence_name", "kmer", "hashval", "encoded", "start"]
+    )
+
+    kmers_test = pl.read_parquet(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.kmers.pq")
+    # Sort by sequence name and kmer start position, then make sure columns are in the same order
+    kmers_test = kmers_test.sort(["sequence_name", "start"]).select(kmers_true.columns)
+    assert kmers_test.shape == (1712, 5)
+    assert kmers_test.equals(kmers_true)
 
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist")
     with open(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist") as f:

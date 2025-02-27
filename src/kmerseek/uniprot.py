@@ -3,8 +3,8 @@ Parse JSON file from UniProt
 """
 
 
-def get_domains(gene, start, end):
-    """For the gene provided, find overlapping regions
+def get_domains(uniprot_id, start, end):
+    """For the query uniprot ID (primary accession, e.g. O43236) provided, find overlapping regions
 
     Probably would do something like this:
     https://github.com/olgabot/botryllus-mhc/blob/main/notebooks/400_query_uniprot_rest_api.ipynb

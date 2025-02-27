@@ -1,9 +1,5 @@
-import os
-
 import click
 from sourmash.logging import notify
-import pandas as pd
-
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
 from .entity import KmerseekEntity
@@ -41,7 +37,7 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 
     siglist = _make_siglist_file(sig)
 
-    # Colros set to false because that's what the sourmash_plugin_branchwater code does
+    # Colors set to false because that's what the sourmash_plugin_branchwater code does
     colors = False
 
     # internal storage is false: don't store the signatures in the index, since the signatures are
@@ -54,7 +50,7 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
         scaled,
         moltype,
         output,
-        colors,  # colors - currently must be false?
+        colors,
         internal_storage,
     )
     if status == 0:
@@ -66,10 +62,16 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-def index(fasta, moltype="hp", ksize=24, scaled=5):
-    index_sketch(fasta, moltype, ksize, scaled)
-    index_kmers_pq(fasta, moltype, ksize, scaled)
-    index_rocksdb(fasta, moltype, ksize, scaled)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
+)
+def index(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+
+    index_sketch(fasta, moltype, ksize, scaled, force=force)
+    index_kmers_pq(fasta, moltype, ksize, scaled, force=force)
+    index_rocksdb(fasta, moltype, ksize, scaled, force=force)
 
 
 @click.command()
@@ -77,7 +79,12 @@ def index(fasta, moltype="hp", ksize=24, scaled=5):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-def index_sketch(fasta, moltype="hp", ksize=24, scaled=5):
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of k-mer signature file even if file already exists",
+)
+def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
@@ -89,7 +96,12 @@ def index_sketch(fasta, moltype="hp", ksize=24, scaled=5):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5):
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of k-mer parquet file even if file already exists",
+)
+def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
@@ -101,8 +113,14 @@ def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5):
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of rocksdb index even if already exists",
+)
+def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
     _ = kmerseek_index.rocksdb
+
