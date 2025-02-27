@@ -17,3 +17,6 @@ build-backend = "hatchling.build"
 
 [project.scripts]
 kmerseek = "kmerseek.main:cli"
+
+[tool.isort]
+profile = "black"

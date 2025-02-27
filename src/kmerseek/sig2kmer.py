@@ -15,6 +15,8 @@ import sourmash
 
 from .logging import logger
 
+from .logging import logger
+
 
 def _make_kmer_filename(sig):
     return f"{sig}.kmers.pq"
@@ -204,6 +206,7 @@ def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
         out_pq = _make_kmer_filename(sig)
 
         # Process the temp CSV file
+        logger.info(f"Postprocessing k-mers with encoded versions")
         postprocess_kmers(tmp_kmers.name, tmp_fasta.name, moltype, out_pq, ksize)
 
         return out_pq

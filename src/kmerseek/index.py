@@ -14,7 +14,7 @@ class KmerseekIndex(KmerseekEntity):
         if not hasattr(self, "_rocksdb"):
             # rocksdb = _make_rocksdb_filename(self.sig)
             # if not os.path.exists(rocksdb):
-            self._rocksdb = make_rocksdb_index(self.sig, **self.sketch_kws)
+            self._rocksdb = make_rocksdb_index(self.sketch, **self.sketch_kws)
             # else:
             #     self._rocksdb = rocksdb
         return self._rocksdb
@@ -68,7 +68,58 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
 def index(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+
+    index_sketch(fasta, moltype, ksize, scaled, force=force)
+    index_kmers_pq(fasta, moltype, ksize, scaled, force=force)
+    index_rocksdb(fasta, moltype, ksize, scaled, force=force)
+
+
+@click.command()
+@click.argument("fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", type=int, default=24)
+@click.option("--scaled", type=int, default=5)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of k-mer signature file even if file already exists",
+)
+def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
-    kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
-    _ = (kmerseek_index.sig, kmerseek_index.kmers_pq, kmerseek_index.rocksdb)
+    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    _ = kmerseek_index.sketch
+
+
+@click.command()
+@click.argument("fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", type=int, default=24)
+@click.option("--scaled", type=int, default=5)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of k-mer parquet file even if file already exists",
+)
+def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
+
+    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    _ = kmerseek_index.kmers_pq
+
+
+@click.command()
+@click.argument("fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", type=int, default=24)
+@click.option("--scaled", type=int, default=5)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of rocksdb index even if already exists",
+)
+def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
+
+    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    _ = kmerseek_index.rocksdb
