@@ -34,7 +34,6 @@ jobs:
           mamba-version: "*"
           activate-environment: kmerseek-dev
           auto-activate-base: false
-      #        use-only-tar-bz2: true
 
       - run: conda info
       - run: conda list
