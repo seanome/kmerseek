@@ -13,6 +13,8 @@ import polars as pl
 import screed
 import sourmash
 
+from .logging import logger
+
 
 def _make_kmer_filename(sig):
     return f"{sig}.kmers.pq"
@@ -160,7 +162,7 @@ def postprocess_kmers(
         moltype (Literal[&quot;hp&quot;, &quot;dayhoff&quot;, &quot;protein&quot;]): _description_
         out_pq (str): _description_
     """
-    print(f"Reading in k-mers, adding {moltype} encoded values")
+    logger.info(f"Reading in k-mers, adding {moltype} encoded values")
     # Read in as a LazyFrame to not load everything into memory
     kmers = pl.scan_csv(in_csv)
 
@@ -193,8 +195,8 @@ def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
         # TODO: this "works" but calls what's normally a CLI as a Python method...
         # would love for this to be just a regular Python method that you could
         # feed sigs and fastas to
-        print(f"Calling get_kmers_cli on {sig} with {fasta}")
-        print(f"Saving matches to {args.save_kmers}")
+        logger.info(f"Calling get_kmers_cli on {sig} with {fasta}")
+        logger.info(f"Saving matches to {args.save_kmers}")
         # CLI call: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/cli/sig/kmers.py#L96
         # Actual code that gets run: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/sig/__main__.py#L1087
         sourmash.sig.__main__.kmers(args)
