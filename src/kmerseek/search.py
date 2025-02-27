@@ -6,7 +6,10 @@ import click
 import polars as pl
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
+from .uniprot import get_domains
+from .sketch import make_sketch_kws
 from .index import KmerseekIndex, _make_siglist_file
+from .query import KmerseekQuery
 from .logging import setup_logging, logger
 from .query import KmerseekQuery
 from .sketch import make_sketch_kws, MOLTYPES
@@ -116,11 +119,11 @@ def stitch_kmers_in_query_match_pair(
 
 # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
 def do_manysearch(query, target, output, ksize, scaled, moltype):
-    query_siglist = _make_siglist_file(query.sig)
+    query_siglist = _make_siglist_file(query.sketch)
 
     # TODO: Figure out why target.rocksdb isn't working
     # https://github.com/seanome/kmerseek/issues/4
-    target_siglist = _make_siglist_file(target.sig)
+    target_siglist = _make_siglist_file(target.sketch)
     sourmash_plugin_branchwater.do_manysearch(
         query_siglist,
         target_siglist,
@@ -136,10 +139,10 @@ def do_manysearch(query, target, output, ksize, scaled, moltype):
 
 def do_multisearch(query, target, output, moltype, ksize, scaled):
     sourmash_plugin_branchwater.do_multisearch(
-        query.sig,
+        query.sketch,
         # TODO: Figure out why target.rocksdb isn't working
         # https://github.com/seanome/kmerseek/issues/4
-        target.sig,
+        target.sketch,
         0,  # threshold=0 to show all matches, even with only 1 k-mer
         ksize,
         scaled,
@@ -173,13 +176,6 @@ class KmerseekResults:
 
     def read_results(self):
         df = pl.scan_csv(self.output_csv)
-
-        # # Remove all commas (,) -> replace with semicolon (;) to prevent read/write issues
-        # # with CSVs down the line
-        # df = df.with_columns(
-        #     match_name=pl.col("match_name").str.replace(",", ";"),
-        #     query_name=pl.col("query_name").str.replace(",", ";"),
-        # )
         return df
 
     def filter_target_kmers_in_results(self):
@@ -358,3 +354,104 @@ def create_sourmash_search_output(sourmash_search_csv, temp_file):
     else:
         csv_path = sourmash_search_csv
     return csv_path, temp_file
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def search_sketch_query(query_fasta, moltype, ksize, scaled, debug):
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+    query = KmerseekQuery(query_fasta, **sketch_kwargs)
+    _ = query.sketch
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.argument("query_sketch")
+@click.argument("target_fasta")
+@click.argument("target_sketch")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--output", default="kmerseek_search.csv")
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def search_do_search(
+    query_fasta,
+    query_sketch,
+    target_fasta,
+    target_sketch,
+    moltype,
+    ksize,
+    scaled,
+    output,
+    debug,
+):
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    logger.debug("Starting search with parameters:")
+    logger.debug(f"Query FASTA: {query_fasta}")
+    logger.debug(f"Target FASTA: {target_fasta}")
+    logger.debug(f"Moltype: {moltype}")
+    logger.debug(f"K-size: {ksize}")
+    logger.debug(f"Scaled: {scaled}")
+    logger.debug(f"Output: {output}")
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+
+    query = KmerseekQuery(query_fasta, sketch=query_sketch, **sketch_kwargs)
+    target = KmerseekIndex(target_fasta, sketch=target_sketch, **sketch_kwargs)
+
+    # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
+    do_manysearch(query, target, output, **sketch_kwargs)
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.argument("query_sketch")
+@click.argument("query_kmers_pq")
+@click.argument("target_fasta")
+@click.argument("target_sketch")
+@click.argument("target_kmers_pq")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--output", default="kmerseek_search.csv")
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def search_show_results(
+    query_fasta,
+    query_sketch,
+    query_kmers_pq,
+    target_fasta,
+    target_sketch,
+    target_kmers_pq,
+    moltype,
+    ksize,
+    scaled,
+    output,
+    debug,
+):
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+
+    query = KmerseekQuery(
+        query_fasta, sketch=query_sketch, kmers_pq=query_kmers_pq, **sketch_kwargs
+    )
+    target = KmerseekIndex(
+        target_fasta, sketch=target_sketch, kmers_pq=target_kmers_pq, **sketch_kwargs
+    )
+
+    results = KmerseekResults(output, query, target)
+
+    results.join_query_target_kmers()
+    results.join_results_kmers()
+    results.stitch_kmers_per_gene()
+    results.show_results_per_gene()
