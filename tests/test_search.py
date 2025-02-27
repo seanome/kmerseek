@@ -33,7 +33,7 @@ sp|Q16611|BAK_HUMAN Bcl-2 homologous antagonist/killer OS=Homo sapiens OX=9606 G
 """
         )
     ).sort("match_name")
-    test_output = pl.read_csv(result.stdout).sort("match_name")
+    test_output = pl.read_csv(StringIO(result.stdout)).sort("match_name")
 
     assert test_output.equals(true_output)
 
