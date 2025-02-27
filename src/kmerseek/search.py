@@ -231,12 +231,32 @@ class KmerseekResults:
         ).collect()
 
     def show_results_per_gene(self):
-        print(
+        click.echo(
             self.per_gene_stitched_kmers.select(pl.col("to_print")).write_csv(
                 quote_style="never", include_header=False
             ),
-            file=sys.stderr,
+            err=True,
         )
+
+    def write_to_file(self, filename):
+        df = self.per_gene_stitched_kmers.select(
+            # Ignore the "to_print" column
+            [
+                "match_name",
+                "query_name",
+                "query_start",
+                "query_end",
+                "query",
+                "match_start",
+                "match_end",
+                "match",
+            ]
+        )
+
+        if filename is None:
+            sys.stdout.write(df.write_csv())
+        else:
+            df.write_csv(filename)
 
 
 @click.command()
@@ -300,8 +320,7 @@ def search(
         results.join_results_kmers()
         results.stitch_kmers_per_gene()
         results.show_results_per_gene()
-
-        results.per_gene_stitched_kmers.write_csv(output)
+        results.write_to_file(output)
 
     finally:
         # Clean up temporary file if we created one
