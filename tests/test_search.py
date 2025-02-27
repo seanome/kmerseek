@@ -18,9 +18,7 @@ def test_search(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
         ],
     )
     assert result.exit_code == 0
-    import pdb
 
-    pdb.set_trace()
     assert (
         result.stdout
         == """match_name,query_name,query_start,query_end,query,match_start,match_end,match
