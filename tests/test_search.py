@@ -32,8 +32,8 @@ sp|Q13625|ASPP2_HUMAN Apoptosis-stimulating of p53 protein 2 OS=Homo sapiens OX=
 sp|Q16611|BAK_HUMAN Bcl-2 homologous antagonist/killer OS=Homo sapiens OX=9606 GN=BAK1 PE=1 SV=1,sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,245,261,RKQNRRWSMIGAGVTA,42,58,HQQEQEAEGVAAPADP
 """
         )
-    ).sort_values("match_name")
-    test_output = pl.read_csv(result.stdout).sort_values("match_name")
+    ).sort("match_name")
+    test_output = pl.read_csv(result.stdout).sort("match_name")
 
     assert test_output.equals(true_output)
 
