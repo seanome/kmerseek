@@ -106,6 +106,8 @@ def stitch_kmers_in_query_match_pair(
             "match_start": [match_start],
             "match_end": [match_end],
             "match": [match],
+            "encoded": [alphabet],
+            "length": [length],
             "to_print": [to_print],
         }
     )
@@ -171,6 +173,13 @@ class KmerseekResults:
 
     def read_results(self):
         df = pl.scan_csv(self.output_csv)
+
+        # # Remove all commas (,) -> replace with semicolon (;) to prevent read/write issues
+        # # with CSVs down the line
+        # df = df.with_columns(
+        #     match_name=pl.col("match_name").str.replace(",", ";"),
+        #     query_name=pl.col("query_name").str.replace(",", ";"),
+        # )
         return df
 
     def filter_target_kmers_in_results(self):
@@ -250,8 +259,14 @@ class KmerseekResults:
                 "match_start",
                 "match_end",
                 "match",
+                "encoded",
+                "length",
             ]
         )
+        #
+        # import pdb
+        #
+        # pdb.set_trace()
 
         if filename is None:
             sys.stdout.write(df.write_csv())
@@ -277,6 +292,11 @@ class KmerseekResults:
     ),
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
+)
 def search(
     query_fasta: str,
     target_fasta: str,
@@ -286,6 +306,7 @@ def search(
     output: str | None = None,
     sourmash_search_csv: str | None = None,
     debug: bool = False,
+    force: bool = False,
 ):
     """Search for k-mers in target sequences."""
     # Set up logging based on debug flag
@@ -301,10 +322,10 @@ def search(
 
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
-    query = KmerseekQuery(query_fasta, **sketch_kwargs)
+    query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
     _ = query.kmers_pq
 
-    target = KmerseekIndex(target_fasta, **sketch_kwargs)
+    target = KmerseekIndex(target_fasta, force=force, **sketch_kwargs)
 
     temp_file = None
 
