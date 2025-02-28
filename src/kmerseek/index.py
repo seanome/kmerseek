@@ -20,14 +20,14 @@ class KmerseekIndex(KmerseekEntity):
         return self._rocksdb
 
 
-def _make_siglist_file(sig):
+def _make_siglist_file(sig: str):
     siglist = f"{sig}.siglist"
     with open(siglist, "w") as f:
         f.write(f"{sig}")
     return siglist
 
 
-def _make_rocksdb_filename(sig):
+def _make_rocksdb_filename(sig: str):
     return f"{sig}.rocksdb"
 
 
@@ -67,11 +67,12 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
-def index(fasta, moltype="hp", ksize=24, scaled=5, force=False):
-
-    index_sketch(fasta, moltype, ksize, scaled, force=force)
-    index_kmers_pq(fasta, moltype, ksize, scaled, force=force)
-    index_rocksdb(fasta, moltype, ksize, scaled, force=force)
+@click.pass_context
+def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    # Now call each individual step
+    ctx.forward(index_sketch)
+    ctx.forward(index_kmers_pq)
+    ctx.forward(index_rocksdb)
 
 
 @click.command()
@@ -87,7 +88,7 @@ def index(fasta, moltype="hp", ksize=24, scaled=5, force=False):
 def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
-    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
     _ = kmerseek_index.sketch
 
 
@@ -104,7 +105,7 @@ def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
 def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
-    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
     _ = kmerseek_index.kmers_pq
 
 
@@ -121,5 +122,5 @@ def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
 def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
-    kmerseek_index = KmerseekIndex(fasta, **sketch_keywords)
+    kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
     _ = kmerseek_index.rocksdb
