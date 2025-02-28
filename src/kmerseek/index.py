@@ -69,10 +69,11 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 )
 @click.pass_context
 def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    """Prepare a database index for searching with k-mers"""
     # Now call each individual step
-    ctx.forward(index_sketch)
-    ctx.forward(index_kmers_pq)
-    ctx.forward(index_rocksdb)
+    ctx.forward(index_create_sketch)
+    ctx.forward(index_create_kmers_pq)
+    ctx.forward(index_create_rocksdb)
 
 
 @click.command()
@@ -85,7 +86,8 @@ def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False):
     is_flag=True,
     help="Force creation of k-mer signature file even if file already exists",
 )
-def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+def index_create_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    """Substep of index: low memory, parallelized"""
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
@@ -102,7 +104,10 @@ def index_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     is_flag=True,
     help="Force creation of k-mer parquet file even if file already exists",
 )
-def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+def index_create_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    """Substep of index: Extract k-mer sequences and encodings to a parquet file
+
+    Low memory, may take a long time"""
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
@@ -119,7 +124,8 @@ def index_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     is_flag=True,
     help="Force creation of rocksdb index even if already exists",
 )
-def index_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+def index_create_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+    """Substep of index: Creates RocksDB index for fast searching"""
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
