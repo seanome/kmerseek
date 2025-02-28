@@ -2,17 +2,25 @@ import os
 
 import polars as pl
 
-from .sketch import sketch, _make_sigfile
-from .sig2kmer import get_kmers_cli, _make_kmer_filename
 from .logging import logger
+from .sig2kmer import get_kmers_cli, _make_kmer_filename
+from .sketch import sketch, _make_sigfile, MOLTYPES
 
 
 class KmerseekEntity:
     """Base class to be inherited by KmerseekQuery and KmerseekIndex"""
 
     def __init__(
-        self, fasta, moltype, ksize, scaled, sketch=None, kmers_pq=None, force=False
+        self,
+        fasta: str,
+        moltype: MOLTYPES,
+        ksize: int,
+        scaled: int,
+        sketch=None,
+        kmers_pq=None,
+        force=False,
     ):
+
         # These are all filenames of where the data is stored
         self.fasta = fasta
         self.sketch_kws = dict(moltype=moltype, ksize=ksize, scaled=scaled)
