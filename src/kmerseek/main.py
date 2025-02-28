@@ -1,6 +1,11 @@
 import click
 
-from .index import index
+from .index import (
+    index,
+    index_create_sketch,
+    index_create_kmers_pq,
+    index_create_rocksdb,
+)
 from .search import search
 
 
@@ -11,4 +16,7 @@ def cli():
 
 
 cli.add_command(index)
+cli.add_command(index_create_sketch)
+cli.add_command(index_create_kmers_pq)
+cli.add_command(index_create_rocksdb)
 cli.add_command(search)
