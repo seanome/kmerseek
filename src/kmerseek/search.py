@@ -7,8 +7,8 @@ from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 from .index import (
     KmerseekIndex,
     _make_siglist_file,
-    index_create_sketch,
-    index_create_kmers_pq,
+    index_01_create_sketch,
+    index_02_create_kmers_pq,
 )
 from .logging import setup_logging, logger
 from .query import KmerseekQuery
@@ -315,7 +315,7 @@ def search(
     logger.debug(f"Output: {output}")
 
     query_sketch = ctx.invoke(
-        search_create_query_sketch,
+        search_01_create_query_sketch,
         query_fasta=query_fasta,
         moltype=moltype,
         ksize=ksize,
@@ -324,9 +324,9 @@ def search(
         force=force,
     )
 
-    # TODO: Maybe these could be the same function?
+    # TODO: Maybe index_01_create_sketch and search_01_create_query_sketch could be the same function?
     target_sketch = ctx.invoke(
-        index_create_sketch,
+        index_01_create_sketch,
         fasta=target_fasta,
         moltype=moltype,
         ksize=ksize,
@@ -335,9 +335,10 @@ def search(
         force=force,
     )
 
+    # TODO: Maybe index_02_create_kmers_pq and search_02_create_query_kmers_pq could be the same function?
     query_kmers_pq = ctx.invoke(
-        index_create_kmers_pq,
-        fasta=query_fasta,
+        search_02_create_query_kmers_pq,
+        query_fasta=query_fasta,
         moltype=moltype,
         ksize=ksize,
         scaled=scaled,
@@ -346,7 +347,7 @@ def search(
     )
 
     target_kmers_pq = ctx.invoke(
-        index_create_kmers_pq,
+        index_02_create_kmers_pq,
         fasta=target_fasta,
         moltype=moltype,
         ksize=ksize,
@@ -357,7 +358,7 @@ def search(
 
     # Do search and populate sourmash_search_csv
     ctx.invoke(
-        search_do_search,
+        search_03_do_search,
         query_fasta=query_fasta,
         query_sketch=query_sketch,
         target_fasta=target_fasta,
@@ -370,7 +371,7 @@ def search(
     )
 
     ctx.invoke(
-        search_show_results,
+        search_04_show_results,
         query_fasta=query_fasta,
         query_sketch=query_sketch,
         query_kmers_pq=query_kmers_pq,
@@ -425,13 +426,33 @@ def search(
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
-def search_create_query_sketch(query_fasta, moltype, ksize, scaled, debug, force):
+def search_01_create_query_sketch(query_fasta, moltype, ksize, scaled, debug, force):
     # Set up logging based on debug flag
     setup_logging(debug)
 
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
     query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
     return query.sketch
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
+)
+def search_02_create_query_kmers_pq(query_fasta, moltype, ksize, scaled, debug, force):
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+    query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
+    return query.kmers_pq
 
 
 @click.command()
@@ -451,7 +472,7 @@ def search_create_query_sketch(query_fasta, moltype, ksize, scaled, debug, force
     ),
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def search_do_search(
+def search_03_do_search(
     query_fasta,
     query_sketch,
     target_fasta,
@@ -497,7 +518,7 @@ def search_do_search(
     "--output", default=None, help="If not specified, then output results to stdout"
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def search_show_results(
+def search_04_show_results(
     query_fasta,
     query_sketch,
     query_kmers_pq,

@@ -73,9 +73,9 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False):
     """Prepare a database index for searching with k-mers"""
     # Now call each individual step
-    ctx.forward(index_create_sketch)
-    ctx.forward(index_create_kmers_pq)
-    ctx.forward(index_create_rocksdb)
+    ctx.forward(index_01_create_sketch)
+    ctx.forward(index_02_create_kmers_pq)
+    ctx.forward(index_03_create_rocksdb)
 
 
 @click.command()
@@ -89,7 +89,7 @@ def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
     help="Force creation of k-mer signature file even if file already exists",
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def index_create_sketch(
+def index_01_create_sketch(
     fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 ):
     """Substep of index: low memory, parallelized"""
@@ -112,7 +112,7 @@ def index_create_sketch(
     help="Force creation of k-mer parquet file even if file already exists",
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def index_create_kmers_pq(
+def index_02_create_kmers_pq(
     fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 ):
     """Substep of index: Extract k-mer sequences and encodings to a parquet file
@@ -137,12 +137,12 @@ def index_create_kmers_pq(
     help="Force creation of rocksdb index even if already exists",
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
-def index_create_rocksdb(
+def index_03_create_rocksdb(
     fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 ):
+    """Substep of index: Creates RocksDB index for fast searching"""
     setup_logging(debug)
 
-    """Substep of index: Creates RocksDB index for fast searching"""
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
