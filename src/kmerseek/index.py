@@ -3,6 +3,7 @@ from sourmash.logging import notify
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
 from .entity import KmerseekEntity
+from .logging import setup_logging
 from .sketch import make_sketch_kws
 
 
@@ -67,8 +68,9 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
+@click.option("--debug", is_flag=True, help="Enable debug logging")
 @click.pass_context
-def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False):
+def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False):
     """Prepare a database index for searching with k-mers"""
     # Now call each individual step
     ctx.forward(index_create_sketch)
@@ -86,12 +88,17 @@ def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False):
     is_flag=True,
     help="Force creation of k-mer signature file even if file already exists",
 )
-def index_create_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def index_create_sketch(
+    fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
+):
     """Substep of index: low memory, parallelized"""
+    setup_logging(debug)
+
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
-    _ = kmerseek_index.sketch
+    return kmerseek_index.sketch
 
 
 @click.command()
@@ -104,14 +111,19 @@ def index_create_sketch(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     is_flag=True,
     help="Force creation of k-mer parquet file even if file already exists",
 )
-def index_create_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def index_create_kmers_pq(
+    fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
+):
     """Substep of index: Extract k-mer sequences and encodings to a parquet file
 
     Low memory, may take a long time"""
+    setup_logging(debug)
+
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
-    _ = kmerseek_index.kmers_pq
+    return kmerseek_index.kmers_pq
 
 
 @click.command()
@@ -124,9 +136,14 @@ def index_create_kmers_pq(fasta, moltype="hp", ksize=24, scaled=5, force=False):
     is_flag=True,
     help="Force creation of rocksdb index even if already exists",
 )
-def index_create_rocksdb(fasta, moltype="hp", ksize=24, scaled=5, force=False):
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def index_create_rocksdb(
+    fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
+):
+    setup_logging(debug)
+
     """Substep of index: Creates RocksDB index for fast searching"""
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(fasta, force=force, **sketch_keywords)
-    _ = kmerseek_index.rocksdb
+    return kmerseek_index.rocksdb
