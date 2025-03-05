@@ -427,6 +427,7 @@ def search(
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
 def search_01_create_query_sketch(query_fasta, moltype, ksize, scaled, debug, force):
+    """Substep of Search: low memory, parallelized k-mer signature creation"""
     # Set up logging based on debug flag
     setup_logging(debug)
 
@@ -447,6 +448,9 @@ def search_01_create_query_sketch(query_fasta, moltype, ksize, scaled, debug, fo
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
 def search_02_create_query_kmers_pq(query_fasta, moltype, ksize, scaled, debug, force):
+    """Substep of Search: Extract k-mer sequences and encodings to a parquet file
+
+    Low memory, may take a long time"""
     # Set up logging based on debug flag
     setup_logging(debug)
 
@@ -483,6 +487,7 @@ def search_03_do_search(
     sourmash_search_csv,
     debug,
 ):
+    """Substep of Search: Perform Sourmash manysearch on query and target"""
     # Set up logging based on debug flag
     setup_logging(debug)
 
@@ -532,6 +537,7 @@ def search_04_show_results(
     output,
     debug,
 ):
+    """Substep of Search: Visualize the matching k-mer regions"""
     # Set up logging based on debug flag
     setup_logging(debug)
 

@@ -92,7 +92,7 @@ def index(ctx, fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 def index_01_create_sketch(
     fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 ):
-    """Substep of index: low memory, parallelized"""
+    """Substep of Index: low memory, parallelized k-mer signature creation"""
     setup_logging(debug)
 
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
@@ -115,7 +115,7 @@ def index_01_create_sketch(
 def index_02_create_kmers_pq(
     fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 ):
-    """Substep of index: Extract k-mer sequences and encodings to a parquet file
+    """Substep of Index: Extract k-mer sequences and encodings to a parquet file
 
     Low memory, may take a long time"""
     setup_logging(debug)
@@ -140,7 +140,7 @@ def index_02_create_kmers_pq(
 def index_03_create_rocksdb(
     fasta, moltype="hp", ksize=24, scaled=5, force=False, debug=False
 ):
-    """Substep of index: Creates RocksDB index for fast searching"""
+    """Substep of Index: Creates RocksDB index for fast searching"""
     setup_logging(debug)
 
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
