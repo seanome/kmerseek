@@ -93,4 +93,3 @@ dependencies:
   - xz-gpl-tools=5.6.4=hbcc6ac9_0
   - xz-tools=5.6.4=hb9d3cd8_0
   - zstd=1.5.6=ha6fb4c9_0
-prefix: /home/ec2-user/miniconda3/envs/kmerseek-dev
