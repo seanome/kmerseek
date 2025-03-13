@@ -93,4 +93,3 @@ dependencies:
   - xz-gpl-tools
   - xz-tools
   - zstd
-prefix: /home/ec2-user/miniconda3/envs/kmerseek-dev
