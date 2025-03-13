@@ -1,12 +1,15 @@
-import os
 import sys
-from tempfile import NamedTemporaryFile
 
 import click
 import polars as pl
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
-from .index import KmerseekIndex, _make_siglist_file
+from .index import (
+    KmerseekIndex,
+    _make_siglist_file,
+    index_01_create_sketch,
+    index_02_create_kmers_pq,
+)
 from .logging import setup_logging, logger
 from .query import KmerseekQuery
 from .sketch import make_sketch_kws, MOLTYPES
@@ -116,11 +119,11 @@ def stitch_kmers_in_query_match_pair(
 
 # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
 def do_manysearch(query, target, output, ksize, scaled, moltype):
-    query_siglist = _make_siglist_file(query.sig)
+    query_siglist = _make_siglist_file(query.sketch)
 
     # TODO: Figure out why target.rocksdb isn't working
     # https://github.com/seanome/kmerseek/issues/4
-    target_siglist = _make_siglist_file(target.sig)
+    target_siglist = _make_siglist_file(target.sketch)
     sourmash_plugin_branchwater.do_manysearch(
         query_siglist,
         target_siglist,
@@ -136,10 +139,10 @@ def do_manysearch(query, target, output, ksize, scaled, moltype):
 
 def do_multisearch(query, target, output, moltype, ksize, scaled):
     sourmash_plugin_branchwater.do_multisearch(
-        query.sig,
+        query.sketch,
         # TODO: Figure out why target.rocksdb isn't working
         # https://github.com/seanome/kmerseek/issues/4
-        target.sig,
+        target.sketch,
         0,  # threshold=0 to show all matches, even with only 1 k-mer
         ksize,
         scaled,
@@ -173,13 +176,6 @@ class KmerseekResults:
 
     def read_results(self):
         df = pl.scan_csv(self.output_csv)
-
-        # # Remove all commas (,) -> replace with semicolon (;) to prevent read/write issues
-        # # with CSVs down the line
-        # df = df.with_columns(
-        #     match_name=pl.col("match_name").str.replace(",", ";"),
-        #     query_name=pl.col("query_name").str.replace(",", ";"),
-        # )
         return df
 
     def filter_target_kmers_in_results(self):
@@ -263,10 +259,6 @@ class KmerseekResults:
                 "length",
             ]
         )
-        #
-        # import pdb
-        #
-        # pdb.set_trace()
 
         if filename is None:
             sys.stdout.write(df.write_csv())
@@ -285,7 +277,7 @@ class KmerseekResults:
 )
 @click.option(
     "--sourmash-search-csv",
-    default=None,
+    default="sourmash-search.csv",
     help=(
         "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
         "Mostly for debugging purposes"
@@ -297,7 +289,9 @@ class KmerseekResults:
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
+@click.pass_context
 def search(
+    ctx,
     query_fasta: str,
     target_fasta: str,
     moltype: MOLTYPES = "hp",
@@ -320,41 +314,247 @@ def search(
     logger.debug(f"Scaled: {scaled}")
     logger.debug(f"Output: {output}")
 
+    query_sketch = ctx.invoke(
+        search_01_create_query_sketch,
+        query_fasta=query_fasta,
+        moltype=moltype,
+        ksize=ksize,
+        scaled=scaled,
+        debug=debug,
+        force=force,
+    )
+
+    # TODO: Maybe index_01_create_sketch and search_01_create_query_sketch could be the same function?
+    target_sketch = ctx.invoke(
+        index_01_create_sketch,
+        fasta=target_fasta,
+        moltype=moltype,
+        ksize=ksize,
+        scaled=scaled,
+        debug=debug,
+        force=force,
+    )
+
+    # TODO: Maybe index_02_create_kmers_pq and search_02_create_query_kmers_pq could be the same function?
+    query_kmers_pq = ctx.invoke(
+        search_02_create_query_kmers_pq,
+        query_fasta=query_fasta,
+        moltype=moltype,
+        ksize=ksize,
+        scaled=scaled,
+        debug=debug,
+        force=force,
+    )
+
+    target_kmers_pq = ctx.invoke(
+        index_02_create_kmers_pq,
+        fasta=target_fasta,
+        moltype=moltype,
+        ksize=ksize,
+        scaled=scaled,
+        debug=debug,
+        force=force,
+    )
+
+    # Do search and populate sourmash_search_csv
+    ctx.invoke(
+        search_03_do_search,
+        query_fasta=query_fasta,
+        query_sketch=query_sketch,
+        target_fasta=target_fasta,
+        target_sketch=target_sketch,
+        moltype=moltype,
+        ksize=ksize,
+        scaled=scaled,
+        sourmash_search_csv=sourmash_search_csv,
+        debug=debug,
+    )
+
+    ctx.invoke(
+        search_04_show_results,
+        query_fasta=query_fasta,
+        query_sketch=query_sketch,
+        query_kmers_pq=query_kmers_pq,
+        target_fasta=target_fasta,
+        target_sketch=target_sketch,
+        target_kmers_pq=target_kmers_pq,
+        sourmash_search_csv=sourmash_search_csv,
+        moltype=moltype,
+        ksize=ksize,
+        scaled=scaled,
+        output=output,
+        debug=debug,
+    )
+
+    # sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+    #
+    # query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
+    # _ = query.kmers_pq
+    #
+    # target = KmerseekIndex(target_fasta, force=force, **sketch_kwargs)
+    #
+    # temp_file = None
+    #
+    # csv_path, temp_file = create_sourmash_search_output(sourmash_search_csv, temp_file)
+    #
+    # try:
+    #     # Run the search with the appropriate CSV file
+    #     do_manysearch(query, target, csv_path, **sketch_kwargs)
+    #     results = KmerseekResults(csv_path, query, target)
+    #
+    #     # Process results
+    #     results.join_query_target_kmers()
+    #     results.join_results_kmers()
+    #     results.stitch_kmers_per_gene()
+    #     results.show_results_per_gene()
+    #     results.write_to_file(output)
+    #
+    # finally:
+    #     # Clean up temporary file if we created one
+    #     if temp_file and os.path.exists(csv_path):
+    #         os.unlink(csv_path)
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
+)
+def search_01_create_query_sketch(query_fasta, moltype, ksize, scaled, debug, force):
+    """Substep of Search: low memory, parallelized k-mer signature creation"""
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+    query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
+    return query.sketch
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
+)
+def search_02_create_query_kmers_pq(query_fasta, moltype, ksize, scaled, debug, force):
+    """Substep of Search: Extract k-mer sequences and encodings to a parquet file
+
+    Low memory, may take a long time"""
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+    query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
+    return query.kmers_pq
+
+
+@click.command()
+@click.argument("query_fasta")
+@click.argument("query_sketch")
+@click.argument("target_fasta")
+@click.argument("target_sketch")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option(
+    "--sourmash-search-csv",
+    default=None,
+    help=(
+        "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
+        "Mostly for debugging purposes"
+    ),
+)
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def search_03_do_search(
+    query_fasta,
+    query_sketch,
+    target_fasta,
+    target_sketch,
+    moltype,
+    ksize,
+    scaled,
+    sourmash_search_csv,
+    debug,
+):
+    """Substep of Search: Perform Sourmash manysearch on query and target"""
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    logger.debug("Starting search with parameters:")
+    logger.debug(f"Query FASTA: {query_fasta}")
+    logger.debug(f"Target FASTA: {target_fasta}")
+    logger.debug(f"Moltype: {moltype}")
+    logger.debug(f"K-size: {ksize}")
+    logger.debug(f"Scaled: {scaled}")
+    logger.debug(f"sourmash_search_csv: {sourmash_search_csv}")
+
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
-    query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
-    _ = query.kmers_pq
+    query = KmerseekQuery(query_fasta, sketch=query_sketch, **sketch_kwargs)
+    target = KmerseekIndex(target_fasta, sketch=target_sketch, **sketch_kwargs)
 
-    target = KmerseekIndex(target_fasta, force=force, **sketch_kwargs)
-
-    temp_file = None
-
-    csv_path, temp_file = create_sourmash_search_output(sourmash_search_csv, temp_file)
-
-    try:
-        # Run the search with the appropriate CSV file
-        do_manysearch(query, target, csv_path, **sketch_kwargs)
-        results = KmerseekResults(csv_path, query, target)
-
-        # Process results
-        results.join_query_target_kmers()
-        results.join_results_kmers()
-        results.stitch_kmers_per_gene()
-        results.show_results_per_gene()
-        results.write_to_file(output)
-
-    finally:
-        # Clean up temporary file if we created one
-        if temp_file and os.path.exists(csv_path):
-            os.unlink(csv_path)
+    # TODO: benchmark manysearch vs multisearch: https://github.com/seanome/kmerseek/issues/2
+    do_manysearch(query, target, sourmash_search_csv, **sketch_kwargs)
 
 
-def create_sourmash_search_output(sourmash_search_csv, temp_file):
-    if sourmash_search_csv is None:
-        # Create a temporary file that will be automatically cleaned up
-        temp_file = NamedTemporaryFile(suffix=".csv", delete=False)
-        csv_path = temp_file.name
-        temp_file.close()  # Close but don't delete yet
-    else:
-        csv_path = sourmash_search_csv
-    return csv_path, temp_file
+@click.command()
+@click.argument("query_fasta")
+@click.argument("query_sketch")
+@click.argument("query_kmers_pq")
+@click.argument("target_fasta")
+@click.argument("target_sketch")
+@click.argument("target_kmers_pq")
+@click.argument("sourmash_search_csv")
+@click.option("--moltype", default="hp")
+@click.option("--ksize", default=24)
+@click.option("--scaled", default=5)
+@click.option(
+    "--output", default=None, help="If not specified, then output results to stdout"
+)
+@click.option("--debug", is_flag=True, help="Enable debug logging")
+def search_04_show_results(
+    query_fasta,
+    query_sketch,
+    query_kmers_pq,
+    target_fasta,
+    target_sketch,
+    target_kmers_pq,
+    sourmash_search_csv,
+    moltype,
+    ksize,
+    scaled,
+    output,
+    debug,
+):
+    """Substep of Search: Visualize the matching k-mer regions"""
+    # Set up logging based on debug flag
+    setup_logging(debug)
+
+    sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
+
+    query = KmerseekQuery(
+        query_fasta, sketch=query_sketch, kmers_pq=query_kmers_pq, **sketch_kwargs
+    )
+    target = KmerseekIndex(
+        target_fasta, sketch=target_sketch, kmers_pq=target_kmers_pq, **sketch_kwargs
+    )
+
+    results = KmerseekResults(sourmash_search_csv, query, target)
+
+    # Process results
+    results.join_query_target_kmers()
+    results.join_results_kmers()
+    results.stitch_kmers_per_gene()
+    results.show_results_per_gene()
+    results.write_to_file(output)
