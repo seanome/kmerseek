@@ -10,11 +10,12 @@ from .sketch import sketch, _make_sigfile
 class KmerseekEntity:
     """Base class to be inherited by KmerseekQuery and KmerseekIndex"""
 
-    def __init__(self, fasta, moltype, ksize, scaled, force=False):
+    def __init__(self, fasta, moltype, ksize, scaled, force=False, skip_kmer_extraction=False):
         # These are all filenames of where the data is stored
         self.fasta = fasta
         self.sketch_kws = dict(moltype=moltype, ksize=ksize, scaled=scaled)
         self.force = force
+        self.skip_kmer_extraction = skip_kmer_extraction
 
     @property
     def sig(self):
@@ -35,6 +36,9 @@ class KmerseekEntity:
     @property
     def kmers_pq(self):
         """String of k-mer csv filename"""
+        if self.skip_kmer_extraction:
+            logger.info("Skipping k-mer extraction")
+            return None
         if not hasattr(self, "_kmers_pq"):
             pq = _make_kmer_filename(self.sig)
             if self.force or not os.path.exists(pq):

@@ -280,6 +280,7 @@ class KmerseekResults:
 @click.option("--moltype", default="hp")
 @click.option("--ksize", default=24)
 @click.option("--scaled", default=5)
+@click.option('--skip-kmer-extraction', is_flag=True, default=False)
 @click.option(
     "--output", default=None, help="If not specified, then output results to stdout"
 )
@@ -304,6 +305,7 @@ def search(
     ksize: int = 24,
     scaled: int = 5,
     output: str | None = None,
+    skip_kmer_extraction: bool = False,
     sourmash_search_csv: str | None = None,
     debug: bool = False,
     force: bool = False,
@@ -322,10 +324,10 @@ def search(
 
     sketch_kwargs = make_sketch_kws(moltype, ksize, scaled)
 
-    query = KmerseekQuery(query_fasta, force=force, **sketch_kwargs)
+    query = KmerseekQuery(query_fasta, force=force, skip_kmer_extraction=skip_kmer_extraction, **sketch_kwargs)
     _ = query.kmers_pq
 
-    target = KmerseekIndex(target_fasta, force=force, **sketch_kwargs)
+    target = KmerseekIndex(target_fasta, force=force, skip_kmer_extraction=skip_kmer_extraction, **sketch_kwargs)
 
     temp_file = None
 
