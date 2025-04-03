@@ -165,11 +165,13 @@ class KmerseekResults:
         output_csv: str,
         query: KmerseekQuery,
         target: KmerseekIndex,
+        do_kmer_extraction: bool = False,
     ):
         self.output_csv = output_csv
         self.query = query
         self.target = target
         self.results = self.read_results()
+        self.do_kmer_extraction = do_kmer_extraction
 
     def read_results(self):
         df = pl.scan_csv(self.output_csv)
@@ -205,21 +207,21 @@ class KmerseekResults:
         )
 
         # No collect yet
-        self.kmers = query_kmers_prepped.join(
+        return query_kmers_prepped.join(
             target_kmers_prepped, on=self.join_query_target_kmers_on
         )
 
     def compute_tf_idf(self):
         raise NotImplementedError()
 
-    def join_results_kmers(self):
-        self.results_with_kmers = self.results.join(
-            self.kmers,
+    def join_search_results_kmers(self, results, kmers):
+        return results.join(
+            kmers,
             left_on=self.join_results_search_on,
             right_on=self.join_results_kmers_on,
         )
 
-    def stitch_kmers_per_gene(self):
+    def stitch_kmers_per_gene(self, search_with_kmers):
         # Define the schema for the output of stitch_kmers_in_query_match_pair
         output_schema = {
             "match_name": pl.Utf8,
@@ -233,22 +235,22 @@ class KmerseekResults:
             "to_print": pl.Utf8,
         }
 
-        self.per_gene_stitched_kmers = (
-            self.results_with_kmers.group_by("match_name")
+        return (
+            search_with_kmers.group_by("match_name")
             .map_groups(stitch_kmers_in_query_match_pair, schema=output_schema)
             .sort(["query_start", "query_end"])
         ).collect()
 
-    def show_results_per_gene(self):
+    def show_results_per_gene(self, per_gene_stitched_kmers):
         click.echo(
-            self.per_gene_stitched_kmers.select(pl.col("to_print")).write_csv(
+            per_gene_stitched_kmers.select(pl.col("to_print")).write_csv(
                 quote_style="never", include_header=False
             ),
             err=True,
         )
 
-    def write_to_file(self, filename):
-        df = self.per_gene_stitched_kmers.select(
+    def make_combined_df_for_output(self, search_with_per_gene_stitched_kmers):
+        return search_with_per_gene_stitched_kmers.select(
             # Ignore the "to_print" column
             [
                 "match_name",
@@ -264,6 +266,20 @@ class KmerseekResults:
             ]
         )
 
+    def process_results(self, filename):
+        search_results = self.read_results()
+        if self.do_kmer_extraction:
+            kmers = self.join_query_target_kmers()
+            search_with_kmers = self.join_search_results_kmers(search_results, kmers)
+            search_with_per_gene_stitched_kmers = self.stitch_kmers_per_gene(search_with_kmers)
+            self.show_results_per_gene(search_with_per_gene_stitched_kmers)
+            processed_df = self.make_combined_df_for_output(search_with_per_gene_stitched_kmers)
+        else:
+            processed_df = search_results.collect()
+        self.write_to_file(processed_df, filename)
+
+
+    def write_to_file(self, df, filename):
         if filename is None:
             sys.stdout.write(df.write_csv())
         else:
@@ -342,14 +358,10 @@ def search(
     try:
         # Run the search with the appropriate CSV file
         do_manysearch(query, target, csv_path, **sketch_kwargs)
-        results = KmerseekResults(csv_path, query, target)
+        results = KmerseekResults(csv_path, query, target, do_kmer_extraction)
 
         # Process results
-        results.join_query_target_kmers()
-        results.join_results_kmers()
-        results.stitch_kmers_per_gene()
-        results.show_results_per_gene()
-        results.write_to_file(output)
+        results.process_results(output)
 
     finally:
         # Clean up temporary file if we created one
