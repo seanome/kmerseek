@@ -24,7 +24,6 @@ def test_index(bcl2_first25):
     # https://github.com/seanome/kmerseek/issues/3
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip")
 
-
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist")
     with open(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.siglist") as f:
         assert f.readlines() == [f"{bcl2_first25}.hp.k24.scaled5.sig.zip"]
@@ -37,7 +36,9 @@ def test_index(bcl2_first25):
 
 def test_index_do_kmer_extraction(bcl2_first25):
     runner = CliRunner()
-    result = runner.invoke(cli, ["index", "--do-kmer-extraction", "--force", bcl2_first25])
+    result = runner.invoke(
+        cli, ["index", "--do-kmer-extraction", "--force", bcl2_first25]
+    )
     assert result.exit_code == 0
 
     # Make sure all the files got created

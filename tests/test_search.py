@@ -43,7 +43,6 @@ sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239
     assert test_output.equals(true_output)
 
 
-
 def test_search_do_kmer_extraction(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
     runner = CliRunner(mix_stderr=False)
     result = runner.invoke(

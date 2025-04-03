@@ -271,13 +271,16 @@ class KmerseekResults:
         if self.do_kmer_extraction:
             kmers = self.join_query_target_kmers()
             search_with_kmers = self.join_search_results_kmers(search_results, kmers)
-            search_with_per_gene_stitched_kmers = self.stitch_kmers_per_gene(search_with_kmers)
+            search_with_per_gene_stitched_kmers = self.stitch_kmers_per_gene(
+                search_with_kmers
+            )
             self.show_results_per_gene(search_with_per_gene_stitched_kmers)
-            processed_df = self.make_combined_df_for_output(search_with_per_gene_stitched_kmers)
+            processed_df = self.make_combined_df_for_output(
+                search_with_per_gene_stitched_kmers
+            )
         else:
             processed_df = search_results.collect()
         self.write_to_file(processed_df, filename)
-
 
     def write_to_file(self, df, filename):
         if filename is None:
