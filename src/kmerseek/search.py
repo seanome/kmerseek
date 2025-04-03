@@ -263,10 +263,6 @@ class KmerseekResults:
                 "length",
             ]
         )
-        #
-        # import pdb
-        #
-        # pdb.set_trace()
 
         if filename is None:
             sys.stdout.write(df.write_csv())
@@ -280,7 +276,7 @@ class KmerseekResults:
 @click.option("--moltype", default="hp")
 @click.option("--ksize", default=24)
 @click.option("--scaled", default=5)
-@click.option("--skip-kmer-extraction", is_flag=True, default=False)
+@click.option("--do-kmer-extraction", is_flag=True, default=False)
 @click.option(
     "--output", default=None, help="If not specified, then output results to stdout"
 )
@@ -305,7 +301,7 @@ def search(
     ksize: int = 24,
     scaled: int = 5,
     output: str | None = None,
-    skip_kmer_extraction: bool = False,
+    do_kmer_extraction: bool = False,
     sourmash_search_csv: str | None = None,
     debug: bool = False,
     force: bool = False,
@@ -327,7 +323,7 @@ def search(
     query = KmerseekQuery(
         query_fasta,
         force=force,
-        skip_kmer_extraction=skip_kmer_extraction,
+        do_kmer_extraction=do_kmer_extraction,
         **sketch_kwargs,
     )
     _ = query.kmers_pq
@@ -335,7 +331,7 @@ def search(
     target = KmerseekIndex(
         target_fasta,
         force=force,
-        skip_kmer_extraction=skip_kmer_extraction,
+        do_kmer_extraction=do_kmer_extraction,
         **sketch_kwargs,
     )
 
