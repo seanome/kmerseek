@@ -1,5 +1,4 @@
 import os
-
 import polars as pl
 from click.testing import CliRunner
 
@@ -34,10 +33,10 @@ def test_index(bcl2_first25):
     assert os.path.exists(f"{bcl2_first25}.hp.k24.scaled5.sig.zip.rocksdb")
 
 
-def test_index_do_kmer_extraction(bcl2_first25):
+def test_index_extract_kmers(bcl2_first25):
     runner = CliRunner()
     result = runner.invoke(
-        cli, ["index", "--do-kmer-extraction", "--force", bcl2_first25]
+        cli, ["index", "--extract-kmers", "--force", bcl2_first25]
     )
     assert result.exit_code == 0
 
