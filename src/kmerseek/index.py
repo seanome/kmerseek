@@ -17,7 +17,9 @@ class KmerseekIndexBase(KmerseekEntity):
         return self._rocksdb
 
     def __init__(self, fasta, moltype, ksize, scaled, force=False):
-        super().__init__(fasta, moltype, ksize, scaled, force=force, extract_kmers=False)
+        super().__init__(
+            fasta, moltype, ksize, scaled, force=force, extract_kmers=False
+        )
 
 
 class KmerseekIndexWithKmerExtraction(KmerseekIndexBase):
@@ -88,7 +90,15 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
-def index(fasta, moltype="hp", ksize=24, scaled=5, extract_kmers=False, debug=False, force=False):
+def index(
+    fasta,
+    moltype="hp",
+    ksize=24,
+    scaled=5,
+    extract_kmers=False,
+    debug=False,
+    force=False,
+):
     # Set up logging based on debug flag
     setup_logging(debug)
 
