@@ -6,7 +6,9 @@ import click
 import polars as pl
 from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
-from .index import KmerseekIndex, _make_siglist_file
+from .index import (
+    KmerseekIndexBase, KmerseekIndexWithKmerExtraction, KmerseekIndexWithoutKmerExtraction, _make_siglist_file,
+)
 from .logging import setup_logging, logger
 from .query import KmerseekQuery
 from .sketch import make_sketch_kws, MOLTYPES
@@ -34,6 +36,8 @@ def single_stitch_together_kmers(kmers: pl.Series, i_kmers: pl.Series):
     logger.debug(f"Input kmers: {kmers}")
     logger.debug(f"Input i_kmers: {i_kmers}")
 
+    prev_i_kmer = 0
+
     for i, (i_kmer, kmer) in enumerate(zip(i_kmers, kmers)):
         logger.debug(f"Processing kmer {i}: position={i_kmer}, kmer={kmer}")
         if i == 0:
@@ -52,12 +56,12 @@ def single_stitch_together_kmers(kmers: pl.Series, i_kmers: pl.Series):
 
 
 def stitch_kmers_in_query_match_pair(
-    df: pl.LazyFrame,
-    kmer_match="kmer_match",
-    kmer_alphabet="encoded",
-    kmer_query="kmer_query",
-    start_match="start_match",
-    start_query="start_query",
+        df: pl.LazyFrame,
+        kmer_match="kmer_match",
+        kmer_alphabet="encoded",
+        kmer_query="kmer_query",
+        start_match="start_match",
+        start_query="start_query",
 ) -> pl.DataFrame:
     logger.debug("\nProcessing new group:")
     logger.debug(f"Input dataframe:\n{df}")
@@ -161,7 +165,7 @@ class KmerseekResultsBase:
     ]
     join_query_target_kmers_on = ["encoded", "hashval"]
 
-    def __init__(self, output_csv: str, query: KmerseekQuery, target: KmerseekIndex):
+    def __init__(self, output_csv: str, query: KmerseekQuery, target: KmerseekIndexBase):
         self.output_csv = output_csv
         self.query = query
         self.target = target
@@ -288,8 +292,8 @@ class KmerseekResultsWithoutKmerExtraction(KmerseekResultsBase):
     "--sourmash-search-csv",
     default=None,
     help=(
-        "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
-        "Mostly for debugging purposes"
+            "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
+            "Mostly for debugging purposes"
     ),
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
@@ -299,16 +303,16 @@ class KmerseekResultsWithoutKmerExtraction(KmerseekResultsBase):
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
 def search(
-    query_fasta: str,
-    target_fasta: str,
-    moltype: MOLTYPES = "hp",
-    ksize: int = 24,
-    scaled: int = 5,
-    output: str | None = None,
-    extract_kmers: bool = False,
-    sourmash_search_csv: str | None = None,
-    debug: bool = False,
-    force: bool = False,
+        query_fasta: str,
+        target_fasta: str,
+        moltype: MOLTYPES = "hp",
+        ksize: int = 24,
+        scaled: int = 5,
+        output: str | None = None,
+        extract_kmers: bool = False,
+        sourmash_search_csv: str | None = None,
+        debug: bool = False,
+        force: bool = False,
 ):
     """Search for k-mers in target sequences."""
     # Set up logging based on debug flag
@@ -332,12 +336,15 @@ def search(
     )
     _ = query.kmers_pq
 
-    target = KmerseekIndex(
-        target_fasta,
-        force=force,
-        extract_kmers=extract_kmers,
-        **sketch_kwargs,
-    )
+    # Instantiate the appropriate KmerseekIndex based on the do_kmer_extraction flag
+    if extract_kmers:
+        target = KmerseekIndexWithKmerExtraction(
+            target_fasta, force=force, **sketch_kwargs
+        )
+    else:
+        target = KmerseekIndexWithoutKmerExtraction(
+            target_fasta, force=force, **sketch_kwargs
+        )
 
     temp_file = None
 
