@@ -1,8 +1,7 @@
 import os
-import polars as pl
 
+from .extract_kmers import KmerseekExtractKmers  # Import the new class
 from .logging import logger
-from .sig2kmer import get_kmers_cli, _make_kmer_filename
 from .sketch import sketch, _make_sigfile
 
 
@@ -15,11 +14,13 @@ class KmerseekEntity:
         self.sketch_kws = dict(moltype=moltype, ksize=ksize, scaled=scaled)
         self.force = force
         self.extract_kmers = extract_kmers
+        self._sig = None
+        self._kmer_extractor = None  # Instance of KmerseekExtractKmers
 
     @property
     def sig(self):
         """String of k-mer signature filename"""
-        if not hasattr(self, "_sig"):
+        if self._sig is None:
             sigfile = _make_sigfile(self.fasta, **self.sketch_kws)
             if self.force or not os.path.exists(sigfile):
                 if os.path.exists(sigfile):
@@ -33,27 +34,34 @@ class KmerseekEntity:
         return self._sig
 
     @property
+    def kmer_extractor(self):
+        """Instance of KmerseekExtractKmers."""
+        if self.extract_kmers and self._kmer_extractor is None:
+            self._kmer_extractor = KmerseekExtractKmers(
+                self.fasta, self.sketch_kws['moltype'], self.sketch_kws['ksize'], self.sketch_kws['scaled'], self.force
+            )
+        return self._kmer_extractor
+
+    @property
     def kmers_pq(self):
-        """String of k-mer csv filename"""
-        if not self.extract_kmers:
+        """String of k-mer parquet filename"""
+        if self.extract_kmers:
+            if self.kmer_extractor:
+                return self.kmer_extractor.kmers_pq
+            else:
+                return None
+        else:
             logger.info("Skipping k-mer extraction")
             return None
-        if not hasattr(self, "_kmers_pq"):
-            pq = _make_kmer_filename(self.sig)
-            if self.force or not os.path.exists(pq):
-                if os.path.exists(pq):
-                    logger.info(f"Found {pq} file, but re-making with '--force'")
-                self._kmers_pq = get_kmers_cli(self.sig, self.fasta, **self.sketch_kws)
-            else:
-                logger.info(
-                    f"Found k-mer parquet {pq}, skipping! Re-make with '--force'"
-                )
-                self._kmers_pq = pq
-        return self._kmers_pq
 
     @property
     def kmers_lazyframe(self):
         """Polars LazyFrame of all the kmers"""
-        if not hasattr(self, "_kmers"):
-            self._kmers = pl.scan_parquet(self.kmers_pq)
-        return self._kmers
+        if self.extract_kmers:
+            if self.kmer_extractor:
+                return self.kmer_extractor.run_extraction()
+            else:
+                return None
+        else:
+            logger.info("K-mer extraction was skipped during initialization.")
+            return None
