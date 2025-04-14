@@ -1,9 +1,10 @@
-import click
 import os
-import polars as pl
 import sys
-from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 from tempfile import NamedTemporaryFile
+
+import click
+import polars as pl
+from sourmash_plugin_branchwater import sourmash_plugin_branchwater
 
 from .index import KmerseekIndex, _make_siglist_file
 from .logging import setup_logging, logger
