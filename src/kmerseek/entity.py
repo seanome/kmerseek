@@ -1,5 +1,4 @@
 import os
-
 import polars as pl
 
 from .logging import logger
@@ -11,13 +10,13 @@ class KmerseekEntity:
     """Base class to be inherited by KmerseekQuery and KmerseekIndex"""
 
     def __init__(
-        self, fasta, moltype, ksize, scaled, force=False, do_kmer_extraction=False
+            self, fasta, moltype, ksize, scaled, force=False, extract_kmers=False
     ):
         # These are all filenames of where the data is stored
         self.fasta = fasta
         self.sketch_kws = dict(moltype=moltype, ksize=ksize, scaled=scaled)
         self.force = force
-        self.do_kmer_extraction = do_kmer_extraction
+        self.extract_kmers = extract_kmers
 
     @property
     def sig(self):
@@ -38,7 +37,7 @@ class KmerseekEntity:
     @property
     def kmers_pq(self):
         """String of k-mer csv filename"""
-        if not self.do_kmer_extraction:
+        if not self.extract_kmers:
             logger.info("Skipping k-mer extraction")
             return None
         if not hasattr(self, "_kmers_pq"):

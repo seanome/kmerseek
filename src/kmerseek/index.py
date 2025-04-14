@@ -62,18 +62,18 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 @click.option("--moltype", default="hp")
 @click.option("--ksize", type=int, default=24)
 @click.option("--scaled", type=int, default=5)
-@click.option("--do-kmer-extraction", is_flag=True, default=False)
+@click.option("--extract-kmers", is_flag=True, default=False)
 @click.option(
     "--force",
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
 def index(
-    fasta, moltype="hp", ksize=24, scaled=5, do_kmer_extraction=False, force=False
+        fasta, moltype="hp", ksize=24, scaled=5, extract_kmers=False, force=False
 ):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(
-        fasta, force=force, do_kmer_extraction=do_kmer_extraction, **sketch_keywords
+        fasta, force=force, extract_kmers=extract_kmers, **sketch_keywords
     )
     _ = (kmerseek_index.sig, kmerseek_index.kmers_pq, kmerseek_index.rocksdb)
