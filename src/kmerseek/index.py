@@ -68,9 +68,7 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
     is_flag=True,
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
-def index(
-        fasta, moltype="hp", ksize=24, scaled=5, extract_kmers=False, force=False
-):
+def index(fasta, moltype="hp", ksize=24, scaled=5, extract_kmers=False, force=False):
     sketch_keywords = make_sketch_kws(moltype, ksize, scaled)
 
     kmerseek_index = KmerseekIndex(

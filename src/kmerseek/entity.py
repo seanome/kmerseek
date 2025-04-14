@@ -9,9 +9,7 @@ from .sketch import sketch, _make_sigfile
 class KmerseekEntity:
     """Base class to be inherited by KmerseekQuery and KmerseekIndex"""
 
-    def __init__(
-            self, fasta, moltype, ksize, scaled, force=False, extract_kmers=False
-    ):
+    def __init__(self, fasta, moltype, ksize, scaled, force=False, extract_kmers=False):
         # These are all filenames of where the data is stored
         self.fasta = fasta
         self.sketch_kws = dict(moltype=moltype, ksize=ksize, scaled=scaled)
