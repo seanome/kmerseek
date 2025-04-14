@@ -35,9 +35,7 @@ def test_index(bcl2_first25):
 
 def test_index_extract_kmers(bcl2_first25):
     runner = CliRunner()
-    result = runner.invoke(
-        cli, ["index", "--extract-kmers", "--force", bcl2_first25]
-    )
+    result = runner.invoke(cli, ["index", "--extract-kmers", "--force", bcl2_first25])
     assert result.exit_code == 0
 
     # Make sure all the files got created

@@ -52,12 +52,12 @@ def single_stitch_together_kmers(kmers: pl.Series, i_kmers: pl.Series):
 
 
 def stitch_kmers_in_query_match_pair(
-        df: pl.LazyFrame,
-        kmer_match="kmer_match",
-        kmer_alphabet="encoded",
-        kmer_query="kmer_query",
-        start_match="start_match",
-        start_query="start_query",
+    df: pl.LazyFrame,
+    kmer_match="kmer_match",
+    kmer_alphabet="encoded",
+    kmer_query="kmer_query",
+    start_match="start_match",
+    start_query="start_query",
 ) -> pl.DataFrame:
     logger.debug("\nProcessing new group:")
     logger.debug(f"Input dataframe:\n{df}")
@@ -153,6 +153,7 @@ def do_multisearch(query, target, output, moltype, ksize, scaled):
 
 class KmerseekResultsBase:
     """Base class for handling search results."""
+
     join_results_search_on = ["match_name", "query_name"]
     join_results_kmers_on = [
         "sequence_name_match",
@@ -287,8 +288,8 @@ class KmerseekResultsWithoutKmerExtraction(KmerseekResultsBase):
     "--sourmash-search-csv",
     default=None,
     help=(
-            "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
-            "Mostly for debugging purposes"
+        "Store sourmash search results in this CSV. If not specified, then a temporary file is created. "
+        "Mostly for debugging purposes"
     ),
 )
 @click.option("--debug", is_flag=True, help="Enable debug logging")
@@ -298,16 +299,16 @@ class KmerseekResultsWithoutKmerExtraction(KmerseekResultsBase):
     help="Force creation of signature, kmer parquet, and rocksdb even if they're already there",
 )
 def search(
-        query_fasta: str,
-        target_fasta: str,
-        moltype: MOLTYPES = "hp",
-        ksize: int = 24,
-        scaled: int = 5,
-        output: str | None = None,
-        extract_kmers: bool = False,
-        sourmash_search_csv: str | None = None,
-        debug: bool = False,
-        force: bool = False,
+    query_fasta: str,
+    target_fasta: str,
+    moltype: MOLTYPES = "hp",
+    ksize: int = 24,
+    scaled: int = 5,
+    output: str | None = None,
+    extract_kmers: bool = False,
+    sourmash_search_csv: str | None = None,
+    debug: bool = False,
+    force: bool = False,
 ):
     """Search for k-mers in target sequences."""
     # Set up logging based on debug flag

@@ -8,28 +8,37 @@ from kmerseek.entity import KmerseekEntity
 
 def test_entity(capsys, bcl2_first25, bcl2_first25_hp_k24_scaled5_sig):
     # Is there a better name for this object than "test" here?
-    test = KmerseekEntity(bcl2_first25, 'hp', 24, 5)
-    assert test.sketch_kws == dict(moltype='hp', ksize=24, scaled=5)
+    test = KmerseekEntity(bcl2_first25, "hp", 24, 5)
+    assert test.sketch_kws == dict(moltype="hp", ksize=24, scaled=5)
     assert test.force == False
     assert test.sig == f"{bcl2_first25}.hp.k24.scaled5.sig.zip"
     assert os.path.exists(test.sig)
 
     test_sig = list(sourmash.load_file_as_signatures(test.sig)).pop()
-    true_sig = list(sourmash.load_file_as_signatures(bcl2_first25_hp_k24_scaled5_sig)).pop()
+    true_sig = list(
+        sourmash.load_file_as_signatures(bcl2_first25_hp_k24_scaled5_sig)
+    ).pop()
 
     assert test_sig == true_sig
 
 
-def test_entity_extract_kmers(capsys, bcl2_first25, bcl2_first25_hp_k24_scaled5_sig, bcl2_first25_hp_k25_scaled5_kmers):
+def test_entity_extract_kmers(
+    capsys,
+    bcl2_first25,
+    bcl2_first25_hp_k24_scaled5_sig,
+    bcl2_first25_hp_k25_scaled5_kmers,
+):
     # Is there a better name for this object than "test" here?
-    test = KmerseekEntity(bcl2_first25, 'hp', 24, 5, extract_kmers=True)
-    assert test.sketch_kws == dict(moltype='hp', ksize=24, scaled=5)
+    test = KmerseekEntity(bcl2_first25, "hp", 24, 5, extract_kmers=True)
+    assert test.sketch_kws == dict(moltype="hp", ksize=24, scaled=5)
     assert test.force == False
     assert test.sig == f"{bcl2_first25}.hp.k24.scaled5.sig.zip"
     assert os.path.exists(test.sig)
 
     test_sig = list(sourmash.load_file_as_signatures(test.sig)).pop()
-    true_sig = list(sourmash.load_file_as_signatures(bcl2_first25_hp_k24_scaled5_sig)).pop()
+    true_sig = list(
+        sourmash.load_file_as_signatures(bcl2_first25_hp_k24_scaled5_sig)
+    ).pop()
     assert test_sig == true_sig
 
     # Test the new kmer extraction behavior

@@ -79,7 +79,7 @@ sp|Q9UK96|FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE
     assert test_output.equals(true_output)
 
     assert (
-            """---
+        """---
 Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
 Match Name: sp|Q9UK96|FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE=1 SV=3
 query: MSIGESIDGKINDWEEPGIVGVVVCGRMMFSLK (59-92)
@@ -113,5 +113,5 @@ Match Name: sp|Q16611|BAK_HUMAN Bcl-2 homologous antagonist/killer OS=Homo sapie
 query: RKQNRRWSMIGAGVTA (245-261)
 alpha: pppppphphhhhhhph
 match: HQQEQEAEGVAAPADP (42-58)"""
-            in result.stderr
+        in result.stderr
     )

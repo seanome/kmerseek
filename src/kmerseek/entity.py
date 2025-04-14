@@ -38,7 +38,11 @@ class KmerseekEntity:
         """Instance of KmerseekExtractKmers."""
         if self.extract_kmers and self._kmer_extractor is None:
             self._kmer_extractor = KmerseekExtractKmers(
-                self.fasta, self.sketch_kws['moltype'], self.sketch_kws['ksize'], self.sketch_kws['scaled'], self.force
+                self.fasta,
+                self.sketch_kws["moltype"],
+                self.sketch_kws["ksize"],
+                self.sketch_kws["scaled"],
+                self.force,
             )
         return self._kmer_extractor
 
