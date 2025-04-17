@@ -60,7 +60,7 @@ class KmerseekExtractKmers:
                 return None
         return self._kmers_lazyframe
 
-    def run_extraction(self):
+    def extract_kmers(self):
         """Explicitly trigger k-mer extraction and return the LazyFrame."""
         _ = self.kmers_pq  # Trigger k-mer generation if needed
         return self.kmers_lazyframe
