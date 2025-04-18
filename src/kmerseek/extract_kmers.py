@@ -1,4 +1,5 @@
 import os
+
 import polars as pl
 
 from .logging import logger
@@ -6,7 +7,7 @@ from .sig2kmer import get_kmers_cli, _make_kmer_filename
 from .sketch import sketch, _make_sigfile
 
 
-class KmerseekExtractKmers:
+class KmerseekKmerExtractor:
     """Class dedicated to extracting k-mers from a FASTA file using sourmash."""
 
     def __init__(self, fasta, moltype, ksize, scaled, force=False):

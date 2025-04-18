@@ -1,6 +1,6 @@
 import os
 
-from .extract_kmers import KmerseekExtractKmers  # Import the new class
+from .extract_kmers import KmerseekKmerExtractor  # Import the new class
 from .logging import logger
 from .sketch import sketch, _make_sigfile
 
@@ -15,7 +15,7 @@ class KmerseekEntity:
         self.force = force
         self.extract_kmers = extract_kmers
         self._sig = None
-        self._kmer_extractor = None  # Instance of KmerseekExtractKmers
+        self._kmer_extractor = None  # Instance of KmerseekKmerExtractor
 
     @property
     def sig(self):
@@ -35,9 +35,9 @@ class KmerseekEntity:
 
     @property
     def kmer_extractor(self):
-        """Instance of KmerseekExtractKmers."""
+        """Instance of KmerseekKmerExtractor."""
         if self.extract_kmers and self._kmer_extractor is None:
-            self._kmer_extractor = KmerseekExtractKmers(
+            self._kmer_extractor = KmerseekKmerExtractor(
                 self.fasta,
                 self.sketch_kws["moltype"],
                 self.sketch_kws["ksize"],
@@ -63,7 +63,7 @@ class KmerseekEntity:
         """Polars LazyFrame of all the kmers"""
         if self.extract_kmers:
             if self.kmer_extractor:
-                return self.kmer_extractor.run_extraction()
+                return self.kmer_extractor.extract_kmers()
             else:
                 return None
         else:
