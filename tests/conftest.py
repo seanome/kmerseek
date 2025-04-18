@@ -23,6 +23,16 @@ def bcl2_first25(fasta_folder):
 
 
 @pytest.fixture
+def bcl2_first25_hp_k24_scaled5_sig(bcl2_first25):
+    return f"{bcl2_first25}.hp.k24.scaled5.sig.zip"
+
+
+@pytest.fixture
+def bcl2_first25_hp_k25_scaled5_kmers(bcl2_first25):
+    return f"{bcl2_first25}.hp.k24.scaled5.sig.TRUE.zip.kmers.pq"
+
+
+@pytest.fixture
 def bcl2_all300(fasta_folder):
     return os.path.join(
         fasta_folder, "uniprotkb_BCL2_AND_model_organism_9606_2025_02_06.fasta.gz"
