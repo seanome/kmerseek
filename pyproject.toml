@@ -1,8 +1,14 @@
 [project]
 name = "kmerseek"
 version = "0.1.0"
+requires-python = ">=3.8"
 description = "Efficient protein domain annotation search with reduced amino acid k-mers"
 authors = [{ name = "Olga Botvinnik", email = "olga@seanome.org" }]
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
 dependencies = [
     "sourmash",
     "sourmash_plugin_branchwater",
@@ -10,10 +16,16 @@ dependencies = [
     "click",
     "pandas",
 ]
-
-[build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+dynamic = ["version"]
 
 [project.scripts]
 kmerseek = "kmerseek.main:cli"
+
+
+[build-system]
+requires = ["maturin>=1.8,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+python-source = "src/python"
+features = ["pyo3/extension-module"]
