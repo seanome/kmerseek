@@ -19,16 +19,14 @@ dependencies = [
     "pandas",
 ]
 dynamic = ["version"]
+scripts.kmerseek = "kmerseek.main:cli"
+
 python-packages = ["python/kmerseek"]
-
-[project.scripts]
-kmerseek = "kmerseek.main:cli"
-
 
 [build-system]
 requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-python-source = "src/python"
+python-source = "src/python/kmerseek"
 features = ["pyo3/extension-module"]

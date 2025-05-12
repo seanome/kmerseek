@@ -7,7 +7,7 @@ edition = "2021"
 [lib]
 name = "kmerseek"
 crate-type = ["cdylib"]
-path = "rust/src/lib.rs"
+path = "src/rust/lib.rs"
 
 [dependencies]
 pyo3 = "0.24.0"
