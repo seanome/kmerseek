@@ -1,12 +1,13 @@
 [package]
-name = "kmerseek-rust"
+name = "kmerseek"
 version = "0.1.0"
 edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
-name = "kmerseek_rust"
+name = "kmerseek"
 crate-type = ["cdylib"]
+path = "rust/src/lib.rs"
 
 [dependencies]
 pyo3 = "0.24.0"
