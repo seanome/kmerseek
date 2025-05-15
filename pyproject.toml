@@ -26,6 +26,6 @@ requires = ["maturin>=1.8,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
-python-source = "src/python/kmerseek"
+python-source = "src/python"
 features = ["pyo3/extension-module"]
 python-packages = ["kmerseek.main", "kmerseek.entity"]
