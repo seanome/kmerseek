@@ -15,7 +15,7 @@ dependencies = [
     "sourmash",
     "sourmash_plugin_branchwater",
     "polars",
-    "click",
+    "click>=8.0",
     "pandas",
 ]
 scripts.kmerseek = "kmerseek.main:cli"
