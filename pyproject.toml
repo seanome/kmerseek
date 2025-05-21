@@ -28,4 +28,3 @@ build-backend = "maturin"
 [tool.maturin]
 python-source = "src/python"
 features = ["pyo3/extension-module"]
-python-packages = ["kmerseek.main", "kmerseek.entity"]
