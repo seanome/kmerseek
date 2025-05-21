@@ -7,7 +7,7 @@ from kmerseek.main import cli
 
 
 def test_search(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(
         cli,
         [
@@ -43,7 +43,7 @@ sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239
 
 
 def test_search_extract_kmers(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
-    runner = CliRunner(mix_stderr=False)
+    runner = CliRunner()
     result = runner.invoke(
         cli,
         [
