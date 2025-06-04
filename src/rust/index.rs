@@ -8,7 +8,7 @@ use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 /// Standard amino acids and their properties
@@ -177,13 +177,14 @@ impl ProteomeIndex {
             minhash.ksize() as usize
         };
 
-        // Process k-mers sequentially for now to avoid locking issues
-        for i in 0..chunk.len().saturating_sub(k - 1) {
-            if i + k <= chunk.len() {
+        // Process k-mers in parallel
+        (0..chunk.len().saturating_sub(k - 1))
+            .into_par_iter()
+            .filter(|&i| i + k <= chunk.len())
+            .for_each(|i| {
                 let kmer = &chunk[i..i + k];
                 self.add_kmer(kmer);
-            }
-        }
+            });
 
         Ok(())
     }
@@ -192,68 +193,54 @@ impl ProteomeIndex {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
 
-        // Buffer for sequence data
+        // Buffer for collecting sequences
+        let mut sequences = Vec::new();
         let mut current_sequence = String::new();
         let mut line_number = 0;
 
-        // Process each line
+        // First pass: collect sequences
         for line in reader.lines() {
             line_number += 1;
             let line = line?;
 
             if line.starts_with('>') {
-                // Process previous sequence if it exists
                 if !current_sequence.is_empty() {
-                    self.process_sequence_chunk(&current_sequence)
-                        .map_err(|e| {
-                            anyhow::anyhow!(
-                                "Error in sequence ending at line {}: {}",
-                                line_number - 1,
-                                e
-                            )
-                        })?;
-                    current_sequence.clear();
+                    sequences.push(current_sequence);
+                    current_sequence = String::new();
                 }
             } else {
-                // Append sequence data
                 current_sequence.push_str(line.trim());
             }
         }
 
-        // Process the last sequence
+        // Don't forget the last sequence
         if !current_sequence.is_empty() {
-            self.process_sequence_chunk(&current_sequence)
-                .map_err(|e| {
-                    anyhow::anyhow!("Error in sequence ending at line {}: {}", line_number, e)
-                })?;
+            sequences.push(current_sequence);
         }
+
+        // Second pass: process sequences in parallel
+        sequences.into_par_iter().try_for_each(|seq| {
+            self.process_sequence_chunk(&seq)
+                .map_err(|e| anyhow::anyhow!("Error processing sequence: {}", e))
+        })?;
 
         Ok(())
     }
 
     /// Process a list of protein FASTA files
-    pub fn process_protein_files<P: AsRef<Path>>(&self, files: &[P]) -> Result<()> {
-        // Process files sequentially for now
-        for file_path in files {
-            self.process_fasta_file(file_path.as_ref())?;
-        }
-        Ok(())
+    pub fn process_protein_files<P: AsRef<Path> + Sync>(&self, files: &[P]) -> Result<()> {
+        // Process files in parallel
+        files
+            .par_iter()
+            .try_for_each(|file_path| self.process_fasta_file(file_path.as_ref()))
     }
 
     pub fn add_sequence(&mut self, seq: &str, force: bool) {
-        // Process sequence in chunks to avoid memory issues with very long sequences
-        const CHUNK_SIZE: usize = 1_000_000;
-
-        seq.as_bytes()
-            .chunks(CHUNK_SIZE)
-            .filter_map(|chunk| std::str::from_utf8(chunk).ok())
-            .for_each(|chunk| {
-                if let Err(e) = self.process_sequence_chunk(chunk) {
-                    if !force {
-                        eprintln!("Error processing sequence: {}", e);
-                    }
-                }
-            });
+        if let Err(e) = self.process_sequence_chunk(seq) {
+            if !force {
+                eprintln!("Error processing sequence: {}", e);
+            }
+        }
     }
 
     pub fn add_hash(&mut self, hash: u64) {
