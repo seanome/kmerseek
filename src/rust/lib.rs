@@ -16,17 +16,17 @@ pub enum PyProteinEncoding {
 #[pymethods]
 impl PyProteinEncoding {
     #[classmethod]
-    fn raw(cls: &PyType) -> Self {
+    fn raw(_cls: Py<PyType>) -> Self {
         Self::Raw
     }
 
     #[classmethod]
-    fn dayhoff(cls: &PyType) -> Self {
+    fn dayhoff(_cls: Py<PyType>) -> Self {
         Self::Dayhoff
     }
 
     #[classmethod]
-    fn hp(cls: &PyType) -> Self {
+    fn hp(_cls: Py<PyType>) -> Self {
         Self::HP
     }
 }
@@ -84,7 +84,7 @@ impl PyProteomeIndex {
         self.inner.get_kmers(hash)
     }
 
-    fn add_sequence(&mut self, seq: &str) {
-        self.inner.add_sequence(seq);
+    fn add_sequence(&mut self, seq: &str, force: bool) {
+        self.inner.add_sequence(seq, force);
     }
 }

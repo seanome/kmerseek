@@ -240,7 +240,7 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    pub fn add_sequence(&mut self, seq: &str) {
+    pub fn add_sequence(&mut self, seq: &str, force: bool) {
         // Process sequence in chunks to avoid memory issues with very long sequences
         const CHUNK_SIZE: usize = 1_000_000;
 
@@ -249,7 +249,9 @@ impl ProteomeIndex {
             .filter_map(|chunk| std::str::from_utf8(chunk).ok())
             .for_each(|chunk| {
                 if let Err(e) = self.process_sequence_chunk(chunk) {
-                    eprintln!("Error processing sequence: {}", e);
+                    if !force {
+                        eprintln!("Error processing sequence: {}", e);
+                    }
                 }
             });
     }
