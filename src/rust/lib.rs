@@ -64,7 +64,7 @@ struct PyProteomeIndex {
 #[pymethods]
 impl PyProteomeIndex {
     #[new]
-    fn new(ksize: u32, scaled: u64, moltype: &str, encoding: PyProteinEncoding) -> Self {
+    fn new(ksize: u32, scaled: u32, moltype: &str, encoding: PyProteinEncoding) -> Self {
         Self {
             inner: ProteomeIndex::new(ksize, scaled, moltype, &String::from(encoding)),
         }

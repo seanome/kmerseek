@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
-use rand::seq::SliceRandom;
-use rand::thread_rng;
+use rand::prelude::*;
+use rand::rng;
 use rayon::prelude::*;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 use sourmash::signature::SigsTrait;
@@ -53,11 +53,10 @@ impl AminoAcidAmbiguity {
                 possible_aas[0]
             } else {
                 // Otherwise randomly choose one of the possibilities
-                *possible_aas.choose(&mut thread_rng()).unwrap_or(&aa)
+                *possible_aas.choose(&mut rng()).unwrap_or(&aa)
             }
         } else {
             // If not found in replacements, return the original character
-            // (this shouldn't happen if is_valid_aa is called first)
             aa
         }
     }
@@ -77,7 +76,6 @@ pub struct ProteomeIndex {
 #[derive(Debug)]
 pub enum IndexError {
     IoError(io::Error),
-    ParseError(String),
 }
 
 impl From<io::Error> for IndexError {
@@ -87,7 +85,7 @@ impl From<io::Error> for IndexError {
 }
 
 impl ProteomeIndex {
-    pub fn new(ksize: u32, scaled: u64, moltype: &str, encoding_type: &str) -> Self {
+    pub fn new(ksize: u32, scaled: u32, _moltype: &str, encoding_type: &str) -> Self {
         // Create a new KmerMinHash with protein parameters
         let hash_function = match encoding_type {
             "dayhoff" => HashFunctions::Murmur64Dayhoff,
@@ -96,7 +94,7 @@ impl ProteomeIndex {
         };
 
         let minhash = KmerMinHash::new(
-            scaled as u64,
+            scaled,
             ksize,
             hash_function.clone(),
             42,    // seed
@@ -196,11 +194,9 @@ impl ProteomeIndex {
         // Buffer for collecting sequences
         let mut sequences = Vec::new();
         let mut current_sequence = String::new();
-        let mut line_number = 0;
 
         // First pass: collect sequences
         for line in reader.lines() {
-            line_number += 1;
             let line = line?;
 
             if line.starts_with('>') {
