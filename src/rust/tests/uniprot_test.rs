@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 
-use crate::uniprot::{ProteinFeature, UniProtSequence};
+use crate::uniprot::UniProtSequence;
 
 const TEST_BCL2_XML: &str =
     "tests/testdata/index/uniprotkb_gene_bcl2_AND_reviewed_true_2025_06_04.xml";

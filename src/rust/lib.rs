@@ -97,7 +97,7 @@ impl PyProteomeIndex {
 
 /// A Python module implemented in Rust.
 #[pymodule]
-fn kmerseek(py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
+fn kmerseek(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(sum_as_string, m)?)?;
     m.add_class::<PyProteinEncoding>()?;
     m.add_class::<PyProteomeIndex>()?;

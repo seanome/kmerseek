@@ -1,5 +1,4 @@
 use crate::aminoacid::AminoAcidAmbiguity;
-use anyhow::Result;
 
 #[test]
 fn test_valid_amino_acids() {

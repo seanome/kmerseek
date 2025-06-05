@@ -10,9 +10,9 @@ const TEST_FASTA: &str =
     "tests/testdata/index/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
 
 #[test]
-fn test_proteome_index_creation() {
+fn test_proteome_index_creation() -> Result<()> {
     let dir = tempdir().unwrap();
-    let index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path()).unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path())?;
     let sequence = "ACDEF";
     let result = index.process_sequence(
         sequence,
@@ -25,23 +25,29 @@ fn test_proteome_index_creation() {
     );
     assert!(result.is_ok());
     assert!(index.get_mins().is_empty());
+    Ok(())
 }
 
 #[test]
-fn test_proteome_index_with_dayhoff() {
-    let index = ProteomeIndex::new(7, 100, "protein", "dayhoff", "test_db");
+fn test_proteome_index_with_dayhoff() -> Result<()> {
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "dayhoff", dir.path())?;
     assert!(index.get_mins().is_empty());
+    Ok(())
 }
 
 #[test]
-fn test_proteome_index_with_hp() {
-    let index = ProteomeIndex::new(7, 100, "protein", "hp", "test_db");
+fn test_proteome_index_with_hp() -> Result<()> {
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "hp", dir.path())?;
     assert!(index.get_mins().is_empty());
+    Ok(())
 }
 
 #[test]
 fn test_process_protein_files() -> Result<()> {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw", "test_db");
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path())?;
     let files = vec![PathBuf::from(TEST_FASTA)];
     index.process_protein_files(&files)?;
 
@@ -53,42 +59,78 @@ fn test_process_protein_files() -> Result<()> {
 }
 
 #[test]
-fn test_invalid_sequence() {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw", "test_db");
-    let result = index.process_sequence("ACDEFGHIKLMNPQRSTVWY"); // Valid sequence
+fn test_invalid_sequence() -> Result<()> {
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path())?;
+    let result = index.process_sequence(
+        "ACDEFGHIKLMNPQRSTVWY",
+        UniProtSequence {
+            id: String::new(),
+            accession: String::new(),
+            sequence: "ACDEFGHIKLMNPQRSTVWY".to_string(),
+            features: Vec::new(),
+        },
+    ); // Valid sequence
     assert!(result.is_ok());
 
-    let result = index.process_sequence("ACDEFGHIKLMNPQRSTVWY1"); // Invalid character '1'
+    let result = index.process_sequence(
+        "ACDEFGHIKLMNPQRSTVWY1",
+        UniProtSequence {
+            id: String::new(),
+            accession: String::new(),
+            sequence: "ACDEFGHIKLMNPQRSTVWY1".to_string(),
+            features: Vec::new(),
+        },
+    ); // Invalid character '1'
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.to_string().contains("Invalid amino acid"));
+    Ok(())
 }
 
 #[test]
-fn test_ambiguous_amino_acids() {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw", "test_db");
+fn test_ambiguous_amino_acids() -> Result<()> {
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path())?;
 
     // Test valid ambiguous amino acids
-    let result = index.process_sequence("ACDEFXBZJ"); // X, B, Z, J are valid ambiguity codes
+    let result = index.process_sequence(
+        "ACDEFXBZJ",
+        UniProtSequence {
+            id: String::new(),
+            accession: String::new(),
+            sequence: "ACDEFXBZJ".to_string(),
+            features: Vec::new(),
+        },
+    ); // X, B, Z, J are valid ambiguity codes
     assert!(result.is_ok());
 
     // When we get kmers containing ambiguous amino acids, they should be resolved
     let kmers = index.get_mins();
     assert!(!kmers.is_empty());
+    Ok(())
 }
 
 #[test]
 fn test_different_encodings() -> Result<()> {
+    let dir = tempdir().unwrap();
     // Create indices with different encodings
-    let raw_index = ProteomeIndex::new(7, 100, "protein", "raw", "protein_db");
-    let dayhoff_index = ProteomeIndex::new(7, 100, "protein", "dayhoff", "dayhoff_db");
-    let hp_index = ProteomeIndex::new(7, 100, "protein", "hp", "hp_db");
+    let raw_index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path().join("protein_db"))?;
+    let dayhoff_index =
+        ProteomeIndex::new(7, 100, "protein", "dayhoff", dir.path().join("dayhoff_db"))?;
+    let hp_index = ProteomeIndex::new(7, 100, "protein", "hp", dir.path().join("hp_db"))?;
 
     // Process the same sequence with each encoding
     let sequence = "ACDEFGHIKLMNPQRSTVWY";
-    raw_index.process_sequence(sequence)?;
-    dayhoff_index.process_sequence(sequence)?;
-    hp_index.process_sequence(sequence)?;
+    let protein = UniProtSequence {
+        id: String::new(),
+        accession: String::new(),
+        sequence: sequence.to_string(),
+        features: Vec::new(),
+    };
+    raw_index.process_sequence(sequence, protein.clone())?;
+    dayhoff_index.process_sequence(sequence, protein.clone())?;
+    hp_index.process_sequence(sequence, protein)?;
 
     // Get the hashes from each index
     let raw_hashes = raw_index.get_mins();
@@ -105,10 +147,19 @@ fn test_different_encodings() -> Result<()> {
 
 #[test]
 fn test_kmer_retrieval() -> Result<()> {
-    let index = ProteomeIndex::new(3, 100, "protein", "raw");
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(3, 100, "protein", "raw", dir.path())?;
 
     // Add a simple sequence
-    index.process_sequence("ACDEF")?;
+    index.process_sequence(
+        "ACDEF",
+        UniProtSequence {
+            id: String::new(),
+            accession: String::new(),
+            sequence: "ACDEF".to_string(),
+            features: Vec::new(),
+        },
+    )?;
 
     // Get the hashes
     let mins = index.get_mins();
@@ -116,28 +167,36 @@ fn test_kmer_retrieval() -> Result<()> {
 
     // For each hash, we should be able to get back the original kmer
     for hash in mins {
-        let kmer_info = index.get_kmers(hash);
+        let kmer_info = index.get_kmer_info(hash);
         assert!(kmer_info.is_some());
         let (encoded, original) = kmer_info.unwrap();
         assert_eq!(encoded.len(), 3); // ksize = 3
-        assert_eq!(original.len(), 3);
+        assert!(!original.is_empty());
     }
 
     Ok(())
 }
 
 #[test]
-fn test_scaled_values() {
+fn test_scaled_values() -> Result<()> {
+    let dir = tempdir().unwrap();
     // Test with different scaled values
-    let index_100 = ProteomeIndex::new(7, 100, "protein", "raw");
-    let index_1000 = ProteomeIndex::new(7, 1000, "protein", "raw");
+    let index_100 = ProteomeIndex::new(7, 100, "protein", "raw", dir.path().join("index_100"))?;
+    let index_1000 = ProteomeIndex::new(7, 1000, "protein", "raw", dir.path().join("index_1000"))?;
 
     let sequence = "ACDEFGHIKLMNPQRSTVWY";
-    index_100.process_sequence(sequence).unwrap();
-    index_1000.process_sequence(sequence).unwrap();
+    let protein = UniProtSequence {
+        id: String::new(),
+        accession: String::new(),
+        sequence: sequence.to_string(),
+        features: Vec::new(),
+    };
+    index_100.process_sequence(sequence, protein.clone())?;
+    index_1000.process_sequence(sequence, protein)?;
 
     // Higher scaled value should result in fewer hashes
     let hashes_100 = index_100.get_mins();
     let hashes_1000 = index_1000.get_mins();
     assert!(hashes_100.len() >= hashes_1000.len());
+    Ok(())
 }
