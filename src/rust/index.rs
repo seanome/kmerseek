@@ -1,7 +1,10 @@
 use anyhow::{bail, Result};
-use rand::prelude::*;
-use rand::rng;
+use quick_xml::events::Event;
+use quick_xml::reader::Reader;
+use rand::Rng;
 use rayon::prelude::*;
+use rocksdb::{Options, DB};
+use serde::{Deserialize, Serialize};
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
@@ -11,60 +14,56 @@ use std::io::{self, BufRead, BufReader};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-/// Standard amino acids and their properties
-const STANDARD_AA: [char; 20] = [
-    'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W',
-    'Y',
-];
+use crate::aminoacid::AminoAcidAmbiguity;
+use crate::uniprot::{self, UniProtSequence};
 
-/// Represents amino acid ambiguity codes and their possible resolutions
-#[derive(Debug)]
-struct AminoAcidAmbiguity {
-    /// Maps ambiguous amino acid codes to their possible resolutions
-    replacements: HashMap<char, Vec<char>>,
+/// Represents the position of a k-mer in a protein sequence
+#[derive(Debug, Clone)]
+pub struct KmerPosition {
+    protein: UniProtSequence,
+    position: usize, // 0-based position in sequence
 }
 
-impl AminoAcidAmbiguity {
-    fn new() -> Self {
-        let mut replacements = HashMap::new();
+impl KmerPosition {
+    /// Get all features that overlap with this k-mer
+    pub fn overlapping_features(&self, kmer_length: usize) -> Vec<&uniprot::ProteinFeature> {
+        let kmer_start = self.position + 1; // Convert to 1-based position
+        let kmer_end = kmer_start + kmer_length - 1;
 
-        // Standard amino acids map to themselves
-        for aa in STANDARD_AA.iter() {
-            replacements.insert(*aa, vec![*aa]);
-        }
-
-        // Add ambiguous amino acid codes
-        replacements.insert('X', STANDARD_AA.to_vec()); // Unknown - any amino acid
-        replacements.insert('B', vec!['D', 'N']); // Aspartic acid or Asparagine
-        replacements.insert('Z', vec!['E', 'Q']); // Glutamic acid or Glutamine
-        replacements.insert('J', vec!['I', 'L']); // Isoleucine or Leucine
-
-        AminoAcidAmbiguity { replacements }
+        self.protein
+            .features
+            .iter()
+            .filter(|feature| {
+                // Check if the feature overlaps with the k-mer
+                !(feature.end < kmer_start || feature.start > kmer_end)
+            })
+            .collect()
     }
+}
 
-    fn is_valid_aa(&self, aa: char) -> bool {
-        self.replacements.contains_key(&aa)
-    }
+/// Represents information about a k-mer occurrence
+#[derive(Debug, Clone)]
+pub struct KmerInfo {
+    original_kmer: String,
+    positions: Vec<KmerPosition>,
+}
 
-    fn resolve_ambiguity(&self, aa: char) -> char {
-        if let Some(possible_aas) = self.replacements.get(&aa) {
-            // If there's only one possibility, use it
-            if possible_aas.len() == 1 {
-                possible_aas[0]
-            } else {
-                // Otherwise randomly choose one of the possibilities
-                *possible_aas.choose(&mut rng()).unwrap_or(&aa)
-            }
-        } else {
-            // If not found in replacements, return the original character
-            aa
-        }
-    }
+/// Statistics for k-mer frequency analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct KmerStats {
+    idf: f64,               // Inverse document frequency
+    frequency: f64,         // Raw frequency
+    l1_norm_frequency: f64, // L1 normalized frequency
+    l2_norm_frequency: f64, // L2 normalized frequency
 }
 
 pub struct ProteomeIndex {
-    // Store hash -> encoded k-mer -> original k-mer mappings
-    hash_to_kmers: Arc<Mutex<HashMap<u64, (String, String)>>>,
+    // RocksDB instance for persistent storage
+    db: DB,
+    // First level: hash -> encoded k-mer
+    hash_to_encoded: Arc<Mutex<HashMap<u64, String>>>,
+    // Second level: encoded k-mer -> original k-mers and their positions
+    encoded_to_originals: Arc<Mutex<HashMap<String, Vec<KmerInfo>>>>,
     // Store the underlying MinHash sketch
     minhash: Arc<Mutex<KmerMinHash>>,
     // Amino acid ambiguity handler
@@ -85,8 +84,22 @@ impl From<io::Error> for IndexError {
 }
 
 impl ProteomeIndex {
-    pub fn new(ksize: u32, scaled: u32, _moltype: &str, encoding_type: &str) -> Self {
-        // Create a new KmerMinHash with protein parameters
+    pub fn new<P: AsRef<Path>>(
+        ksize: u32,
+        scaled: u32,
+        _moltype: &str,
+        encoding_type: &str,
+        db_path: P,
+    ) -> Result<Self> {
+        // Create RocksDB options
+        let mut opts = Options::default();
+        opts.create_if_missing(true);
+        opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
+
+        // Open RocksDB
+        let db = DB::open(&opts, db_path)?;
+
+        // Create MinHash sketch
         let hash_function = match encoding_type {
             "dayhoff" => HashFunctions::Murmur64Dayhoff,
             "hp" => HashFunctions::Murmur64Hp,
@@ -94,40 +107,128 @@ impl ProteomeIndex {
         };
 
         let minhash = KmerMinHash::new(
-            scaled,
+            scaled as u64,
             ksize,
-            hash_function.clone(),
+            hash_function,
             42,    // seed
             false, // track_abundance
             0,     // num
         );
 
-        // Select the encoding function based on type
+        // Select encoding function
         let encoding_fn = match encoding_type {
             "dayhoff" => aa_to_dayhoff,
             "hp" => aa_to_hp,
-            _ => |c| c, // Raw encoding - no transformation
+            _ => |c| c,
         };
 
-        ProteomeIndex {
-            hash_to_kmers: Arc::new(Mutex::new(HashMap::new())),
+        Ok(ProteomeIndex {
+            db,
+            hash_to_encoded: Arc::new(Mutex::new(HashMap::new())),
+            encoded_to_originals: Arc::new(Mutex::new(HashMap::new())),
             minhash: Arc::new(Mutex::new(minhash)),
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             encoding_fn,
-        }
+        })
     }
 
-    /// Validates a protein sequence and returns an error if invalid characters are found
-    fn validate_sequence(&self, sequence: &str) -> Result<()> {
-        for (i, c) in sequence.chars().enumerate() {
-            if !self.aa_ambiguity.is_valid_aa(c) {
-                bail!("Invalid amino acid '{}' found at position {}", c, i + 1);
-            }
-        }
+    /// Process a UniProt XML file
+    pub fn process_uniprot_xml<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let proteins = UniProtSequence::from_xml(path)?;
+
+        // Process proteins in parallel
+        proteins
+            .par_iter()
+            .try_for_each(|protein| self.process_sequence(&protein.sequence, protein.clone()))?;
+
+        // Compute and store statistics
+        self.compute_and_store_statistics()?;
+
         Ok(())
     }
 
-    /// Resolves ambiguous amino acids in a k-mer and returns both the resolved and encoded versions
+    /// Process a sequence with its protein information
+    pub fn process_sequence(&self, sequence: &str, protein: UniProtSequence) -> Result<()> {
+        // First validate the sequence
+        self.aa_ambiguity.validate_sequence(sequence)?;
+
+        let k = {
+            let minhash = self.minhash.lock().unwrap();
+            minhash.ksize() as usize
+        };
+
+        // Process k-mers in parallel
+        (0..sequence.len().saturating_sub(k - 1))
+            .into_par_iter()
+            .filter(|&i| i + k <= sequence.len())
+            .for_each(|i| {
+                let kmer = &sequence[i..i + k];
+                self.add_kmer(kmer, i, protein.clone());
+            });
+
+        Ok(())
+    }
+
+    /// Process a list of protein FASTA files
+    pub fn process_protein_files<P: AsRef<Path> + Sync>(&self, files: &[P]) -> Result<()> {
+        // Process files in parallel
+        files
+            .par_iter()
+            .try_for_each(|file_path| self.process_fasta_file(file_path.as_ref()))?;
+
+        // Compute and store statistics
+        self.compute_and_store_statistics()?;
+
+        Ok(())
+    }
+
+    fn process_fasta_file(&self, path: &Path) -> Result<()> {
+        let file = File::open(path)?;
+        let reader = BufReader::new(file);
+
+        // Buffer for collecting sequences
+        let mut sequences = Vec::new();
+        let mut current_sequence = String::new();
+        let mut current_id = String::new();
+
+        // First pass: collect sequences
+        for line in reader.lines() {
+            let line = line?;
+
+            if line.starts_with('>') {
+                if !current_sequence.is_empty() {
+                    sequences.push((current_id.clone(), current_sequence.clone()));
+                    current_sequence.clear();
+                }
+                current_id = line[1..].trim().to_string();
+            } else {
+                current_sequence.push_str(line.trim());
+            }
+        }
+
+        // Don't forget the last sequence
+        if !current_sequence.is_empty() {
+            sequences.push((current_id.clone(), current_sequence.clone()));
+        }
+
+        // Second pass: process sequences in parallel
+        sequences.into_par_iter().try_for_each(|(id, seq)| {
+            self.process_sequence(
+                &seq,
+                UniProtSequence {
+                    id,
+                    accession: String::new(), // We don't have accession in FASTA
+                    sequence: seq.clone(),
+                    features: Vec::new(),
+                },
+            )
+            .map_err(|e| anyhow::anyhow!("Error processing sequence: {}", e))
+        })?;
+
+        Ok(())
+    }
+
+    /// Process a k-mer to get its encoded version
     fn process_kmer(&self, kmer: &str) -> (String, String) {
         // First resolve ambiguities
         let resolved: String = kmer
@@ -145,8 +246,9 @@ impl ProteomeIndex {
         (encoded, kmer.to_string())
     }
 
-    pub fn add_kmer(&self, kmer: &str) {
-        // Process the k-mer to get encoded and original versions
+    /// Add a k-mer with its position information
+    fn add_kmer(&self, kmer: &str, position: usize, protein: UniProtSequence) {
+        // Process the k-mer to get encoded version
         let (encoded_kmer, original_kmer) = self.process_kmer(kmer);
 
         // Get the hash from the minhash implementation
@@ -156,225 +258,91 @@ impl ProteomeIndex {
             minhash.to_vec().last().copied().unwrap_or(0)
         };
 
-        // Store both the encoded and original k-mers
-        let mut hash_to_kmers = self.hash_to_kmers.lock().unwrap();
-        hash_to_kmers.insert(hash, (encoded_kmer, original_kmer));
-    }
+        // Create position information
+        let kmer_position = KmerPosition { protein, position };
 
-    pub fn get_kmers(&self, hash: u64) -> Option<(String, String)> {
-        let hash_to_kmers = self.hash_to_kmers.lock().unwrap();
-        hash_to_kmers.get(&hash).cloned()
-    }
+        // Update hash -> encoded mapping
+        {
+            let mut hash_to_encoded = self.hash_to_encoded.lock().unwrap();
+            hash_to_encoded.insert(hash, encoded_kmer.clone());
+        }
 
-    pub fn process_sequence_chunk(&self, chunk: &str) -> Result<()> {
-        // First validate the entire chunk
-        self.validate_sequence(chunk)?;
+        // Update encoded -> originals mapping
+        {
+            let mut encoded_to_originals = self.encoded_to_originals.lock().unwrap();
+            let kmer_infos = encoded_to_originals
+                .entry(encoded_kmer)
+                .or_insert_with(Vec::new);
 
-        let k = {
-            let minhash = self.minhash.lock().unwrap();
-            minhash.ksize() as usize
-        };
-
-        // Process k-mers in parallel
-        (0..chunk.len().saturating_sub(k - 1))
-            .into_par_iter()
-            .filter(|&i| i + k <= chunk.len())
-            .for_each(|i| {
-                let kmer = &chunk[i..i + k];
-                self.add_kmer(kmer);
-            });
-
-        Ok(())
-    }
-
-    fn process_fasta_file(&self, path: &Path) -> Result<()> {
-        let file = File::open(path)?;
-        let reader = BufReader::new(file);
-
-        // Buffer for collecting sequences
-        let mut sequences = Vec::new();
-        let mut current_sequence = String::new();
-
-        // First pass: collect sequences
-        for line in reader.lines() {
-            let line = line?;
-
-            if line.starts_with('>') {
-                if !current_sequence.is_empty() {
-                    sequences.push(current_sequence);
-                    current_sequence = String::new();
-                }
+            // Find or create KmerInfo for this original k-mer
+            if let Some(info) = kmer_infos
+                .iter_mut()
+                .find(|info| info.original_kmer == original_kmer)
+            {
+                info.positions.push(kmer_position);
             } else {
-                current_sequence.push_str(line.trim());
-            }
-        }
-
-        // Don't forget the last sequence
-        if !current_sequence.is_empty() {
-            sequences.push(current_sequence);
-        }
-
-        // Second pass: process sequences in parallel
-        sequences.into_par_iter().try_for_each(|seq| {
-            self.process_sequence_chunk(&seq)
-                .map_err(|e| anyhow::anyhow!("Error processing sequence: {}", e))
-        })?;
-
-        Ok(())
-    }
-
-    /// Process a list of protein FASTA files
-    pub fn process_protein_files<P: AsRef<Path> + Sync>(&self, files: &[P]) -> Result<()> {
-        // Process files in parallel
-        files
-            .par_iter()
-            .try_for_each(|file_path| self.process_fasta_file(file_path.as_ref()))
-    }
-
-    pub fn add_sequence(&mut self, seq: &str, force: bool) {
-        if let Err(e) = self.process_sequence_chunk(seq) {
-            if !force {
-                eprintln!("Error processing sequence: {}", e);
+                kmer_infos.push(KmerInfo {
+                    original_kmer,
+                    positions: vec![kmer_position],
+                });
             }
         }
     }
 
-    pub fn add_hash(&mut self, hash: u64) {
-        let mut minhash = self.minhash.lock().unwrap();
-        minhash.add_hash(hash);
+    /// Get all information about a hash value
+    pub fn get_kmer_info(&self, hash: u64) -> Option<(String, Vec<KmerInfo>)> {
+        let hash_to_encoded = self.hash_to_encoded.lock().unwrap();
+        let encoded_to_originals = self.encoded_to_originals.lock().unwrap();
+
+        hash_to_encoded.get(&hash).and_then(|encoded| {
+            encoded_to_originals
+                .get(encoded)
+                .map(|infos| (encoded.clone(), infos.clone()))
+        })
     }
 
+    /// Get statistics for a hash value
+    pub fn get_kmer_stats(&self, hash: u64) -> Result<Option<KmerStats>> {
+        let key = format!("stats:{}", hash);
+        if let Some(value) = self.db.get(key.as_bytes())? {
+            Ok(Some(bincode::deserialize(&value)?))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Get all hashes in the index
     pub fn get_mins(&self) -> Vec<u64> {
         let minhash = self.minhash.lock().unwrap();
         minhash.to_vec()
     }
-}
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use std::path::PathBuf;
+    /// Compute and store k-mer statistics
+    fn compute_and_store_statistics(&self) -> Result<()> {
+        let minhash = self.minhash.lock().unwrap();
+        let hashes = minhash.to_vec();
 
-    const TEST_FASTA: &str = "tests/testdata/index/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
+        // TODO: Implement frequency computations
+        // For now, just store empty statistics
+        for hash in hashes {
+            let stats = KmerStats {
+                idf: 0.0,
+                frequency: 0.0,
+                l1_norm_frequency: 0.0,
+                l2_norm_frequency: 0.0,
+            };
 
-    #[test]
-    fn test_proteome_index_creation() {
-        let index = ProteomeIndex::new(7, 100, "protein", "raw");
-        assert!(index.get_mins().is_empty());
-    }
-
-    #[test]
-    fn test_proteome_index_with_dayhoff() {
-        let index = ProteomeIndex::new(7, 100, "protein", "dayhoff");
-        assert!(index.get_mins().is_empty());
-    }
-
-    #[test]
-    fn test_proteome_index_with_hp() {
-        let index = ProteomeIndex::new(7, 100, "protein", "hp");
-        assert!(index.get_mins().is_empty());
-    }
-
-    #[test]
-    fn test_process_protein_files() -> Result<()> {
-        let index = ProteomeIndex::new(7, 100, "protein", "raw");
-        let files = vec![PathBuf::from(TEST_FASTA)];
-        index.process_protein_files(&files)?;
-
-        // After processing, we should have some hashes
-        let mins = index.get_mins();
-        assert!(!mins.is_empty());
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_invalid_sequence() {
-        let index = ProteomeIndex::new(7, 100, "protein", "raw");
-        let result = index.process_sequence_chunk("ACDEFGHIKLMNPQRSTVWY"); // Valid sequence
-        assert!(result.is_ok());
-
-        let result = index.process_sequence_chunk("ACDEFGHIKLMNPQRSTVWY1"); // Invalid character '1'
-        assert!(result.is_err());
-        let err = result.unwrap_err();
-        assert!(err.to_string().contains("Invalid amino acid"));
-    }
-
-    #[test]
-    fn test_ambiguous_amino_acids() {
-        let index = ProteomeIndex::new(7, 100, "protein", "raw");
-
-        // Test valid ambiguous amino acids
-        let result = index.process_sequence_chunk("ACDEFXBZJ"); // X, B, Z, J are valid ambiguity codes
-        assert!(result.is_ok());
-
-        // When we get kmers containing ambiguous amino acids, they should be resolved
-        let kmers = index.get_mins();
-        assert!(!kmers.is_empty());
-    }
-
-    #[test]
-    fn test_different_encodings() -> Result<()> {
-        // Create indices with different encodings
-        let raw_index = ProteomeIndex::new(7, 100, "protein", "raw");
-        let dayhoff_index = ProteomeIndex::new(10, 100, "protein", "dayhoff");
-        let hp_index = ProteomeIndex::new(15, 100, "protein", "hp");
-
-        // Process the same sequence with each encoding
-        let sequence = "ACDEFGHIKLMNPQRSTVWY";
-        raw_index.process_sequence_chunk(sequence)?;
-        dayhoff_index.process_sequence_chunk(sequence)?;
-        hp_index.process_sequence_chunk(sequence)?;
-
-        // Get the hashes from each index
-        let raw_hashes = raw_index.get_mins();
-        let dayhoff_hashes = dayhoff_index.get_mins();
-        let hp_hashes = hp_index.get_mins();
-
-        // Different encodings should produce different hash sets
-        assert_ne!(raw_hashes, dayhoff_hashes);
-        assert_ne!(raw_hashes, hp_hashes);
-        assert_ne!(dayhoff_hashes, hp_hashes);
-
-        Ok(())
-    }
-
-    #[test]
-    fn test_kmer_retrieval() -> Result<()> {
-        let index = ProteomeIndex::new(3, 100, "protein", "raw");
-
-        // Add a simple sequence
-        index.process_sequence_chunk("ACDEF")?;
-
-        // Get the hashes
-        let mins = index.get_mins();
-        assert!(!mins.is_empty());
-
-        // For each hash, we should be able to get back the original kmer
-        for hash in mins {
-            let kmer_info = index.get_kmers(hash);
-            assert!(kmer_info.is_some());
-            let (encoded, original) = kmer_info.unwrap();
-            assert_eq!(encoded.len(), 3); // ksize = 3
-            assert_eq!(original.len(), 3);
+            let key = format!("stats:{}", hash);
+            let value = bincode::serialize(&stats)?;
+            self.db.put(key.as_bytes(), value)?;
         }
 
         Ok(())
     }
+}
 
-    #[test]
-    fn test_scaled_values() {
-        // Test with different scaled values
-        let index_100 = ProteomeIndex::new(7, 100, "protein", "raw");
-        let index_1000 = ProteomeIndex::new(7, 1000, "protein", "raw");
-
-        let sequence = "ACDEFGHIKLMNPQRSTVWY";
-        index_100.process_sequence_chunk(sequence).unwrap();
-        index_1000.process_sequence_chunk(sequence).unwrap();
-
-        // Higher scaled value should result in fewer hashes
-        let hashes_100 = index_100.get_mins();
-        let hashes_1000 = index_1000.get_mins();
-        assert!(hashes_100.len() >= hashes_1000.len());
-    }
+#[derive(Debug, Clone, Copy)]
+pub enum Normalization {
+    L1,
+    L2,
 }

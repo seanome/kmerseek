@@ -1,31 +1,47 @@
 use super::*;
+use anyhow::Result;
 use std::path::PathBuf;
 use tempfile::tempdir;
+
+use crate::index::ProteomeIndex;
+use crate::uniprot::UniProtSequence;
 
 const TEST_FASTA: &str =
     "tests/testdata/index/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
 
 #[test]
 fn test_proteome_index_creation() {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw");
+    let dir = tempdir().unwrap();
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", dir.path()).unwrap();
+    let sequence = "ACDEF";
+    let result = index.process_sequence(
+        sequence,
+        UniProtSequence {
+            id: String::new(),
+            accession: String::new(),
+            sequence: sequence.to_string(),
+            features: Vec::new(),
+        },
+    );
+    assert!(result.is_ok());
     assert!(index.get_mins().is_empty());
 }
 
 #[test]
 fn test_proteome_index_with_dayhoff() {
-    let index = ProteomeIndex::new(7, 100, "protein", "dayhoff");
+    let index = ProteomeIndex::new(7, 100, "protein", "dayhoff", "test_db");
     assert!(index.get_mins().is_empty());
 }
 
 #[test]
 fn test_proteome_index_with_hp() {
-    let index = ProteomeIndex::new(7, 100, "protein", "hp");
+    let index = ProteomeIndex::new(7, 100, "protein", "hp", "test_db");
     assert!(index.get_mins().is_empty());
 }
 
 #[test]
 fn test_process_protein_files() -> Result<()> {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw");
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", "test_db");
     let files = vec![PathBuf::from(TEST_FASTA)];
     index.process_protein_files(&files)?;
 
@@ -38,11 +54,11 @@ fn test_process_protein_files() -> Result<()> {
 
 #[test]
 fn test_invalid_sequence() {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw");
-    let result = index.process_sequence_chunk("ACDEFGHIKLMNPQRSTVWY"); // Valid sequence
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", "test_db");
+    let result = index.process_sequence("ACDEFGHIKLMNPQRSTVWY"); // Valid sequence
     assert!(result.is_ok());
 
-    let result = index.process_sequence_chunk("ACDEFGHIKLMNPQRSTVWY1"); // Invalid character '1'
+    let result = index.process_sequence("ACDEFGHIKLMNPQRSTVWY1"); // Invalid character '1'
     assert!(result.is_err());
     let err = result.unwrap_err();
     assert!(err.to_string().contains("Invalid amino acid"));
@@ -50,10 +66,10 @@ fn test_invalid_sequence() {
 
 #[test]
 fn test_ambiguous_amino_acids() {
-    let index = ProteomeIndex::new(7, 100, "protein", "raw");
+    let index = ProteomeIndex::new(7, 100, "protein", "raw", "test_db");
 
     // Test valid ambiguous amino acids
-    let result = index.process_sequence_chunk("ACDEFXBZJ"); // X, B, Z, J are valid ambiguity codes
+    let result = index.process_sequence("ACDEFXBZJ"); // X, B, Z, J are valid ambiguity codes
     assert!(result.is_ok());
 
     // When we get kmers containing ambiguous amino acids, they should be resolved
@@ -64,15 +80,15 @@ fn test_ambiguous_amino_acids() {
 #[test]
 fn test_different_encodings() -> Result<()> {
     // Create indices with different encodings
-    let raw_index = ProteomeIndex::new(7, 100, "protein", "raw");
-    let dayhoff_index = ProteomeIndex::new(7, 100, "protein", "dayhoff");
-    let hp_index = ProteomeIndex::new(7, 100, "protein", "hp");
+    let raw_index = ProteomeIndex::new(7, 100, "protein", "raw", "protein_db");
+    let dayhoff_index = ProteomeIndex::new(7, 100, "protein", "dayhoff", "dayhoff_db");
+    let hp_index = ProteomeIndex::new(7, 100, "protein", "hp", "hp_db");
 
     // Process the same sequence with each encoding
     let sequence = "ACDEFGHIKLMNPQRSTVWY";
-    raw_index.process_sequence_chunk(sequence)?;
-    dayhoff_index.process_sequence_chunk(sequence)?;
-    hp_index.process_sequence_chunk(sequence)?;
+    raw_index.process_sequence(sequence)?;
+    dayhoff_index.process_sequence(sequence)?;
+    hp_index.process_sequence(sequence)?;
 
     // Get the hashes from each index
     let raw_hashes = raw_index.get_mins();
@@ -92,7 +108,7 @@ fn test_kmer_retrieval() -> Result<()> {
     let index = ProteomeIndex::new(3, 100, "protein", "raw");
 
     // Add a simple sequence
-    index.process_sequence_chunk("ACDEF")?;
+    index.process_sequence("ACDEF")?;
 
     // Get the hashes
     let mins = index.get_mins();
@@ -117,8 +133,8 @@ fn test_scaled_values() {
     let index_1000 = ProteomeIndex::new(7, 1000, "protein", "raw");
 
     let sequence = "ACDEFGHIKLMNPQRSTVWY";
-    index_100.process_sequence_chunk(sequence).unwrap();
-    index_1000.process_sequence_chunk(sequence).unwrap();
+    index_100.process_sequence(sequence).unwrap();
+    index_1000.process_sequence(sequence).unwrap();
 
     // Higher scaled value should result in fewer hashes
     let hashes_100 = index_100.get_mins();
