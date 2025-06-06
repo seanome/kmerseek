@@ -1,24 +1,29 @@
 use anyhow::Result;
-use quick_xml::reader::Reader;
 use rayon::prelude::*;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
-use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
+use sourmash::encodings::HashFunctions;
 use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::{self, BufRead, BufReader};
 use std::path::Path;
+use std::str;
 use std::sync::{Arc, Mutex};
 
 use crate::aminoacid::AminoAcidAmbiguity;
-use crate::uniprot::{self, UniProtSequence};
+use crate::uniprot::{self, UniProtEntry};
+use sourmash::cmd::ComputeParameters;
+use sourmash::collection::Collection;
+use sourmash::manifest::Manifest;
+use sourmash::signature::Signature;
+use sourmash::storage::{FSStorage, InnerStorage};
 
 /// Represents the position of a k-mer in a protein sequence
 #[derive(Debug, Clone)]
 pub struct KmerPosition {
-    protein: UniProtSequence,
+    protein: UniProtEntry,
     position: usize, // 0-based position in sequence
 }
 
@@ -64,6 +69,8 @@ pub struct ProteomeIndex {
     encoded_to_originals: Arc<Mutex<HashMap<String, Vec<KmerInfo>>>>,
     // Store the underlying MinHash sketch
     minhash: Arc<Mutex<KmerMinHash>>,
+    // Collection of signatures for source tracking
+    collection: Arc<Mutex<Collection>>,
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
     // Protein encoding function
@@ -83,56 +90,124 @@ impl From<io::Error> for IndexError {
 
 impl ProteomeIndex {
     pub fn new<P: AsRef<Path>>(
+        path: P,
         ksize: u32,
-        scaled: u32,
-        _moltype: &str,
-        encoding_type: &str,
-        db_path: P,
+        scaled: u64,
+        hash_function: HashFunctions,
+        encoding_fn: fn(u8) -> u8,
     ) -> Result<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
         opts.create_if_missing(true);
-        opts.set_compression_type(rocksdb::DBCompressionType::Lz4);
 
-        // Open RocksDB
-        let db = DB::open(&opts, db_path)?;
+        // Open the database
+        let db = DB::open(&opts, path)?;
 
-        // Create MinHash sketch
-        let hash_function = match encoding_type {
-            "dayhoff" => HashFunctions::Murmur64Dayhoff,
-            "hp" => HashFunctions::Murmur64Hp,
-            _ => HashFunctions::Murmur64Protein,
-        };
-
+        // Create the minhash sketch with proper type conversion
         let minhash = KmerMinHash::new(
-            scaled as u64,
+            scaled,
             ksize,
             hash_function,
-            42,    // seed
-            false, // track_abundance
-            0,     // num
+            42,   // seed
+            true, // track_abundance
+            0,    // num (use scaled instead)
         );
 
-        // Select encoding function
-        let encoding_fn = match encoding_type {
-            "dayhoff" => aa_to_dayhoff,
-            "hp" => aa_to_hp,
-            _ => |c| c,
-        };
+        // Create an empty collection with storage
+        let manifest = Manifest::default();
+        let storage = InnerStorage::new(
+            FSStorage::builder()
+                .fullpath("".into())
+                .subdir("".into())
+                .build(),
+        );
+        let collection = Collection::new(manifest, storage);
 
-        Ok(ProteomeIndex {
+        Ok(Self {
             db,
             hash_to_encoded: Arc::new(Mutex::new(HashMap::new())),
             encoded_to_originals: Arc::new(Mutex::new(HashMap::new())),
             minhash: Arc::new(Mutex::new(minhash)),
+            collection: Arc::new(Mutex::new(collection)),
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             encoding_fn,
         })
     }
 
+    pub fn add_protein(&mut self, protein: UniProtEntry) -> Result<()> {
+        // Create a new minhash for this protein
+        let mut minhash_guard = self.minhash.lock().unwrap();
+        let hash_function = minhash_guard.hash_function();
+        let ksize = minhash_guard.ksize() as u32;
+        let scaled = minhash_guard.scaled();
+        drop(minhash_guard);
+
+        // Create compute parameters for this protein's signature
+        let params = ComputeParameters::builder()
+            .ksizes(vec![ksize])
+            .scaled(scaled) // Already u64
+            .protein(true)
+            .num_hashes(0) // use scaled instead
+            .build();
+
+        // Create a signature for this protein
+        let mut sig = Signature::from_params(&params);
+        sig.set_name(&protein.id);
+
+        // Process each k-mer
+        let sequence = protein.sequence.as_bytes();
+        for i in 0..sequence.len().saturating_sub(ksize as usize - 1) {
+            let kmer = &sequence[i..i + ksize as usize];
+
+            // Add to the global minhash
+            let mut minhash_guard = self.minhash.lock().unwrap();
+            minhash_guard.add_sequence(kmer, true)?;
+            let hash = minhash_guard.mins().last().copied().unwrap_or(0);
+            drop(minhash_guard);
+
+            // Process the k-mer to get encoded version
+            let (encoded_kmer, original_kmer) = self.process_kmer(kmer);
+
+            // Create position information
+            let kmer_position = KmerPosition {
+                protein: protein.clone(),
+                position: i,
+            };
+
+            // Update hash -> encoded mapping
+            {
+                let mut hash_to_encoded = self.hash_to_encoded.lock().unwrap();
+                hash_to_encoded.insert(hash, encoded_kmer.clone());
+            }
+
+            // Update encoded -> originals mapping
+            {
+                let mut encoded_to_originals = self.encoded_to_originals.lock().unwrap();
+                let kmer_infos = encoded_to_originals
+                    .entry(encoded_kmer)
+                    .or_insert_with(Vec::new);
+
+                // Find or create KmerInfo for this original k-mer
+                if let Some(info) = kmer_infos
+                    .iter_mut()
+                    .find(|info| info.original_kmer == original_kmer)
+                {
+                    info.positions.push(kmer_position);
+                } else {
+                    kmer_infos.push(KmerInfo {
+                        original_kmer,
+                        positions: vec![kmer_position],
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Process a UniProt XML file
     pub fn process_uniprot_xml<P: AsRef<Path>>(&self, path: P) -> Result<()> {
-        let proteins = UniProtSequence::from_xml(path)?;
+        let proteins = UniProtEntry::from_xml(path)?;
 
         // Process proteins in parallel
         proteins
@@ -146,23 +221,17 @@ impl ProteomeIndex {
     }
 
     /// Process a sequence with its protein information
-    pub fn process_sequence(&self, sequence: &str, protein: UniProtSequence) -> Result<()> {
-        // First validate the sequence
-        self.aa_ambiguity.validate_sequence(sequence)?;
+    pub fn process_sequence(&self, sequence: &str, protein: UniProtEntry) -> Result<()> {
+        let bytes = sequence.as_bytes();
+        let minhash_guard = self.minhash.lock().unwrap();
+        let ksize = minhash_guard.ksize() as usize;
+        drop(minhash_guard);
 
-        let k = {
-            let minhash = self.minhash.lock().unwrap();
-            minhash.ksize() as usize
-        };
-
-        // Process k-mers in parallel
-        (0..sequence.len().saturating_sub(k - 1))
-            .into_par_iter()
-            .filter(|&i| i + k <= sequence.len())
-            .for_each(|i| {
-                let kmer = &sequence[i..i + k];
-                self.add_kmer(kmer, i, protein.clone());
-            });
+        for i in 0..bytes.len().saturating_sub(ksize - 1) {
+            let kmer = &bytes[i..i + ksize];
+            let kmer_str = str::from_utf8(kmer).unwrap();
+            self.add_kmer(kmer_str, i, protein.clone());
+        }
 
         Ok(())
     }
@@ -213,7 +282,7 @@ impl ProteomeIndex {
         sequences.into_par_iter().try_for_each(|(id, seq)| {
             self.process_sequence(
                 &seq,
-                UniProtSequence {
+                UniProtEntry {
                     id,
                     accession: String::new(), // We don't have accession in FASTA
                     sequence: seq.clone(),
@@ -227,34 +296,31 @@ impl ProteomeIndex {
     }
 
     /// Process a k-mer to get its encoded version
-    fn process_kmer(&self, kmer: &str) -> (String, String) {
-        // First resolve ambiguities
-        let resolved: String = kmer
-            .chars()
-            .map(|aa| self.aa_ambiguity.resolve_ambiguity(aa))
-            .collect();
+    fn process_kmer(&self, kmer: &[u8]) -> (String, String) {
+        // Convert the k-mer to a string
+        let kmer_str = str::from_utf8(kmer).unwrap();
 
-        // Then encode using the selected encoding function
-        let encoded: String = resolved
-            .bytes()
-            .map(|aa| (self.encoding_fn)(aa))
-            .map(|aa| aa as char)
-            .collect();
+        // Create the encoded k-mer by applying the encoding function
+        let encoded: Vec<u8> = kmer.iter().map(|&b| (self.encoding_fn)(b)).collect();
+        let encoded_str = str::from_utf8(&encoded).unwrap();
 
-        (encoded, kmer.to_string())
+        (encoded_str.to_string(), kmer_str.to_string())
     }
 
     /// Add a k-mer with its position information
-    fn add_kmer(&self, kmer: &str, position: usize, protein: UniProtSequence) {
+    fn add_kmer(&self, kmer: &str, position: usize, protein: UniProtEntry) {
         // Process the k-mer to get encoded version
-        let (encoded_kmer, original_kmer) = self.process_kmer(kmer);
+        let (encoded_kmer, original_kmer) = self.process_kmer(kmer.as_bytes());
+
+        println!("kmer: {}", encoded_kmer);
+        println!("encoded_kmer: {}", encoded_kmer);
+        println!("original_kmer: {}", original_kmer);
 
         // Get the hash from the minhash implementation
-        let hash = {
-            let mut minhash = self.minhash.lock().unwrap();
-            minhash.add_sequence(encoded_kmer.as_bytes(), true).unwrap();
-            minhash.to_vec().last().copied().unwrap_or(0)
-        };
+        let mut minhash_guard = self.minhash.lock().unwrap();
+        minhash_guard.add_word(kmer.as_bytes());
+        let hash = minhash_guard.mins().last().copied().unwrap_or(0);
+        drop(minhash_guard);
 
         // Create position information
         let kmer_position = KmerPosition { protein, position };
@@ -310,7 +376,7 @@ impl ProteomeIndex {
     }
 
     /// Get all hashes in the index
-    pub fn get_mins(&self) -> Vec<u64> {
+    pub fn get_hashes(&self) -> Vec<u64> {
         let minhash = self.minhash.lock().unwrap();
         minhash.to_vec()
     }

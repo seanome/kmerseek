@@ -3,7 +3,7 @@ use std::fs::File;
 use std::io::Write;
 use tempfile::tempdir;
 
-use crate::uniprot::UniProtSequence;
+use crate::uniprot::UniProtEntry;
 
 const TEST_BCL2_XML: &str =
     "tests/testdata/index/uniprotkb_gene_bcl2_AND_reviewed_true_2025_06_04.xml";
@@ -11,7 +11,7 @@ const TEST_BCL2_XML: &str =
 #[test]
 fn test_bcl2_xml_parsing() -> Result<()> {
     // Parse the BCL2 test file
-    let proteins = UniProtSequence::from_xml(TEST_BCL2_XML)?;
+    let proteins = UniProtEntry::from_xml(TEST_BCL2_XML)?;
 
     // Basic validation
     assert!(
@@ -94,7 +94,7 @@ fn test_simple_xml_parsing() -> Result<()> {
     file.write_all(xml_content.as_bytes())?;
 
     // Parse the test file
-    let proteins = UniProtSequence::from_xml(&file_path)?;
+    let proteins = UniProtEntry::from_xml(&file_path)?;
 
     assert_eq!(proteins.len(), 1);
     let protein = &proteins[0];

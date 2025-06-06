@@ -1,5 +1,6 @@
 use pyo3::prelude::*;
 use pyo3::types::PyType;
+use sourmash::encodings::{self, HashFunctions};
 use std::path::PathBuf;
 
 pub mod aminoacid;
@@ -12,7 +13,7 @@ mod tests;
 // Re-export main types for easier access
 pub use aminoacid::AminoAcidAmbiguity;
 pub use index::ProteomeIndex;
-pub use uniprot::{ProteinFeature, UniProtSequence};
+pub use uniprot::{ProteinFeature, UniProtEntry};
 
 #[pyclass]
 #[derive(Clone, Copy)]
@@ -71,9 +72,42 @@ impl PyProteomeIndex {
         encoding_type: &str,
         db_path: &str,
     ) -> PyResult<Self> {
-        let index =
-            crate::index::ProteomeIndex::new(ksize, scaled, moltype, encoding_type, db_path)
-                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        // Convert scaled to u64
+        let scaled = scaled as u64;
+
+        // Convert moltype string to HashFunctions enum
+        let hash_function = match moltype {
+            "protein" => HashFunctions::Murmur64Protein,
+            "dayhoff" => HashFunctions::Murmur64Dayhoff,
+            "hp" => HashFunctions::Murmur64Hp,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid moltype",
+                ))
+            }
+        };
+
+        // Convert encoding_type to encoding function
+        let encoding_fn: fn(u8) -> u8 = match encoding_type {
+            "raw" => |x| x,
+            "dayhoff" => sourmash::encodings::aa_to_dayhoff,
+            "hp" => sourmash::encodings::aa_to_hp,
+            _ => {
+                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
+                    "Invalid encoding type",
+                ))
+            }
+        };
+
+        let index = crate::index::ProteomeIndex::new(
+            PathBuf::from(db_path),
+            ksize,
+            scaled,
+            hash_function,
+            encoding_fn,
+        )
+        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+
         Ok(PyProteomeIndex { index })
     }
 
@@ -91,7 +125,7 @@ impl PyProteomeIndex {
     }
 
     fn get_mins(&self) -> Vec<u64> {
-        self.index.get_mins()
+        self.index.get_hashes()
     }
 }
 

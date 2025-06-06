@@ -19,16 +19,16 @@ pub struct ProteinFeature {
 
 /// Represents a protein sequence and its features from UniProt
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct UniProtSequence {
+pub struct UniProtEntry {
     pub id: String,        // e.g. "SFI1_CALJA"
     pub accession: String, // e.g. "B0KWR6"
     pub sequence: String,  // The amino acid sequence
     pub features: Vec<ProteinFeature>,
 }
 
-impl UniProtSequence {
+impl UniProtEntry {
     /// Parse a UniProt XML file and extract protein information
-    pub fn from_xml<P: AsRef<Path>>(path: P) -> Result<Vec<UniProtSequence>> {
+    pub fn from_xml<P: AsRef<Path>>(path: P) -> Result<Vec<UniProtEntry>> {
         let path_str = path.as_ref().to_string_lossy();
         let file = File::open(&path)?;
         let reader = BufReader::new(file);
@@ -46,7 +46,7 @@ impl UniProtSequence {
         let mut proteins = Vec::new();
         let mut buf = Vec::new();
 
-        let mut current_protein: Option<UniProtSequence> = None;
+        let mut current_protein: Option<UniProtEntry> = None;
         let mut in_sequence = false;
         let mut sequence_buf = String::new();
         let mut in_recommended_name = false;
@@ -57,7 +57,7 @@ impl UniProtSequence {
                 Ok(Event::Start(ref e)) => {
                     match e.name().as_ref() {
                         b"entry" => {
-                            current_protein = Some(UniProtSequence {
+                            current_protein = Some(UniProtEntry {
                                 id: String::new(),
                                 accession: String::new(),
                                 sequence: String::new(),
