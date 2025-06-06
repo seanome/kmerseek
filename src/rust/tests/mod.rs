@@ -1,3 +1,5 @@
-mod aminoacid_test;
-mod index_test;
-mod uniprot_test;
+mod test_aminoacid;
+pub mod test_fixtures;
+mod test_index;
+mod test_kmer;
+mod test_uniprot;

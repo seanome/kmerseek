@@ -1,8 +1,6 @@
 use anyhow::Result;
 use rayon::prelude::*;
 use rocksdb::{Options, DB};
-use serde::{Deserialize, Serialize};
-use sourmash::encodings::HashFunctions;
 use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
@@ -13,52 +11,21 @@ use std::str;
 use std::sync::{Arc, Mutex};
 
 use crate::aminoacid::AminoAcidAmbiguity;
-use crate::uniprot::{self, UniProtEntry};
+use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
+use crate::kmer::{KmerInfo, KmerPosition, KmerStats};
+use crate::uniprot::UniProtEntry;
+use sourmash::ani_utils::ani_from_containment;
 use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
+use sourmash::search_significance::{
+    compute_inverse_document_frequency, get_hash_frequencies, get_prob_overlap,
+    get_term_frequency_inverse_document_frequency, merge_all_minhashes, Normalization,
+};
 use sourmash::signature::Signature;
 use sourmash::storage::{FSStorage, InnerStorage};
-
-/// Represents the position of a k-mer in a protein sequence
-#[derive(Debug, Clone)]
-pub struct KmerPosition {
-    protein: UniProtEntry,
-    position: usize, // 0-based position in sequence
-}
-
-impl KmerPosition {
-    /// Get all features that overlap with this k-mer
-    pub fn overlapping_features(&self, kmer_length: usize) -> Vec<&uniprot::ProteinFeature> {
-        let kmer_start = self.position + 1; // Convert to 1-based position
-        let kmer_end = kmer_start + kmer_length - 1;
-
-        self.protein
-            .features
-            .iter()
-            .filter(|feature| {
-                // Check if the feature overlaps with the k-mer
-                !(feature.end < kmer_start || feature.start > kmer_end)
-            })
-            .collect()
-    }
-}
-
-/// Represents information about a k-mer occurrence
-#[derive(Debug, Clone)]
-pub struct KmerInfo {
-    original_kmer: String,
-    positions: Vec<KmerPosition>,
-}
-
-/// Statistics for k-mer frequency analysis
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KmerStats {
-    idf: f64,               // Inverse document frequency
-    frequency: f64,         // Raw frequency
-    l1_norm_frequency: f64, // L1 normalized frequency
-    l2_norm_frequency: f64, // L2 normalized frequency
-}
+use sourmash::utils::multicollection::SmallSignature;
+use sourmash::utils::{csvwriter_thread, load_collection, MultiSearchResult, ReportType};
 
 pub struct ProteomeIndex {
     // RocksDB instance for persistent storage
@@ -89,19 +56,23 @@ impl From<io::Error> for IndexError {
 }
 
 impl ProteomeIndex {
-    pub fn new<P: AsRef<Path>>(
-        path: P,
-        ksize: u32,
-        scaled: u64,
-        hash_function: HashFunctions,
-        encoding_fn: fn(u8) -> u8,
-    ) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P, ksize: u32, scaled: u64, moltype: &str) -> Result<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
         opts.create_if_missing(true);
 
         // Open the database
         let db = DB::open(&opts, path)?;
+
+        let hash_function = match get_hash_function_from_moltype(moltype) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
+
+        let encoding_fn = match get_encoding_fn_from_moltype(moltype) {
+            Ok(value) => value,
+            Err(value) => return value,
+        };
 
         // Create the minhash sketch with proper type conversion
         let minhash = KmerMinHash::new(
@@ -137,7 +108,6 @@ impl ProteomeIndex {
     pub fn add_protein(&mut self, protein: UniProtEntry) -> Result<()> {
         // Create a new minhash for this protein
         let mut minhash_guard = self.minhash.lock().unwrap();
-        let hash_function = minhash_guard.hash_function();
         let ksize = minhash_guard.ksize() as u32;
         let scaled = minhash_guard.scaled();
         drop(minhash_guard);
@@ -388,12 +358,16 @@ impl ProteomeIndex {
 
         // TODO: Implement frequency computations
         // For now, just store empty statistics
+        let hash_frequencies = get_hash_frequencies(minhash, Some(Normalization::L1));
+        let idf = compute_inverse_document_frequency(
+            minhash,
+            self.collection.lock().unwrap().signatures().collect(),
+            true,
+        );
         for hash in hashes {
             let stats = KmerStats {
-                idf: 0.0,
-                frequency: 0.0,
-                l1_norm_frequency: 0.0,
-                l2_norm_frequency: 0.0,
+                idf: idf,
+                frequency: hash_frequencies,
             };
 
             let key = format!("stats:{}", hash);

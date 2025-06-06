@@ -1,10 +1,11 @@
 use pyo3::prelude::*;
 use pyo3::types::PyType;
-use sourmash::encodings::{self, HashFunctions};
 use std::path::PathBuf;
 
 pub mod aminoacid;
+pub mod encoding;
 pub mod index;
+pub mod kmer;
 pub mod uniprot;
 
 #[cfg(test)]
@@ -65,48 +66,13 @@ pub struct PyProteomeIndex {
 #[pymethods]
 impl PyProteomeIndex {
     #[new]
-    fn new(
-        ksize: u32,
-        scaled: u32,
-        moltype: &str,
-        encoding_type: &str,
-        db_path: &str,
-    ) -> PyResult<Self> {
+    fn new(ksize: u32, scaled: u32, moltype: &str, db_path: &str) -> PyResult<Self> {
         // Convert scaled to u64
         let scaled = scaled as u64;
 
-        // Convert moltype string to HashFunctions enum
-        let hash_function = match moltype {
-            "protein" => HashFunctions::Murmur64Protein,
-            "dayhoff" => HashFunctions::Murmur64Dayhoff,
-            "hp" => HashFunctions::Murmur64Hp,
-            _ => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid moltype",
-                ))
-            }
-        };
-
-        // Convert encoding_type to encoding function
-        let encoding_fn: fn(u8) -> u8 = match encoding_type {
-            "raw" => |x| x,
-            "dayhoff" => sourmash::encodings::aa_to_dayhoff,
-            "hp" => sourmash::encodings::aa_to_hp,
-            _ => {
-                return Err(PyErr::new::<pyo3::exceptions::PyValueError, _>(
-                    "Invalid encoding type",
-                ))
-            }
-        };
-
-        let index = crate::index::ProteomeIndex::new(
-            PathBuf::from(db_path),
-            ksize,
-            scaled,
-            hash_function,
-            encoding_fn,
-        )
-        .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
+        let index =
+            crate::index::ProteomeIndex::new(PathBuf::from(db_path), ksize, scaled, moltype)
+                .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         Ok(PyProteomeIndex { index })
     }

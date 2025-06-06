@@ -4,23 +4,17 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
+use crate::tests::test_fixtures::*;
 use crate::uniprot::UniProtEntry;
-
-const TEST_FASTA: &str =
-    "tests/testdata/index/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
-
-const TEST_PROTEIN: &str = "PLANTANDANIMALGENQMES";
-const TEST_PROTEIN_INVALID: &str = "PLANTANDANIMALGENOMES";
 
 #[test]
 fn test_proteome_index_creation() -> Result<()> {
     let dir = tempdir().unwrap();
     let index = ProteomeIndex::new(
-        dir.path().to_path_buf(),  // Convert &Path to PathBuf to satisfy AsRef<Path>
-        7,                         // ksize
-        100,                       // scaled
-        HashFunctions::Murmur64Hp, // hash_function
-        aa_to_hp,                  // raw encoding - just returns the same amino acid
+        dir.path().to_path_buf(), // Convert &Path to PathBuf to satisfy AsRef<Path>
+        15,                       // ksize
+        1,                        // scaled
+        "hp",                     // hydrophobic-polar encoding
     )?;
     let sequence = TEST_PROTEIN;
     let result = index.process_sequence(
