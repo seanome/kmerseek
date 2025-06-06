@@ -3,7 +3,7 @@ use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 
 use crate::index::ProteomeIndex;
 
-fn get_hash_function_from_moltype(
+pub fn get_hash_function_from_moltype(
     moltype: &str,
 ) -> Result<HashFunctions, std::result::Result<ProteomeIndex, anyhow::Error>> {
     let hash_function = match moltype {
@@ -20,7 +20,7 @@ fn get_hash_function_from_moltype(
     Ok(hash_function)
 }
 
-fn get_encoding_fn_from_moltype(
+pub fn get_encoding_fn_from_moltype(
     moltype: &str,
 ) -> Result<fn(u8) -> u8, std::result::Result<ProteomeIndex, anyhow::Error>> {
     let encoding_fn = match moltype {
