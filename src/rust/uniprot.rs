@@ -26,6 +26,17 @@ pub struct UniProtEntry {
     pub features: Vec<ProteinFeature>,
 }
 
+impl Default for UniProtEntry {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            accession: String::new(),
+            sequence: String::new(),
+            features: Vec::new(),
+        }
+    }
+}
+
 impl UniProtEntry {
     /// Parse a UniProt XML file and extract protein information
     pub fn from_xml<P: AsRef<Path>>(path: P) -> Result<Vec<UniProtEntry>> {
