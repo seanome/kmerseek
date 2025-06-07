@@ -78,14 +78,16 @@ impl PyProteomeIndex {
     }
 
     fn process_uniprot_xml(&self, path: &str) -> PyResult<()> {
-        self.index
+        &self
+            .index
             .process_uniprot_xml(path)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
     fn process_protein_files(&self, files: Vec<String>) -> PyResult<()> {
         let paths: Vec<PathBuf> = files.into_iter().map(PathBuf::from).collect();
-        self.index
+        &self
+            .index
             .process_protein_files(&paths)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }

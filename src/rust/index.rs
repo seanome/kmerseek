@@ -1,5 +1,5 @@
-use anyhow::Result;
-use needletail::{parse_fastx_file, parse_fastx_reader, parse_fastx_stdin};
+use anyhow::{Context, Result};
+use needletail::{parse_fastx_file, parse_fastx_stdin};
 use rayon::prelude::*;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
@@ -89,11 +89,11 @@ pub struct ProteomeIndex {
     ksize: u32,
 
     // Add scaled field for serialization
-    scaled: u64,
+    scaled: u32,
 }
 
 impl ProteomeIndex {
-    pub fn new<P: AsRef<Path>>(path: P, ksize: u32, scaled: u64, moltype: &str) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(path: P, ksize: u32, scaled: u32, moltype: &str) -> Result<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -460,7 +460,10 @@ impl ProteomeIndex {
     }
 
     /// Process a list of protein FASTA files
-    pub fn process_protein_files<P: AsRef<Path>>(&mut self, paths: &[P]) -> Result<()> {
+    pub fn process_protein_files<P: AsRef<Path> + std::cmp::PartialEq<str>>(
+        &mut self,
+        paths: &[P],
+    ) -> Result<()> {
         for path in paths {
             // Create a FASTX reader from the file or stdin
             let mut fastx_reader = if path == "-" {
@@ -475,7 +478,7 @@ impl ProteomeIndex {
             while let Some(record_result) = fastx_reader.next() {
                 let record = record_result.context("Failed to read a record from input")?;
 
-                protein = UniProtEntry {
+                let protein = UniProtEntry {
                     id: &record.name().to_string(),
                     sequence: &record.seq().to_string(),
                     features: Vec::new(),
