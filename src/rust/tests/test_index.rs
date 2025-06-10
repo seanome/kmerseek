@@ -1,10 +1,10 @@
 use crate::uniprot::UniProtEntry;
 use anyhow::Result;
-use std::path::PathBuf;
+
 use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
-use crate::tests::test_fixtures::{TEST_FASTA, TEST_PROTEIN, TEST_PROTEIN_INVALID};
+use crate::tests::test_fixtures::{TEST_FASTA};
 
 // #[test]
 // fn test_proteome_index_creation() -> Result<()> {
@@ -185,7 +185,7 @@ fn test_single_protein_addition() -> Result<()> {
     };
 
     // Create index with minimal parameters
-    let mut index = ProteomeIndex::new(
+    let index = ProteomeIndex::new(
         dir.path().join("single_protein.db"),
         3, // small ksize for test
         1, // scaled

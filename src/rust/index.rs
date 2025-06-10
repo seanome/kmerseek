@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use needletail::{parse_fastx_file, parse_fastx_stdin, parser::SequenceRecord};
+use needletail::{parse_fastx_file, parse_fastx_stdin};
 use rayon::prelude::*;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
@@ -211,7 +211,7 @@ impl ProteomeIndex {
         // Update global structures
         {
             let mut collection = self.collection.lock().unwrap();
-            let mut sigs = vec![sig];
+            let sigs = vec![sig];
             let new_collection = Collection::from_sigs(sigs)?;
             *collection = new_collection;
 
