@@ -44,7 +44,7 @@ impl AminoAcidAmbiguity {
                 possible_aas[0]
             } else {
                 // Otherwise randomly choose one of the possibilities
-                let mut rng = rand::thread_rng();
+                let mut rng = rand::rng();
                 *possible_aas.choose(&mut rng).unwrap_or(&aa)
             }
         } else {

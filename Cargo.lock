@@ -1881,7 +1881,6 @@ dependencies = [
 [[package]]
 name = "sourmash_plugin_branchwater"
 version = "0.9.14-dev"
-source = "git+https://github.com/sourmash-bio/sourmash_plugin_branchwater?branch=upd-rust#1e6e2096d735f3db9ab3a65188a71c4ea416d8ae"
 dependencies = [
  "anyhow",
  "camino",
@@ -1898,6 +1897,7 @@ dependencies = [
  "rust_decimal_macros",
  "rustworkx-core",
  "serde",
+ "serde_derive",
  "serde_json",
  "simple-error",
  "sourmash",

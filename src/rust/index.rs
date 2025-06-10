@@ -21,17 +21,47 @@ use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
 use sourmash::signature::Signature;
-use sourmash::storage::{FSStorage, InnerStorage};
+use sourmash::storage::{FSStorage, InnerStorage, SigStore};
 use sourmash_plugin_branchwater::search_significance::{
     compute_inverse_document_frequency, get_hash_frequencies, Normalization,
 };
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
+#[derive(Clone, Serialize, Deserialize)]
+struct SerializableSignature {
+    location: String,
+    name: String,
+    md5sum: String,
+    minhash: KmerMinHash,
+}
+
+impl From<SmallSignature> for SerializableSignature {
+    fn from(sig: SmallSignature) -> Self {
+        Self {
+            location: sig.location,
+            name: sig.name,
+            md5sum: sig.md5sum,
+            minhash: sig.minhash,
+        }
+    }
+}
+
+impl From<SigStore> for SerializableSignature {
+    fn from(sig: SigStore) -> Self {
+        Self {
+            location: sig.filename().clone(),
+            name: sig.name().clone(),
+            md5sum: sig.md5sum().to_string(),
+            minhash: sig.minhash().unwrap().clone(),
+        }
+    }
+}
+
 // Represents the serializable state of ProteomeIndex
 #[derive(Serialize, Deserialize)]
 struct ProteomeIndexState {
     // Store signatures instead of Collection
-    signatures: Vec<SmallSignature>,
+    signatures: Vec<SerializableSignature>,
     combined_minhash: KmerMinHash,
     protein_info: HashMap<String, ProteinKmerInfo>,
     moltype: String,
@@ -49,7 +79,7 @@ pub struct ProteinKmerInfo {
     // Map of encoded k-mer -> original k-mer info
     pub encoded_to_originals: HashMap<String, Vec<KmerInfo>>,
     // The protein's signature for searching
-    pub signature: SmallSignature,
+    pub signature: SerializableSignature,
 }
 
 impl ProteinKmerInfo {
@@ -58,7 +88,7 @@ impl ProteinKmerInfo {
             protein,
             hash_to_encoded: HashMap::new(),
             encoded_to_originals: HashMap::new(),
-            signature,
+            signature: SerializableSignature::from(signature),
         }
     }
 }
@@ -164,11 +194,16 @@ impl ProteomeIndex {
         sig.set_name(&protein.id);
 
         // Convert to SmallSignature
-        let small_sig = SmallSignature::from(sig.clone());
-        let md5sum = small_sig.md5sum().to_string();
+        let small_sig = SmallSignature {
+            location: sig.filename().clone(),
+            name: sig.name().clone().unwrap(),
+            md5sum: sig.md5sum().to_string(),
+            minhash: sig.minhash().unwrap().clone(),
+        };
+        let md5sum = small_sig.md5sum.to_string();
 
         // Create protein-specific k-mer info
-        let mut protein_info = ProteinKmerInfo::new(protein.clone(), small_sig.clone());
+        let mut protein_info = ProteinKmerInfo::new(protein.clone(), small_sig);
 
         // Process k-mers for this protein
         self.process_protein_kmers(&mut protein_info)?;
@@ -298,7 +333,14 @@ impl ProteomeIndex {
         let mut signatures = Vec::new();
         for (_, record) in collection.iter() {
             if let Ok(sig) = collection.sig_from_record(record) {
-                signatures.push(SmallSignature::from(sig));
+                let serialized = SerializableSignature::from(sig);
+                let small_sig = SmallSignature {
+                    location: serialized.location,
+                    name: serialized.name,
+                    md5sum: serialized.md5sum,
+                    minhash: serialized.minhash,
+                };
+                signatures.push(small_sig);
             }
         }
 
@@ -372,13 +414,16 @@ impl ProteomeIndex {
         // Convert each signature in the collection to a SmallSignature
         for (_, record) in collection.iter() {
             if let Ok(sig) = collection.sig_from_record(record) {
-                signatures.push(SmallSignature::from(sig));
+                signatures.push(SerializableSignature::from(sig));
             }
         }
 
         // Create a serializable state
         let state = ProteomeIndexState {
-            signatures,
+            signatures: signatures
+                .into_iter()
+                .map(SerializableSignature::from)
+                .collect(),
             combined_minhash: self.combined_minhash.lock().unwrap().clone(),
             protein_info: self.protein_info.lock().unwrap().clone(),
             moltype: self.moltype.clone(),
@@ -422,18 +467,23 @@ impl ProteomeIndex {
             ),
         );
 
-        // Convert SmallSignatures back to regular Signatures and add to collection
+        // Convert SerializableSignature to Signature
         let mut sigs = Vec::new();
-        for small_sig in state.signatures {
-            let params = ComputeParameters::builder()
-                .ksizes(vec![state.ksize])
-                .scaled(state.scaled)
-                .protein(true)
-                .num_hashes(0)
-                .build();
+        for serialized_sig in state.signatures {
+            // Create a new signature with the same parameters
+            let mut sig = Signature::from_params(
+                &ComputeParameters::builder()
+                    .ksizes(vec![state.ksize])
+                    .scaled(state.scaled)
+                    .protein(true)
+                    .num_hashes(0)
+                    .build(),
+            );
 
-            let mut sig = Signature::from_params(&params);
-            sig.set_name(small_sig.name());
+            // Set the signature properties
+            sig.set_name(&serialized_sig.name);
+            sig.set_filename(&serialized_sig.location);
+
             sigs.push(sig);
         }
         collection = Collection::from_sigs(sigs)?;
@@ -538,10 +588,4 @@ impl ProteomeIndex {
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Clone, Copy)]
-pub enum Normalization {
-    L1,
-    L2,
 }
