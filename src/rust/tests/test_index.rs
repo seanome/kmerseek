@@ -1,3 +1,4 @@
+use crate::uniprot::UniProtEntry;
 use anyhow::Result;
 use std::path::PathBuf;
 use tempfile::tempdir;
@@ -170,3 +171,47 @@ fn test_proteome_index_creation_raw() -> Result<()> {
 //     assert!(index.get_hashes().is_empty());
 //     Ok(())
 // }
+
+#[test]
+fn test_single_protein_addition() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create a simple test protein
+    let test_protein = UniProtEntry {
+        id: "TEST1".to_string(),
+        sequence: "MVKVGVNG".to_string(), // Simple 8 amino acid sequence
+        features: Vec::new(),
+        ..Default::default()
+    };
+
+    // Create index with minimal parameters
+    let mut index = ProteomeIndex::new(
+        dir.path().join("single_protein.db"),
+        3, // small ksize for test
+        1, // scaled
+        "protein",
+    )?;
+
+    // Add the protein - clone it since process_sequence takes ownership
+    index.process_sequence(test_protein.sequence.as_bytes(), test_protein.clone())?;
+
+    // Verify the protein was added by checking if we can get k-mer info
+    // Get the first hash from the index
+    let hashes = index.get_hashes();
+    assert!(
+        !hashes.is_empty(),
+        "Should have at least one hash after adding protein"
+    );
+
+    // Try to get k-mer info for the first hash
+    if let Some(kmer_info) = index.get_kmer_info(hashes[0]) {
+        assert!(!kmer_info.is_empty(), "Should have k-mer info for the hash");
+    } else {
+        panic!("Failed to get k-mer info for hash");
+    }
+
+    // Explicitly close the index
+    index.close()?;
+
+    Ok(())
+}
