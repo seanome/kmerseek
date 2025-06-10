@@ -3,9 +3,10 @@ use std::path::PathBuf;
 use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
+use crate::tests::test_fixtures::{TEST_FASTA, TEST_PROTEIN, TEST_PROTEIN_INVALID};
 
 #[test]
-fn test_proteome_index_creation_raw() -> Result<()> {
+fn test_proteome_index_creation() -> Result<()> {
     let dir = tempdir()?;
     let files = vec![PathBuf::from(TEST_FASTA)];
 
@@ -37,7 +38,7 @@ fn test_proteome_index_creation_raw() -> Result<()> {
     index.process_protein_files(&files)?;
 
     // Test sequence validation
-    let result = index.process_sequence("INVALID", Default::default());
+    let result = index.process_sequence(TEST_PROTEIN_INVALID, Default::default());
     assert!(result.is_err());
 
     // Test k-mer info retrieval
@@ -92,10 +93,7 @@ fn test_proteome_index_creation_raw() -> Result<()> {
 #[test]
 fn test_proteome_index_creation_raw() -> Result<()> {
     let dir = tempdir()?;
-    let files = vec![
-        PathBuf::from("tests/data/protein1.fasta"),
-        PathBuf::from("tests/data/protein2.fasta"),
-    ];
+    let files = vec![TEST_FASTA];
 
     // Test with protein encoding
     let mut index = ProteomeIndex::new(
@@ -123,13 +121,10 @@ fn test_proteome_index_creation_raw() -> Result<()> {
 
     // Compare statistics between different scaled values
     for hash in index.get_hashes() {
-        if let (Some(stats_100), Some(stats_1000)) = (
-            index_100.get_kmer_stats(hash)?,
-            index_1000.get_kmer_stats(hash)?,
-        ) {
+        if let (Some(stats)) = (index.get_kmer_stats(hash)?) {
             println!(
-                "Hash {} - Scaled 100: {:.2} {:.2}, Scaled 1000: {:.2} {:.2}",
-                hash, stats_100.idf, stats_100.frequency, stats_1000.idf, stats_1000.frequency
+                "Hash {} - IDF: {:.2}, Frequency: {:.2}",
+                hash, stats.idf, stats.frequency,
             );
         }
     }

@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use needletail::{parse_fastx_file, parse_fastx_stdin};
+use needletail::{parse_fastx_file, parse_fastx_stdin, parser::SequenceRecord};
 use rayon::prelude::*;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
@@ -8,7 +8,7 @@ use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
 use std::fs::File;
-use std::io::{self, BufRead, BufReader};
+use std::io::BufReader;
 use std::path::Path;
 use std::str;
 use std::sync::{Arc, Mutex};
@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
 use crate::kmer::{KmerInfo, KmerPosition, KmerStats};
-use crate::uniprot::{self, UniProtEntry};
+use crate::uniprot::UniProtEntry;
 use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
@@ -36,7 +36,7 @@ struct ProteomeIndexState {
     protein_info: HashMap<String, ProteinKmerInfo>,
     moltype: String,
     ksize: u32,
-    scaled: u64,
+    scaled: u32,
 }
 
 // Represents a single protein's k-mer information
@@ -324,13 +324,13 @@ impl ProteomeIndex {
     }
 
     /// Process a single protein sequence
-    pub fn process_sequence(&self, sequence: &str, protein: UniProtEntry) -> Result<()> {
+    pub fn process_sequence(&self, sequence: &[u8], protein: UniProtEntry) -> Result<()> {
         // Validate sequence - check for invalid amino acids
-        for (i, c) in sequence.chars().enumerate() {
-            if !self.aa_ambiguity.is_valid_aa(c) {
+        for (i, c) in sequence.iter().enumerate() {
+            if !self.aa_ambiguity.is_valid_aa(*c as char) {
                 return Err(anyhow::anyhow!(
                     "Invalid amino acid '{}' at position {}",
-                    c,
+                    *c as char,
                     i + 1
                 ));
             }
@@ -363,7 +363,7 @@ impl ProteomeIndex {
         minhash.mins().to_vec()
     }
 
-    /// Save the entire index state to RocksDB
+    /// Save the index state to RocksDB
     pub fn save(&self) -> Result<()> {
         // Extract signatures from collection
         let collection = self.collection.lock().unwrap();
@@ -386,7 +386,7 @@ impl ProteomeIndex {
             scaled: self.scaled,
         };
 
-        // Serialize and store the state
+        // Serialize and store the state using bincode 1.3
         let serialized = bincode::serialize(&state)?;
         self.db.put("index_state", serialized)?;
 
@@ -399,7 +399,7 @@ impl ProteomeIndex {
         opts.create_if_missing(false);
         let db = DB::open(&opts, path)?;
 
-        // Load the serialized state
+        // Load the serialized state using bincode 1.3
         let state: ProteomeIndexState = match db.get("index_state")? {
             Some(bytes) => bincode::deserialize(&bytes)?,
             None => return Err(anyhow::anyhow!("No index state found in database")),
@@ -460,16 +460,13 @@ impl ProteomeIndex {
     }
 
     /// Process a list of protein FASTA files
-    pub fn process_protein_files<P: AsRef<Path> + std::cmp::PartialEq<str>>(
-        &mut self,
-        paths: &[P],
-    ) -> Result<()> {
+    pub fn process_protein_files<P: AsRef<Path>>(&mut self, paths: &[P]) -> Result<()> {
         for path in paths {
             // Create a FASTX reader from the file or stdin
-            let mut fastx_reader = if path == "-" {
+            let mut fastx_reader = if path.as_ref() == Path::new("-") {
                 parse_fastx_stdin().context("Failed to parse FASTA/FASTQ data from stdin")?
             } else {
-                parse_fastx_file(&path).context("Failed to open file for FASTA/FASTQ data")?
+                parse_fastx_file(path).context("Failed to open file for FASTA/FASTQ data")?
             };
 
             let mut record_count: u64 = 0;
@@ -477,17 +474,21 @@ impl ProteomeIndex {
             // Parse records and add sequences to signatures
             while let Some(record_result) = fastx_reader.next() {
                 let record = record_result.context("Failed to read a record from input")?;
+                let id = String::from_utf8_lossy(record.id()).to_string();
+                let seq_bytes = record.seq();
+                let sequence = String::from_utf8_lossy(seq_bytes.as_ref()).to_string();
 
                 let protein = UniProtEntry {
-                    id: &record.name().to_string(),
-                    sequence: &record.seq().to_string(),
+                    id,
+                    sequence: sequence.clone(),
                     features: Vec::new(),
                     ..Default::default()
                 };
 
-                self.process_sequence(&protein.sequence, protein.clone())?;
+                self.process_sequence(seq_bytes.as_ref(), protein)?;
                 record_count += 1;
             }
+            println!("Processed {} sequence records", record_count);
         }
         Ok(())
     }
@@ -514,7 +515,7 @@ impl ProteomeIndex {
                     _ => {}
                 },
                 Ok(quick_xml::events::Event::Text(e)) => {
-                    if let Some(protein) = current_protein.as_mut() {
+                    if let Some(_protein) = current_protein.as_mut() {
                         if !current_sequence.is_empty() {
                             current_sequence.push_str(&e.unescape()?.into_owned());
                         }
@@ -524,7 +525,7 @@ impl ProteomeIndex {
                     b"entry" => {
                         if let Some(mut protein) = current_protein.take() {
                             protein.sequence = current_sequence.clone();
-                            self.process_sequence(&current_sequence, protein)?;
+                            self.process_sequence(current_sequence.as_bytes(), protein)?;
                         }
                         current_sequence.clear();
                     }

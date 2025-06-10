@@ -52,7 +52,7 @@ impl UniProtEntry {
         };
 
         let mut xml_reader = Reader::from_reader(reader);
-        xml_reader.trim_text(true);
+        xml_reader.config_mut().trim_text(true);
 
         let mut proteins = Vec::new();
         let mut buf = Vec::new();

@@ -67,9 +67,6 @@ pub struct PyProteomeIndex {
 impl PyProteomeIndex {
     #[new]
     fn new(ksize: u32, scaled: u32, moltype: &str, db_path: &str) -> PyResult<Self> {
-        // Convert scaled to u64
-        let scaled = scaled as u64;
-
         let index =
             crate::index::ProteomeIndex::new(PathBuf::from(db_path), ksize, scaled, moltype)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
@@ -77,17 +74,15 @@ impl PyProteomeIndex {
         Ok(PyProteomeIndex { index })
     }
 
-    fn process_uniprot_xml(&self, path: &str) -> PyResult<()> {
-        &self
-            .index
+    fn process_uniprot_xml(&mut self, path: &str) -> PyResult<()> {
+        self.index
             .process_uniprot_xml(path)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }
 
-    fn process_protein_files(&self, files: Vec<String>) -> PyResult<()> {
+    fn process_protein_files(&mut self, files: Vec<String>) -> PyResult<()> {
         let paths: Vec<PathBuf> = files.into_iter().map(PathBuf::from).collect();
-        &self
-            .index
+        self.index
             .process_protein_files(&paths)
             .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
     }

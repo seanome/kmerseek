@@ -14,3 +14,15 @@ export MACOSX_DEPLOYMENT_TARGET=10.15 \
 	&& export DYLD_FALLBACK_LIBRARY_PATH="/Users/olga/anaconda3/envs/kmerseek-dev/lib:$DYLD_FALLBACK_LIBRARY_PATH" \
 	&& export RUSTFLAGS="-C link-arg=-undefined -C link-arg=dynamic_lookup"
 ```
+
+It may look like this:
+
+```bash
+export MACOSX_DEPLOYMENT_TARGET=10.15 \
+        && export PYTHON_CONFIGURE_OPTS="--enable-framework" \
+        && export PYTHON_SYS_EXECUTABLE="/Users/olga/anaconda3/envs/kmerseek-dev/bin/python" \
+        && export PYO3_PYTHON="/Users/olga/anaconda3/envs/kmerseek-dev/bin/python" \
+        && export PYTHONPATH="/Users/olga/anaconda3/envs/kmerseek-dev/lib/python3.13/site-packages:$PYTHONPATH" \
+        && export DYLD_FALLBACK_LIBRARY_PATH="/Users/olga/anaconda3/envs/kmerseek-dev/lib:$DYLD_FALLBACK_LIBRARY_PATH" \
+        && export RUSTFLAGS="-C link-arg=-undefined -C link-arg=dynamic_lookup"
+```
