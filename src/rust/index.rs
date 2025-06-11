@@ -8,6 +8,7 @@ use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
 use std::fs::File;
+use std::hash::Hash;
 use std::io::BufReader;
 use std::path::Path;
 use std::str;
@@ -15,8 +16,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
-use crate::kmer::{KmerInfo, KmerPosition, KmerStats};
+use crate::kmer_signature::{KmerInfo, KmerPosition, KmerStats};
 use crate::uniprot::UniProtEntry;
+use sourmash::_hash_murmur;
 use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
@@ -27,35 +29,7 @@ use sourmash_plugin_branchwater::search_significance::{
 };
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
-#[derive(Clone, Serialize, Deserialize)]
-struct SerializableSignature {
-    location: String,
-    name: String,
-    md5sum: String,
-    minhash: KmerMinHash,
-}
 
-impl From<SmallSignature> for SerializableSignature {
-    fn from(sig: SmallSignature) -> Self {
-        Self {
-            location: sig.location,
-            name: sig.name,
-            md5sum: sig.md5sum,
-            minhash: sig.minhash,
-        }
-    }
-}
-
-impl From<SigStore> for SerializableSignature {
-    fn from(sig: SigStore) -> Self {
-        Self {
-            location: sig.filename().clone(),
-            name: sig.name().clone(),
-            md5sum: sig.md5sum().to_string(),
-            minhash: sig.minhash().unwrap().clone(),
-        }
-    }
-}
 
 // Represents the serializable state of ProteomeIndex
 #[derive(Serialize, Deserialize)]
@@ -63,35 +37,13 @@ struct ProteomeIndexState {
     // Store signatures instead of Collection
     signatures: Vec<SerializableSignature>,
     combined_minhash: KmerMinHash,
-    protein_info: HashMap<String, ProteinKmerInfo>,
+    protein_info: HashMap<String, SignatureKmerMapping>,
     moltype: String,
     ksize: u32,
     scaled: u32,
 }
 
-// Represents a single protein's k-mer information
-#[derive(Clone, Serialize, Deserialize)]
-pub struct ProteinKmerInfo {
-    // The original protein sequence and metadata
-    pub protein: UniProtEntry,
-    // Map of hash -> encoded k-mer for this protein
-    pub hash_to_encoded: HashMap<u64, String>,
-    // Map of encoded k-mer -> original k-mer info
-    pub encoded_to_originals: HashMap<String, Vec<KmerInfo>>,
-    // The protein's signature for searching
-    pub signature: SerializableSignature,
-}
 
-impl ProteinKmerInfo {
-    pub fn new(protein: UniProtEntry, signature: SmallSignature) -> Self {
-        Self {
-            protein,
-            hash_to_encoded: HashMap::new(),
-            encoded_to_originals: HashMap::new(),
-            signature: SerializableSignature::from(signature),
-        }
-    }
-}
 
 pub struct ProteomeIndex {
     // RocksDB instance for persistent storage
@@ -104,7 +56,7 @@ pub struct ProteomeIndex {
     combined_minhash: Arc<Mutex<KmerMinHash>>,
 
     // Map of signature md5 -> protein k-mer information
-    protein_info: Arc<Mutex<HashMap<String, ProteinKmerInfo>>>,
+    protein_info: Arc<Mutex<HashMap<String, SignatureKmerMapping>>>,
 
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
@@ -174,12 +126,11 @@ impl ProteomeIndex {
         })
     }
 
-    pub fn add_protein(&mut self, protein: UniProtEntry) -> Result<()> {
+    pub fn add_uniprot_entry(&mut self, protein: UniProtEntry) -> Result<()> {
         // Get parameters from combined_minhash
-        let minhash_guard = self.combined_minhash.lock().unwrap();
+        let mut minhash_guard = self.combined_minhash.lock().unwrap();
         let ksize = minhash_guard.ksize() as u32;
         let scaled = minhash_guard.scaled();
-        drop(minhash_guard);
 
         // Create compute parameters for this protein's signature
         let params = ComputeParameters::builder()
@@ -201,12 +152,18 @@ impl ProteomeIndex {
             minhash: sig.minhash().unwrap().clone(),
         };
         let md5sum = small_sig.md5sum.to_string();
+        let mut minhash = small_sig.minhash.clone();
+        minhash.add_sequence(protein.sequence.as_bytes(), true)?;
+
+        // Add the newly created hashes to the combined minhash
+        minhash_guard.add_many_with_abund(&minhash.to_vec_abunds())?;
+        drop(minhash_guard);
 
         // Create protein-specific k-mer info
-        let mut protein_info = ProteinKmerInfo::new(protein.clone(), small_sig);
+        let mut protein_info = SignatureKmerMapping::new(protein.clone(), small_sig);
 
         // Process k-mers for this protein
-        self.process_protein_kmers(&mut protein_info)?;
+        self.process_protein_kmers(protein.sequence.as_bytes(), small_sig&sig)?;
 
         // Update global structures
         {
@@ -214,9 +171,6 @@ impl ProteomeIndex {
             let sigs = vec![sig];
             let new_collection = Collection::from_sigs(sigs)?;
             *collection = new_collection;
-
-            let mut combined = self.combined_minhash.lock().unwrap();
-            combined.add_sequence(protein.sequence.as_bytes(), true)?;
 
             let mut proteins = self.protein_info.lock().unwrap();
             proteins.insert(md5sum.clone(), protein_info.clone());
@@ -231,51 +185,54 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    fn process_protein_kmers(&self, protein_info: &mut ProteinKmerInfo) -> Result<()> {
-        let sequence = protein_info.protein.sequence.as_bytes();
-        let minhash_guard = self.combined_minhash.lock().unwrap();
+    fn process_protein_kmers(&self, sequence: &[u8], signature: &SmallSignature) -> Result<SignatureKmerMapping> {
+        let minhash_guard = signature.minhash.clone();
         let ksize = minhash_guard.ksize() as usize;
+        let seed = minhash_guard.seed();
+        let hashvals = minhash_guard.to_vec();
         drop(minhash_guard);
+
+        let mut signature_kmers = SignatureKmerMapping::new(SmallSignature { location: signature.location.clone(), name: signature.name.clone(), md5sum: signature.md5sum.clone(), minhash: signature.minhash.clone() });
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = &sequence[i..i + ksize];
 
             // Process the k-mer to get encoded version
-            let (encoded_kmer, original_kmer) = self.process_kmer(kmer);
-
-            // Create position information
-            let kmer_position = KmerPosition {
-                protein: protein_info.protein.clone(),
-                position: i,
-            };
+            let (encoded_kmer, original_kmer) = self.encode_kmer(kmer);
 
             // Get the hash from the minhash implementation
-            let mut minhash_guard = self.combined_minhash.lock().unwrap();
-            minhash_guard.add_sequence(kmer, true)?;
-            let hash = minhash_guard.mins().last().copied().unwrap_or(0);
-            drop(minhash_guard);
+            let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
-            // Update protein-specific mappings
-            protein_info
-                .hash_to_encoded
-                .insert(hash, encoded_kmer.clone());
+            // If this hashval is in the minhash, then save its k-mer positions
+            // This step is necessary because scaled > 1 means we aren't saving ALL the hashes
+            // -> check if the hashed version of the encoded k-mer is in the minhash
+            if !hashvals.contains(&hashval) {
+                // Create position information
+                let kmer_position = KmerPosition {
+                    protein: signature_kmers.protein.clone(),
+                    position: i,
+                };
 
-            let kmer_infos = protein_info
-                .encoded_to_originals
-                .entry(encoded_kmer)
-                .or_insert_with(Vec::new);
+                let kmer_infos = signature_kmers
+                    .encoded_to_originals
+                    .entry(encoded_kmer)
+                    .or_insert_with(Vec::new);
 
-            // Find or create KmerInfo for this original k-mer
-            if let Some(info) = kmer_infos
-                .iter_mut()
-                .find(|info| info.original_kmer == original_kmer)
-            {
-                info.positions.push(kmer_position);
-            } else {
-                kmer_infos.push(KmerInfo {
-                    original_kmer,
-                    positions: vec![kmer_position],
-                });
+                // Find or create KmerInfo for this original k-mer
+                if let Some(info) = kmer_infos
+                    .iter_mut()
+                    .find(|info| info.original_kmer == original_kmer)
+                {
+                    info.positions.push(kmer_position);
+                } else {
+                    kmer_infos.push(KmerInfo {
+                        hashval,
+                        encoded_kmer.clone(),
+                        original_kmer,
+                        positions: vec![kmer_position],
+                    });
+                }
+                println!("{}", kmer_infos);
             }
         }
 
@@ -283,7 +240,7 @@ impl ProteomeIndex {
     }
 
     /// Process a k-mer to get its encoded version
-    fn process_kmer(&self, kmer: &[u8]) -> (String, String) {
+    pub fn encode_kmer(&self, kmer: &[u8]) -> (String, String) {
         // Convert the k-mer to a string
         let kmer_str = str::from_utf8(kmer).unwrap();
 
@@ -394,7 +351,7 @@ impl ProteomeIndex {
         };
 
         // Add the protein
-        temp_self.add_protein(protein)?;
+        temp_self.add_uniprot_entry(protein)?;
 
         Ok(())
     }
