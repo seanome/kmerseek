@@ -5,7 +5,8 @@ use std::path::PathBuf;
 pub mod aminoacid;
 pub mod encoding;
 pub mod index;
-pub mod kmer;
+pub mod kmer_signature;
+pub mod protein;
 pub mod uniprot;
 
 #[cfg(test)]

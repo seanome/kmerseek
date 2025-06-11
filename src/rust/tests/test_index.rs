@@ -1,10 +1,13 @@
 use crate::uniprot::UniProtEntry;
 use anyhow::Result;
+use sourmash::cmd::ComputeParameters;
+use sourmash::signature::Signature;
+use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
-use crate::tests::test_fixtures::{TEST_FASTA};
+use crate::tests::test_fixtures::{TEST_FASTA, TEST_PROTEIN};
 
 // #[test]
 // fn test_proteome_index_creation() -> Result<()> {
@@ -179,21 +182,21 @@ fn test_single_protein_addition() -> Result<()> {
     // Create a simple test protein
     let test_protein = UniProtEntry {
         id: "TEST1".to_string(),
-        sequence: "MVKVGVNG".to_string(), // Simple 8 amino acid sequence
+        sequence: TEST_PROTEIN.to_string(),
         features: Vec::new(),
         ..Default::default()
     };
 
     // Create index with minimal parameters
-    let index = ProteomeIndex::new(
+    let mut index = ProteomeIndex::new(
         dir.path().join("single_protein.db"),
-        3, // small ksize for test
+        7, // small ksize for test
         1, // scaled
         "protein",
     )?;
 
-    // Add the protein - clone it since process_sequence takes ownership
-    index.process_sequence(test_protein.sequence.as_bytes(), test_protein.clone())?;
+    // Add the protein directly
+    index.add_uniprot_entry(test_protein.clone())?;
 
     // Verify the protein was added by checking if we can get k-mer info
     // Get the first hash from the index
@@ -212,6 +215,129 @@ fn test_single_protein_addition() -> Result<()> {
 
     // Explicitly close the index
     index.close()?;
+
+    Ok(())
+}
+
+#[test]
+fn test_kmer_encoding() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("kmer_test.db"),
+        11, // small ksize for test
+        1,  // scaled
+        "protein",
+    )?;
+
+    // Test k-mer encoding
+    let test_kmer = b"LIVINGALIVE"; // 3-mer
+    let (encoded_kmer, original_kmer) = index.encode_kmer(test_kmer);
+
+    // The original k-mer should be exactly what we put in
+    assert_eq!(original_kmer, "LIVINGALIVE");
+
+    // The encoded k-mer should be the same as the original k-mer
+    assert_eq!(encoded_kmer, "LIVINGALIVE");
+
+    Ok(())
+}
+
+#[test]
+fn test_kmer_encoding_dayhoff() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("kmer_test.db"),
+        11, // small ksize for test
+        1,  // scaled
+        "dayhoff",
+    )?;
+
+    // Test k-mer encoding
+    let test_kmer = b"LIVINGALIVE"; // 3-mer
+    let (encoded_kmer, original_kmer) = index.encode_kmer(test_kmer);
+
+    // The original k-mer should be exactly what we put in
+    assert_eq!(original_kmer, "LIVINGALIVE");
+
+    // The encoded k-mer should be dayhoff-encoded k-mer
+    assert_eq!(encoded_kmer, "eeeecbbeeec");
+
+    Ok(())
+}
+
+#[test]
+fn test_kmer_encoding_hp() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("kmer_test.db"),
+        11, // small ksize for test
+        1,  // scaled
+        "hp",
+    )?;
+
+    // Test k-mer encoding
+    let test_kmer = b"LIVINGALIVE"; // 3-mer
+    let (encoded_kmer, original_kmer) = index.encode_kmer(test_kmer);
+
+    // The original k-mer should be exactly what we put in
+    assert_eq!(original_kmer, "LIVINGALIVE");
+
+    // The encoded k-mer should be hp-encoded k-mer
+    assert_eq!(encoded_kmer, "hhhhphhhhhp");
+
+    Ok(())
+}
+
+#[test]
+fn test_process_protein_kmers() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("protein_test.db"),
+        3, // small ksize for test
+        1, // scaled=1 to capture all kmers
+        "protein",
+    )?;
+
+    let sequence = TEST_PROTEIN;
+
+    // Create test signature
+    let mut sig = Signature::from_params(
+        &ComputeParameters::builder()
+            .ksizes(vec![3])
+            .scaled(1)
+            .protein(true)
+            .num_hashes(0)
+            .build(),
+    );
+    sig.set_name("test1");
+
+    let small_sig = SmallSignature {
+        location: sig.filename().clone(),
+        name: sig.name().clone().unwrap(),
+        md5sum: sig.md5sum().to_string(),
+        minhash: sig.minhash().unwrap().clone(),
+    };
+
+    // Process kmers
+    let kmer_signature = index.process_protein_kmers(sequence, &small_sig)?;
+
+    println!("{}", kmer_signature.signature.name);
+    println!("{:?}", kmer_signature.kmer_infos.keys());
+    for (hash, kmer_info) in kmer_signature.kmer_infos {
+        println!("Hash: {}", hash);
+        println!("Kmer info: {:?}", kmer_info);
+    }
+
+    // Should have 4 kmers (length 6 - ksize 3 + 1)
+    assert_eq!(kmer_signature.kmer_infos.len(), 4);
 
     Ok(())
 }

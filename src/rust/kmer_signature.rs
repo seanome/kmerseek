@@ -1,6 +1,5 @@
 use crate::uniprot::{self, UniProtEntry};
 use serde::{Deserialize, Serialize};
-use sourmash::signature::Signature;
 use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::SigStore;
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
@@ -39,37 +38,30 @@ pub struct KmerInfo {
     pub original_kmer_to_position: HashMap<String, Vec<usize>>,
 }
 
-/// Statistics for k-mer frequency analysis
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KmerStats {
-    pub idf: f64,       // Inverse document frequency
-    pub frequency: f64, // Raw frequency
-}
-
 // Represents a single protein's k-mer information
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SignatureKmerMapping {
     // The protein's signature for searching
     pub signature: SerializableSignature,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
-    pub kmer_info: HashMap<u64, KmerInfo>,
+    pub kmer_infos: HashMap<u64, KmerInfo>,
 }
 
 impl SignatureKmerMapping {
     pub fn new(signature: SmallSignature) -> Self {
         Self {
-            kmer_info: HashMap::new(),
+            kmer_infos: HashMap::new(),
             signature: SerializableSignature::from(signature),
         }
     }
 }
 
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SerializableSignature {
-    location: String,
-    name: String,
-    md5sum: String,
-    minhash: KmerMinHash,
+    pub location: String,
+    pub name: String,
+    pub md5sum: String,
+    pub minhash: KmerMinHash,
 }
 
 impl From<SmallSignature> for SerializableSignature {

@@ -8,7 +8,6 @@ use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
 use std::fs::File;
-use std::hash::Hash;
 use std::io::BufReader;
 use std::path::Path;
 use std::str;
@@ -16,20 +15,26 @@ use std::sync::{Arc, Mutex};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
-use crate::kmer_signature::{KmerInfo, KmerPosition, KmerStats};
+use crate::kmer_signature::{KmerInfo, SerializableSignature, SignatureKmerMapping};
+use crate::protein::Protein;
 use crate::uniprot::UniProtEntry;
 use sourmash::_hash_murmur;
 use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
 use sourmash::signature::Signature;
-use sourmash::storage::{FSStorage, InnerStorage, SigStore};
+use sourmash::storage::{FSStorage, InnerStorage};
 use sourmash_plugin_branchwater::search_significance::{
     compute_inverse_document_frequency, get_hash_frequencies, Normalization,
 };
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
-
+/// Statistics for k-mer frequency analysis
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProteomeIndexKmerStats {
+    pub idf: f64,       // Inverse document frequency
+    pub frequency: f64, // Raw frequency
+}
 
 // Represents the serializable state of ProteomeIndex
 #[derive(Serialize, Deserialize)]
@@ -43,8 +48,6 @@ struct ProteomeIndexState {
     scaled: u32,
 }
 
-
-
 pub struct ProteomeIndex {
     // RocksDB instance for persistent storage
     db: DB,
@@ -56,7 +59,7 @@ pub struct ProteomeIndex {
     combined_minhash: Arc<Mutex<KmerMinHash>>,
 
     // Map of signature md5 -> protein k-mer information
-    protein_info: Arc<Mutex<HashMap<String, SignatureKmerMapping>>>,
+    protein_info: Arc<Mutex<HashMap<String, Protein>>>,
 
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
@@ -126,7 +129,7 @@ impl ProteomeIndex {
         })
     }
 
-    pub fn add_uniprot_entry(&mut self, protein: UniProtEntry) -> Result<()> {
+    pub fn add_uniprot_entry(&mut self, uniprot_entry: UniProtEntry) -> Result<()> {
         // Get parameters from combined_minhash
         let mut minhash_guard = self.combined_minhash.lock().unwrap();
         let ksize = minhash_guard.ksize() as u32;
@@ -142,7 +145,7 @@ impl ProteomeIndex {
 
         // Create a signature for this protein
         let mut sig = Signature::from_params(&params);
-        sig.set_name(&protein.id);
+        sig.set_name(&uniprot_entry.id);
 
         // Convert to SmallSignature
         let small_sig = SmallSignature {
@@ -151,19 +154,18 @@ impl ProteomeIndex {
             md5sum: sig.md5sum().to_string(),
             minhash: sig.minhash().unwrap().clone(),
         };
-        let md5sum = small_sig.md5sum.to_string();
+        let md5sum = small_sig.md5sum.clone();
         let mut minhash = small_sig.minhash.clone();
-        minhash.add_sequence(protein.sequence.as_bytes(), true)?;
+        minhash.add_sequence(uniprot_entry.sequence.as_bytes(), true)?;
 
         // Add the newly created hashes to the combined minhash
         minhash_guard.add_many_with_abund(&minhash.to_vec_abunds())?;
         drop(minhash_guard);
 
-        // Create protein-specific k-mer info
-        let mut protein_info = SignatureKmerMapping::new(protein.clone(), small_sig);
-
         // Process k-mers for this protein
-        self.process_protein_kmers(protein.sequence.as_bytes(), small_sig&sig)?;
+        let protein_kmers = self.process_protein_kmers(&uniprot_entry.sequence, &small_sig)?;
+
+        let protein = Protein::new(uniprot_entry, protein_kmers);
 
         // Update global structures
         {
@@ -173,26 +175,35 @@ impl ProteomeIndex {
             *collection = new_collection;
 
             let mut proteins = self.protein_info.lock().unwrap();
-            proteins.insert(md5sum.clone(), protein_info.clone());
+            proteins.insert(md5sum.clone(), protein.clone());
         }
 
         // Store in RocksDB
         self.db.put(
             format!("protein:{}", md5sum).as_bytes(),
-            bincode::serialize(&protein_info)?,
+            bincode::serialize(&protein)?,
         )?;
 
         Ok(())
     }
 
-    fn process_protein_kmers(&self, sequence: &[u8], signature: &SmallSignature) -> Result<SignatureKmerMapping> {
+    pub fn process_protein_kmers(
+        &self,
+        sequence: &str,
+        signature: &SmallSignature,
+    ) -> Result<SignatureKmerMapping> {
         let minhash_guard = signature.minhash.clone();
         let ksize = minhash_guard.ksize() as usize;
         let seed = minhash_guard.seed();
         let hashvals = minhash_guard.to_vec();
         drop(minhash_guard);
 
-        let mut signature_kmers = SignatureKmerMapping::new(SmallSignature { location: signature.location.clone(), name: signature.name.clone(), md5sum: signature.md5sum.clone(), minhash: signature.minhash.clone() });
+        let mut signature_kmers = SignatureKmerMapping::new(SmallSignature {
+            location: signature.location.clone(),
+            name: signature.name.clone(),
+            md5sum: signature.md5sum.clone(),
+            minhash: signature.minhash.clone(),
+        });
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = &sequence[i..i + ksize];
@@ -204,81 +215,82 @@ impl ProteomeIndex {
             let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
             // If this hashval is in the minhash, then save its k-mer positions
-            // This step is necessary because scaled > 1 means we aren't saving ALL the hashes
-            // -> check if the hashed version of the encoded k-mer is in the minhash
             if !hashvals.contains(&hashval) {
-                // Create position information
-                let kmer_position = KmerPosition {
-                    protein: signature_kmers.protein.clone(),
-                    position: i,
-                };
-
-                let kmer_infos = signature_kmers
-                    .encoded_to_originals
-                    .entry(encoded_kmer)
-                    .or_insert_with(Vec::new);
-
-                // Find or create KmerInfo for this original k-mer
-                if let Some(info) = kmer_infos
-                    .iter_mut()
-                    .find(|info| info.original_kmer == original_kmer)
-                {
-                    info.positions.push(kmer_position);
-                } else {
-                    kmer_infos.push(KmerInfo {
+                let kmer_info = signature_kmers
+                    .kmer_infos
+                    .entry(hashval)
+                    .or_insert_with(|| KmerInfo {
                         hashval,
-                        encoded_kmer.clone(),
-                        original_kmer,
-                        positions: vec![kmer_position],
+                        encoded_kmer: encoded_kmer.clone(),
+                        original_kmer_to_position: HashMap::new(),
                     });
-                }
-                println!("{}", kmer_infos);
+
+                kmer_info
+                    .original_kmer_to_position
+                    .entry(original_kmer)
+                    .or_insert_with(Vec::new)
+                    .push(i);
             }
         }
 
-        Ok(())
+        Ok(signature_kmers)
     }
 
     /// Process a k-mer to get its encoded version
-    pub fn encode_kmer(&self, kmer: &[u8]) -> (String, String) {
-        // Convert the k-mer to a string
-        let kmer_str = str::from_utf8(kmer).unwrap();
-
+    pub fn encode_kmer(&self, kmer: &str) -> (String, String) {
         // Create the encoded k-mer by applying the encoding function
-        let encoded: Vec<u8> = kmer.iter().map(|&b| (self.encoding_fn)(b)).collect();
+        let encoded: Vec<u8> = kmer.chars().map(|c| (self.encoding_fn)(c as u8)).collect();
         let encoded_str = str::from_utf8(&encoded).unwrap();
 
-        (encoded_str.to_string(), kmer_str.to_string())
-    }
-
-    /// Get all information about a hash value
-    pub fn get_kmer_info(&self, hash: u64) -> Option<Vec<(String, Vec<KmerInfo>)>> {
-        let proteins = self.protein_info.lock().unwrap();
-        let mut results = Vec::new();
-
-        for (md5sum, protein_info) in proteins.iter() {
-            if let Some(encoded) = protein_info.hash_to_encoded.get(&hash) {
-                if let Some(infos) = protein_info.encoded_to_originals.get(encoded) {
-                    results.push((md5sum.clone(), infos.clone()));
-                }
-            }
-        }
-
-        if results.is_empty() {
-            None
-        } else {
-            Some(results)
-        }
+        (encoded_str.to_owned(), kmer.to_owned())
     }
 
     /// Get statistics for a hash value
-    pub fn get_kmer_stats(&self, hash: u64) -> Result<Option<KmerStats>> {
+    pub fn get_kmer_stats(&self, hash: u64) -> Result<Option<ProteomeIndexKmerStats>> {
         let key = format!("stats:{}", hash);
         if let Some(value) = self.db.get(key.as_bytes())? {
             Ok(Some(bincode::deserialize(&value)?))
         } else {
             Ok(None)
         }
+    }
+
+    /// Process a list of protein FASTA files
+    pub fn process_protein_files<P: AsRef<Path> + Sync + Send>(
+        &mut self,
+        paths: &[P],
+    ) -> Result<()> {
+        paths.par_iter().try_for_each(|path| -> Result<()> {
+            // Create a FASTX reader from the file or stdin
+            let mut fastx_reader = if path.as_ref() == Path::new("-") {
+                parse_fastx_stdin().context("Failed to parse FASTA/FASTQ data from stdin")?
+            } else {
+                parse_fastx_file(path).context("Failed to open file for FASTA/FASTQ data")?
+            };
+
+            let mut record_count: u64 = 0;
+
+            // Parse records and add sequences to signatures
+            while let Some(record_result) = fastx_reader.next() {
+                let record = record_result.context("Failed to read a record from input")?;
+                let id = String::from_utf8_lossy(record.id()).to_string();
+                let seq_bytes = record.seq();
+                let sequence = String::from_utf8_lossy(seq_bytes.as_ref()).to_string();
+
+                let protein = UniProtEntry {
+                    id,
+                    sequence: sequence.clone(),
+                    features: Vec::new(),
+                    ..Default::default()
+                };
+
+                self.process_sequence(seq_bytes.as_ref(), protein)?;
+                record_count += 1;
+            }
+            println!("Processed {} sequence records", record_count);
+            Ok(())
+        })?;
+        Ok(())
     }
 
     /// Compute and store k-mer statistics
@@ -307,9 +319,9 @@ impl ProteomeIndex {
         // Compute inverse document frequency with smoothing
         let idf = compute_inverse_document_frequency(&minhash, &signatures, Some(true));
 
-        // Store statistics for each hash
-        for hash in minhash.mins() {
-            let stats = KmerStats {
+        // Store statistics for each hash in parallel
+        minhash.mins().par_iter().try_for_each(|&hash| {
+            let stats = ProteomeIndexKmerStats {
                 idf: *idf.get(&hash).unwrap_or(&0.0),
                 frequency: *frequencies.get(&hash).unwrap_or(&0.0),
             };
@@ -317,7 +329,8 @@ impl ProteomeIndex {
             let key = format!("stats:{}", hash);
             let value = bincode::serialize(&stats)?;
             self.db.put(key.as_bytes(), value)?;
-        }
+            Ok::<(), anyhow::Error>(())
+        })?;
 
         Ok(())
     }
@@ -360,144 +373,6 @@ impl ProteomeIndex {
     pub fn get_hashes(&self) -> Vec<u64> {
         let minhash = self.combined_minhash.lock().unwrap();
         minhash.mins().to_vec()
-    }
-
-    /// Save the index state to RocksDB
-    pub fn save(&self) -> Result<()> {
-        // Extract signatures from collection
-        let collection = self.collection.lock().unwrap();
-        let mut signatures = Vec::new();
-
-        // Convert each signature in the collection to a SmallSignature
-        for (_, record) in collection.iter() {
-            if let Ok(sig) = collection.sig_from_record(record) {
-                signatures.push(SerializableSignature::from(sig));
-            }
-        }
-
-        // Create a serializable state
-        let state = ProteomeIndexState {
-            signatures: signatures
-                .into_iter()
-                .map(SerializableSignature::from)
-                .collect(),
-            combined_minhash: self.combined_minhash.lock().unwrap().clone(),
-            protein_info: self.protein_info.lock().unwrap().clone(),
-            moltype: self.moltype.clone(),
-            ksize: self.ksize,
-            scaled: self.scaled,
-        };
-
-        // Serialize and store the state using bincode 1.3
-        let serialized = bincode::serialize(&state)?;
-        self.db.put("index_state", serialized)?;
-
-        Ok(())
-    }
-
-    /// Load the index state from RocksDB
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let mut opts = Options::default();
-        opts.create_if_missing(false);
-        let db = DB::open(&opts, path)?;
-
-        // Load the serialized state using bincode 1.3
-        let state: ProteomeIndexState = match db.get("index_state")? {
-            Some(bytes) => bincode::deserialize(&bytes)?,
-            None => return Err(anyhow::anyhow!("No index state found in database")),
-        };
-
-        // Get the encoding function
-        let encoding_fn = match get_encoding_fn_from_moltype(&state.moltype) {
-            Ok(value) => value,
-            Err(value) => return value,
-        };
-
-        // Reconstruct collection from signatures
-        let mut collection = Collection::new(
-            Manifest::default(),
-            InnerStorage::new(
-                FSStorage::builder()
-                    .fullpath("".into())
-                    .subdir("".into())
-                    .build(),
-            ),
-        );
-
-        // Convert SerializableSignature to Signature
-        let mut sigs = Vec::new();
-        for serialized_sig in state.signatures {
-            // Create a new signature with the same parameters
-            let mut sig = Signature::from_params(
-                &ComputeParameters::builder()
-                    .ksizes(vec![state.ksize])
-                    .scaled(state.scaled)
-                    .protein(true)
-                    .num_hashes(0)
-                    .build(),
-            );
-
-            // Set the signature properties
-            sig.set_name(&serialized_sig.name);
-            sig.set_filename(&serialized_sig.location);
-
-            sigs.push(sig);
-        }
-        collection = Collection::from_sigs(sigs)?;
-
-        Ok(Self {
-            db,
-            collection: Arc::new(Mutex::new(collection)),
-            combined_minhash: Arc::new(Mutex::new(state.combined_minhash)),
-            protein_info: Arc::new(Mutex::new(state.protein_info)),
-            aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-            encoding_fn,
-            moltype: state.moltype,
-            ksize: state.ksize,
-            scaled: state.scaled,
-        })
-    }
-
-    /// Close the database properly
-    pub fn close(self) -> Result<()> {
-        // Save the state before closing
-        self.save()?;
-        drop(self.db);
-        Ok(())
-    }
-
-    /// Process a list of protein FASTA files
-    pub fn process_protein_files<P: AsRef<Path>>(&mut self, paths: &[P]) -> Result<()> {
-        for path in paths {
-            // Create a FASTX reader from the file or stdin
-            let mut fastx_reader = if path.as_ref() == Path::new("-") {
-                parse_fastx_stdin().context("Failed to parse FASTA/FASTQ data from stdin")?
-            } else {
-                parse_fastx_file(path).context("Failed to open file for FASTA/FASTQ data")?
-            };
-
-            let mut record_count: u64 = 0;
-
-            // Parse records and add sequences to signatures
-            while let Some(record_result) = fastx_reader.next() {
-                let record = record_result.context("Failed to read a record from input")?;
-                let id = String::from_utf8_lossy(record.id()).to_string();
-                let seq_bytes = record.seq();
-                let sequence = String::from_utf8_lossy(seq_bytes.as_ref()).to_string();
-
-                let protein = UniProtEntry {
-                    id,
-                    sequence: sequence.clone(),
-                    features: Vec::new(),
-                    ..Default::default()
-                };
-
-                self.process_sequence(seq_bytes.as_ref(), protein)?;
-                record_count += 1;
-            }
-            println!("Processed {} sequence records", record_count);
-        }
-        Ok(())
     }
 
     /// Process a UniProt XML file
