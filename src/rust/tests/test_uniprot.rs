@@ -8,40 +8,17 @@ use crate::uniprot::UniProtEntry;
 const TEST_BCL2_XML: &str =
     "tests/testdata/index/uniprotkb_gene_bcl2_AND_reviewed_true_2025_06_04.xml";
 
+// TODO: Fix this test, the parsing isn't happening properly
 #[test]
 fn test_bcl2_xml_parsing() -> Result<()> {
     // Parse the BCL2 test file
     let proteins = UniProtEntry::from_xml(TEST_BCL2_XML)?;
 
     // Basic validation
-    assert!(
-        !proteins.is_empty(),
-        "Should have found at least one protein"
-    );
+    assert_eq!(proteins.len(), 9, "Should have found exactly 9 proteins");
 
     // Check the first protein
     let protein = &proteins[0];
-
-    // BCL2 proteins should have an ID containing "Bcl-2"
-    assert!(
-        protein.id.contains("Bcl-2"),
-        "Protein ID should contain Bcl-2"
-    );
-
-    // Should have a non-empty accession
-    assert!(
-        !protein.accession.is_empty(),
-        "Protein should have an accession number"
-    );
-
-    // Should have a sequence
-    assert!(
-        !protein.sequence.is_empty(),
-        "Protein should have a sequence"
-    );
-
-    // Should have some features
-    assert!(!protein.features.is_empty(), "Protein should have features");
 
     // Print some debug information
     println!("Found {} proteins", proteins.len());
@@ -52,8 +29,33 @@ fn test_bcl2_xml_parsing() -> Result<()> {
     println!("  Number of features: {}", protein.features.len());
     println!("\nFeature types:");
     for feature in &protein.features {
-        println!("  {} ({})", feature.feature_type, feature.description);
+        println!(
+            "  {} ({}), {}-{}",
+            feature.feature_type, feature.description, feature.start, feature.end
+        );
     }
+
+    // TODO: this is the name, not the ID
+    // Get the ID and store here, store this value as the name instead of the ID
+    // assert_eq!(protein.name, "BCL2_BOVIN");
+    // assert_eq!(protein.full_name, "Apoptosis regulator Bcl-2");
+
+    // Should have a non-empty accession
+    assert_eq!(protein.accession, "O02718");
+
+    // Should have a sequence
+    assert_eq!(protein.sequence, "MAHAGGTGYDNREIVMKYIHYKLSQRGYEWDAGDAGAAPPGAAPAPGILSSQPGRTPAPSRTSPPPPPAAAAGPAPSPVPPVVHLTLRQAGDDFSRRYRRDFAEMSSQLHLTPFTARERFATVVEELFRDGVNWGRIVAFFEFGGVMCVESVNREMSPLVDSIALWMTEYLNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKALLSLALVGACITLGAYLGHK");
+
+    // Should have some features
+    assert_eq!(protein.features.len(), 13);
+    assert_eq!(protein.features[0].feature_type, "chain");
+    assert_eq!(protein.features[0].description, "Apoptosis regulator Bcl-2");
+    // assert_eq!(protein.features[0].start, 1);
+    // assert_eq!(protein.features[0].end, 229);
+    assert_eq!(protein.features[1].feature_type, "transmembrane region");
+    assert_eq!(protein.features[1].description, "Helical");
+    // assert_eq!(protein.features[1].start, 202);
+    // assert_eq!(protein.features[1].end, 223);
 
     Ok(())
 }
@@ -68,6 +70,8 @@ fn test_simple_xml_parsing() -> Result<()> {
     let xml_content = r#"<?xml version="1.0" encoding="UTF-8"?>
     <uniprot xmlns="http://uniprot.org/uniprot">
         <entry>
+        <accession>O02718</accession>
+<name>BCL2_BOVIN</name>
             <protein>
                 <recommendedName>
                     <fullName>Apoptosis regulator Bcl-2</fullName>

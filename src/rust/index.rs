@@ -15,7 +15,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
-use crate::kmer_signature::{KmerInfo, SerializableSignature, SignatureKmerMapping};
+use crate::kmer_signature::{KmerInfo, KmerSignature, SerializableSignature};
 use crate::protein::Protein;
 use crate::uniprot::UniProtEntry;
 use sourmash::_hash_murmur;
@@ -32,8 +32,8 @@ use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProteomeIndexKmerStats {
-    pub idf: f64,       // Inverse document frequency
-    pub frequency: f64, // Raw frequency
+    pub idf: HashMap<u64, f64>, // Inverse document frequency for each k-mer hashvalue
+    pub frequency: HashMap<u64, f64>, // Raw frequency for each k-mer hashvalue
 }
 
 // Represents the serializable state of ProteomeIndex
@@ -42,7 +42,7 @@ struct ProteomeIndexState {
     // Store signatures instead of Collection
     signatures: Vec<SerializableSignature>,
     combined_minhash: KmerMinHash,
-    protein_info: HashMap<String, SignatureKmerMapping>,
+    protein_info: HashMap<String, KmerSignature>,
     moltype: String,
     ksize: u32,
     scaled: u32,
@@ -75,6 +75,9 @@ pub struct ProteomeIndex {
 
     // Add scaled field for serialization
     scaled: u32,
+
+    // Statistics for k-mer frequencies and IDF
+    stats: ProteomeIndexKmerStats,
 }
 
 impl ProteomeIndex {
@@ -126,6 +129,10 @@ impl ProteomeIndex {
             moltype: moltype.to_string(),
             ksize,
             scaled,
+            stats: ProteomeIndexKmerStats {
+                idf: HashMap::new(),
+                frequency: HashMap::new(),
+            },
         })
     }
 
@@ -191,14 +198,14 @@ impl ProteomeIndex {
         &self,
         sequence: &str,
         signature: &SmallSignature,
-    ) -> Result<SignatureKmerMapping> {
+    ) -> Result<KmerSignature> {
         let minhash_guard = signature.minhash.clone();
         let ksize = minhash_guard.ksize() as usize;
         let seed = minhash_guard.seed();
         let hashvals = minhash_guard.to_vec();
         drop(minhash_guard);
 
-        let mut signature_kmers = SignatureKmerMapping::new(SmallSignature {
+        let mut signature_kmers = KmerSignature::new(SmallSignature {
             location: signature.location.clone(),
             name: signature.name.clone(),
             md5sum: signature.md5sum.clone(),
@@ -294,7 +301,7 @@ impl ProteomeIndex {
     }
 
     /// Compute and store k-mer statistics
-    pub fn compute_statistics(&self) -> Result<()> {
+    pub fn compute_statistics(&mut self) -> Result<()> {
         let minhash = self.combined_minhash.lock().unwrap();
         let collection = self.collection.lock().unwrap();
 
@@ -319,18 +326,16 @@ impl ProteomeIndex {
         // Compute inverse document frequency with smoothing
         let idf = compute_inverse_document_frequency(&minhash, &signatures, Some(true));
 
-        // Store statistics for each hash in parallel
-        minhash.mins().par_iter().try_for_each(|&hash| {
-            let stats = ProteomeIndexKmerStats {
-                idf: *idf.get(&hash).unwrap_or(&0.0),
-                frequency: *frequencies.get(&hash).unwrap_or(&0.0),
-            };
+        // Store all statistics in one go
+        self.stats = ProteomeIndexKmerStats {
+            idf,
+            frequency: frequencies,
+        };
 
-            let key = format!("stats:{}", hash);
-            let value = bincode::serialize(&stats)?;
-            self.db.put(key.as_bytes(), value)?;
-            Ok::<(), anyhow::Error>(())
-        })?;
+        // Store the combined stats
+        let key = "kmer_stats";
+        let value = bincode::serialize(&self.stats)?;
+        self.db.put(key.as_bytes(), value)?;
 
         Ok(())
     }
@@ -361,6 +366,7 @@ impl ProteomeIndex {
             moltype: self.moltype.clone(),
             ksize: self.ksize,
             scaled: self.scaled,
+            stats: self.stats.clone(),
         };
 
         // Add the protein

@@ -40,14 +40,14 @@ pub struct KmerInfo {
 
 // Represents a single protein's k-mer information
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SignatureKmerMapping {
+pub struct KmerSignature {
     // The protein's signature for searching
     pub signature: SerializableSignature,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
     pub kmer_infos: HashMap<u64, KmerInfo>,
 }
 
-impl SignatureKmerMapping {
+impl KmerSignature {
     pub fn new(signature: SmallSignature) -> Self {
         Self {
             kmer_infos: HashMap::new(),
