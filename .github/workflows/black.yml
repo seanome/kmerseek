@@ -1,4 +1,4 @@
-name: Lint
+name: Lint (Python Black Formatter)
 
 on: [push, pull_request]
 
