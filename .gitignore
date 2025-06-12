@@ -189,3 +189,6 @@ tests/testdata/fasta/*sig.zip*
 
 # Ignore reference codebases for Cursor
 REFERENCE*
+
+# Ignore vscode configuration
+.vscode/
