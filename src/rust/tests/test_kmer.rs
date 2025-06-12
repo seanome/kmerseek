@@ -1,12 +1,3 @@
-
-
-
-
-
-
-
-
-
 // #[test]
 // fn test_kmer_position() -> Result<()> {
 //     use crate::uniprot::{ProteinFeature, UniProtEntry};
