@@ -22,7 +22,9 @@ serde = { version = "1.0.219", features = ["derive"] }
 bincode = "1.3"
 flate2 = "1.0"
 needletail = "0.6.3"
-sourmash_plugin_branchwater = { path = "/Users/olga/code/kmerseek/REFERENCE_sourmash_plugin_branchwater" }
+# PR: https://github.com/sourmash-bio/sourmash_plugin_branchwater/pull/657
+sourmash_plugin_branchwater = { git = "https://github.com/sourmash-bio/sourmash_plugin_branchwater", rev = "585dabf4f50239dbcf56dddf94a7ed181fc03046" }
+
 zip = { version = "4.0", default-features = false }
 
 [dev-dependencies]

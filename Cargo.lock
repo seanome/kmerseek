@@ -1881,6 +1881,7 @@ dependencies = [
 [[package]]
 name = "sourmash_plugin_branchwater"
 version = "0.9.14-dev"
+source = "git+https://github.com/sourmash-bio/sourmash_plugin_branchwater?rev=585dabf4f50239dbcf56dddf94a7ed181fc03046#585dabf4f50239dbcf56dddf94a7ed181fc03046"
 dependencies = [
  "anyhow",
  "camino",
@@ -1897,7 +1898,6 @@ dependencies = [
  "rust_decimal_macros",
  "rustworkx-core",
  "serde",
- "serde_derive",
  "serde_json",
  "simple-error",
  "sourmash",
