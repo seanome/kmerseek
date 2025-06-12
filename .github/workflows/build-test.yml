@@ -49,10 +49,14 @@ jobs:
         shell: bash -l {0}
         run: mamba install polars sourmash sourmash_plugin_branchwater click pytest pandas
 
+      - name: Run cargo fmt
+        run: cargo fmt --all -- --check --verbose
+
       - name: build
         shell: bash -l {0}
         run: make
 
-      - name: test
+      - name: cargo test
         shell: bash -l {0}
-        run: pytest -vv
+        run: cargo test --all-features --workspace
+      
