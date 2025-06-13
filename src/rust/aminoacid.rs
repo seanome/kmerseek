@@ -119,9 +119,6 @@ mod tests {
         // Test invalid sequence
         let result = aa.validate_sequence("ACDEF1GHIKL");
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Invalid amino acid '1'"));
+        assert!(result.unwrap_err().to_string().contains("Invalid amino acid '1'"));
     }
 }

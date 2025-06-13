@@ -1,9 +1,11 @@
-use crate::uniprot::{self, UniProtEntry};
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::SigStore;
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
-use std::collections::HashMap;
+
+use crate::uniprot::{self, UniProtEntry};
 
 /// Represents the position of a k-mer in a protein sequence
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -49,10 +51,7 @@ pub struct KmerSignature {
 
 impl KmerSignature {
     pub fn new(signature: SmallSignature) -> Self {
-        Self {
-            kmer_infos: HashMap::new(),
-            signature: SerializableSignature::from(signature),
-        }
+        Self { kmer_infos: HashMap::new(), signature: SerializableSignature::from(signature) }
     }
 }
 
@@ -66,12 +65,7 @@ pub struct SerializableSignature {
 
 impl From<SmallSignature> for SerializableSignature {
     fn from(sig: SmallSignature) -> Self {
-        Self {
-            location: sig.location,
-            name: sig.name,
-            md5sum: sig.md5sum,
-            minhash: sig.minhash,
-        }
+        Self { location: sig.location, name: sig.name, md5sum: sig.md5sum, minhash: sig.minhash }
     }
 }
 

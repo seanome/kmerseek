@@ -130,10 +130,7 @@ fn test_process_protein_kmers() -> Result<()> {
     println!("----------------------------------------");
     for (hash, kmer_info) in &kmer_signature.kmer_infos {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
-            println!(
-                "{}\t{}\t{}\t{:?}",
-                hash, kmer_info.encoded_kmer, original_kmer, positions
-            );
+            println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
     }
     println!("----------------------------------------\n");
@@ -172,9 +169,8 @@ fn test_process_protein_kmers() -> Result<()> {
 
     // Verify each kmer info matches expected values
     for (hash, kmer_info) in &kmer_signature.kmer_infos {
-        let (expected_kmer, expected_positions) = expected_kmers
-            .get(hash)
-            .expect(&format!("Missing expected hash {}", hash));
+        let (expected_kmer, expected_positions) =
+            expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
 
         // Verify the k-mer
         assert_eq!(
@@ -250,10 +246,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
     println!("----------------------------------------");
     for (hash, kmer_info) in &kmer_signature.kmer_infos {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
-            println!(
-                "{}\t{}\t{}\t{:?}",
-                hash, kmer_info.encoded_kmer, original_kmer, positions
-            );
+            println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
     }
     println!("----------------------------------------\n");
@@ -301,18 +294,13 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
     );
 
     for hash in expected_hashes {
-        assert!(
-            kmer_signature.kmer_infos.contains_key(hash),
-            "Missing expected hash {}",
-            hash
-        );
+        assert!(kmer_signature.kmer_infos.contains_key(hash), "Missing expected hash {}", hash);
     }
 
     // Verify each kmer info matches expected values
     for (hash, kmer_info) in &kmer_signature.kmer_infos {
-        let (expected_encoded, expected_originals) = expected_kmers
-            .get(hash)
-            .expect(&format!("Missing expected hash {}", hash));
+        let (expected_encoded, expected_originals) =
+            expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
 
         // Verify the encoded k-mer
         assert_eq!(
@@ -326,10 +314,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
             let positions = kmer_info
                 .original_kmer_to_position
                 .get(original_kmer)
-                .expect(&format!(
-                    "Missing original k-mer {} for hash {}",
-                    original_kmer, hash
-                ));
+                .expect(&format!("Missing original k-mer {} for hash {}", original_kmer, hash));
             assert_eq!(
                 positions, expected_positions,
                 "Position mismatch for k-mer {}: expected {:?}, got {:?}",
@@ -402,10 +387,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
     println!("----------------------------------------");
     for (hash, kmer_info) in &kmer_signature.kmer_infos {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
-            println!(
-                "{}\t{}\t{}\t{:?}",
-                hash, kmer_info.encoded_kmer, original_kmer, positions
-            );
+            println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
     }
     println!("----------------------------------------\n");
@@ -425,18 +407,9 @@ fn test_process_protein_kmers_hp() -> Result<()> {
         (9081059129327932468, ("ppphp", vec!["ENQME"], vec![15])),
         (2863220259252354754, ("phphh", vec!["DANIM"], vec![7])),
         // Multiple original protein k-mer sequences mapping to same HP encoding
-        (
-            4230974618842309829,
-            ("hhhpp", vec!["PLANT", "ALGEN"], vec![0, 12]),
-        ),
-        (
-            13058023948041027181,
-            ("pphpp", vec!["NQMES", "NTAND"], vec![16, 3]),
-        ),
-        (
-            4144736064335623701,
-            ("hpphp", vec!["ANDAN", "ANTAN"], vec![5, 2]),
-        ),
+        (4230974618842309829, ("hhhpp", vec!["PLANT", "ALGEN"], vec![0, 12])),
+        (13058023948041027181, ("pphpp", vec!["NQMES", "NTAND"], vec![16, 3])),
+        (4144736064335623701, ("hpphp", vec!["ANDAN", "ANTAN"], vec![5, 2])),
     ]
     .into_iter()
     .map(|(hash, (encoded, originals, positions))| {
@@ -460,18 +433,13 @@ fn test_process_protein_kmers_hp() -> Result<()> {
     );
 
     for hash in expected_hashes {
-        assert!(
-            kmer_signature.kmer_infos.contains_key(hash),
-            "Missing expected hash {}",
-            hash
-        );
+        assert!(kmer_signature.kmer_infos.contains_key(hash), "Missing expected hash {}", hash);
     }
 
     // Verify each kmer info matches expected values
     for (hash, kmer_info) in &kmer_signature.kmer_infos {
-        let (expected_encoded, expected_originals) = kmer_data
-            .get(hash)
-            .expect(&format!("Missing expected hash {}", hash));
+        let (expected_encoded, expected_originals) =
+            kmer_data.get(hash).expect(&format!("Missing expected hash {}", hash));
 
         // Verify the encoded k-mer
         assert_eq!(
@@ -485,10 +453,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
             let positions = kmer_info
                 .original_kmer_to_position
                 .get(original_kmer)
-                .expect(&format!(
-                    "Missing original k-mer {} for hash {}",
-                    original_kmer, hash
-                ));
+                .expect(&format!("Missing original k-mer {} for hash {}", original_kmer, hash));
             assert_eq!(
                 positions, expected_positions,
                 "Position mismatch for k-mer {}: expected {:?}, got {:?}",

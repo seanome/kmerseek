@@ -12,9 +12,6 @@ pub struct Protein {
 
 impl Protein {
     pub fn new(uniprot_entry: UniProtEntry, signature_kmers: KmerSignature) -> Self {
-        Self {
-            uniprot_entry,
-            signature_kmers,
-        }
+        Self { uniprot_entry, signature_kmers }
     }
 }

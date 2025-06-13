@@ -1,11 +1,3 @@
-use anyhow::{Context, Result};
-use needletail::{parse_fastx_file, parse_fastx_stdin};
-use rayon::prelude::*;
-use rocksdb::{Options, DB};
-use serde::{Deserialize, Serialize};
-
-use sourmash::signature::SigsTrait;
-use sourmash::sketch::minhash::KmerMinHash;
 use std::collections::HashMap;
 use std::fs::File;
 use std::io::BufReader;
@@ -13,21 +5,28 @@ use std::path::Path;
 use std::str;
 use std::sync::{Arc, Mutex};
 
-use crate::aminoacid::AminoAcidAmbiguity;
-use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
-use crate::kmer_signature::{KmerInfo, KmerSignature, SerializableSignature};
-use crate::protein::Protein;
-use crate::uniprot::UniProtEntry;
+use anyhow::{Context, Result};
+use needletail::{parse_fastx_file, parse_fastx_stdin};
+use rayon::prelude::*;
+use rocksdb::{Options, DB};
+use serde::{Deserialize, Serialize};
 use sourmash::_hash_murmur;
 use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
-use sourmash::signature::Signature;
+use sourmash::signature::{Signature, SigsTrait};
+use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage};
 use sourmash_plugin_branchwater::search_significance::{
     compute_inverse_document_frequency, get_hash_frequencies, Normalization,
 };
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
+
+use crate::aminoacid::AminoAcidAmbiguity;
+use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
+use crate::kmer_signature::{KmerInfo, KmerSignature, SerializableSignature};
+use crate::protein::Protein;
+use crate::uniprot::UniProtEntry;
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -111,12 +110,8 @@ impl ProteomeIndex {
 
         // Create an empty collection with storage
         let manifest = Manifest::default();
-        let storage = InnerStorage::new(
-            FSStorage::builder()
-                .fullpath("".into())
-                .subdir("".into())
-                .build(),
-        );
+        let storage =
+            InnerStorage::new(FSStorage::builder().fullpath("".into()).subdir("".into()).build());
         let collection = Collection::new(manifest, storage);
 
         Ok(Self {
@@ -129,10 +124,7 @@ impl ProteomeIndex {
             moltype: moltype.to_string(),
             ksize,
             scaled,
-            stats: ProteomeIndexKmerStats {
-                idf: HashMap::new(),
-                frequency: HashMap::new(),
-            },
+            stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
         })
     }
 
@@ -186,10 +178,7 @@ impl ProteomeIndex {
         }
 
         // Store in RocksDB
-        self.db.put(
-            format!("protein:{}", md5sum).as_bytes(),
-            bincode::serialize(&protein)?,
-        )?;
+        self.db.put(format!("protein:{}", md5sum).as_bytes(), bincode::serialize(&protein)?)?;
 
         Ok(())
     }
@@ -223,10 +212,8 @@ impl ProteomeIndex {
 
             // If this hashval is in the minhash, then save its k-mer positions
             if !hashvals.contains(&hashval) {
-                let kmer_info = signature_kmers
-                    .kmer_infos
-                    .entry(hashval)
-                    .or_insert_with(|| KmerInfo {
+                let kmer_info =
+                    signature_kmers.kmer_infos.entry(hashval).or_insert_with(|| KmerInfo {
                         hashval,
                         encoded_kmer: encoded_kmer.clone(),
                         original_kmer_to_position: HashMap::new(),
@@ -327,10 +314,7 @@ impl ProteomeIndex {
         let idf = compute_inverse_document_frequency(&minhash, &signatures, Some(true));
 
         // Store all statistics in one go
-        self.stats = ProteomeIndexKmerStats {
-            idf,
-            frequency: frequencies,
-        };
+        self.stats = ProteomeIndexKmerStats { idf, frequency: frequencies };
 
         // Store the combined stats
         let key = "kmer_stats";

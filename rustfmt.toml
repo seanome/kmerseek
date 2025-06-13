@@ -1,0 +1,3 @@
+merge_derives = true
+newline_style = "Unix"
+use_small_heuristics = "Max"
