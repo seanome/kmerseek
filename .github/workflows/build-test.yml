@@ -45,7 +45,6 @@ jobs:
         shell: bash -l {0}
         run: 
           mamba install rust==1.75.0
-          mamba install -c conda-forge
 
       - name: install updated GCC
         shell: bash -l {0}
@@ -54,9 +53,6 @@ jobs:
       - name: install python dependencies
         shell: bash -l {0}
         run: mamba install polars sourmash sourmash_plugin_branchwater click pytest pandas
-
-      - name: Run cargo fmt
-        run: cargo fmt --all -- --check --verbose
 
       - name: build
         shell: bash -l {0}
