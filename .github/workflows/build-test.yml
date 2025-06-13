@@ -43,7 +43,9 @@ jobs:
 
       - name: install dependencies
         shell: bash -l {0}
-        run: mamba install rust==1.75.0
+        run: 
+          mamba install rust==1.75.0
+          mamba install -c conda-forge gcc=13
 
       - name: install dependencies 2
         shell: bash -l {0}
