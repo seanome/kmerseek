@@ -3,6 +3,6 @@ pub const TEST_FASTA: &str =
 
 pub const TEST_KMER: &str = "LIVINGALIVE";
 pub const TEST_PROTEIN: &str = "PLANTANDANIMALGENQMES";
-pub const TEST_PROTEIN_INVALID: &str = "PLANTANDANIMALGENOMES";
 
-// Add more shared test fixtures here as needed
+// "O" (pyrrolysine) is not a valid amino acid for our purposes
+pub const TEST_PROTEIN_INVALID: &str = "PLANTANDANIMALGENOMES";
