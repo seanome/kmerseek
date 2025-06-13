@@ -1,4 +1,4 @@
-name: Rust Format Check
+name: Lint (Rust Cargo Formatter)
 
 on:
   push:
