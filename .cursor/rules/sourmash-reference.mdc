@@ -1,0 +1,38 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Sourmash Reference Codebases Guide
+
+This project uses two reference codebases for development:
+
+## Main Sourmash Library (`REFERENCE_sourmash/`)
+The main sourmash library contains core functionality for:
+
+- MinHash/FracMinHash sketching
+- Sequence encoding (DNA/protein/dayhoff/hp)
+- Index structures
+- File I/O and serialization
+
+Key files to reference:
+- Core Rust implementation: `REFERENCE_sourmash/src/core/src/`
+  - MinHash sketching: `sketch/minhash.rs`
+  - Encodings: `encodings.rs`
+  - Index structures: `index/mod.rs`
+  - Type definitions: `lib.rs`
+- Python bindings: `REFERENCE_sourmash/src/sourmash/`
+
+## Branchwater Plugin (`REFERENCE_sourmash_plugin_branchwater/`)
+The branchwater plugin extends sourmash with additional functionality:
+- Distributed search capabilities
+- Additional index types
+- Performance optimizations
+
+When implementing new features:
+1. First check the main sourmash library for existing implementations
+2. Reference the appropriate encoding/sketching/index patterns
+3. Use consistent types and method signatures
+4. Follow the error handling patterns from the reference code
+
+Note: These are niche codebases with limited external examples, so always reference these directly rather than searching online for examples.

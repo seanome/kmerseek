@@ -185,3 +185,10 @@ cython_debug/
 # Ignore signature files created by tests
 tests/testdata/fasta/*sig.zip*
 *.manysketch.csv
+
+
+# Ignore reference codebases for Cursor
+REFERENCE*
+
+# Ignore vscode configuration
+.vscode/
