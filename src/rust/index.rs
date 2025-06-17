@@ -234,12 +234,10 @@ impl ProteomeIndex {
     }
 
     /// Process a k-mer to get its encoded version
-    pub fn encode_kmer(&self, kmer: &str) -> (String, String) {
-        // Create the encoded k-mer by applying the encoding function
-        let encoded: Vec<u8> = kmer.chars().map(|c| (self.encoding_fn)(c as u8)).collect();
-        let encoded_str = str::from_utf8(&encoded).unwrap();
-
-        (encoded_str.to_owned(), kmer.to_owned())
+    pub fn encode_kmer(&self, kmer: &str) -> Result<(String, String)> {
+        let encoded: Vec<u8> = kmer.as_bytes().iter().map(|&b| (self.encoding_fn)(b)).collect();
+        let encoded_str = std::str::from_utf8(&encoded)?;
+        Ok((encoded_str.to_owned(), kmer.to_owned()))
     }
 
     /// Get statistics for a hash value
