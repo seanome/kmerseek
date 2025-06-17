@@ -12,14 +12,15 @@ const TEST_PROTEIN: &str = "PLANTYANDANIMALGENQMESCOFFEE";
 
 fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     let temp_dir = tempdir().unwrap();
-    let db_path = temp_dir.path().join("proteins.fasta");
+    let fasta_path = temp_dir.path().join(format!("proteins_{}_{}.fasta", moltype, ksize));
+    let db_path = temp_dir.path().join(format!("db_{}_{}", moltype, ksize));
 
     // Create a simple test FASTA file
-    let mut file = File::create(&db_path).unwrap();
+    let mut file = File::create(&fasta_path).unwrap();
     writeln!(file, ">test_protein\n{}", TEST_PROTEIN).unwrap();
 
-    let index = ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, SEED).unwrap();
-    (index, db_path)
+    let index = ProteomeIndex::new(db_path, ksize, 1, moltype, SEED).unwrap();
+    (index, fasta_path)
 }
 
 fn benchmark_encode_kmer(c: &mut Criterion) {
