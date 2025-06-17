@@ -90,37 +90,34 @@ fn test_kmer_encoding_hp() -> Result<()> {
 fn test_process_protein_kmers() -> Result<()> {
     let dir = tempdir()?;
 
+    let protein_ksize = 5;
+    let moltype = "protein";
+
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
-        dir.path().join("protein_test.db"),
-        5, // ksize=1 for protein (will be multiplied by 3)
-        1, // scaled=1 to capture all kmers
-        "protein",
+        dir.path().join("dayhoff_test.db"),
+        protein_ksize, // protein ksize
+        1,             // scaled=1 to capture all kmers
+        moltype,
         SEED,
     )?;
 
     let sequence = TEST_PROTEIN;
 
-    // Create a minhash sketch for protein
-    let minhash = KmerMinHash::new(
+    // Create a protein signature
+    let mut protein_sig = ProteinSignature::new(
+        protein_ksize,
         1, // scaled
-        5, // ksize
-        HashFunctions::Murmur64Protein,
-        SEED, // seed
-        true, // track_abundance
-        0,    // num (use scaled instead)
-    );
+        moltype,
+        SEED,
+    )?;
 
-    let mut small_sig = SmallSignature {
-        location: "test1".to_string(),
-        name: "test1".to_string(),
-        md5sum: "test1".to_string(),
-        minhash: minhash,
-    };
-    small_sig.minhash.add_protein(sequence.as_bytes())?;
+    // Add the sequence
+    protein_sig.add_protein(sequence.as_bytes())?;
+    println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, &small_sig)?;
+    let kmer_signature = index.process_protein_kmers(sequence, &protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature.name);
     println!("{:?}", kmer_signature.kmer_infos.keys());
@@ -340,39 +337,34 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
 fn test_process_protein_kmers_hp() -> Result<()> {
     let dir = tempdir()?;
 
-    let ksize = 5;
+    let protein_ksize = 5;
+    let moltype = "hp";
 
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
-        dir.path().join("hp_test.db"),
-        ksize, // ksize=5
-        1,     // scaled=1 to capture all kmers
-        "hp",
+        dir.path().join("dayhoff_test.db"),
+        protein_ksize, // protein ksize
+        1,             // scaled=1 to capture all kmers
+        moltype,
         SEED,
     )?;
 
     let sequence = TEST_PROTEIN;
 
-    // Create a minhash sketch for protein
-    let minhash = KmerMinHash::new(
-        1,     // scaled
-        ksize, // ksize
-        HashFunctions::Murmur64Dayhoff,
-        SEED, // seed
-        true, // track_abundance
-        0,    // num (use scaled instead)
-    );
+    // Create a protein signature
+    let mut protein_sig = ProteinSignature::new(
+        protein_ksize,
+        1, // scaled
+        moltype,
+        SEED,
+    )?;
 
-    let mut small_sig = SmallSignature {
-        location: "test1".to_string(),
-        name: "test1".to_string(),
-        md5sum: "test1".to_string(),
-        minhash: minhash,
-    };
-    small_sig.minhash.add_protein(sequence.as_bytes())?;
+    // Add the sequence
+    protein_sig.add_protein(sequence.as_bytes())?;
+    println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, &small_sig)?;
+    let kmer_signature = index.process_protein_kmers(sequence, &protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature.name);
     let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
