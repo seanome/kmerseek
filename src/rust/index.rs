@@ -17,6 +17,7 @@ use sourmash::manifest::Manifest;
 use sourmash::signature::{Signature, SigsTrait};
 use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage};
+use sourmash::Error as SourmashError;
 use sourmash_plugin_branchwater::search_significance::{
     compute_inverse_document_frequency, get_hash_frequencies, Normalization,
 };
@@ -48,6 +49,63 @@ struct ProteomeIndexState {
     seed: u64,
 }
 
+/// A wrapper around SmallSignature that handles protein k-mer size conversions
+pub struct ProteinSignature {
+    signature: SmallSignature,
+    protein_ksize: u32,
+}
+
+impl ProteinSignature {
+    /// Create a new ProteinSignature with the given protein k-mer size
+    pub fn new(protein_ksize: u32, scaled: u32, moltype: &str, seed: u64) -> Result<Self> {
+        let hash_function = get_hash_function_from_moltype(moltype)?;
+        let minhash_ksize = protein_ksize * 3; // Convert protein ksize to minhash ksize
+
+        let minhash = KmerMinHash::new(
+            scaled,
+            minhash_ksize,
+            hash_function,
+            seed,
+            true, // track_abundance
+            0,    // num (use scaled instead)
+        );
+
+        let signature = SmallSignature {
+            location: "".to_string(),
+            name: "".to_string(),
+            md5sum: "".to_string(),
+            minhash,
+        };
+
+        Ok(Self { signature, protein_ksize })
+    }
+
+    /// Add a protein sequence to the signature
+    pub fn add_protein(&mut self, sequence: &[u8]) -> Result<()> {
+        Ok(self.signature.minhash.add_protein(sequence)?)
+    }
+
+    /// Get the protein k-mer size
+    pub fn protein_ksize(&self) -> u32 {
+        self.protein_ksize
+    }
+
+    /// Get the minhash k-mer size
+    pub fn minhash_ksize(&self) -> u32 {
+        self.protein_ksize * 3
+    }
+
+    /// Get the underlying SmallSignature
+    pub fn into_signature(self) -> SmallSignature {
+        self.signature
+    }
+
+    /// Get a reference to the underlying SmallSignature
+    pub fn signature(&self) -> &SmallSignature {
+        &self.signature
+    }
+}
+
 pub struct ProteomeIndex {
     // RocksDB instance for persistent storage
     db: DB,
@@ -67,17 +125,21 @@ pub struct ProteomeIndex {
     // Protein encoding function
     encoding_fn: fn(u8) -> u8,
 
+    // Statistics for k-mer frequencies and IDF
+    stats: ProteomeIndexKmerStats,
+
     // Add moltype field for serialization
     moltype: String,
 
     // Add ksize field for serialization
     ksize: u32,
 
+    // Add minhash_ksize field for serialization
+    // MinHash k-mer size is protein_ksize * 3, as a legacy from Sourmash which was originally designed for DNA
+    minhash_ksize: u32,
+
     // Add scaled field for serialization
     scaled: u32,
-
-    // Statistics for k-mer frequencies and IDF
-    stats: ProteomeIndexKmerStats,
 
     // Add seed field for serialization
     seed: u64,
@@ -102,10 +164,11 @@ impl ProteomeIndex {
 
         let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
 
+        let minhash_ksize = ksize * 3;
         // Create the minhash sketch
         let minhash = KmerMinHash::new(
             scaled,
-            ksize,
+            minhash_ksize,
             hash_function,
             seed, // seed
             true, // track_abundance
@@ -126,7 +189,8 @@ impl ProteomeIndex {
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             encoding_fn,
             moltype: moltype.to_string(),
-            ksize,
+            ksize: ksize,
+            minhash_ksize: minhash_ksize,
             scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             seed,
@@ -155,7 +219,7 @@ impl ProteomeIndex {
         };
         let md5sum = small_sig.md5sum.clone();
         let mut minhash = small_sig.minhash.clone();
-        minhash.add_sequence(uniprot_entry.sequence.as_bytes(), true)?;
+        minhash.add_protein(uniprot_entry.sequence.as_bytes())?;
 
         // Process k-mers for this protein
         let protein_kmers = self.process_protein_kmers(&uniprot_entry.sequence, &small_sig)?;
@@ -203,6 +267,10 @@ impl ProteomeIndex {
 
             // Get the hash from the minhash implementation
             let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
+            println!(
+                "pos: {:3} | hash: {:20} | encoded: {:15} | original: {:15}",
+                i, hashval, encoded_kmer, original_kmer
+            );
 
             // If this hashval is in the minhash, then save its k-mer positions
             if hashvals.contains(&hashval) {
@@ -341,6 +409,7 @@ impl ProteomeIndex {
             encoding_fn: self.encoding_fn,
             moltype: self.moltype.clone(),
             ksize: self.ksize,
+            minhash_ksize: self.minhash_ksize,
             scaled: self.scaled,
             stats: self.stats.clone(),
             seed: self.seed,

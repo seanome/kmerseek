@@ -6,7 +6,7 @@ use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use tempfile::tempdir;
 
-use crate::index::ProteomeIndex;
+use crate::index::{ProteinSignature, ProteomeIndex};
 use crate::tests::test_fixtures::{TEST_KMER, TEST_PROTEIN};
 use crate::SEED;
 use std::collections::HashMap;
@@ -117,7 +117,7 @@ fn test_process_protein_kmers() -> Result<()> {
         md5sum: "test1".to_string(),
         minhash: minhash,
     };
-    small_sig.minhash.add_sequence(sequence.as_bytes(), true)?;
+    small_sig.minhash.add_protein(sequence.as_bytes())?;
 
     // Process kmers
     let kmer_signature = index.process_protein_kmers(sequence, &small_sig)?;
@@ -204,39 +204,33 @@ fn test_process_protein_kmers() -> Result<()> {
 fn test_process_protein_kmers_dayhoff() -> Result<()> {
     let dir = tempdir()?;
 
-    let ksize = 5;
+    let protein_ksize = 5;
 
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
         dir.path().join("dayhoff_test.db"),
-        ksize, // ksize=5
-        1,     // scaled=1 to capture all kmers
+        protein_ksize, // protein ksize
+        1,             // scaled=1 to capture all kmers
         "dayhoff",
         SEED,
     )?;
 
     let sequence = TEST_PROTEIN;
 
-    // Create a minhash sketch for protein
-    let minhash = KmerMinHash::new(
-        1,     // scaled
-        ksize, // ksize
-        HashFunctions::Murmur64Dayhoff,
-        SEED, // seed
-        true, // track_abundance
-        0,    // num (use scaled instead)
-    );
+    // Create a protein signature
+    let mut protein_sig = ProteinSignature::new(
+        protein_ksize,
+        1, // scaled
+        "dayhoff",
+        SEED,
+    )?;
 
-    let mut small_sig = SmallSignature {
-        location: "test1".to_string(),
-        name: "test1".to_string(),
-        md5sum: "test1".to_string(),
-        minhash: minhash,
-    };
-    small_sig.minhash.add_sequence(sequence.as_bytes(), true)?;
+    // Add the sequence
+    protein_sig.add_protein(sequence.as_bytes())?;
+    println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, &small_sig)?;
+    let kmer_signature = index.process_protein_kmers(sequence, protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature.name);
     let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
@@ -375,7 +369,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
         md5sum: "test1".to_string(),
         minhash: minhash,
     };
-    small_sig.minhash.add_sequence(sequence.as_bytes(), true)?;
+    small_sig.minhash.add_protein(sequence.as_bytes())?;
 
     // Process kmers
     let kmer_signature = index.process_protein_kmers(sequence, &small_sig)?;
