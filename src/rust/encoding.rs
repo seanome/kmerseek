@@ -1,7 +1,6 @@
 use anyhow::Result;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 
-
 /// Returns the appropriate `HashFunctions` variant for the given `moltype`.
 ///
 /// # Arguments
@@ -15,17 +14,15 @@ use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 ///
 /// * `Ok(HashFunctions)` if the `moltype` is valid
 /// * `Err(...)` if the `moltype` is unrecognized
-pub fn get_hash_function_from_moltype(
-    moltype: &str,
-) -> Result<HashFunctions, anyhow::Error> {
+pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, anyhow::Error> {
     match moltype {
         "protein" | "raw" => Ok(HashFunctions::Murmur64Protein),
         "hp" => Ok(HashFunctions::Murmur64Hp),
         "dayhoff" => Ok(HashFunctions::Murmur64Dayhoff),
         _ => Err(anyhow::anyhow!(
-                "Invalid moltype: {}, only 'protein', 'hp', or 'dayhoff' are supported",
-                moltype
-            )),
+            "Invalid moltype: {}, only 'protein', 'hp', or 'dayhoff' are supported",
+            moltype
+        )),
     }
 }
 
@@ -38,13 +35,11 @@ pub fn get_hash_function_from_moltype(
 ///   - `"dayhoff"` for Dayhoff encoding
 ///
 /// # Returns
-/// 
+///
 /// * `Ok(fn(u8) -> u8)` - A function that encodes an amino acid byte according to
 ///    the specified `moltype`.
 /// * `Err(...)` - An error if the `moltype` is unrecognized.
-pub fn get_encoding_fn_from_moltype(
-    moltype: &str,
-) -> Result<fn(u8) -> u8, anyhow::Error> {
+pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyhow::Error> {
     match moltype {
         "protein" | "raw" => Ok(|b| b),
         "hp" => Ok(aa_to_hp),
