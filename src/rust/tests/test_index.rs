@@ -50,7 +50,7 @@ fn test_kmer_encoding_dayhoff() -> Result<()> {
     )?;
 
     // Test k-mer encoding
-    let (encoded_kmer, original_kmer) = index.encode_kmer(TEST_KMER);
+    let (encoded_kmer, original_kmer) = index.encode_kmer(TEST_KMER)?;
 
     // The original k-mer should be exactly what we put in
     assert_eq!(original_kmer, TEST_KMER);
