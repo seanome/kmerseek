@@ -93,7 +93,7 @@ fn test_process_protein_kmers() -> Result<()> {
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
         dir.path().join("protein_test.db"),
-        1, // ksize=1 for protein (will be multiplied by 3)
+        5, // ksize=1 for protein (will be multiplied by 3)
         1, // scaled=1 to capture all kmers
         "protein",
         SEED,
@@ -209,7 +209,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
         dir.path().join("dayhoff_test.db"),
-        ksize, // ksize=1 for protein (will be multiplied by 3)
+        ksize, // ksize=5
         1,     // scaled=1 to capture all kmers
         "dayhoff",
         SEED,
@@ -351,7 +351,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
         dir.path().join("hp_test.db"),
-        ksize, // ksize=1 for protein (will be multiplied by 3)
+        ksize, // ksize=5
         1,     // scaled=1 to capture all kmers
         "hp",
         SEED,
