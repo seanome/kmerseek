@@ -7,7 +7,7 @@ rust-version = "1.75.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "kmerseek"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 path = "src/rust/lib.rs"
 
 [dependencies]
@@ -35,3 +35,7 @@ half = "=2.2.1"
 
 [profile.release]
 debug = "line-tables-only"
+
+[[bench]]
+name = "benchmark"
+harness = false
