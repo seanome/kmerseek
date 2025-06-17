@@ -25,7 +25,7 @@ fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
 
 fn benchmark_encode_kmer(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
-        for ksize in [7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27] {
+        for ksize in [5, 10, 15, 20] {
             let (index, _) = setup_test_index(ksize, moltype);
             c.bench_function(&format!("encode_kmer_{}_{}", moltype, ksize), |b| {
                 b.iter(|| index.encode_kmer(&TEST_PROTEIN[..ksize as usize]))
@@ -36,7 +36,7 @@ fn benchmark_encode_kmer(c: &mut Criterion) {
 
 fn benchmark_process_protein_kmers(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
-        for ksize in [7, 9, 11, 13, 15, 17, 19, 21, 23, 25, 27] {
+        for ksize in [5, 10, 15, 20] {
             let (index, _) = setup_test_index(ksize, moltype);
 
             // Create a test signature
