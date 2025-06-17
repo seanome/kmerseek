@@ -192,3 +192,6 @@ REFERENCE*
 
 # Ignore vscode configuration
 .vscode/
+
+# Ignore cargo flamegraph output from profiling
+flamegraph.svg
