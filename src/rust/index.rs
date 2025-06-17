@@ -129,15 +129,10 @@ impl ProteomeIndex {
     }
 
     pub fn add_uniprot_entry(&mut self, uniprot_entry: UniProtEntry) -> Result<()> {
-        // Get parameters from combined_minhash
-        let mut minhash_guard = self.combined_minhash.lock().unwrap();
-        let ksize = minhash_guard.ksize() as u32;
-        let scaled = minhash_guard.scaled();
-
         // Create compute parameters for this protein's signature
         let params = ComputeParameters::builder()
-            .ksizes(vec![ksize])
-            .scaled(scaled)
+            .ksizes(vec![self.ksize])
+            .scaled(self.scaled)
             .protein(true)
             .num_hashes(0) // use scaled instead
             .build();
@@ -158,8 +153,7 @@ impl ProteomeIndex {
         minhash.add_sequence(uniprot_entry.sequence.as_bytes(), true)?;
 
         // Add the newly created hashes to the combined minhash
-        minhash_guard.add_many_with_abund(&minhash.to_vec_abunds())?;
-        drop(minhash_guard);
+        self.combined_minhash.lock().unwrap().add_many_with_abund(&minhash.to_vec_abunds())?;
 
         // Process k-mers for this protein
         let protein_kmers = self.process_protein_kmers(&uniprot_entry.sequence, &small_sig)?;
