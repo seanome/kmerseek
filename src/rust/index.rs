@@ -208,7 +208,7 @@ impl ProteomeIndex {
             let kmer = &sequence[i..i + ksize];
 
             // Process the k-mer to get encoded version
-            let (encoded_kmer, original_kmer) = self.encode_kmer(kmer);
+            let (encoded_kmer, original_kmer) = self.encode_kmer(kmer)?;
 
             // Get the hash from the minhash implementation
             let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
