@@ -163,9 +163,6 @@ impl ProteomeIndex {
         let mut minhash = small_sig.minhash.clone();
         minhash.add_sequence(uniprot_entry.sequence.as_bytes(), true)?;
 
-        // Add the newly created hashes to the combined minhash
-        self.combined_minhash.lock().unwrap().add_many_with_abund(&minhash.to_vec_abunds())?;
-
         // Process k-mers for this protein
         let protein_kmers = self.process_protein_kmers(&uniprot_entry.sequence, &small_sig)?;
 
