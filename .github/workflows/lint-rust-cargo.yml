@@ -1,4 +1,4 @@
-name: Lint (Rust Cargo Formatter)
+name: Lint (Rust "cargo fmt" and "cargo clippy")
 
 on: [push, pull_request]
 
@@ -13,3 +13,5 @@ jobs:
           components: rustfmt
       - name: Check formatting
         run: cargo fmt --all -- --check --verbose 
+      - name: Check clippy
+        run: cargo clippy --all -- --deny warnings
