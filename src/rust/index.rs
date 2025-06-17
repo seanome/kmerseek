@@ -98,22 +98,16 @@ impl ProteomeIndex {
         // Open the database
         let db = DB::open(&opts, path)?;
 
-        let hash_function = match get_hash_function_from_moltype(moltype) {
-            Ok(value) => value,
-            Err(value) => return Err(value),
-        };
+        let hash_function = get_hash_function_from_moltype(moltype)?;
 
-        let encoding_fn = match get_encoding_fn_from_moltype(moltype) {
-            Ok(value) => value,
-            Err(value) => return Err(value),
-        };
+        let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
 
         // Create the minhash sketch
         let minhash = KmerMinHash::new(
             scaled,
             ksize,
             hash_function,
-            42,   // seed
+            seed, // seed
             true, // track_abundance
             0,    // num (use scaled instead)
         );
