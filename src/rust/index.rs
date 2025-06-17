@@ -100,12 +100,12 @@ impl ProteomeIndex {
 
         let hash_function = match get_hash_function_from_moltype(moltype) {
             Ok(value) => value,
-            Err(value) => return value,
+            Err(value) => return Err(value),
         };
 
         let encoding_fn = match get_encoding_fn_from_moltype(moltype) {
             Ok(value) => value,
-            Err(value) => return value,
+            Err(value) => return Err(value),
         };
 
         // Create the minhash sketch
