@@ -8,6 +8,7 @@ use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
 use crate::tests::test_fixtures::{TEST_KMER, TEST_PROTEIN};
+use crate::SEED;
 use std::collections::HashMap;
 
 #[test]
@@ -20,6 +21,7 @@ fn test_kmer_encoding() -> Result<()> {
         11, // small ksize for test
         1,  // scaled
         "protein",
+        SEED,
     )?;
 
     // Test k-mer encoding
@@ -44,6 +46,7 @@ fn test_kmer_encoding_dayhoff() -> Result<()> {
         11, // small ksize for test
         1,  // scaled
         "dayhoff",
+        SEED,
     )?;
 
     // Test k-mer encoding
@@ -68,6 +71,7 @@ fn test_kmer_encoding_hp() -> Result<()> {
         11, // small ksize for test
         1,  // scaled
         "hp",
+        SEED,
     )?;
 
     // Test k-mer encoding
@@ -92,6 +96,7 @@ fn test_process_protein_kmers() -> Result<()> {
         1, // ksize=1 for protein (will be multiplied by 3)
         1, // scaled=1 to capture all kmers
         "protein",
+        SEED,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -101,7 +106,7 @@ fn test_process_protein_kmers() -> Result<()> {
         1, // scaled
         5, // ksize
         HashFunctions::Murmur64Protein,
-        42,   // seed
+        SEED, // seed
         true, // track_abundance
         0,    // num (use scaled instead)
     );
@@ -207,6 +212,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
         ksize, // ksize=1 for protein (will be multiplied by 3)
         1,     // scaled=1 to capture all kmers
         "dayhoff",
+        SEED,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -216,7 +222,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
         1,     // scaled
         ksize, // ksize
         HashFunctions::Murmur64Dayhoff,
-        42,   // seed
+        SEED, // seed
         true, // track_abundance
         0,    // num (use scaled instead)
     );
@@ -348,6 +354,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
         ksize, // ksize=1 for protein (will be multiplied by 3)
         1,     // scaled=1 to capture all kmers
         "hp",
+        SEED,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -357,7 +364,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
         1,     // scaled
         ksize, // ksize
         HashFunctions::Murmur64Dayhoff,
-        42,   // seed
+        SEED, // seed
         true, // track_abundance
         0,    // num (use scaled instead)
     );

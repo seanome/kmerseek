@@ -15,6 +15,7 @@ mod tests;
 // Re-export main types for easier access
 pub use aminoacid::AminoAcidAmbiguity;
 pub use index::ProteomeIndex;
+pub use kmer_signature::SEED;
 pub use uniprot::{ProteinFeature, UniProtEntry};
 
 #[pyclass]
@@ -69,7 +70,7 @@ impl PyProteomeIndex {
     #[new]
     fn new(ksize: u32, scaled: u32, moltype: &str, db_path: &str) -> PyResult<Self> {
         let index =
-            crate::index::ProteomeIndex::new(PathBuf::from(db_path), ksize, scaled, moltype)
+            crate::index::ProteomeIndex::new(PathBuf::from(db_path), ksize, scaled, moltype, SEED)
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         Ok(PyProteomeIndex { index })

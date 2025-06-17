@@ -7,6 +7,8 @@ use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use crate::uniprot::{self, UniProtEntry};
 
+pub const SEED: u64 = 42;
+
 /// Represents the position of a k-mer in a protein sequence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KmerPosition {

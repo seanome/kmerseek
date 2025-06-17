@@ -45,6 +45,7 @@ struct ProteomeIndexState {
     moltype: String,
     ksize: u32,
     scaled: u32,
+    seed: u64,
 }
 
 pub struct ProteomeIndex {
@@ -77,10 +78,19 @@ pub struct ProteomeIndex {
 
     // Statistics for k-mer frequencies and IDF
     stats: ProteomeIndexKmerStats,
+
+    // Add seed field for serialization
+    seed: u64,
 }
 
 impl ProteomeIndex {
-    pub fn new<P: AsRef<Path>>(path: P, ksize: u32, scaled: u32, moltype: &str) -> Result<Self> {
+    pub fn new<P: AsRef<Path>>(
+        path: P,
+        ksize: u32,
+        scaled: u32,
+        moltype: &str,
+        seed: u64,
+    ) -> Result<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -125,6 +135,7 @@ impl ProteomeIndex {
             ksize,
             scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
+            seed,
         })
     }
 
@@ -182,11 +193,9 @@ impl ProteomeIndex {
         sequence: &str,
         signature: &SmallSignature,
     ) -> Result<KmerSignature> {
-        let minhash_guard = signature.minhash.clone();
-        let ksize = minhash_guard.ksize() as usize;
-        let seed = minhash_guard.seed();
-        let hashvals = minhash_guard.to_vec();
-        drop(minhash_guard);
+        let ksize = self.ksize as usize;
+        let seed = self.seed as u64;
+        let hashvals = &signature.minhash.to_vec();
 
         let mut signature_kmers = KmerSignature::new(SmallSignature {
             location: signature.location.clone(),
@@ -205,7 +214,7 @@ impl ProteomeIndex {
             let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
             // If this hashval is in the minhash, then save its k-mer positions
-            if !hashvals.contains(&hashval) {
+            if hashvals.contains(&hashval) {
                 let kmer_info =
                     signature_kmers.kmer_infos.entry(hashval).or_insert_with(|| KmerInfo {
                         hashval,
@@ -345,6 +354,7 @@ impl ProteomeIndex {
             ksize: self.ksize,
             scaled: self.scaled,
             stats: self.stats.clone(),
+            seed: self.seed,
         };
 
         // Add the protein
