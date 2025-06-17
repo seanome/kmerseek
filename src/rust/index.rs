@@ -267,10 +267,6 @@ impl ProteomeIndex {
 
             // Get the hash from the minhash implementation
             let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
-            println!(
-                "pos: {:3} | hash: {:20} | encoded: {:15} | original: {:15}",
-                i, hashval, encoded_kmer, original_kmer
-            );
 
             // If this hashval is in the minhash, then save its k-mer positions
             if hashvals.contains(&hashval) {
