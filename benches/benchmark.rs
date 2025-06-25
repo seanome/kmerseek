@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kmerseek::encoding::encode_kmer;
+use kmerseek::encoding::{encode_kmer, encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
 use kmerseek::kmer_signature::SEED;
 use sourmash::signature::SigsTrait;
@@ -45,6 +45,22 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
     }
 }
 
+fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
+    for moltype in ["protein", "hp", "dayhoff"] {
+        let encoding_fn = get_encoding_fn_from_moltype(moltype).unwrap();
+        for ksize in [5, 10, 15, 20] {
+            c.bench_function(
+                &format!("encodings_encode_kmer_with_encoding_fn_{}_{}", moltype, ksize),
+                |b| {
+                    b.iter(|| {
+                        encode_kmer_with_encoding_fn(&TEST_PROTEIN[..ksize as usize], encoding_fn)
+                    })
+                },
+            );
+        }
+    }
+}
+
 fn benchmark_process_protein_kmers(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
         for ksize in [5, 10, 15, 20] {
@@ -79,6 +95,7 @@ criterion_group!(
     benches,
     benchmark_proteome_index_encode_kmer,
     benchmark_encodings_encode_kmer,
-    benchmark_process_protein_kmers
+    benchmark_encodings_encode_kmer_with_encoding_fn,
+    benchmark_process_protein_kmers,
 );
 criterion_main!(benches);

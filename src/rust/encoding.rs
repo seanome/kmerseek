@@ -77,6 +77,31 @@ pub fn encode_kmer(kmer: &str, moltype: &str) -> Result<(String, String)> {
     Ok((encoded, original))
 }
 
+/// Process a k-mer to get its encoded version based on the specified moltype and hash function.
+///
+/// # Arguments
+/// * `kmer` - A string slice containing the k-mer to encode
+/// * `encoding_fn` - A function that encodes an amino acid byte according to
+///    the specified `moltype`.
+///
+/// # Returns
+/// * `Ok((String, String))` - A tuple containing (encoded_kmer, original_kmer)
+/// * `Err(...)` - An error if the `moltype` is unrecognized
+pub fn encode_kmer_with_encoding_fn(
+    kmer: &str,
+    encoding_fn: fn(u8) -> u8,
+) -> Result<(String, String)> {
+    let mut encoded = String::with_capacity(kmer.len());
+    let mut original = String::with_capacity(kmer.len());
+
+    for &b in kmer.as_bytes() {
+        encoded.push(encoding_fn(b) as char);
+    }
+    original.push_str(kmer);
+
+    Ok((encoded, original))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

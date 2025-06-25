@@ -24,7 +24,9 @@ use sourmash_plugin_branchwater::search_significance::{
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use crate::aminoacid::AminoAcidAmbiguity;
-use crate::encoding::{get_encoding_fn_from_moltype, get_hash_function_from_moltype};
+use crate::encoding::{
+    encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
+};
 use crate::kmer_signature::{KmerInfo, KmerSignature, SerializableSignature};
 use crate::protein::Protein;
 use crate::uniprot::UniProtEntry;
@@ -263,7 +265,8 @@ impl ProteomeIndex {
             let kmer = &sequence[i..i + ksize];
 
             // Process the k-mer to get encoded version
-            let (encoded_kmer, original_kmer) = self.encode_kmer(kmer)?;
+            let (encoded_kmer, original_kmer) =
+                encode_kmer_with_encoding_fn(kmer, self.encoding_fn)?;
 
             // Get the hash from the minhash implementation
             let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
@@ -287,19 +290,6 @@ impl ProteomeIndex {
         }
 
         Ok(signature_kmers)
-    }
-
-    /// Process a k-mer to get its encoded version
-    pub fn encode_kmer(&self, kmer: &str) -> Result<(String, String)> {
-        let mut encoded = String::with_capacity(kmer.len());
-        let mut original = String::with_capacity(kmer.len());
-
-        for &b in kmer.as_bytes() {
-            encoded.push((self.encoding_fn)(b) as char);
-        }
-        original.push_str(kmer);
-
-        Ok((encoded, original))
     }
 
     /// Get statistics for a hash value
