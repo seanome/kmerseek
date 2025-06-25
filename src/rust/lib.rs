@@ -5,9 +5,8 @@ use std::path::PathBuf;
 pub mod aminoacid;
 pub mod encoding;
 pub mod index;
-pub mod kmer_signature;
-pub mod protein;
-pub mod uniprot;
+pub mod kmer;
+pub mod signature;
 
 #[cfg(test)]
 mod tests;
@@ -15,8 +14,7 @@ mod tests;
 // Re-export main types for easier access
 pub use aminoacid::AminoAcidAmbiguity;
 pub use index::ProteomeIndex;
-pub use kmer_signature::SEED;
-pub use uniprot::{ProteinFeature, UniProtEntry};
+pub use signature::SEED;
 
 #[pyclass]
 #[derive(Clone, Copy)]
@@ -74,23 +72,6 @@ impl PyProteomeIndex {
                 .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))?;
 
         Ok(PyProteomeIndex { index })
-    }
-
-    fn process_uniprot_xml(&mut self, path: &str) -> PyResult<()> {
-        self.index
-            .process_uniprot_xml(path)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-    }
-
-    fn process_protein_files(&mut self, files: Vec<String>) -> PyResult<()> {
-        let paths: Vec<PathBuf> = files.into_iter().map(PathBuf::from).collect();
-        self.index
-            .process_protein_files(&paths)
-            .map_err(|e| PyErr::new::<pyo3::exceptions::PyRuntimeError, _>(e.to_string()))
-    }
-
-    fn get_mins(&self) -> Vec<u64> {
-        self.index.get_hashes()
     }
 }
 

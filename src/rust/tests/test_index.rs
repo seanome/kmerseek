@@ -6,7 +6,8 @@ use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use tempfile::tempdir;
 
-use crate::index::{ProteinSignature, ProteomeIndex};
+use crate::index::ProteomeIndex;
+use crate::signature::ProteinSignature;
 use crate::tests::test_fixtures::{TEST_KMER, TEST_PROTEIN};
 use crate::SEED;
 use std::collections::HashMap;
@@ -42,11 +43,11 @@ fn test_process_protein_kmers() -> Result<()> {
     println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, &protein_sig.signature())?;
+    let protein_signature = index.process_protein_kmers(sequence, &protein_sig.signature())?;
 
-    println!("{}", kmer_signature.signature.name);
-    println!("{:?}", kmer_signature.kmer_infos.keys());
-    let kmer_count = kmer_signature.kmer_infos.len();
+    println!("{}", protein_signature.signature().name);
+    println!("{:?}", protein_signature.kmer_infos.keys());
+    let kmer_count = protein_signature.kmer_infos.len();
 
     // Should have 17 kmers (length 21 - ksize 5 + 1)
     assert_eq!(kmer_count, 17);
@@ -55,7 +56,7 @@ fn test_process_protein_kmers() -> Result<()> {
     println!("\nKmer Info Details:");
     println!("Hash\t\t\\tProtein\tOrig\tPos");
     println!("----------------------------------------");
-    for (hash, kmer_info) in &kmer_signature.kmer_infos {
+    for (hash, kmer_info) in &protein_signature.kmer_infos {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
             println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
@@ -95,7 +96,7 @@ fn test_process_protein_kmers() -> Result<()> {
         .collect();
 
     // Verify each kmer info matches expected values
-    for (hash, kmer_info) in &kmer_signature.kmer_infos {
+    for (hash, kmer_info) in &protein_signature.kmer_infos {
         let (expected_kmer, expected_positions) =
             expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
 
@@ -154,7 +155,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
     // Process kmers
     let kmer_signature = index.process_protein_kmers(sequence, protein_sig.signature())?;
 
-    println!("{}", kmer_signature.signature.name);
+    println!("{}", kmer_signature.signature().name);
     let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
     println!("{:?}", hashvals);
     let kmer_count = kmer_signature.kmer_infos.len();
@@ -289,9 +290,9 @@ fn test_process_protein_kmers_hp() -> Result<()> {
     println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, &protein_sig.signature())?;
+    let kmer_signature = index.process_protein_kmers(sequence, protein_sig.signature())?;
 
-    println!("{}", kmer_signature.signature.name);
+    println!("{}", kmer_signature.signature().name);
     let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
     println!("{:?}", hashvals);
     let kmer_count = kmer_signature.kmer_infos.len();

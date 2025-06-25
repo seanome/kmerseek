@@ -25,7 +25,6 @@ impl AminoAcidAmbiguity {
         }
 
         // Add ambiguous amino acid codes
-        replacements.insert('X', STANDARD_AA.to_vec()); // Unknown - any amino acid
         replacements.insert('B', vec!['D', 'N']); // Aspartic acid or Asparagine
         replacements.insert('Z', vec!['E', 'Q']); // Glutamic acid or Glutamine
         replacements.insert('J', vec!['I', 'L']); // Isoleucine or Leucine
@@ -78,7 +77,6 @@ mod tests {
         }
 
         // Test ambiguous codes
-        assert!(aa.is_valid_aa('X'));
         assert!(aa.is_valid_aa('B'));
         assert!(aa.is_valid_aa('Z'));
         assert!(aa.is_valid_aa('J'));
