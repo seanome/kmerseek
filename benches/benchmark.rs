@@ -85,7 +85,7 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
             };
 
             c.bench_function(&format!("process_protein_kmers_{}_{}", moltype, ksize), |b| {
-                b.iter(|| index.process_protein_kmers(TEST_PROTEIN, &small_sig))
+                b.iter(|| index.process_kmers(TEST_PROTEIN, &small_sig))
             });
         }
     }

@@ -188,13 +188,13 @@ impl ProteomeIndex {
         protein_sig.add_protein(sequence.as_bytes())?;
 
         // Process the k-mers to get detailed k-mer information
-        let processed_signature = self.process_protein_kmers(sequence, &protein_sig.signature())?;
+        let processed_signature = self.process_kmers(sequence, &protein_sig.signature())?;
 
         // Return the processed signature (don't store it yet)
         Ok(processed_signature)
     }
 
-    pub fn process_protein_kmers<S: SignatureAccess>(
+    pub fn process_kmers<S: SignatureAccess>(
         &self,
         sequence: &str,
         signature: &S,

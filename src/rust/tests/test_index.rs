@@ -5,12 +5,12 @@ use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
 use crate::signature::ProteinSignature;
-use crate::tests::test_fixtures::TEST_PROTEIN;
+use crate::tests::test_fixtures::{TEST_FASTA, TEST_PROTEIN};
 use crate::SEED;
 use std::collections::HashMap;
 
 #[test]
-fn test_process_protein_kmers() -> Result<()> {
+fn test_process_kmers_moltype_protein() -> Result<()> {
     let dir = tempdir()?;
 
     let protein_ksize = 5;
@@ -40,7 +40,7 @@ fn test_process_protein_kmers() -> Result<()> {
     println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let protein_signature = index.process_protein_kmers(sequence, &protein_sig.signature())?;
+    let protein_signature = index.process_kmers(sequence, &protein_sig.signature())?;
 
     println!("{}", protein_signature.signature().name);
     println!("{:?}", protein_signature.kmer_infos.keys());
@@ -121,7 +121,7 @@ fn test_process_protein_kmers() -> Result<()> {
 }
 
 #[test]
-fn test_process_protein_kmers_dayhoff() -> Result<()> {
+fn test_process_kmers_moltype_dayhoff() -> Result<()> {
     let dir = tempdir()?;
 
     let protein_ksize = 5;
@@ -150,7 +150,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
     println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, protein_sig.signature())?;
+    let kmer_signature = index.process_kmers(sequence, protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature().name);
     let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
@@ -257,7 +257,7 @@ fn test_process_protein_kmers_dayhoff() -> Result<()> {
 }
 
 #[test]
-fn test_process_protein_kmers_hp() -> Result<()> {
+fn test_process_kmers_moltype_hp() -> Result<()> {
     let dir = tempdir()?;
 
     let protein_ksize = 5;
@@ -287,7 +287,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
     println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
     // Process kmers
-    let kmer_signature = index.process_protein_kmers(sequence, protein_sig.signature())?;
+    let kmer_signature = index.process_kmers(sequence, protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature().name);
     let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
@@ -560,13 +560,8 @@ fn test_process_protein_fasta_parallel() -> Result<()> {
         SEED,
     )?;
 
-    // Create a temporary FASTA file for testing
-    let fasta_content = ">test_protein1\nPLANTANDANIMALGENQMES\n>test_protein2\nLIVINGALIVE";
-    let fasta_path = dir.path().join("test.fasta");
-    std::fs::write(&fasta_path, fasta_content)?;
-
     // Process the FASTA file
-    index.process_protein_fasta_parallel(&fasta_path)?;
+    index.process_protein_fasta_parallel(TEST_FASTA)?;
 
     // Verify the signatures were added to the signatures map
     {
