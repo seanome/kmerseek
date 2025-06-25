@@ -105,6 +105,8 @@ pub fn encode_kmer_with_encoding_fn(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_fixtures::TEST_KMER;
+    use anyhow::Result;
     use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 
     #[test]
@@ -163,5 +165,89 @@ mod tests {
         }
 
         assert!(get_encoding_fn_from_moltype("xyz").is_err());
+    }
+
+    #[test]
+    fn test_kmer_encoding_protein() -> Result<()> {
+        // Test k-mer encoding
+        let (encoded_kmer, original_kmer) = encode_kmer(TEST_KMER, "protein")?;
+
+        // The original k-mer should be exactly what we put in
+        assert_eq!(original_kmer, TEST_KMER);
+
+        // The encoded k-mer should be the same as the original k-mer
+        assert_eq!(encoded_kmer, TEST_KMER);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kmer_encoding_dayhoff() -> Result<()> {
+        // Test k-mer encoding
+        let (encoded_kmer, original_kmer) = encode_kmer(TEST_KMER, "dayhoff")?;
+
+        // The original k-mer should be exactly what we put in
+        assert_eq!(original_kmer, TEST_KMER);
+
+        // The encoded k-mer should be dayhoff-encoded k-mer
+        assert_eq!(encoded_kmer, "eeeecbbeeec");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kmer_encoding_hp() -> Result<()> {
+        // Test k-mer encoding
+        let (encoded_kmer, original_kmer) = encode_kmer(TEST_KMER, "hp")?;
+
+        // The original k-mer should be exactly what we put in
+        assert_eq!(original_kmer, TEST_KMER);
+
+        // The encoded k-mer should be hp-encoded k-mer
+        assert_eq!(encoded_kmer, "hhhhphhhhhp");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kmer_encoding_protein_with_encoding_fn() -> Result<()> {
+        // Test k-mer encoding
+        let (encoded_kmer, original_kmer) = encode_kmer_with_encoding_fn(TEST_KMER, |b| b)?;
+
+        // The original k-mer should be exactly what we put in
+        assert_eq!(original_kmer, TEST_KMER);
+
+        // The encoded k-mer should be the same as the original k-mer
+        assert_eq!(encoded_kmer, TEST_KMER);
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kmer_encoding_dayhoff_with_encoding_fn() -> Result<()> {
+        // Test k-mer encoding
+        let (encoded_kmer, original_kmer) = encode_kmer_with_encoding_fn(TEST_KMER, aa_to_dayhoff)?;
+
+        // The original k-mer should be exactly what we put in
+        assert_eq!(original_kmer, TEST_KMER);
+
+        // The encoded k-mer should be dayhoff-encoded k-mer
+        assert_eq!(encoded_kmer, "eeeecbbeeec");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_kmer_encoding_hp_with_encoding_fn() -> Result<()> {
+        // Test k-mer encoding
+        let (encoded_kmer, original_kmer) = encode_kmer_with_encoding_fn(TEST_KMER, aa_to_hp)?;
+
+        // The original k-mer should be exactly what we put in
+        assert_eq!(original_kmer, TEST_KMER);
+
+        // The encoded k-mer should be hp-encoded k-mer
+        assert_eq!(encoded_kmer, "hhhhphhhhhp");
+
+        Ok(())
     }
 }
