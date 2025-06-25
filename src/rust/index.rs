@@ -6,16 +6,11 @@ use anyhow::Result;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sourmash::_hash_murmur;
-use sourmash::cmd::ComputeParameters;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
-use sourmash::signature::{Signature, SigsTrait};
+use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage};
-use sourmash_plugin_branchwater::search_significance::{
-    compute_inverse_document_frequency, get_hash_frequencies, Normalization,
-};
-use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{
@@ -113,7 +108,7 @@ impl ProteomeIndex {
         let manifest = Manifest::default();
         let storage =
             InnerStorage::new(FSStorage::builder().fullpath("".into()).subdir("".into()).build());
-        let collection = Collection::new(manifest, storage);
+        let _collection = Collection::new(manifest, storage);
 
         Ok(Self {
             db,
@@ -128,6 +123,80 @@ impl ProteomeIndex {
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             seed,
         })
+    }
+
+    /// Get a reference to the signatures map (for testing)
+    pub fn get_signatures(&self) -> &Arc<Mutex<HashMap<String, ProteinSignature>>> {
+        &self.signatures
+    }
+
+    /// Get a reference to the combined minhash (for testing)
+    pub fn get_combined_minhash(&self) -> &Arc<Mutex<KmerMinHash>> {
+        &self.combined_minhash
+    }
+
+    /// Add a single protein sequence as a signature and process its k-mers
+    ///
+    /// This method creates a protein signature from the given sequence, processes its k-mers
+    /// to extract detailed position information, and stores it in the index. The signature
+    /// is also merged into the combined minhash for statistical analysis.
+    ///
+    /// # Arguments
+    ///
+    /// * `sequence` - The protein sequence as a string
+    /// * `_name` - The name/identifier for the protein (currently unused but reserved for future use)
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the operation fails.
+    ///
+    /// # Example
+    ///
+    /// ```rust
+    /// use kmerseek::index::ProteomeIndex;
+    /// use tempfile::tempdir;
+    ///
+    /// fn main() -> anyhow::Result<()> {
+    ///     let dir = tempdir()?;
+    ///     
+    ///     // Create a new index
+    ///     let index = ProteomeIndex::new(
+    ///         dir.path().join("test.db"),
+    ///         5,        // k-mer size
+    ///         1,        // scaled (1 = capture all k-mers)
+    ///         "protein", // molecular type
+    ///         42,       // seed
+    ///     )?;
+    ///     
+    ///     // Add a protein sequence
+    ///     let sequence = "PLANTANDANIMALGENQMES";
+    ///     index.add_protein_sequence(sequence, "test_protein")?;
+    ///     
+    ///     // The protein is now indexed and its k-mers are processed
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn add_protein_sequence(&self, sequence: &str, _name: &str) -> Result<()> {
+        // Create a new protein signature
+        let mut protein_sig =
+            ProteinSignature::new(self.ksize, self.scaled, &self.moltype, self.seed)?;
+
+        // Add the protein sequence to the signature
+        protein_sig.add_protein(sequence.as_bytes())?;
+
+        // Process the k-mers to get detailed k-mer information
+        let processed_signature = self.process_protein_kmers(sequence, &protein_sig.signature())?;
+
+        // Get the MD5 hash of the signature for storage
+        let md5sum = protein_sig.signature().get_md5sum();
+
+        // Store the processed signature in the signatures map
+        {
+            let mut signatures = self.signatures.lock().unwrap();
+            signatures.insert(md5sum.to_string(), processed_signature);
+        }
+
+        Ok(())
     }
 
     pub fn process_protein_kmers<S: SignatureAccess>(

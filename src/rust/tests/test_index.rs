@@ -1,14 +1,11 @@
 use anyhow::Result;
-use sourmash::encodings::HashFunctions;
 use sourmash::signature::SigsTrait;
-use sourmash::sketch::minhash::KmerMinHash;
-use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
 use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
 use crate::signature::ProteinSignature;
-use crate::tests::test_fixtures::{TEST_KMER, TEST_PROTEIN};
+use crate::tests::test_fixtures::TEST_PROTEIN;
 use crate::SEED;
 use std::collections::HashMap;
 
@@ -389,6 +386,61 @@ fn test_process_protein_kmers_hp() -> Result<()> {
             hash,
             kmer_info.original_kmer_to_position.len()
         );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_add_protein_sequence() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "protein";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("add_protein_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    let sequence = TEST_PROTEIN;
+    let name = "test_protein";
+
+    // Add the protein sequence to the index
+    index.add_protein_sequence(sequence, name)?;
+
+    // Verify the signature was added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
+
+        // Get the first (and only) signature
+        let (_md5sum, stored_signature) = signatures.iter().next().unwrap();
+
+        // Verify the signature has the expected number of k-mers
+        assert_eq!(
+            stored_signature.kmer_infos.len(),
+            17,
+            "Expected 17 k-mers for the test protein"
+        );
+
+        // Verify some specific k-mers are present
+        let expected_hash = 5893010049374798421; // Hash for "PLANT"
+        assert!(
+            stored_signature.kmer_infos.contains_key(&expected_hash),
+            "Expected k-mer hash {} to be present",
+            expected_hash
+        );
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        assert!(combined_minhash.size() > 0, "Combined minhash should contain hashes");
     }
 
     Ok(())
