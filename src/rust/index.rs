@@ -285,7 +285,7 @@ impl ProteomeIndex {
     }
 
     /// Process a protein FASTA file in parallel, adding all sequences to the index
-    pub fn process_protein_fasta_parallel<P: AsRef<Path>>(&self, fasta_path: P) -> Result<()> {
+    pub fn process_fasta<P: AsRef<Path>>(&self, fasta_path: P) -> Result<()> {
         use needletail::parse_fastx_file;
         use rayon::prelude::*;
 

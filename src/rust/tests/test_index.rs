@@ -545,7 +545,7 @@ fn test_create_protein_signature_moltype_hp() -> Result<()> {
 }
 
 #[test]
-fn test_process_protein_fasta_parallel() -> Result<()> {
+fn test_process_fasta() -> Result<()> {
     let dir = tempdir()?;
 
     let protein_ksize = 5;
@@ -561,7 +561,7 @@ fn test_process_protein_fasta_parallel() -> Result<()> {
     )?;
 
     // Process the FASTA file
-    index.process_protein_fasta_parallel(TEST_FASTA)?;
+    index.process_fasta(TEST_FASTA)?;
 
     // Verify the signatures were added to the signatures map
     {
