@@ -272,7 +272,8 @@ impl ProteomeIndex {
             if hashvals.contains(&hashval) {
                 let kmer_info =
                     signature_kmers.kmer_infos.entry(hashval).or_insert_with(|| KmerInfo {
-                        hashval,
+                        ksize: ksize,
+                        hashval: hashval,
                         encoded_kmer: encoded_kmer.clone(),
                         original_kmer_to_position: HashMap::new(),
                     });
