@@ -1,4 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
+use kmerseek::encoding::encode_kmer;
 use kmerseek::index::ProteomeIndex;
 use kmerseek::kmer_signature::SEED;
 use sourmash::signature::SigsTrait;
@@ -23,12 +24,22 @@ fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     (index, fasta_path)
 }
 
-fn benchmark_encode_kmer(c: &mut Criterion) {
+fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
         for ksize in [5, 10, 15, 20] {
             let (index, _) = setup_test_index(ksize, moltype);
-            c.bench_function(&format!("encode_kmer_{}_{}", moltype, ksize), |b| {
+            c.bench_function(&format!("proteome_index_encode_kmer_{}_{}", moltype, ksize), |b| {
                 b.iter(|| index.encode_kmer(&TEST_PROTEIN[..ksize as usize]))
+            });
+        }
+    }
+}
+
+fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
+    for moltype in ["protein", "hp", "dayhoff"] {
+        for ksize in [5, 10, 15, 20] {
+            c.bench_function(&format!("encodings_encode_kmer_{}_{}", moltype, ksize), |b| {
+                b.iter(|| encode_kmer(&TEST_PROTEIN[..ksize as usize], moltype))
             });
         }
     }
@@ -64,5 +75,10 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, benchmark_encode_kmer, benchmark_process_protein_kmers);
+criterion_group!(
+    benches,
+    benchmark_proteome_index_encode_kmer,
+    benchmark_encodings_encode_kmer,
+    benchmark_process_protein_kmers
+);
 criterion_main!(benches);

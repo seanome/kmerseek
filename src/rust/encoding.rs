@@ -51,6 +51,32 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
     }
 }
 
+/// Process a k-mer to get its encoded version based on the specified moltype.
+///
+/// # Arguments
+/// * `kmer` - A string slice containing the k-mer to encode
+/// * `moltype` - A string slice that specifies the molecule type. Supported values:
+///   - `"protein"` or `"raw"` for standard protein encoding
+///   - `"hp"` for hydrophobic/polar encoding
+///   - `"dayhoff"` for Dayhoff encoding
+///
+/// # Returns
+/// * `Ok((String, String))` - A tuple containing (encoded_kmer, original_kmer)
+/// * `Err(...)` - An error if the `moltype` is unrecognized
+pub fn encode_kmer(kmer: &str, moltype: &str) -> Result<(String, String)> {
+    let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
+
+    let mut encoded = String::with_capacity(kmer.len());
+    let mut original = String::with_capacity(kmer.len());
+
+    for &b in kmer.as_bytes() {
+        encoded.push(encoding_fn(b) as char);
+    }
+    original.push_str(kmer);
+
+    Ok((encoded, original))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
