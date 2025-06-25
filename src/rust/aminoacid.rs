@@ -24,6 +24,10 @@ impl AminoAcidAmbiguity {
             replacements.insert(*aa, vec![*aa]);
         }
 
+        // Keep "X" as unknown because the randomness is too much
+        // The other amino acids are within the same biochemical category, and can be replaced
+        replacements.insert('X', vec!['X']); // Unknown - any amino acid
+
         // Add ambiguous amino acid codes
         replacements.insert('B', vec!['D', 'N']); // Aspartic acid or Asparagine
         replacements.insert('Z', vec!['E', 'Q']); // Glutamic acid or Glutamine
