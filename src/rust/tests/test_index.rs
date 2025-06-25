@@ -392,7 +392,7 @@ fn test_process_protein_kmers_hp() -> Result<()> {
 }
 
 #[test]
-fn test_add_protein_sequence() -> Result<()> {
+fn test_create_protein_signature_moltype_protein() -> Result<()> {
     let dir = tempdir()?;
 
     let protein_ksize = 5;
@@ -400,7 +400,7 @@ fn test_add_protein_sequence() -> Result<()> {
 
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
-        dir.path().join("add_protein_test.db"),
+        dir.path().join("protein_test.db"),
         protein_ksize,
         1, // scaled=1 to capture all kmers for testing
         moltype,
@@ -410,31 +410,176 @@ fn test_add_protein_sequence() -> Result<()> {
     let sequence = TEST_PROTEIN;
     let name = "test_protein";
 
-    // Add the protein sequence to the index
-    index.add_protein_sequence(sequence, name)?;
+    // Add the protein sequence to the index and get the signature
+    let signature = index.create_protein_signature(sequence, name)?;
+
+    // Verify the signature has the expected number of k-mers
+    assert_eq!(signature.kmer_infos.len(), 17, "Expected 17 k-mers for the test protein");
+
+    // Verify some specific k-mers are present
+    let expected_hash = 5893010049374798421; // Hash for "PLANT"
+    assert!(
+        signature.kmer_infos.contains_key(&expected_hash),
+        "Expected k-mer hash {} to be present",
+        expected_hash
+    );
+
+    // Store the signature in the index
+    index.store_signatures(vec![signature])?;
 
     // Verify the signature was added to the signatures map
     {
         let signatures = index.get_signatures().lock().unwrap();
         assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
+    }
 
-        // Get the first (and only) signature
-        let (_md5sum, stored_signature) = signatures.iter().next().unwrap();
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        assert!(combined_minhash.size() == 17, "Combined minhash should contain 17 hashes");
+    }
 
-        // Verify the signature has the expected number of k-mers
-        assert_eq!(
-            stored_signature.kmer_infos.len(),
-            17,
-            "Expected 17 k-mers for the test protein"
-        );
+    Ok(())
+}
 
-        // Verify some specific k-mers are present
-        let expected_hash = 5893010049374798421; // Hash for "PLANT"
-        assert!(
-            stored_signature.kmer_infos.contains_key(&expected_hash),
-            "Expected k-mer hash {} to be present",
-            expected_hash
-        );
+#[test]
+fn test_create_protein_signature_moltype_dayhoff() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "dayhoff";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("dayhoff_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    let sequence = TEST_PROTEIN;
+    let name = "test_protein";
+
+    // Add the protein sequence to the index and get the signature
+    let signature = index.create_protein_signature(sequence, name)?;
+
+    // Verify the signature has the expected number of k-mers
+    assert_eq!(signature.kmer_infos.len(), 17, "Expected 17 k-mers for the test protein");
+
+    // Verify some specific k-mers are present
+    let expected_hash = 5045972850709227854; // Hash for "PLANT" in Dayhoff encoding ("bebcb")
+    assert!(
+        signature.kmer_infos.contains_key(&expected_hash),
+        "Expected k-mer hash {} to be present",
+        expected_hash
+    );
+
+    // Store the signature in the index
+    index.store_signatures(vec![signature])?;
+
+    // Verify the signature was added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        assert!(combined_minhash.size() == 17, "Combined minhash should contain hashes");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_create_protein_signature_moltype_hp() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "hp";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("hp_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    let sequence = TEST_PROTEIN;
+    let name = "test_protein";
+
+    // Add the protein sequence to the index and get the signature
+    let signature = index.create_protein_signature(sequence, name)?;
+
+    // Verify the signature has the expected number of k-mers
+    assert_eq!(signature.kmer_infos.len(), 14, "Expected 14 k-mers for the test protein");
+
+    // Verify some specific k-mers are present
+    let expected_hash = 4230974618842309829; // Hash for "PLANT" in HP encoding ("hhhpp")
+    assert!(
+        signature.kmer_infos.contains_key(&expected_hash),
+        "Expected k-mer hash {} to be present",
+        expected_hash
+    );
+
+    // Store the signature in the index
+    index.store_signatures(vec![signature])?;
+
+    // Verify the signature was added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        assert!(combined_minhash.size() == 14, "Combined minhash should contain 14 hashes");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_protein_fasta_parallel() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "protein";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_parallel_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Create a temporary FASTA file for testing
+    let fasta_content = ">test_protein1\nPLANTANDANIMALGENQMES\n>test_protein2\nLIVINGALIVE";
+    let fasta_path = dir.path().join("test.fasta");
+    std::fs::write(&fasta_path, fasta_content)?;
+
+    // Process the FASTA file
+    index.process_protein_fasta_parallel(&fasta_path)?;
+
+    // Verify the signatures were added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
+
+        // Verify each signature has the expected number of k-mers
+        for (_md5sum, stored_signature) in signatures.iter() {
+            assert!(
+                stored_signature.kmer_infos.len() > 0,
+                "Each signature should have at least one k-mer"
+            );
+        }
     }
 
     // Verify the combined minhash was updated

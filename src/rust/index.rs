@@ -138,8 +138,7 @@ impl ProteomeIndex {
     /// Add a single protein sequence as a signature and process its k-mers
     ///
     /// This method creates a protein signature from the given sequence, processes its k-mers
-    /// to extract detailed position information, and stores it in the index. The signature
-    /// is also merged into the combined minhash for statistical analysis.
+    /// to extract detailed position information, and returns the signature for later storage.
     ///
     /// # Arguments
     ///
@@ -148,7 +147,7 @@ impl ProteomeIndex {
     ///
     /// # Returns
     ///
-    /// Returns `Ok(())` on success, or an error if the operation fails.
+    /// Returns the processed `ProteinSignature` on success, or an error if the operation fails.
     ///
     /// # Example
     ///
@@ -170,13 +169,17 @@ impl ProteomeIndex {
     ///     
     ///     // Add a protein sequence
     ///     let sequence = "PLANTANDANIMALGENQMES";
-    ///     index.add_protein_sequence(sequence, "test_protein")?;
+    ///     let signature = index.add_protein_sequence(sequence, "test_protein")?;
     ///     
-    ///     // The protein is now indexed and its k-mers are processed
+    ///     // The protein signature is now ready for storage
     ///     Ok(())
     /// }
     /// ```
-    pub fn add_protein_sequence(&self, sequence: &str, _name: &str) -> Result<()> {
+    pub fn create_protein_signature(
+        &self,
+        sequence: &str,
+        _name: &str,
+    ) -> Result<ProteinSignature> {
         // Create a new protein signature
         let mut protein_sig =
             ProteinSignature::new(self.ksize, self.scaled, &self.moltype, self.seed)?;
@@ -187,16 +190,8 @@ impl ProteomeIndex {
         // Process the k-mers to get detailed k-mer information
         let processed_signature = self.process_protein_kmers(sequence, &protein_sig.signature())?;
 
-        // Get the MD5 hash of the signature for storage
-        let md5sum = protein_sig.signature().get_md5sum();
-
-        // Store the processed signature in the signatures map
-        {
-            let mut signatures = self.signatures.lock().unwrap();
-            signatures.insert(md5sum.to_string(), processed_signature);
-        }
-
-        Ok(())
+        // Return the processed signature (don't store it yet)
+        Ok(processed_signature)
     }
 
     pub fn process_protein_kmers<S: SignatureAccess>(
@@ -208,8 +203,12 @@ impl ProteomeIndex {
         let seed = self.seed as u64;
         let hashvals = &signature.get_minhash().to_vec();
 
+        // Create a new protein signature with the same minhash data as the original
         let mut protein_signature =
             ProteinSignature::new(self.ksize, self.scaled, &self.moltype, self.seed)?;
+
+        // Add the protein sequence to populate the minhash
+        protein_signature.add_protein(sequence.as_bytes())?;
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = &sequence[i..i + ksize];
@@ -240,5 +239,83 @@ impl ProteomeIndex {
         }
 
         Ok(protein_signature)
+    }
+
+    /// Store a collection of protein signatures in the index
+    ///
+    /// This method stores multiple signatures at once and updates the combined minhash.
+    /// It's designed to be called after processing multiple sequences in parallel.
+    ///
+    /// # Arguments
+    ///
+    /// * `signatures` - A vector of `ProteinSignature` objects to store
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the operation fails.
+    pub fn store_signatures(&self, signatures: Vec<ProteinSignature>) -> Result<()> {
+        // Collect the minhash data from new signatures before storing them
+        let new_hashes_and_abunds: Vec<(u64, u64)> = signatures
+            .iter()
+            .flat_map(|sig| {
+                let minhash = sig.signature().get_minhash();
+                // If abundance is tracked, use to_vec_abunds, else use mins with abundance 1
+                if let Some(abunds) = minhash.abunds() {
+                    minhash.mins().into_iter().zip(abunds.into_iter()).collect::<Vec<_>>()
+                } else {
+                    minhash.mins().into_iter().map(|h| (h, 1)).collect::<Vec<_>>()
+                }
+            })
+            .collect();
+
+        // Store all signatures in the signatures map
+        {
+            let mut signatures_map = self.signatures.lock().unwrap();
+            for signature in signatures {
+                let md5sum = signature.signature().get_md5sum();
+                signatures_map.insert(md5sum.to_string(), signature);
+            }
+        }
+
+        // Update the combined minhash with only the new signatures
+        let mut combined_minhash = self.combined_minhash.lock().unwrap();
+        combined_minhash.add_many_with_abund(&new_hashes_and_abunds)?;
+
+        Ok(())
+    }
+
+    /// Process a protein FASTA file in parallel, adding all sequences to the index
+    pub fn process_protein_fasta_parallel<P: AsRef<Path>>(&self, fasta_path: P) -> Result<()> {
+        use needletail::parse_fastx_file;
+        use rayon::prelude::*;
+
+        // Open and parse the FASTA file using needletail
+        let mut reader = parse_fastx_file(&fasta_path)?;
+
+        // Convert records into a vector for parallel processing
+        let mut records = Vec::new();
+        while let Some(record) = reader.next() {
+            let record = record?;
+            // Clone the record data to avoid borrowing issues
+            let sequence = record.seq().to_vec();
+            let id = record.id().to_vec();
+            records.push((sequence, id));
+        }
+
+        // Process records in parallel and collect signatures
+        let signatures: Result<Vec<ProteinSignature>> = records
+            .par_iter()
+            .map(|(seq_bytes, id_bytes)| {
+                let sequence = std::str::from_utf8(seq_bytes)?;
+                let name = std::str::from_utf8(id_bytes)?;
+                // Create protein signature for each sequence
+                self.create_protein_signature(sequence, name)
+            })
+            .collect();
+
+        // Store all signatures at once
+        self.store_signatures(signatures?)?;
+
+        Ok(())
     }
 }
