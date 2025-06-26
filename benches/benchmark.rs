@@ -2,7 +2,6 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use kmerseek::encoding::{encode_kmer, encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
 use kmerseek::signature::SEED;
-use sourmash::signature::SigsTrait;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
@@ -95,11 +94,49 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
     }
 }
 
+fn benchmark_process_fasta(c: &mut Criterion) {
+    let temp_dir = tempdir().unwrap();
+    // Create a temporary FASTA file for testing with distinct sequences
+    let fasta_content = ">sp|O43236|SEPT4_HUMAN Septin-4 OS=Homo sapiens OX=9606 GN=SEPTIN4 PE=1 SV=1
+MDRSLGWQGNSVPEDRTEAGIKRFLEDTTDDGELSKFVKDFSGNASCHPPEAKTWASRPQ
+VPEPRPQAPDLYDDDLEFRPPSRPQSSDNQQYFCAPAPLSPSARPRSPWGKLDPYDSSED
+DKEYVGFATLPNQVHRKSVKKGFDFTLMVAGESGLGKSTLVNSLFLTDLYRDRKLLGAEE
+RIMQTVEITKHAVDIEEKGVRLRLTIVDTPGFGDAVNNTECWKPVAEYIDQQFEQYFRDE
+SGLNRKNIQDNRVHCCLYFISPFGHGLRPLDVEFMKALHQRVNIVPILAKADTLTPPEVD
+HKKRKIREEIEHFGIKIYQFPDCDSDEDEDFKLQDQALKESIPFAVIGSNTVVEARGRRV
+RGRLYPWGIVEVENPGHCDFVKLRTMLVRTHMQDLKDVTRETHYENYRAQCIQSMTRLVV
+KERNRNKLTRESGTDFPIPAVPPGTDPETEKLIREKDEELRRMQEMLHKIQKQMKENY
+>sp|O43521|B2L11_HUMAN Bcl-2-like protein 11 OS=Homo sapiens OX=9606 GN=BCL2L11 PE=1 SV=1
+MAKQPSDVSSECDREGRQLQPAERPPQLRPGAPTSLQTEPQGNPEGNHGGEGDSCPHGSP
+QGPLAPPASPGPFATRSPLFIFMRRSSLLSRSSSGYFSFDTDRSPAPMSCDKSTQTPSPP
+CQAFNHYLSAMASMRQAEPADMRPEIWIAQELRRIGDEFNAYYARRVFLNNYQAAEDHPR
+MVILRLLRYIVRLVWRMH
+>sp|O60238|BNI3L_HUMAN BCL2/adenovirus E1B 19 kDa protein-interacting protein 3-like OS=Homo sapiens OX=9606 GN=BNIP3L PE=1 SV=1
+MSSHLVEPPPPLHNNNNNCEENEQSLPPPAGLNSSWVELPMNSSNGNDNGNGKNGGLEHV
+PSSSSIHNGDMEKILLDAQHESGQSSSRGSSHCDSPSPQEDGQIMFDVEMHTSRDHSSQS
+EEEVVEGEKEVEALKKSADWVSDWSSRPENIPPKEFHFRHPKRSVSLSMRKSGAMKKGGI
+FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
+    let fasta_path = temp_dir.path().join("test.fasta");
+    std::fs::write(&fasta_path, fasta_content).unwrap();
+    for moltype in ["protein", "hp", "dayhoff"] {
+        for ksize in [5, 10, 15, 20] {
+            let (index, _) = setup_test_index(ksize, moltype);
+
+            c.bench_function(&format!("process_fasta_{}_{}", moltype, ksize), |b| {
+                b.iter(|| {
+                    index.process_fasta(&fasta_path).unwrap();
+                })
+            });
+        }
+    }
+}
+
 criterion_group!(
     benches,
     benchmark_proteome_index_encode_kmer,
     benchmark_encodings_encode_kmer,
     benchmark_encodings_encode_kmer_with_encoding_fn,
     benchmark_process_protein_kmers,
+    benchmark_process_fasta,
 );
 criterion_main!(benches);
