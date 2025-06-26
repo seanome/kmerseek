@@ -2,6 +2,8 @@ use anyhow::{bail, Result};
 use rand::prelude::*;
 use std::collections::HashMap;
 
+use crate::tests::test_fixtures::{TEST_PROTEIN, TEST_PROTEIN_INVALID};
+
 /// Standard amino acids and their properties
 pub const STANDARD_AA: [char; 20] = [
     'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W',
@@ -115,12 +117,14 @@ mod tests {
         let aa = AminoAcidAmbiguity::new();
 
         // Test valid sequence
+        assert!(aa.validate_sequence(TEST_PROTEIN).is_ok());
         assert!(aa.validate_sequence("ACDEFGHIKLMNPQRSTVWY").is_ok());
         assert!(aa.validate_sequence("ACDEFXBZJ").is_ok());
 
         // Test invalid sequence
-        let result = aa.validate_sequence("ACDEF1GHIKL");
+        let result = aa.validate_sequence(TEST_PROTEIN_INVALID);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Invalid amino acid '1'"));
+        // "O" (pyrrolysine) is not a valid amino acid for our purposes
+        assert!(result.unwrap_err().to_string().contains("Invalid amino acid 'O'"));
     }
 }
