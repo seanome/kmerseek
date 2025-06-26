@@ -175,40 +175,29 @@ impl ProteomeIndex {
     ///     Ok(())
     /// }
     /// ```
-    pub fn create_protein_signature(
-        &self,
-        sequence: &str,
-        _name: &str,
-    ) -> Result<ProteinSignature> {
+    pub fn create_protein_signature(&self, sequence: &str, name: &str) -> Result<ProteinSignature> {
         // Create a new protein signature
         let mut protein_sig =
-            ProteinSignature::new(self.ksize, self.scaled, &self.moltype, self.seed)?;
+            ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype, self.seed)?;
 
         // Add the protein sequence to the signature
         protein_sig.add_protein(sequence.as_bytes())?;
 
         // Process the k-mers to get detailed k-mer information
-        let processed_signature = self.process_kmers(sequence, &protein_sig.signature())?;
+        self.process_kmers(sequence, &mut protein_sig)?;
 
         // Return the processed signature (don't store it yet)
-        Ok(processed_signature)
+        Ok(protein_sig)
     }
 
-    pub fn process_kmers<S: SignatureAccess>(
+    pub fn process_kmers(
         &self,
         sequence: &str,
-        signature: &S,
-    ) -> Result<ProteinSignature> {
+        protein_signature: &mut ProteinSignature,
+    ) -> Result<()> {
         let ksize = self.ksize as usize;
         let seed = self.seed as u64;
-        let hashvals = &signature.get_minhash().to_vec();
-
-        // Create a new protein signature with the same minhash data as the original
-        let mut protein_signature =
-            ProteinSignature::new(self.ksize, self.scaled, &self.moltype, self.seed)?;
-
-        // Add the protein sequence to populate the minhash
-        protein_signature.add_protein(sequence.as_bytes())?;
+        let hashvals = &protein_signature.signature().get_minhash().to_vec();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = &sequence[i..i + ksize];
@@ -238,7 +227,7 @@ impl ProteomeIndex {
             }
         }
 
-        Ok(protein_signature)
+        Ok(())
     }
 
     /// Store a collection of protein signatures in the index

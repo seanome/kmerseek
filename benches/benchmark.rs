@@ -28,8 +28,14 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
         for ksize in [5, 10, 15, 20] {
             let (index, _) = setup_test_index(ksize, moltype);
+            let encoding_fn = kmerseek::encoding::get_encoding_fn_from_moltype(moltype).unwrap();
             c.bench_function(&format!("proteome_index_encode_kmer_{}_{}", moltype, ksize), |b| {
-                b.iter(|| index.encode_kmer(&TEST_PROTEIN[..ksize as usize]))
+                b.iter(|| {
+                    kmerseek::encoding::encode_kmer_with_encoding_fn(
+                        &TEST_PROTEIN[..ksize as usize],
+                        encoding_fn,
+                    )
+                })
             });
         }
     }
@@ -66,26 +72,24 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
         for ksize in [5, 10, 15, 20] {
             let (index, _) = setup_test_index(ksize, moltype);
 
-            // Create a test signature
-            let mut minhash = sourmash::sketch::minhash::KmerMinHash::new(
-                1, // scaled
+            // Create a test protein signature
+            let mut protein_sig = kmerseek::signature::ProteinSignature::new(
+                "test_protein",
                 ksize,
-                kmerseek::encoding::get_hash_function_from_moltype(moltype).unwrap(),
-                SEED,
-                true, // track_abundance
-                0,    // num (use scaled instead)
-            );
-            minhash.add_sequence(TEST_PROTEIN.as_bytes(), true).unwrap();
+                1, // scaled
+                moltype,
+                kmerseek::signature::SEED,
+            )
+            .unwrap();
 
-            let small_sig = sourmash_plugin_branchwater::utils::multicollection::SmallSignature {
-                location: "test".to_string(),
-                name: "test".to_string(),
-                md5sum: "test".to_string(),
-                minhash,
-            };
+            // Add the protein sequence
+            protein_sig.add_protein(TEST_PROTEIN.as_bytes()).unwrap();
 
             c.bench_function(&format!("process_protein_kmers_{}_{}", moltype, ksize), |b| {
-                b.iter(|| index.process_kmers(TEST_PROTEIN, &small_sig))
+                b.iter(|| {
+                    let mut sig = protein_sig.clone();
+                    index.process_kmers(TEST_PROTEIN, &mut sig).unwrap();
+                })
             });
         }
     }
