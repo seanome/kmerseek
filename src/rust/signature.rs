@@ -102,6 +102,7 @@ impl From<SigStore> for SerializableSignature {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProteinSignature {
     signature: SerializableSignature,
+    moltype: String,
     protein_ksize: u32,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
     kmer_infos: HashMap<u64, KmerInfo>,
@@ -136,7 +137,12 @@ impl ProteinSignature {
             minhash,
         };
 
-        Ok(Self { signature, protein_ksize, kmer_infos: HashMap::new() })
+        Ok(Self {
+            signature,
+            moltype: moltype.to_string(),
+            protein_ksize,
+            kmer_infos: HashMap::new(),
+        })
     }
 
     /// Add a protein sequence to the signature
@@ -157,6 +163,11 @@ impl ProteinSignature {
     /// Get the protein k-mer size
     pub fn protein_ksize(&self) -> u32 {
         self.protein_ksize
+    }
+
+    /// Get the moltype
+    pub fn moltype(&self) -> &str {
+        &self.moltype
     }
 
     /// Get the minhash k-mer size
