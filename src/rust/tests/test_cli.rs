@@ -3,13 +3,15 @@ use predicates::prelude::*;
 use std::process::Command;
 use tempfile::tempdir;
 
+use crate::tests::test_fixtures::{TEST_FASTA, TEST_FASTA_GZ};
+
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::cargo_bin("kmerseek-rust")?;
     cmd.arg("--help");
-    cmd.assert()
-        .success()
-        .stdout(predicate::str::contains("A tool for indexing protein sequences from FASTA files"));
+    cmd.assert().success().stdout(predicate::str::contains(
+        "Efficient protein domain annotation search with reduced amino acid k-mers",
+    ));
 
     Ok(())
 }
@@ -58,7 +60,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
     cmd.args([
         "index",
         "--input",
-        "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz",
+        TEST_FASTA_GZ,
         "--output",
         output_path.to_str().unwrap(),
         "--ksize",
@@ -86,7 +88,7 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
         cmd.args([
             "index",
             "--input",
-            "tests/testdata/fasta/ced9.fasta",
+            TEST_FASTA,
             "--output",
             output_path.to_str().unwrap(),
             "--ksize",

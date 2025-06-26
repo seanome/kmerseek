@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "kmerseek")]
-#[command(about = "A tool for indexing protein sequences from FASTA files")]
+#[command(about = "Efficient protein domain annotation search with reduced amino acid k-mers")]
 #[command(version)]
 struct Cli {
     #[command(subcommand)]
