@@ -31,7 +31,7 @@ RUST_SIZE=$(du -h "$TEMP_DIR/rust_output.db" | cut -f1)
 # Python version
 echo "Python CLI:"
 PYTHON_START=$(date +%s.%N)
-kmerseek index "$TEST_FILE" --moltype protein --ksize 10 --scaled 1 --force
+kmerseek index "$TEST_FILE" --extract-kmers --moltype protein --ksize 10 --scaled 1 --force
 PYTHON_END=$(date +%s.%N)
 PYTHON_TIME=$(echo "$PYTHON_END - $PYTHON_START" | bc)
 PYTHON_SIZE=$(du -h "$TEST_FILE.protein.k10.scaled1.sig.zip" | cut -f1)
@@ -61,7 +61,7 @@ RUST_SIZE=$(du -h "$TEMP_DIR/rust_output2.db" | cut -f1)
 # Python version
 echo "Python CLI:"
 PYTHON_START=$(date +%s.%N)
-kmerseek index "$TEST_FILE_GZ" --moltype protein --ksize 10 --scaled 1 --force
+kmerseek index "$TEST_FILE_GZ" --extract-kmers --moltype protein --ksize 10 --scaled 1 --force
 PYTHON_END=$(date +%s.%N)
 PYTHON_TIME=$(echo "$PYTHON_END - $PYTHON_START" | bc)
 PYTHON_SIZE=$(du -h "$TEST_FILE_GZ.protein.k10.scaled1.sig.zip" | cut -f1)
@@ -81,7 +81,7 @@ echo "Rust memory usage:"
 RUST_MEMORY=$(/usr/bin/time -l kmerseek-rust index --input "$TEST_FILE_GZ" --output "$TEMP_DIR/rust_memory.db" --ksize 10 --encoding protein 2>&1 | grep "maximum resident set size" | awk '{print $1}')
 
 echo "Python memory usage:"
-PYTHON_MEMORY=$(/usr/bin/time -l kmerseek index "$TEST_FILE_GZ" --moltype protein --ksize 10 --scaled 1 --force 2>&1 | grep "maximum resident set size" | awk '{print $1}')
+PYTHON_MEMORY=$(/usr/bin/time -l kmerseek index "$TEST_FILE_GZ" --extract-kmers --moltype protein --ksize 10 --scaled 1 --force 2>&1 | grep "maximum resident set size" | awk '{print $1}')
 
 echo
 echo "Memory usage (KB):"
