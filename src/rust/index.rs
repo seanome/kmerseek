@@ -301,33 +301,56 @@ impl ProteomeIndex {
         use needletail::parse_fastx_file;
         use rayon::prelude::*;
 
+        println!("Reading FASTA file...");
+
         // Open and parse the FASTA file using needletail
         let mut reader = parse_fastx_file(&fasta_path)?;
 
         // Convert records into a vector for parallel processing
         let mut records = Vec::new();
+        let mut record_count = 0;
         while let Some(record) = reader.next() {
             let record = record?;
             // Clone the record data to avoid borrowing issues
             let sequence = record.seq().to_vec();
             let id = record.id().to_vec();
             records.push((sequence, id));
+            record_count += 1;
+
+            // Print progress every 10,000 records
+            if record_count % 10_000 == 0 {
+                println!("Read {} sequences...", record_count);
+            }
         }
+
+        let total_records = records.len();
+        println!("Finished reading {} sequences. Starting parallel processing...", total_records);
 
         // Process records in parallel and collect signatures
         let signatures: Result<Vec<ProteinSignature>> = records
             .par_iter()
-            .map(|(seq_bytes, id_bytes)| {
+            .enumerate()
+            .map(|(index, (seq_bytes, id_bytes))| {
                 let sequence = std::str::from_utf8(seq_bytes)?;
                 let name = std::str::from_utf8(id_bytes)?;
+
+                // Print progress every 10,000 records
+                if (index + 1) % 10_000 == 0 {
+                    let percentage = ((index + 1) as f64 / total_records as f64 * 100.0) as u32;
+                    println!("Processed {} sequences ({:.1}%)", index + 1, percentage);
+                }
+
                 // Create protein signature for each sequence
                 self.create_protein_signature(sequence, name)
             })
             .collect();
 
+        println!("Storing {} signatures...", total_records);
+
         // Store all signatures at once
         self.store_signatures(signatures?)?;
 
+        println!("Successfully processed and stored {} sequences.", total_records);
         Ok(())
     }
 }
