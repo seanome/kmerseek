@@ -2,8 +2,6 @@ use anyhow::{bail, Result};
 use rand::prelude::*;
 use std::collections::HashMap;
 
-use crate::tests::test_fixtures::{TEST_PROTEIN, TEST_PROTEIN_INVALID};
-
 /// Standard amino acids and their properties
 pub const STANDARD_AA: [char; 20] = [
     'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W',
@@ -72,6 +70,7 @@ impl AminoAcidAmbiguity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_fixtures::{TEST_PROTEIN, TEST_PROTEIN_INVALID};
 
     #[test]
     fn test_valid_amino_acids() {
