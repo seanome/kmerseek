@@ -292,16 +292,23 @@ impl ProteomeIndex {
     /// # Arguments
     ///
     /// * `fasta_path` - Path to the FASTA file to process
+    /// * `progress_interval` - Number of sequences between progress reports (0 to disable progress)
     ///
     /// # Returns
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
     /// The error will contain details about any invalid amino acids found in the sequences.
-    pub fn process_fasta<P: AsRef<Path>>(&self, fasta_path: P) -> Result<()> {
+    pub fn process_fasta<P: AsRef<Path>>(
+        &self,
+        fasta_path: P,
+        progress_interval: u32,
+    ) -> Result<()> {
         use needletail::parse_fastx_file;
         use rayon::prelude::*;
 
-        println!("Reading FASTA file...");
+        if progress_interval > 0 {
+            println!("Reading FASTA file...");
+        }
 
         // Open and parse the FASTA file using needletail
         let mut reader = parse_fastx_file(&fasta_path)?;
@@ -317,14 +324,19 @@ impl ProteomeIndex {
             records.push((sequence, id));
             record_count += 1;
 
-            // Print progress every 10,000 records
-            if record_count % 10_000 == 0 {
+            // Print progress if interval is set and we've reached the interval
+            if progress_interval > 0 && record_count % progress_interval == 0 {
                 println!("Read {} sequences...", record_count);
             }
         }
 
         let total_records = records.len();
-        println!("Finished reading {} sequences. Starting parallel processing...", total_records);
+        if progress_interval > 0 {
+            println!(
+                "Finished reading {} sequences. Starting parallel processing...",
+                total_records
+            );
+        }
 
         // Process records in parallel and collect signatures
         let signatures: Result<Vec<ProteinSignature>> = records
@@ -334,8 +346,8 @@ impl ProteomeIndex {
                 let sequence = std::str::from_utf8(seq_bytes)?;
                 let name = std::str::from_utf8(id_bytes)?;
 
-                // Print progress every 10,000 records
-                if (index + 1) % 10_000 == 0 {
+                // Print progress if interval is set and we've reached the interval
+                if progress_interval > 0 && (index + 1) % progress_interval as usize == 0 {
                     let percentage = ((index + 1) as f64 / total_records as f64 * 100.0) as u32;
                     println!("Processed {} sequences ({:.1}%)", index + 1, percentage);
                 }
@@ -345,12 +357,16 @@ impl ProteomeIndex {
             })
             .collect();
 
-        println!("Storing {} signatures...", total_records);
+        if progress_interval > 0 {
+            println!("Storing {} signatures...", total_records);
+        }
 
         // Store all signatures at once
         self.store_signatures(signatures?)?;
 
-        println!("Successfully processed and stored {} sequences.", total_records);
+        if progress_interval > 0 {
+            println!("Successfully processed and stored {} sequences.", total_records);
+        }
         Ok(())
     }
 }

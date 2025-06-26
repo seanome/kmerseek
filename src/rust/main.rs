@@ -34,6 +34,10 @@ enum Commands {
         /// Protein encoding method
         #[arg(short, long, default_value = "protein")]
         encoding: ProteinEncoding,
+
+        /// Progress notification interval (number of sequences between progress reports)
+        #[arg(short, long, default_value = "10000")]
+        progress_interval: u32,
     },
 }
 
@@ -61,19 +65,20 @@ fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index { input, output, ksize, scaled, encoding } => {
+        Commands::Index { input, output, ksize, scaled, encoding, progress_interval } => {
             println!("Indexing FASTA file: {}", input.display());
             println!("Output database: {}", output.display());
             println!("K-mer size: {}", ksize);
             println!("Scaled: {}", scaled);
             println!("Encoding: {:?}", encoding);
+            println!("Progress interval: {}", progress_interval);
 
             // Create the index
             let index = ProteomeIndex::new(&output, ksize, scaled, encoding.into(), SEED)?;
 
             // Process the FASTA file
             println!("Processing FASTA file...");
-            index.process_fasta(&input)?;
+            index.process_fasta(&input, progress_interval)?;
 
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output.display());

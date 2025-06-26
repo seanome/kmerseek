@@ -124,7 +124,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 
             c.bench_function(&format!("process_fasta_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
-                    index.process_fasta(&fasta_path).unwrap();
+                    index.process_fasta(&fasta_path, 0).unwrap();
                 })
             });
         }

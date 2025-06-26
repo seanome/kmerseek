@@ -545,7 +545,7 @@ fn test_process_fasta_moltype_protein() -> Result<()> {
     std::fs::write(&fasta_path, fasta_content)?;
 
     // Process the FASTA file
-    index.process_fasta(&fasta_path)?;
+    index.process_fasta(&fasta_path, 0)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -605,7 +605,7 @@ fn test_process_fasta_moltype_dayhoff() -> Result<()> {
     std::fs::write(&fasta_path, fasta_content)?;
 
     // Process the FASTA file
-    index.process_fasta(&fasta_path)?;
+    index.process_fasta(&fasta_path, 0)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -665,7 +665,7 @@ fn test_process_fasta_moltype_hp() -> Result<()> {
     std::fs::write(&fasta_path, fasta_content)?;
 
     // Process the FASTA file
-    index.process_fasta(&fasta_path)?;
+    index.process_fasta(&fasta_path, 0)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -720,7 +720,7 @@ fn test_process_fasta_gz_moltype_protein() -> Result<()> {
     )?;
 
     // Process the FASTA file
-    index.process_fasta(TEST_FASTA_GZ)?;
+    index.process_fasta(TEST_FASTA_GZ, 0)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -777,7 +777,7 @@ fn test_process_fasta_gz_moltype_dayhoff() -> Result<()> {
     )?;
 
     // Process the FASTA file
-    index.process_fasta(TEST_FASTA_GZ)?;
+    index.process_fasta(TEST_FASTA_GZ, 0)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -841,7 +841,7 @@ fn test_process_fasta_gz_moltype_hp() -> Result<()> {
     )?;
 
     // Process the FASTA file
-    index.process_fasta(TEST_FASTA_GZ)?;
+    index.process_fasta(TEST_FASTA_GZ, 0)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -1170,7 +1170,7 @@ fn test_process_fasta_amino_acid_validation() -> Result<()> {
     std::fs::write(&fasta_path, fasta_content)?;
 
     // Process the FASTA file - this should fail due to truly invalid sequences (like '1')
-    let result = index.process_fasta(&fasta_path);
+    let result = index.process_fasta(&fasta_path, 0);
     assert!(result.is_err(), "Processing FASTA with invalid sequences should fail");
 
     // Check that the error message contains information about the invalid amino acids
@@ -1187,7 +1187,7 @@ fn test_process_fasta_amino_acid_validation() -> Result<()> {
     std::fs::write(&valid_fasta_path, valid_fasta_content)?;
 
     // Process the valid FASTA file - this should succeed
-    let result = index.process_fasta(&valid_fasta_path);
+    let result = index.process_fasta(&valid_fasta_path, 0);
     assert!(result.is_ok(), "Processing FASTA with valid sequences should succeed");
 
     // Verify that the signatures were added
