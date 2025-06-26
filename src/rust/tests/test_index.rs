@@ -5,9 +5,12 @@ use tempfile::tempdir;
 
 use crate::index::ProteomeIndex;
 use crate::signature::ProteinSignature;
-use crate::tests::test_fixtures::{TEST_FASTA, TEST_PROTEIN};
+use crate::tests::test_fixtures::{TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_PROTEIN};
 use crate::SEED;
 use std::collections::HashMap;
+
+/// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
+/// than unit tests with all the moltype testing. Also, it's a lot of tests!
 
 #[test]
 fn test_process_kmers_moltype_protein() -> Result<()> {
@@ -544,7 +547,7 @@ fn test_create_protein_signature_moltype_hp() -> Result<()> {
 }
 
 #[test]
-fn test_process_fasta() -> Result<()> {
+fn test_process_fasta_moltype_protein() -> Result<()> {
     let dir = tempdir()?;
 
     let protein_ksize = 5;
@@ -552,7 +555,7 @@ fn test_process_fasta() -> Result<()> {
 
     // Create index with minimal parameters
     let index = ProteomeIndex::new(
-        dir.path().join("fasta_parallel_test.db"),
+        dir.path().join("fasta_protein_test.db"),
         protein_ksize,
         1, // scaled=1 to capture all kmers for testing
         moltype,
@@ -560,7 +563,7 @@ fn test_process_fasta() -> Result<()> {
     )?;
 
     // Create a temporary FASTA file for testing with distinct sequences
-    let fasta_content = ">test_protein1\nPLANTANDANIMALGENQMES\n>test_protein2\nLIVINGALIVE";
+    let fasta_content = TEST_FASTA_CONTENT;
     let fasta_path = dir.path().join("test.fasta");
     std::fs::write(&fasta_path, fasta_content)?;
 
@@ -574,18 +577,194 @@ fn test_process_fasta() -> Result<()> {
 
         // Verify each signature has the expected number of k-mers
         for (md5sum, stored_signature) in signatures.iter() {
-            println!("md5sum: {}", md5sum);
-            println!("Name: {}", stored_signature.signature().name);
             if md5sum == "f7661cd829e75c0d" {
                 assert!(
                     stored_signature.kmer_infos().len() == 7,
-                    "LIVINGALIVE should have 7 5-mers"
+                    "LIVINGALIVE should have 7 protein 5-mers"
+                );
+            } else if md5sum == "7641839ad508ab8" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 17,
+                    "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
+                );
+            } else {
+                println!("md5sum: {}", md5sum);
+                println!("Name: {}", stored_signature.signature().name);
+                println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                assert!(false, "Unknown md5sum: {}", md5sum);
+            }
+        }
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        println!("combined_minhash.size(): {}", combined_minhash.size());
+        assert!(combined_minhash.size() == 24, "Combined minhash should contain 24 hashes");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_fasta_moltype_dayhoff() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "dayhoff";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_dayhoff_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Create a temporary FASTA file for testing with distinct sequences
+    let fasta_content = TEST_FASTA_CONTENT;
+    let fasta_path = dir.path().join("test.fasta");
+    std::fs::write(&fasta_path, fasta_content)?;
+
+    // Process the FASTA file
+    index.process_fasta(&fasta_path)?;
+
+    // Verify the signatures were added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
+
+        // Verify each signature has the expected number of k-mers
+        for (md5sum, stored_signature) in signatures.iter() {
+            if md5sum == "a963d06839b6d6a9" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 7,
+                    "LIVINGALIVE should have 7 dayhoff 5-mers"
+                );
+            } else if md5sum == "84d7545d531dcf51" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 17,
+                    "PLANTANDANIMALGENQMES should have 17 dayhoff 5-mers"
+                );
+            } else {
+                println!("md5sum: {}", md5sum);
+                println!("Name: {}", stored_signature.signature().name);
+                println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                assert!(false, "Unknown md5sum: {}", md5sum);
+            }
+        }
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        println!("combined_minhash.size(): {}", combined_minhash.size());
+        assert!(combined_minhash.size() == 24, "Combined minhash should contain 24 hashes");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_fasta_moltype_hp() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "hp";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_hp_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Create a temporary FASTA file for testing with distinct sequences
+    let fasta_content = TEST_FASTA_CONTENT;
+    let fasta_path = dir.path().join("test.fasta");
+    std::fs::write(&fasta_path, fasta_content)?;
+
+    // Process the FASTA file
+    index.process_fasta(&fasta_path)?;
+
+    // Verify the signatures were added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
+
+        // Verify each signature has the expected number of k-mers
+        for (md5sum, stored_signature) in signatures.iter() {
+            if md5sum == "24ca8d939672666b" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 6,
+                    "LIVINGALIVE should have 6 hp 5-mers"
+                );
+            } else if md5sum == "668d7173d661287b" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 14,
+                    "PLANTANDANIMALGENQMES should have 14 hp 5-mers"
+                );
+            } else {
+                println!("md5sum: {}", md5sum);
+                println!("Name: {}", stored_signature.signature().name);
+                println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                assert!(false, "Unknown md5sum: {}", md5sum);
+            }
+        }
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        println!("combined_minhash.size(): {}", combined_minhash.size());
+        assert!(combined_minhash.size() == 16, "Combined minhash should contain 16 hashes");
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_fasta_gz_moltype_protein() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "protein";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_gz_protein_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Process the FASTA file
+    index.process_fasta(TEST_FASTA_GZ)?;
+
+    // Verify the signatures were added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 25, "Expected 25 signatures to be stored");
+
+        // Check a few signatures
+        for (md5sum, stored_signature) in signatures.iter() {
+            println!("\n---\nmd5sum: {}", md5sum);
+            println!("Name: {}", stored_signature.signature().name);
+            println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+            if md5sum == "4d565dee9c8de9db" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 474,
+                    "sp|O43236|SEPT4_HUMAN should have 474 protein 5-mers"
                 );
             }
-            if md5sum == "f7661cd829e75c0d" {
+            if md5sum == "4da1f84ad8be618e" {
                 assert!(
-                    stored_signature.kmer_infos().len() == 7,
-                    "PLANTANDANIMALGENQMES should have 17 5-mers"
+                    stored_signature.kmer_infos().len() == 235,
+                    "sp|P10415|BCL2_HUMAN should have 235 protein 5-mers"
                 );
             }
         }
@@ -594,7 +773,132 @@ fn test_process_fasta() -> Result<()> {
     // Verify the combined minhash was updated
     {
         let combined_minhash = index.get_combined_minhash().lock().unwrap();
-        assert!(combined_minhash.size() > 0, "Combined minhash should contain hashes");
+        println!("combined_minhash.size(): {}", combined_minhash.size());
+        assert!(
+            combined_minhash.size() == 9049,
+            "Combined minhash should contain 9049 protein 5-mer hashes"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_fasta_gz_moltype_dayhoff() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "dayhoff";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_gz_dayhoff_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Process the FASTA file
+    index.process_fasta(TEST_FASTA_GZ)?;
+
+    // Verify the signatures were added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 25, "Expected 25 signatures to be stored");
+
+        // Check a few signatures
+        for (md5sum, stored_signature) in signatures.iter() {
+            println!("\n---\nmd5sum: {}", md5sum);
+            println!("Name: {}", stored_signature.signature().name);
+            println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+            if md5sum == "fc27dcd533217385" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 433,
+                    "sp|O43236|SEPT4_HUMAN should have 433 dayhoff 5-mers"
+                );
+            }
+            if md5sum == "3206706fa14185e7" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 204,
+                    "sp|P10415|BCL2_HUMAN should have 204 dayhoff 5-mers"
+                );
+            }
+        }
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        println!("combined_minhash.size(): {}", combined_minhash.size());
+        assert!(
+            combined_minhash.size() == 2730,
+            "Combined minhash should contain 2730 dayhoff 5-mer hashes"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_fasta_gz_moltype_hp() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Need a higher k-mer size because otherwise the binary space of 5-mers is saturated (other tests use 5-mers)
+    // If k=5, then all signatures have ~32 (=2^5) 5-mers:
+    // - Not unique -> each md5sum is identical -> "25 signatures" fails
+    // - "Combined minhash" only contains 32 hashes, which isn't an interesting test
+    // If k=12, then all signatures have ~4096 (=2^12) 12-mers:
+    // - Unique -> "25 signatures" passes
+    // - "Combined minhash" has an upper bound of 4096 hashes, which is a lot more interesting
+    let protein_ksize = 12;
+    let moltype = "hp";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_gz_hp_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Process the FASTA file
+    index.process_fasta(TEST_FASTA_GZ)?;
+
+    // Verify the signatures were added to the signatures map
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 25, "Expected 25 signatures to be stored");
+
+        // Check a few signatures
+        for (md5sum, stored_signature) in signatures.iter() {
+            println!("\n---\nmd5sum: {}", md5sum);
+            println!("Name: {}", stored_signature.signature().name);
+            println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+            if md5sum == "38ffedf9d3ec7cec" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 452,
+                    "sp|O43236|SEPT4_HUMAN should have 452 hp 12-mers"
+                );
+            }
+            if md5sum == "204716e4d80eb350" {
+                assert!(
+                    stored_signature.kmer_infos().len() == 220,
+                    "sp|P10415|BCL2_HUMAN should have 220 hp 12-mers"
+                );
+            }
+        }
+    }
+
+    // Verify the combined minhash was updated
+    {
+        let combined_minhash = index.get_combined_minhash().lock().unwrap();
+        println!("combined_minhash.size(): {}", combined_minhash.size());
+        assert!(
+            combined_minhash.size() == 3549,
+            "Combined minhash should contain 3549 hp 12-mer hashes"
+        );
     }
 
     Ok(())
