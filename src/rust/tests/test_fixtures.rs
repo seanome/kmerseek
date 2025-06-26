@@ -7,5 +7,5 @@ pub const TEST_FASTA_CONTENT: &str =
 pub const TEST_KMER: &str = "LIVINGALIVE";
 pub const TEST_PROTEIN: &str = "PLANTANDANIMALGENQMES";
 
-// "O" (pyrrolysine) is not a valid amino acid for our purposes
-pub const TEST_PROTEIN_INVALID: &str = "PLANTANDANIMALGENOMES";
+// Contains invalid character '1' which is not a valid amino acid
+pub const TEST_PROTEIN_INVALID: &str = "PLANTANDANIMALGEN1MES";
