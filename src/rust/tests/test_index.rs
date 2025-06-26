@@ -903,3 +903,111 @@ fn test_process_fasta_gz_moltype_hp() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_create_protein_signature_amino_acid_validation() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "protein";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("validation_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Test valid sequences
+    let valid_sequences = [
+        "PLANTANDANIMALGENQMES", // Standard amino acids
+        "ACDEFGHIKLMNPQRSTVWY",  // All standard amino acids
+        "ACDEFXBZJ",             // With ambiguous amino acids
+    ];
+
+    for sequence in valid_sequences.iter() {
+        let protein_signature = index.create_protein_signature(sequence, "test_protein")?;
+        println!("protein_signature.kmer_infos().len(): {}", protein_signature.kmer_infos().len());
+        assert!(
+            protein_signature.kmer_infos().len() == 17,
+            "Valid sequence '{}' should be accepted",
+            sequence
+        );
+    }
+
+    // Test invalid sequences
+    let invalid_sequences = [
+        ("PLANTANDANIMALGENOMES", "Invalid amino acid 'O'"), // Pyrrolysine
+        ("PLANTANDANIMALGEN1MES", "Invalid amino acid '1'"), // Number
+        ("PLANTANDANIMALGEN$MES", "Invalid amino acid '$'"), // Special character
+    ];
+
+    for (sequence, expected_error) in invalid_sequences.iter() {
+        let result = index.create_protein_signature(sequence, "test_protein");
+        assert!(result.is_err(), "Invalid sequence '{}' should be rejected", sequence);
+
+        let error_msg = result.unwrap_err().to_string();
+        assert!(
+            error_msg.contains(expected_error),
+            "Expected error message to contain '{}', but got '{}'",
+            expected_error,
+            error_msg
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_process_fasta_amino_acid_validation() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "protein";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("fasta_validation_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Create a temporary FASTA file with both valid and invalid sequences
+    let fasta_content = ">valid_protein1\nPLANTANDANIMALGENQMES\n>invalid_protein1\nPLANTANDANIMALGENOMES\n>valid_protein2\nACDEFGHIKLMNPQRSTVWY\n>invalid_protein2\nPLANTANDANIMALGEN1MES";
+    let fasta_path = dir.path().join("test_validation.fasta");
+    std::fs::write(&fasta_path, fasta_content)?;
+
+    // Process the FASTA file - this should fail due to invalid sequences
+    let result = index.process_fasta(&fasta_path);
+    assert!(result.is_err(), "Processing FASTA with invalid sequences should fail");
+
+    // Check that the error message contains information about the invalid amino acids
+    let error_msg = result.unwrap_err().to_string();
+    assert!(
+        error_msg.contains("Invalid amino acid 'O'")
+            || error_msg.contains("Invalid amino acid '1'"),
+        "Error message should mention invalid amino acids, but got: {}",
+        error_msg
+    );
+
+    // Create a FASTA file with only valid sequences
+    let valid_fasta_content = ">valid_protein1\nPLANTANDANIMALGENQMES\n>valid_protein2\nACDEFGHIKLMNPQRSTVWY\n>valid_protein3\nACDEFXBZJ";
+    let valid_fasta_path = dir.path().join("test_valid.fasta");
+    std::fs::write(&valid_fasta_path, valid_fasta_content)?;
+
+    // Process the valid FASTA file - this should succeed
+    let result = index.process_fasta(&valid_fasta_path);
+    assert!(result.is_ok(), "Processing FASTA with valid sequences should succeed");
+
+    // Verify that the signatures were added
+    {
+        let signatures = index.get_signatures().lock().unwrap();
+        assert_eq!(signatures.len(), 3, "Expected 3 signatures to be stored");
+    }
+
+    Ok(())
+}

@@ -140,14 +140,19 @@ impl ProteomeIndex {
     /// This method creates a protein signature from the given sequence, processes its k-mers
     /// to extract detailed position information, and returns the signature for later storage.
     ///
+    /// The method validates the protein sequence for amino acid ambiguity before processing.
+    /// Valid amino acids include the 20 standard amino acids (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y)
+    /// and the ambiguous codes (B for D/N, Z for E/Q, J for I/L, X for unknown).
+    ///
     /// # Arguments
     ///
     /// * `sequence` - The protein sequence as a string
-    /// * `_name` - The name/identifier for the protein (currently unused but reserved for future use)
+    /// * `name` - The name/identifier for the protein
     ///
     /// # Returns
     ///
     /// Returns the processed `ProteinSignature` on success, or an error if the operation fails.
+    /// The error will contain details about any invalid amino acids found in the sequence.
     ///
     /// # Example
     ///
@@ -169,13 +174,16 @@ impl ProteomeIndex {
     ///     
     ///     // Add a protein sequence
     ///     let sequence = "PLANTANDANIMALGENQMES";
-    ///     let signature = index.add_protein_sequence(sequence, "test_protein")?;
+    ///     let signature = index.create_protein_signature(sequence, "test_protein")?;
     ///     
     ///     // The protein signature is now ready for storage
     ///     Ok(())
     /// }
     /// ```
     pub fn create_protein_signature(&self, sequence: &str, name: &str) -> Result<ProteinSignature> {
+        // Validate the protein sequence for amino acid ambiguity
+        self.aa_ambiguity.validate_sequence(sequence)?;
+
         // Create a new protein signature
         let mut protein_sig =
             ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype, self.seed)?;
@@ -274,6 +282,22 @@ impl ProteomeIndex {
     }
 
     /// Process a protein FASTA file in parallel, adding all sequences to the index
+    ///
+    /// This method reads a FASTA file, validates each protein sequence for amino acid ambiguity,
+    /// creates protein signatures for each sequence, and stores them in the index.
+    ///
+    /// Each sequence is validated using the same amino acid validation as `create_protein_signature`.
+    /// If any sequence contains invalid amino acids, the entire operation will fail with an error
+    /// describing the first invalid amino acid encountered.
+    ///
+    /// # Arguments
+    ///
+    /// * `fasta_path` - Path to the FASTA file to process
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the operation fails.
+    /// The error will contain details about any invalid amino acids found in the sequences.
     pub fn process_fasta<P: AsRef<Path>>(&self, fasta_path: P) -> Result<()> {
         use needletail::parse_fastx_file;
         use rayon::prelude::*;
