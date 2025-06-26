@@ -13,13 +13,12 @@ classifiers = [
 ]
 dependencies = [
     "sourmash",
-    "sourmash_plugin_branchwater",
+    "sourmash_plugin_branchwater @ git+https://github.com/sourmash-bio/sourmash_plugin_branchwater.git@23a609d54e4979aef56b0d3ad08fcc29d8006c8a",
     "polars",
     "click>=8.0",
     "pandas",
 ]
 scripts.kmerseek = "kmerseek.main:cli"
-
 
 [build-system]
 requires = ["maturin>=1.8,<2.0"]
