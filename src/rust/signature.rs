@@ -104,7 +104,7 @@ pub struct ProteinSignature {
     signature: SerializableSignature,
     protein_ksize: u32,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
-    pub kmer_infos: HashMap<u64, KmerInfo>,
+    kmer_infos: HashMap<u64, KmerInfo>,
 }
 
 // Represents a single protein's k-mer signature and hashval -> kmer info mapping
@@ -135,7 +135,17 @@ impl ProteinSignature {
 
     /// Add a protein sequence to the signature
     pub fn add_protein(&mut self, sequence: &[u8]) -> Result<()> {
-        Ok(self.signature.minhash.add_protein(sequence)?)
+        self.signature.minhash.add_protein(sequence)?;
+
+        // Generate a simple hash-based identifier from the minhash data
+        let mins = self.signature.minhash.mins();
+        let mut hash = 0u64;
+        for min in mins {
+            hash = hash.wrapping_add(min);
+        }
+        self.signature.md5sum = format!("{:x}", hash);
+
+        Ok(())
     }
 
     /// Get the protein k-mer size
@@ -156,5 +166,15 @@ impl ProteinSignature {
     /// Get a reference to the underlying SmallSignature
     pub fn signature(&self) -> &SerializableSignature {
         &self.signature
+    }
+
+    /// Get a reference to the kmer infos HashMap (hashval -> kmer info)
+    pub fn kmer_infos(&self) -> &HashMap<u64, KmerInfo> {
+        &self.kmer_infos
+    }
+
+    /// Get a mutable reference to the kmer infos HashMap (hashval -> kmer info)
+    pub fn kmer_infos_mut(&mut self) -> &mut HashMap<u64, KmerInfo> {
+        &mut self.kmer_infos
     }
 }

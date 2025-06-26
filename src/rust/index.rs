@@ -223,7 +223,7 @@ impl ProteomeIndex {
             // If this hashval is in the minhash, then save its k-mer positions
             if hashvals.contains(&hashval) {
                 let kmer_info =
-                    protein_signature.kmer_infos.entry(hashval).or_insert_with(|| KmerInfo {
+                    protein_signature.kmer_infos_mut().entry(hashval).or_insert_with(|| KmerInfo {
                         ksize: ksize,
                         hashval: hashval,
                         encoded_kmer: encoded_kmer.clone(),
@@ -253,9 +253,9 @@ impl ProteomeIndex {
     /// # Returns
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
-    pub fn store_signatures(&self, signatures: Vec<ProteinSignature>) -> Result<()> {
+    pub fn store_signatures(&self, protein_signatures: Vec<ProteinSignature>) -> Result<()> {
         // Collect the minhash data from new signatures before storing them
-        let new_hashes_and_abunds: Vec<(u64, u64)> = signatures
+        let new_hashes_and_abunds: Vec<(u64, u64)> = protein_signatures
             .iter()
             .flat_map(|sig| {
                 let minhash = sig.signature().get_minhash();
@@ -271,9 +271,9 @@ impl ProteomeIndex {
         // Store all signatures in the signatures map
         {
             let mut signatures_map = self.signatures.lock().unwrap();
-            for signature in signatures {
-                let md5sum = signature.signature().get_md5sum();
-                signatures_map.insert(md5sum.to_string(), signature);
+            for protein_signature in protein_signatures {
+                let md5sum = protein_signature.signature().md5sum.clone();
+                signatures_map.insert(md5sum.to_string(), protein_signature);
             }
         }
 

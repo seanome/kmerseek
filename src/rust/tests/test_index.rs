@@ -43,8 +43,8 @@ fn test_process_kmers_moltype_protein() -> Result<()> {
     let protein_signature = index.process_kmers(sequence, &protein_sig.signature())?;
 
     println!("{}", protein_signature.signature().name);
-    println!("{:?}", protein_signature.kmer_infos.keys());
-    let kmer_count = protein_signature.kmer_infos.len();
+    println!("{:?}", protein_signature.kmer_infos().keys());
+    let kmer_count = protein_signature.kmer_infos().len();
 
     // Should have 17 kmers (length 21 - ksize 5 + 1)
     assert_eq!(kmer_count, 17);
@@ -53,7 +53,7 @@ fn test_process_kmers_moltype_protein() -> Result<()> {
     println!("\nKmer Info Details:");
     println!("Hash\t\t\\tProtein\tOrig\tPos");
     println!("----------------------------------------");
-    for (hash, kmer_info) in &protein_signature.kmer_infos {
+    for (hash, kmer_info) in protein_signature.kmer_infos().iter() {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
             println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
@@ -93,7 +93,7 @@ fn test_process_kmers_moltype_protein() -> Result<()> {
         .collect();
 
     // Verify each kmer info matches expected values
-    for (hash, kmer_info) in &protein_signature.kmer_infos {
+    for (hash, kmer_info) in protein_signature.kmer_infos().iter() {
         let (expected_kmer, expected_positions) =
             expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
 
@@ -153,9 +153,9 @@ fn test_process_kmers_moltype_dayhoff() -> Result<()> {
     let kmer_signature = index.process_kmers(sequence, protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature().name);
-    let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
+    let hashvals = kmer_signature.kmer_infos().keys().collect::<Vec<_>>();
     println!("{:?}", hashvals);
-    let kmer_count = kmer_signature.kmer_infos.len();
+    let kmer_count = kmer_signature.kmer_infos().len();
 
     // Should have 17 kmers (length 21 - ksize 5 + 1)
     assert_eq!(kmer_count, 17);
@@ -164,7 +164,7 @@ fn test_process_kmers_moltype_dayhoff() -> Result<()> {
     println!("\nKmer Info Details:");
     println!("Hash\t\t\tDayhoff\tOrig\tPos");
     println!("----------------------------------------");
-    for (hash, kmer_info) in &kmer_signature.kmer_infos {
+    for (hash, kmer_info) in kmer_signature.kmer_infos().iter() {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
             println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
@@ -204,7 +204,7 @@ fn test_process_kmers_moltype_dayhoff() -> Result<()> {
 
     // Verify all expected hashes are present
     let expected_hashes: Vec<_> = expected_kmers.keys().collect();
-    let actual_hashes: Vec<_> = kmer_signature.kmer_infos.keys().collect();
+    let actual_hashes: Vec<_> = kmer_signature.kmer_infos().keys().collect();
     assert_eq!(
         expected_hashes.len(),
         actual_hashes.len(),
@@ -214,11 +214,11 @@ fn test_process_kmers_moltype_dayhoff() -> Result<()> {
     );
 
     for hash in expected_hashes {
-        assert!(kmer_signature.kmer_infos.contains_key(hash), "Missing expected hash {}", hash);
+        assert!(kmer_signature.kmer_infos().contains_key(hash), "Missing expected hash {}", hash);
     }
 
     // Verify each kmer info matches expected values
-    for (hash, kmer_info) in &kmer_signature.kmer_infos {
+    for (hash, kmer_info) in kmer_signature.kmer_infos().iter() {
         let (expected_encoded, expected_originals) =
             expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
 
@@ -290,9 +290,9 @@ fn test_process_kmers_moltype_hp() -> Result<()> {
     let kmer_signature = index.process_kmers(sequence, protein_sig.signature())?;
 
     println!("{}", kmer_signature.signature().name);
-    let hashvals = kmer_signature.kmer_infos.keys().collect::<Vec<_>>();
+    let hashvals = kmer_signature.kmer_infos().keys().collect::<Vec<_>>();
     println!("{:?}", hashvals);
-    let kmer_count = kmer_signature.kmer_infos.len();
+    let kmer_count = kmer_signature.kmer_infos().len();
 
     // // Should have 14 kmers (length 21 - ksize 5 + 1), but a few duplicates
     assert_eq!(kmer_count, 14);
@@ -301,7 +301,7 @@ fn test_process_kmers_moltype_hp() -> Result<()> {
     println!("\nKmer Info Details:");
     println!("Hash\t\t\tHP\tOrig\tPos");
     println!("----------------------------------------");
-    for (hash, kmer_info) in &kmer_signature.kmer_infos {
+    for (hash, kmer_info) in kmer_signature.kmer_infos().iter() {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
             println!("{}\t{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, original_kmer, positions);
         }
@@ -339,7 +339,7 @@ fn test_process_kmers_moltype_hp() -> Result<()> {
 
     // Verify all expected hashes are present
     let expected_hashes: Vec<_> = kmer_data.keys().collect();
-    let actual_hashes: Vec<_> = kmer_signature.kmer_infos.keys().collect();
+    let actual_hashes: Vec<_> = kmer_signature.kmer_infos().keys().collect();
     assert_eq!(
         expected_hashes.len(),
         actual_hashes.len(),
@@ -349,11 +349,11 @@ fn test_process_kmers_moltype_hp() -> Result<()> {
     );
 
     for hash in expected_hashes {
-        assert!(kmer_signature.kmer_infos.contains_key(hash), "Missing expected hash {}", hash);
+        assert!(kmer_signature.kmer_infos().contains_key(hash), "Missing expected hash {}", hash);
     }
 
     // Verify each kmer info matches expected values
-    for (hash, kmer_info) in &kmer_signature.kmer_infos {
+    for (hash, kmer_info) in kmer_signature.kmer_infos().iter() {
         let (expected_encoded, expected_originals) =
             kmer_data.get(hash).expect(&format!("Missing expected hash {}", hash));
 
@@ -414,12 +414,12 @@ fn test_create_protein_signature_moltype_protein() -> Result<()> {
     let signature = index.create_protein_signature(sequence, name)?;
 
     // Verify the signature has the expected number of k-mers
-    assert_eq!(signature.kmer_infos.len(), 17, "Expected 17 k-mers for the test protein");
+    assert_eq!(signature.kmer_infos().len(), 17, "Expected 17 k-mers for the test protein");
 
     // Verify some specific k-mers are present
     let expected_hash = 5893010049374798421; // Hash for "PLANT"
     assert!(
-        signature.kmer_infos.contains_key(&expected_hash),
+        signature.kmer_infos().contains_key(&expected_hash),
         "Expected k-mer hash {} to be present",
         expected_hash
     );
@@ -465,12 +465,12 @@ fn test_create_protein_signature_moltype_dayhoff() -> Result<()> {
     let signature = index.create_protein_signature(sequence, name)?;
 
     // Verify the signature has the expected number of k-mers
-    assert_eq!(signature.kmer_infos.len(), 17, "Expected 17 k-mers for the test protein");
+    assert_eq!(signature.kmer_infos().len(), 17, "Expected 17 k-mers for the test protein");
 
     // Verify some specific k-mers are present
     let expected_hash = 5045972850709227854; // Hash for "PLANT" in Dayhoff encoding ("bebcb")
     assert!(
-        signature.kmer_infos.contains_key(&expected_hash),
+        signature.kmer_infos().contains_key(&expected_hash),
         "Expected k-mer hash {} to be present",
         expected_hash
     );
@@ -516,12 +516,12 @@ fn test_create_protein_signature_moltype_hp() -> Result<()> {
     let signature = index.create_protein_signature(sequence, name)?;
 
     // Verify the signature has the expected number of k-mers
-    assert_eq!(signature.kmer_infos.len(), 14, "Expected 14 k-mers for the test protein");
+    assert_eq!(signature.kmer_infos().len(), 14, "Expected 14 k-mers for the test protein");
 
     // Verify some specific k-mers are present
     let expected_hash = 4230974618842309829; // Hash for "PLANT" in HP encoding ("hhhpp")
     assert!(
-        signature.kmer_infos.contains_key(&expected_hash),
+        signature.kmer_infos().contains_key(&expected_hash),
         "Expected k-mer hash {} to be present",
         expected_hash
     );
@@ -560,8 +560,13 @@ fn test_process_fasta() -> Result<()> {
         SEED,
     )?;
 
+    // Create a temporary FASTA file for testing with distinct sequences
+    let fasta_content = ">test_protein1\nPLANTANDANIMALGENQMES\n>test_protein2\nLIVINGALIVE";
+    let fasta_path = dir.path().join("test.fasta");
+    std::fs::write(&fasta_path, fasta_content)?;
+
     // Process the FASTA file
-    index.process_fasta(TEST_FASTA)?;
+    index.process_fasta(&fasta_path)?;
 
     // Verify the signatures were added to the signatures map
     {
@@ -571,7 +576,7 @@ fn test_process_fasta() -> Result<()> {
         // Verify each signature has the expected number of k-mers
         for (_md5sum, stored_signature) in signatures.iter() {
             assert!(
-                stored_signature.kmer_infos.len() > 0,
+                stored_signature.kmer_infos().len() > 0,
                 "Each signature should have at least one k-mer"
             );
         }
