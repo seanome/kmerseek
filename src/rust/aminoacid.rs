@@ -9,6 +9,7 @@ pub const STANDARD_AA: [char; 20] = [
     'Y',
 ];
 
+/// Special amino acids that are valid but not ambiguous
 pub const SPECIAL_AA: [char; 4] = ['X', 'U', 'O', '*'];
 
 /// Represents amino acid ambiguity codes and their possible resolutions
@@ -31,20 +32,14 @@ impl AminoAcidAmbiguity {
     }
 
     fn is_valid_aa(&self, aa: char) -> bool {
-        // Put the most common (99.9%) case, of the 20 standard amino acids first
         STANDARD_AA.contains(&aa) || SPECIAL_AA.contains(&aa) || self.replacements.contains_key(&aa)
     }
 
     fn resolve_ambiguity(&self, aa: char) -> char {
         if let Some(possible_aas) = self.replacements.get(&aa) {
-            // If there's only one possibility, use it
-            if possible_aas.len() == 1 {
-                possible_aas[0]
-            } else {
-                // Otherwise randomly choose one of the possibilities
-                let mut rng = rand::rng();
-                *possible_aas.choose(&mut rng).unwrap_or(&aa)
-            }
+            // Randomly choose one of the possibilities
+            let mut rng = rand::rng();
+            *possible_aas.choose(&mut rng).unwrap_or(&aa)
         } else {
             // If not found in replacements, return the original character
             aa
@@ -70,26 +65,33 @@ impl AminoAcidAmbiguity {
     /// Returns Ok(Cow<str>) with ambiguity resolved if needed, or an error if invalid characters are found.
     /// Stops processing at the first stop codon (*).
     pub fn validate_and_resolve<'a>(&self, sequence: &'a str) -> Result<Cow<'a, str>> {
-        // First validate the sequence (this will stop at stop codon)
-        self.validate_sequence(sequence)?;
+        let mut result = String::new();
+        let mut has_ambiguous = false;
 
-        // Find the position of the first stop codon, if any
-        let stop_pos = sequence.find('*');
-        let sequence_to_process = if let Some(pos) = stop_pos {
-            &sequence[..pos + 1] // Include the stop codon
-        } else {
-            sequence
-        };
+        for (i, c) in sequence.chars().enumerate() {
+            if c == '*' {
+                // Stop codon - this is valid, but we stop reading here
+                result.push(c);
+                break;
+            }
 
-        let has_ambiguous = sequence_to_process.chars().any(|c| matches!(c, 'B' | 'Z' | 'J'));
+            if !self.is_valid_aa(c) {
+                bail!("Invalid amino acid '{}' found at position {}", c, i + 1);
+            }
+
+            // Check if this character is ambiguous
+            if self.replacements.contains_key(&c) {
+                has_ambiguous = true;
+                result.push(self.resolve_ambiguity(c));
+            } else {
+                result.push(c);
+            }
+        }
+
         if has_ambiguous {
-            // Only replace ambiguous characters if needed, since <0.01% of amino acids in UniProtKB are ambiguous
-            // See: https://www.uniprot.org/uniprotkb/statistics#amino-acid-composition
-            let resolved: String =
-                sequence_to_process.chars().map(|c| self.resolve_ambiguity(c)).collect();
-            Ok(Cow::Owned(resolved))
+            Ok(Cow::Owned(result))
         } else {
-            Ok(Cow::Borrowed(sequence_to_process))
+            Ok(Cow::Borrowed(&sequence[..result.len()]))
         }
     }
 }
@@ -213,5 +215,19 @@ mod tests {
         assert!(vec!['D', 'N'].contains(&seventh_char));
         assert!(vec!['E', 'Q'].contains(&eighth_char));
         assert!(vec!['I', 'L'].contains(&ninth_char));
+    }
+
+    #[test]
+    fn test_validate_and_resolve_no_ambiguous() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test sequence with no ambiguous amino acids
+        let result = aa.validate_and_resolve("ACDEFGHIKLMNPQRSTVWY");
+        assert!(result.is_ok());
+        // Should return borrowed string (no allocation)
+        match result.unwrap() {
+            Cow::Borrowed(s) => assert_eq!(s, "ACDEFGHIKLMNPQRSTVWY"),
+            Cow::Owned(_) => panic!("Expected borrowed string for non-ambiguous sequence"),
+        }
     }
 }
