@@ -140,9 +140,8 @@ impl ProteomeIndex {
     /// This method creates a protein signature from the given sequence, processes its k-mers
     /// to extract detailed position information, and returns the signature for later storage.
     ///
-    /// The method validates the protein sequence for amino acid ambiguity before processing.
-    /// Valid amino acids include the 20 standard amino acids (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y)
-    /// and the ambiguous codes (B for D/N, Z for E/Q, J for I/L, X for unknown).
+    /// The method resolves amino acid ambiguity before processing. Valid amino acids include the 20 standard amino acids (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y)
+    /// and the ambiguous codes (B for D/N, Z for E/Q, J for I/L, X for unknown) which are resolved to one of their possible values.
     ///
     /// # Arguments
     ///
@@ -181,18 +180,18 @@ impl ProteomeIndex {
     /// }
     /// ```
     pub fn create_protein_signature(&self, sequence: &str, name: &str) -> Result<ProteinSignature> {
-        // Validate the protein sequence for amino acid ambiguity
-        self.aa_ambiguity.validate_sequence(sequence)?;
+        // Validate and resolve ambiguity if needed
+        let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence)?;
 
         // Create a new protein signature
         let mut protein_sig =
             ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype, self.seed)?;
 
         // Add the protein sequence to the signature
-        protein_sig.add_protein(sequence.as_bytes())?;
+        protein_sig.add_protein(processed_sequence.as_bytes())?;
 
         // Process the k-mers to get detailed k-mer information
-        self.process_kmers(sequence, &mut protein_sig)?;
+        self.process_kmers(&processed_sequence, &mut protein_sig)?;
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)

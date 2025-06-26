@@ -6,7 +6,7 @@ use tempfile::tempdir;
 use crate::index::ProteomeIndex;
 use crate::signature::ProteinSignature;
 use crate::tests::test_fixtures::{TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_PROTEIN};
-use crate::tests::test_utils;
+use crate::tests::test_utils::{self, print_kmer_infos};
 use crate::SEED;
 use std::collections::HashMap;
 
@@ -897,11 +897,11 @@ fn test_create_protein_signature_amino_acid_validation_moltype_protein() -> Resu
         SEED,
     )?;
 
-    // Test valid sequences
+    // Test valid sequences (including those with ambiguous amino acids that should be resolved)
     let valid_sequences = [
         "PLANTANDANIMALGENQMES", // Standard amino acids
         "ACDEFGHIKLMNPQRSTVWY",  // All standard amino acids
-        "ACDEFXBZJ",             // With ambiguous amino acids
+        "ACDEFXBZJ",             // With ambiguous amino acids (should be resolved)
     ];
 
     for sequence in valid_sequences.iter() {
@@ -912,12 +912,24 @@ fn test_create_protein_signature_amino_acid_validation_moltype_protein() -> Resu
                 protein_signature.kmer_infos().len() == 17,
                 "Valid sequence 'PLANTANDANIMALGENQMES' should be accepted and have 17 protein 5-mers",
             );
+        } else if protein_signature.signature().md5sum == "b95f0777d5439d56" {
+            assert!(
+                protein_signature.kmer_infos().len() == 16,
+                "Valid sequence 'ACDEFGHIKLMNPQRSTVWY' should be accepted and have 16 protein 5-mers",
+            );
+        } else if protein_signature.signature().md5sum == "7372c9ffcd357b86" {
+            assert!(
+                protein_signature.kmer_infos().len() == 5,
+                "Valid sequence 'ACDEFXBZJ' should be accepted and have 5 protein 5-mers",
+            );
+        } else {
+            assert!(false, "Unknown md5sum: {}", protein_signature.signature().md5sum);
         }
     }
 
-    // Test invalid sequences
+    // Test sequences with truly invalid characters (not in the replacements map)
     let invalid_sequences = [
-        ("PLANTANDANIMALGENOMES", "Invalid amino acid 'O'"), // Pyrrolysine
+        ("PLANTANDANIMALGENOMES", "Invalid amino acid 'O'"), // Number
         ("PLANTANDANIMALGEN1MES", "Invalid amino acid '1'"), // Number
         ("PLANTANDANIMALGEN$MES", "Invalid amino acid '$'"), // Special character
     ];
@@ -933,6 +945,203 @@ fn test_create_protein_signature_amino_acid_validation_moltype_protein() -> Resu
             expected_error,
             error_msg
         );
+    }
+
+    // Test that ambiguous characters are resolved (not rejected)
+    let ambiguous_sequences = [
+        "PLANTANDANIMALGENBMES", // B should be resolved to D or N
+        "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
+        "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+    ];
+
+    for sequence in ambiguous_sequences.iter() {
+        let result = index.create_protein_signature(sequence, "test_protein");
+        assert!(
+            result.is_ok(),
+            "Sequence with ambiguous amino acid '{}' should be resolved, not rejected",
+            sequence
+        );
+
+        let protein_signature = result.unwrap();
+        print_kmer_infos(&protein_signature);
+        // Should have the same number of k-mers as the original sequence
+        assert_eq!(
+            protein_signature.kmer_infos().len(),
+            17,
+            "Resolved sequence should have 17 protein 5-mers"
+        );
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_create_protein_signature_amino_acid_validation_moltype_dayhoff() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "dayhoff";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("validation_test_dayhoff.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Test that ambiguous characters are resolved (not rejected)
+    let ambiguous_sequences = [
+        "PLANTANDANIMALGENBMES", // B should be resolved to D or N
+        "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
+        "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+    ];
+
+    for sequence in ambiguous_sequences.iter() {
+        let result = index.create_protein_signature(sequence, "test_protein");
+        assert!(
+            result.is_ok(),
+            "Sequence with ambiguous amino acid '{}' should be resolved, not rejected",
+            sequence
+        );
+
+        let protein_signature = result.unwrap();
+        print_kmer_infos(&protein_signature);
+        // Should have the same number of k-mers as the original sequence
+        println!("sequence: {}", sequence);
+        assert_eq!(
+            protein_signature.kmer_infos().len(),
+            17,
+            "Resolved sequence should have 17 protein 5-mers"
+        );
+        // Check that the ambiguous k-mer is resolved correctly
+        if sequence == &"PLANTANDANIMALGENBMES" {
+            let kmer_info = protein_signature.kmer_infos().get(&6161374941338912337);
+            assert!(
+                kmer_info.is_some(),
+                "Expected k-mer with hash 6161374941338912337 to be present in {}",
+                sequence
+            );
+            let kmer_info = kmer_info.unwrap();
+            assert_eq!(
+                kmer_info.encoded_kmer, "ccecb",
+                "Expected encoded k-mer 'ccecb' (NDMES/NNMES) to be present in {}",
+                sequence
+            );
+        } else if sequence == &"PLANTANDANIMALGENZMES" {
+            let kmer_info = protein_signature.kmer_infos().get(&6161374941338912337);
+            assert!(
+                kmer_info.is_some(),
+                "Expected k-mer with hash 6161374941338912337 to be present in {}",
+                sequence
+            );
+            let kmer_info = kmer_info.unwrap();
+            assert_eq!(
+                kmer_info.encoded_kmer, "ccecb",
+                "Expected encoded k-mer 'ccecb' (NEMES/NQMES) to be present in {}",
+                sequence
+            );
+        } else if sequence == &"PLANTANDANIMALGENJMES" {
+            let kmer_info = protein_signature.kmer_infos().get(&9182605311834199497);
+            assert!(
+                kmer_info.is_some(),
+                "Expected k-mer with hash 9182605311834199497 to be present in {}",
+                sequence
+            );
+            let kmer_info = kmer_info.unwrap();
+            assert_eq!(
+                kmer_info.encoded_kmer, "ceecb",
+                "Expected encoded k-mer 'ceecb' (NLMES/NIMES) to be present in {}",
+                sequence
+            );
+        }
+    }
+
+    Ok(())
+}
+
+#[test]
+fn test_create_protein_signature_amino_acid_validation_moltype_hp() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "hp";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("validation_test_hp.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Test that ambiguous characters are resolved (not rejected)
+    let ambiguous_sequences = [
+        "PLANTANDANIMALGENBMES", // B should be resolved to D or N
+        "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
+        "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+    ];
+
+    for sequence in ambiguous_sequences.iter() {
+        let result = index.create_protein_signature(sequence, "test_protein");
+        assert!(
+            result.is_ok(),
+            "Sequence with ambiguous amino acid '{}' should be resolved, not rejected",
+            sequence
+        );
+
+        let protein_signature = result.unwrap();
+        print_kmer_infos(&protein_signature);
+        // Should have the same number of k-mers as the original sequence
+        println!("sequence: {}", sequence);
+        assert_eq!(
+            protein_signature.kmer_infos().len(),
+            14,
+            "Resolved sequence should have 14 protein 5-mers"
+        );
+        // Check that the ambiguous k-mer is resolved correctly
+        if sequence == &"PLANTANDANIMALGENBMES" {
+            let kmer_info = protein_signature.kmer_infos().get(&13058023948041027181);
+            assert!(
+                kmer_info.is_some(),
+                "Expected k-mer with hash 6161374941338912337 to be present in {}",
+                sequence
+            );
+            let kmer_info = kmer_info.unwrap();
+            assert_eq!(
+                kmer_info.encoded_kmer, "pphpp",
+                "Expected encoded k-mer 'pphpp' (NDMES/NNMES) to be present in {}",
+                sequence
+            );
+        } else if sequence == &"PLANTANDANIMALGENZMES" {
+            let kmer_info = protein_signature.kmer_infos().get(&13058023948041027181);
+            assert!(
+                kmer_info.is_some(),
+                "Expected k-mer with hash 13058023948041027181 to be present in {}",
+                sequence
+            );
+            let kmer_info = kmer_info.unwrap();
+            assert_eq!(
+                kmer_info.encoded_kmer, "pphpp",
+                "Expected encoded k-mer 'pphpp' (NEMES/NQMES) to be present in {}",
+                sequence
+            );
+        } else if sequence == &"PLANTANDANIMALGENJMES" {
+            let kmer_info = protein_signature.kmer_infos().get(&10495165127682499337);
+            assert!(
+                kmer_info.is_some(),
+                "Expected k-mer with hash 10495165127682499337 to be present in {}",
+                sequence
+            );
+            let kmer_info = kmer_info.unwrap();
+            assert_eq!(
+                kmer_info.encoded_kmer, "phhpp",
+                "Expected encoded k-mer 'phhpp' (NLMES/NIMES) to be present in {}",
+                sequence
+            );
+        }
     }
 
     Ok(())
@@ -955,25 +1164,25 @@ fn test_process_fasta_amino_acid_validation() -> Result<()> {
     )?;
 
     // Create a temporary FASTA file with both valid and invalid sequences
-    let fasta_content = ">valid_protein1\nPLANTANDANIMALGENQMES\n>invalid_protein1\nPLANTANDANIMALGENOMES\n>valid_protein2\nACDEFGHIKLMNPQRSTVWY\n>invalid_protein2\nPLANTANDANIMALGEN1MES";
+    // Note: Sequences with ambiguous characters (B, Z, J, X) should now be processed successfully
+    let fasta_content = ">valid_protein1\nPLANTANDANIMALGENQMES\n>ambiguous_protein1\nPLANTANDANIMALGENBMES\n>valid_protein2\nACDEFGHIKLMNPQRSTVWY\n>invalid_protein1\nPLANTANDANIMALGEN1MES";
     let fasta_path = dir.path().join("test_validation.fasta");
     std::fs::write(&fasta_path, fasta_content)?;
 
-    // Process the FASTA file - this should fail due to invalid sequences
+    // Process the FASTA file - this should fail due to truly invalid sequences (like '1')
     let result = index.process_fasta(&fasta_path);
     assert!(result.is_err(), "Processing FASTA with invalid sequences should fail");
 
     // Check that the error message contains information about the invalid amino acids
     let error_msg = result.unwrap_err().to_string();
     assert!(
-        error_msg.contains("Invalid amino acid 'O'")
-            || error_msg.contains("Invalid amino acid '1'"),
+        error_msg.contains("Invalid amino acid '1'"),
         "Error message should mention invalid amino acids, but got: {}",
         error_msg
     );
 
-    // Create a FASTA file with only valid sequences
-    let valid_fasta_content = ">valid_protein1\nPLANTANDANIMALGENQMES\n>valid_protein2\nACDEFGHIKLMNPQRSTVWY\n>valid_protein3\nACDEFXBZJ";
+    // Create a FASTA file with only valid sequences (including ambiguous ones that should be resolved)
+    let valid_fasta_content = ">valid_protein1\nPLANTANDANIMALGENQMES\n>valid_protein2\nACDEFGHIKLMNPQRSTVWY\n>ambiguous_protein1\nACDEFXBZJ\n>ambiguous_protein2\nPLANTANDANIMALGENBMES";
     let valid_fasta_path = dir.path().join("test_valid.fasta");
     std::fs::write(&valid_fasta_path, valid_fasta_content)?;
 
@@ -984,8 +1193,42 @@ fn test_process_fasta_amino_acid_validation() -> Result<()> {
     // Verify that the signatures were added
     {
         let signatures = index.get_signatures().lock().unwrap();
-        assert_eq!(signatures.len(), 3, "Expected 3 signatures to be stored");
+        assert_eq!(signatures.len(), 4, "Expected 4 signatures to be stored");
     }
+
+    Ok(())
+}
+
+#[test]
+fn test_create_protein_signature_no_ambiguous_chars() -> Result<()> {
+    let dir = tempdir()?;
+
+    let protein_ksize = 5;
+    let moltype = "protein";
+
+    // Create index with minimal parameters
+    let index = ProteomeIndex::new(
+        dir.path().join("no_ambiguous_test.db"),
+        protein_ksize,
+        1, // scaled=1 to capture all kmers for testing
+        moltype,
+        SEED,
+    )?;
+
+    // Test a sequence with no ambiguous characters
+    let sequence = "PLANTANDANIMALGENQMES"; // Only standard amino acids
+    let signature = index.create_protein_signature(sequence, "test_protein")?;
+
+    // Verify the signature has the expected number of k-mers
+    assert_eq!(signature.kmer_infos().len(), 17, "Expected 17 k-mers for the test protein");
+
+    // Verify some specific k-mers are present
+    let expected_hash = 5893010049374798421; // Hash for "PLANT"
+    assert!(
+        signature.kmer_infos().contains_key(&expected_hash),
+        "Expected k-mer hash {} to be present",
+        expected_hash
+    );
 
     Ok(())
 }

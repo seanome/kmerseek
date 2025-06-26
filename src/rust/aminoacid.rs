@@ -1,5 +1,6 @@
 use anyhow::{bail, Result};
 use rand::prelude::*;
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Standard amino acids and their properties
@@ -64,6 +65,21 @@ impl AminoAcidAmbiguity {
             }
         }
         Ok(())
+    }
+
+    /// Validates a protein sequence and resolves ambiguity if needed.
+    /// Returns Ok(Cow<str>) with ambiguity resolved if needed, or an error if invalid characters are found.
+    pub fn validate_and_resolve<'a>(&self, sequence: &'a str) -> Result<Cow<'a, str>> {
+        self.validate_sequence(sequence)?;
+        let has_ambiguous = sequence.chars().any(|c| matches!(c, 'B' | 'Z' | 'J'));
+        if has_ambiguous {
+            // Only replace ambiguous characters if needed, since <0.01% of amino acids in UniProtKB are ambiguous
+            // See: https://www.uniprot.org/uniprotkb/statistics#amino-acid-composition
+            let resolved: String = sequence.chars().map(|c| self.resolve_ambiguity(c)).collect();
+            Ok(Cow::Owned(resolved))
+        } else {
+            Ok(Cow::Borrowed(sequence))
+        }
     }
 }
 
