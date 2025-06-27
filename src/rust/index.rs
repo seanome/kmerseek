@@ -20,7 +20,7 @@ use crate::encoding::{
     encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::kmer::KmerInfo;
-use crate::signature::{ProteinSignature, SignatureAccess};
+use crate::signature::{ProteinSignature, SerializableSignature, SignatureAccess};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,16 +143,30 @@ impl ProteomeIndex {
         let signatures_map = self.signatures.lock().unwrap();
         let combined_minhash = self.combined_minhash.lock().unwrap();
 
-        let state = ProteomeIndexState {
-            signatures: signatures_map.values().cloned().collect(),
-            combined_minhash: combined_minhash.clone(),
-            moltype: self.moltype.clone(),
-            ksize: self.ksize,
-            scaled: self.scaled,
-            seed: self.seed,
-        };
+        // Create a serializable state that avoids the problematic KmerMinHash
+        let mut signature_data = Vec::new();
+        for sig in signatures_map.values() {
+            let minhash = sig.signature().get_minhash();
+            signature_data.push((
+                sig.signature().name.clone(),
+                sig.signature().md5sum.clone(),
+                minhash.mins().to_vec(),
+                minhash.abunds().map(|abunds| abunds.to_vec()),
+                sig.kmer_infos().clone(),
+            ));
+        }
 
-        let serialized = bincode::serialize(&state)?;
+        let state_data = (
+            signature_data,
+            combined_minhash.mins().to_vec(),
+            combined_minhash.abunds().map(|abunds| abunds.to_vec()),
+            self.moltype.clone(),
+            self.ksize,
+            self.scaled,
+            self.seed,
+        );
+
+        let serialized = bincode::serialize(&state_data)?;
         self.db.put(b"index_state", &serialized)?;
 
         Ok(())
@@ -162,22 +176,86 @@ impl ProteomeIndex {
     pub fn load_state(&self) -> Result<()> {
         let serialized = self.db.get(b"index_state")?;
         if let Some(data) = serialized {
-            let state: ProteomeIndexState = bincode::deserialize(&data)?;
+            let state_data: (
+                Vec<(String, String, Vec<u64>, Option<Vec<u64>>, HashMap<u64, KmerInfo>)>,
+                Vec<u64>,
+                Option<Vec<u64>>,
+                String,
+                u32,
+                u32,
+                u64,
+            ) = bincode::deserialize(&data)?;
 
-            // Update signatures
-            {
-                let mut signatures_map = self.signatures.lock().unwrap();
-                signatures_map.clear();
-                for sig in state.signatures {
-                    let md5sum = sig.signature().md5sum.clone();
-                    signatures_map.insert(md5sum.to_string(), sig);
-                }
+            let (signature_data, combined_mins, combined_abunds, moltype, ksize, scaled, seed) =
+                state_data;
+
+            // Reconstruct the combined minhash
+            let hash_function = get_hash_function_from_moltype(&moltype)?;
+            let minhash_ksize = ksize * 3;
+            let mut combined_minhash = KmerMinHash::new(
+                scaled,
+                minhash_ksize,
+                hash_function,
+                seed,
+                true, // track_abundance
+                0,    // num (use scaled instead)
+            );
+
+            if let Some(abunds) = combined_abunds {
+                combined_minhash.add_many_with_abund(
+                    &combined_mins.into_iter().zip(abunds.into_iter()).collect::<Vec<_>>(),
+                )?;
+            } else {
+                combined_minhash.add_many(&combined_mins)?;
             }
 
-            // Update combined minhash
+            // Reconstruct signatures
+            let mut signatures_map = HashMap::new();
+            for (name, md5sum, mins, abunds, kmer_infos) in signature_data {
+                // Reconstruct the minhash for this signature
+                let sig_hash_function = get_hash_function_from_moltype(&moltype)?;
+                let mut minhash = KmerMinHash::new(
+                    scaled,
+                    minhash_ksize,
+                    sig_hash_function,
+                    seed,
+                    true, // track_abundance
+                    0,    // num (use scaled instead)
+                );
+
+                if let Some(abunds) = abunds {
+                    minhash.add_many_with_abund(
+                        &mins.into_iter().zip(abunds.into_iter()).collect::<Vec<_>>(),
+                    )?;
+                } else {
+                    minhash.add_many(&mins)?;
+                }
+
+                // Create the SerializableSignature
+                let signature =
+                    SerializableSignature { location: "".to_string(), name, md5sum, minhash };
+
+                // Create the ProteinSignature using the new constructor
+                let protein_sig = ProteinSignature::from_existing_data(
+                    signature,
+                    moltype.clone(),
+                    ksize,
+                    kmer_infos,
+                );
+
+                let md5sum = protein_sig.signature().md5sum.clone();
+                signatures_map.insert(md5sum.to_string(), protein_sig);
+            }
+
+            // Update the current index state
             {
-                let mut combined_minhash = self.combined_minhash.lock().unwrap();
-                *combined_minhash = state.combined_minhash;
+                let mut current_signatures = self.signatures.lock().unwrap();
+                *current_signatures = signatures_map;
+            }
+
+            {
+                let mut current_combined = self.combined_minhash.lock().unwrap();
+                *current_combined = combined_minhash;
             }
 
             Ok(())
@@ -187,6 +265,8 @@ impl ProteomeIndex {
     }
 
     /// Load an existing ProteomeIndex from a RocksDB path
+    /// Note: This method has known issues with serialization and may not work reliably.
+    /// For now, it's recommended to use save_state() and load_state() on existing indices.
     pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
         // Create RocksDB options
         let mut opts = Options::default();

@@ -145,6 +145,17 @@ impl ProteinSignature {
         })
     }
 
+    /// Create a ProteinSignature from existing signature data
+    /// This is useful for reconstructing signatures during load operations
+    pub fn from_existing_data(
+        signature: SerializableSignature,
+        moltype: String,
+        protein_ksize: u32,
+        kmer_infos: HashMap<u64, KmerInfo>,
+    ) -> Self {
+        Self { signature, moltype, protein_ksize, kmer_infos }
+    }
+
     /// Add a protein sequence to the signature
     pub fn add_protein(&mut self, sequence: &[u8]) -> Result<()> {
         self.signature.minhash.add_protein(sequence)?;
