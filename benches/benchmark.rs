@@ -16,6 +16,7 @@ const TEST_PROTEIN_WITH_SPECIAL: &str = "PLANTYANDANIMALGENQMESCOFFEEXUO";
 const TEST_PROTEIN_WITH_STOP: &str = "PLANTYANDANIMALGENQMESCOFFEE*EXTRA";
 
 const KSIZES: [u32; 3] = [5, 10, 20];
+const MOLTYPES: [&str; 3] = ["protein", "hp", "dayhoff"];
 
 fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     let temp_dir = tempdir().unwrap();
@@ -31,7 +32,7 @@ fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
 }
 
 fn benchmark_create_protein_signature(c: &mut Criterion) {
-    for moltype in ["protein", "hp", "dayhoff"] {
+    for moltype in MOLTYPES {
         for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
 
@@ -91,7 +92,7 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 }
 
 fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
-    for moltype in ["protein", "hp", "dayhoff"] {
+    for moltype in MOLTYPES {
         for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
             let encoding_fn = kmerseek::encoding::get_encoding_fn_from_moltype(moltype).unwrap();
@@ -108,7 +109,7 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
 }
 
 fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
-    for moltype in ["protein", "hp", "dayhoff"] {
+    for moltype in MOLTYPES {
         for ksize in KSIZES {
             c.bench_function(&format!("encodings_encode_kmer_{}_{}", moltype, ksize), |b| {
                 b.iter(|| encode_kmer(&TEST_PROTEIN[..ksize as usize], moltype))
@@ -118,7 +119,7 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
 }
 
 fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
-    for moltype in ["protein", "hp", "dayhoff"] {
+    for moltype in MOLTYPES {
         let encoding_fn = get_encoding_fn_from_moltype(moltype).unwrap();
         for ksize in KSIZES {
             c.bench_function(
@@ -134,7 +135,7 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
 }
 
 fn benchmark_process_protein_kmers(c: &mut Criterion) {
-    for moltype in ["protein", "hp", "dayhoff"] {
+    for moltype in MOLTYPES {
         for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
 
@@ -185,7 +186,7 @@ EEEVVEGEKEVEALKKSADWVSDWSSRPENIPPKEFHFRHPKRSVSLSMRKSGAMKKGGI
 FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
     let fasta_path = temp_dir.path().join("test.fasta");
     std::fs::write(&fasta_path, fasta_content).unwrap();
-    for moltype in ["protein", "hp", "dayhoff"] {
+    for moltype in MOLTYPES {
         for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
 
