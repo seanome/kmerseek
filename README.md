@@ -28,6 +28,8 @@ export MACOSX_DEPLOYMENT_TARGET=10.15 \
 
 ## Testing
 
+Run real-world examples like:
+
 ```bash
 cargo run --example test_bcl2_processing
 ```
