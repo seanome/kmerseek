@@ -5,7 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sourmash::_hash_murmur;
@@ -136,6 +136,170 @@ impl ProteomeIndex {
     /// Get a reference to the combined minhash (for testing)
     pub fn get_combined_minhash(&self) -> &Arc<Mutex<KmerMinHash>> {
         &self.combined_minhash
+    }
+
+    /// Save the current index state to RocksDB
+    pub fn save_state(&self) -> Result<()> {
+        let signatures_map = self.signatures.lock().unwrap();
+        let combined_minhash = self.combined_minhash.lock().unwrap();
+
+        let state = ProteomeIndexState {
+            signatures: signatures_map.values().cloned().collect(),
+            combined_minhash: combined_minhash.clone(),
+            moltype: self.moltype.clone(),
+            ksize: self.ksize,
+            scaled: self.scaled,
+            seed: self.seed,
+        };
+
+        let serialized = bincode::serialize(&state)?;
+        self.db.put(b"index_state", &serialized)?;
+
+        Ok(())
+    }
+
+    /// Load index state from RocksDB
+    pub fn load_state(&self) -> Result<()> {
+        let serialized = self.db.get(b"index_state")?;
+        if let Some(data) = serialized {
+            let state: ProteomeIndexState = bincode::deserialize(&data)?;
+
+            // Update signatures
+            {
+                let mut signatures_map = self.signatures.lock().unwrap();
+                signatures_map.clear();
+                for sig in state.signatures {
+                    let md5sum = sig.signature().md5sum.clone();
+                    signatures_map.insert(md5sum.to_string(), sig);
+                }
+            }
+
+            // Update combined minhash
+            {
+                let mut combined_minhash = self.combined_minhash.lock().unwrap();
+                *combined_minhash = state.combined_minhash;
+            }
+
+            Ok(())
+        } else {
+            bail!("No saved state found in database")
+        }
+    }
+
+    /// Load an existing ProteomeIndex from a RocksDB path
+    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+        // Create RocksDB options
+        let mut opts = Options::default();
+        opts.create_if_missing(false); // Don't create if missing
+
+        // Open the database
+        let db = DB::open(&opts, path)?;
+
+        // Try to load state to get configuration
+        let serialized = db.get(b"index_state")?;
+        if let Some(data) = serialized {
+            let state: ProteomeIndexState = bincode::deserialize(&data)?;
+
+            let hash_function = get_hash_function_from_moltype(&state.moltype)?;
+            let encoding_fn = get_encoding_fn_from_moltype(&state.moltype)?;
+
+            let index = Self {
+                db,
+                signatures: Arc::new(Mutex::new(HashMap::new())),
+                combined_minhash: Arc::new(Mutex::new(state.combined_minhash.clone())),
+                aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
+                encoding_fn,
+                moltype: state.moltype,
+                ksize: state.ksize,
+                minhash_ksize: state.ksize * 3,
+                scaled: state.scaled,
+                stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
+                seed: state.seed,
+            };
+
+            // Load the actual state
+            index.load_state()?;
+
+            Ok(index)
+        } else {
+            bail!("No saved state found in database")
+        }
+    }
+
+    /// Get the number of signatures in the index
+    pub fn signature_count(&self) -> usize {
+        self.signatures.lock().unwrap().len()
+    }
+
+    /// Get the combined minhash size
+    pub fn combined_minhash_size(&self) -> usize {
+        self.combined_minhash.lock().unwrap().size()
+    }
+
+    /// Compare this index with another for equivalency
+    pub fn is_equivalent_to(&self, other: &ProteomeIndex) -> Result<bool> {
+        // Check basic configuration
+        if self.ksize != other.ksize {
+            return Ok(false);
+        }
+        if self.scaled != other.scaled {
+            return Ok(false);
+        }
+        if self.moltype != other.moltype {
+            return Ok(false);
+        }
+        if self.seed != other.seed {
+            return Ok(false);
+        }
+
+        // Check signature count
+        if self.signature_count() != other.signature_count() {
+            return Ok(false);
+        }
+
+        // Check combined minhash size
+        if self.combined_minhash_size() != other.combined_minhash_size() {
+            return Ok(false);
+        }
+
+        // Compare signatures
+        let self_signatures = self.signatures.lock().unwrap();
+        let other_signatures = other.signatures.lock().unwrap();
+
+        for (md5, self_sig) in self_signatures.iter() {
+            if let Some(other_sig) = other_signatures.get(md5) {
+                let self_mins = self_sig.signature().get_minhash().mins();
+                let other_mins = other_sig.signature().get_minhash().mins();
+                if self_mins != other_mins {
+                    return Ok(false);
+                }
+            } else {
+                return Ok(false);
+            }
+        }
+
+        // Compare combined minhashes
+        let self_combined = self.combined_minhash.lock().unwrap();
+        let other_combined = other.combined_minhash.lock().unwrap();
+
+        let self_mins = self_combined.mins();
+        let other_mins = other_combined.mins();
+        if self_mins != other_mins {
+            return Ok(false);
+        }
+
+        Ok(true)
+    }
+
+    /// Print index statistics
+    pub fn print_stats(&self) {
+        println!("ProteomeIndex Statistics:");
+        println!("  K-mer size: {}", self.ksize);
+        println!("  Scaled: {}", self.scaled);
+        println!("  Molecular type: {}", self.moltype);
+        println!("  Seed: {}", self.seed);
+        println!("  Number of signatures: {}", self.signature_count());
+        println!("  Combined minhash size: {}", self.combined_minhash_size());
     }
 
     /// Add a single protein sequence as a signature and process its k-mers
@@ -378,6 +542,9 @@ impl ProteomeIndex {
 
         // Store all signatures at once
         self.store_signatures(signatures?)?;
+
+        // Save the index state to RocksDB
+        self.save_state()?;
 
         if progress_interval > 0 {
             println!("Successfully processed and stored {} sequences.", total_records);

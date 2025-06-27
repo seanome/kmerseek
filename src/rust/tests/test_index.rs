@@ -1232,3 +1232,65 @@ fn test_create_protein_signature_no_ambiguous_chars() -> Result<()> {
 
     Ok(())
 }
+
+#[test]
+fn test_index_save_load_equivalence() {
+    let temp_dir = tempdir().unwrap();
+    let db_path1 = temp_dir.path().join("test1.db");
+    let db_path2 = temp_dir.path().join("test2.db");
+
+    // Create a new index
+    let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED).unwrap();
+
+    // Add some test signatures
+    let sig1 = index1.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
+    let sig2 = index1.create_protein_signature("PLANTANDANIMALGENQMES", "test2").unwrap();
+
+    // Store signatures
+    index1.store_signatures(vec![sig1, sig2]).unwrap();
+
+    // Save state
+    index1.save_state().unwrap();
+
+    // Drop the first index to release the RocksDB lock
+    drop(index1);
+
+    // Load the index from the same path
+    let index2 = ProteomeIndex::load(&db_path1).unwrap();
+
+    // Create a new index with the same parameters for comparison
+    let index3 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED).unwrap();
+
+    // Add the same signatures to the new index
+    let sig1_again = index3.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
+    let sig2_again = index3.create_protein_signature("PLANTANDANIMALGENQMES", "test2").unwrap();
+    index3.store_signatures(vec![sig1_again, sig2_again]).unwrap();
+
+    // Compare for equivalence
+    assert!(index2.is_equivalent_to(&index3).unwrap());
+
+    // Check stats
+    assert_eq!(index2.signature_count(), 2);
+    assert_eq!(index3.signature_count(), 2);
+    assert_eq!(index2.combined_minhash_size(), index3.combined_minhash_size());
+}
+
+#[test]
+fn test_index_stats() {
+    let temp_dir = tempdir().unwrap();
+    let db_path = temp_dir.path().join("test.db");
+
+    // Create a new index
+    let index = ProteomeIndex::new(&db_path, 10, 5, "hp", SEED).unwrap();
+
+    // Add a test signature
+    let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test").unwrap();
+    index.store_signatures(vec![sig]).unwrap();
+
+    // Print stats (this should not panic)
+    index.print_stats();
+
+    // Verify stats
+    assert_eq!(index.signature_count(), 1);
+    assert!(index.combined_minhash_size() > 0);
+}
