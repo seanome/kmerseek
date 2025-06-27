@@ -10,6 +10,13 @@ use tempfile::tempdir;
 // Test protein sequence
 const TEST_PROTEIN: &str = "PLANTYANDANIMALGENQMESCOFFEE";
 
+// Test protein sequences with different characteristics for benchmarking
+const TEST_PROTEIN_WITH_AMBIGUOUS: &str = "PLANTYANDANIMALGENQMESCOFFEEBZJ";
+const TEST_PROTEIN_WITH_SPECIAL: &str = "PLANTYANDANIMALGENQMESCOFFEEXUO";
+const TEST_PROTEIN_WITH_STOP: &str = "PLANTYANDANIMALGENQMESCOFFEE*EXTRA";
+
+const KSIZES: [u32; 3] = [5, 10, 20];
+
 fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     let temp_dir = tempdir().unwrap();
     let fasta_path = temp_dir.path().join(format!("proteins_{}_{}.fasta", moltype, ksize));
@@ -23,9 +30,69 @@ fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     (index, fasta_path)
 }
 
+fn benchmark_create_protein_signature(c: &mut Criterion) {
+    for moltype in ["protein", "hp", "dayhoff"] {
+        for ksize in KSIZES {
+            let (index, _) = setup_test_index(ksize, moltype);
+
+            // Benchmark standard protein sequence
+            c.bench_function(
+                &format!("create_protein_signature_standard_{}_{}", moltype, ksize),
+                |b| {
+                    b.iter(|| {
+                        index.create_protein_signature(TEST_PROTEIN, "test_protein").unwrap();
+                    })
+                },
+            );
+
+            // Benchmark protein sequence with ambiguous amino acids
+            c.bench_function(
+                &format!("create_protein_signature_ambiguous_{}_{}", moltype, ksize),
+                |b| {
+                    b.iter(|| {
+                        index
+                            .create_protein_signature(
+                                TEST_PROTEIN_WITH_AMBIGUOUS,
+                                "test_protein_ambiguous",
+                            )
+                            .unwrap();
+                    })
+                },
+            );
+
+            // Benchmark protein sequence with special amino acids (X, U, O)
+            c.bench_function(
+                &format!("create_protein_signature_special_{}_{}", moltype, ksize),
+                |b| {
+                    b.iter(|| {
+                        index
+                            .create_protein_signature(
+                                TEST_PROTEIN_WITH_SPECIAL,
+                                "test_protein_special",
+                            )
+                            .unwrap();
+                    })
+                },
+            );
+
+            // Benchmark protein sequence with stop codon
+            c.bench_function(
+                &format!("create_protein_signature_stop_{}_{}", moltype, ksize),
+                |b| {
+                    b.iter(|| {
+                        index
+                            .create_protein_signature(TEST_PROTEIN_WITH_STOP, "test_protein_stop")
+                            .unwrap();
+                    })
+                },
+            );
+        }
+    }
+}
+
 fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
-        for ksize in [5, 10, 15, 20] {
+        for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
             let encoding_fn = kmerseek::encoding::get_encoding_fn_from_moltype(moltype).unwrap();
             c.bench_function(&format!("proteome_index_encode_kmer_{}_{}", moltype, ksize), |b| {
@@ -42,7 +109,7 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
 
 fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
-        for ksize in [5, 10, 15, 20] {
+        for ksize in KSIZES {
             c.bench_function(&format!("encodings_encode_kmer_{}_{}", moltype, ksize), |b| {
                 b.iter(|| encode_kmer(&TEST_PROTEIN[..ksize as usize], moltype))
             });
@@ -53,7 +120,7 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
 fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
         let encoding_fn = get_encoding_fn_from_moltype(moltype).unwrap();
-        for ksize in [5, 10, 15, 20] {
+        for ksize in KSIZES {
             c.bench_function(
                 &format!("encodings_encode_kmer_with_encoding_fn_{}_{}", moltype, ksize),
                 |b| {
@@ -68,7 +135,7 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
 
 fn benchmark_process_protein_kmers(c: &mut Criterion) {
     for moltype in ["protein", "hp", "dayhoff"] {
-        for ksize in [5, 10, 15, 20] {
+        for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
 
             // Create a test protein signature
@@ -119,7 +186,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
     let fasta_path = temp_dir.path().join("test.fasta");
     std::fs::write(&fasta_path, fasta_content).unwrap();
     for moltype in ["protein", "hp", "dayhoff"] {
-        for ksize in [5, 10, 15, 20] {
+        for ksize in KSIZES {
             let (index, _) = setup_test_index(ksize, moltype);
 
             c.bench_function(&format!("process_fasta_{}_{}", moltype, ksize), |b| {
@@ -133,6 +200,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 
 criterion_group!(
     benches,
+    benchmark_create_protein_signature,
     benchmark_proteome_index_encode_kmer,
     benchmark_encodings_encode_kmer,
     benchmark_encodings_encode_kmer_with_encoding_fn,
