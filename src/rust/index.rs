@@ -1,6 +1,9 @@
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
+use std::thread;
+use std::time::Duration;
 
 use anyhow::Result;
 use rocksdb::{Options, DB};
@@ -338,22 +341,34 @@ impl ProteomeIndex {
             );
         }
 
+        // Set up atomic counter for progress
+        let processed_count = Arc::new(AtomicUsize::new(0));
+        if progress_interval > 0 {
+            let processed_count_clone = Arc::clone(&processed_count);
+            thread::spawn(move || loop {
+                let count = processed_count_clone.load(Ordering::Relaxed);
+                if count > 0 {
+                    let percent = (count as f64 / total_records as f64) * 100.0;
+                    println!("Processed {} sequences ({:.1}%)", count, percent);
+                }
+                if count >= total_records {
+                    break;
+                }
+                thread::sleep(Duration::from_secs(2));
+            });
+        }
+
         // Process records in parallel and collect signatures
         let signatures: Result<Vec<ProteinSignature>> = records
             .par_iter()
-            .enumerate()
-            .map(|(index, (seq_bytes, id_bytes))| {
+            .map(|(seq_bytes, id_bytes)| {
                 let sequence = std::str::from_utf8(seq_bytes)?;
                 let name = std::str::from_utf8(id_bytes)?;
 
-                // Print progress if interval is set and we've reached the interval
-                if progress_interval > 0 && (index + 1) % progress_interval as usize == 0 {
-                    let percentage = ((index + 1) as f64 / total_records as f64 * 100.0) as u32;
-                    println!("Processed {} sequences ({:.1}%)", index + 1, percentage);
-                }
-
                 // Create protein signature for each sequence
-                self.create_protein_signature(sequence, name)
+                let result = self.create_protein_signature(sequence, name);
+                processed_count.fetch_add(1, Ordering::Relaxed);
+                result
             })
             .collect();
 
