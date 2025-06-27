@@ -200,7 +200,7 @@ impl ProteomeIndex {
         if let Some(data) = serialized {
             let state: ProteomeIndexState = bincode::deserialize(&data)?;
 
-            let hash_function = get_hash_function_from_moltype(&state.moltype)?;
+            let _hash_function = get_hash_function_from_moltype(&state.moltype)?;
             let encoding_fn = get_encoding_fn_from_moltype(&state.moltype)?;
 
             let index = Self {
@@ -273,6 +273,52 @@ impl ProteomeIndex {
                 if self_mins != other_mins {
                     return Ok(false);
                 }
+
+                // Compare kmer_infos
+                let self_kmer_infos = self_sig.kmer_infos();
+                let other_kmer_infos = other_sig.kmer_infos();
+
+                if self_kmer_infos.len() != other_kmer_infos.len() {
+                    return Ok(false);
+                }
+
+                for (hashval, self_kmer_info) in self_kmer_infos.iter() {
+                    if let Some(other_kmer_info) = other_kmer_infos.get(hashval) {
+                        // Compare kmer_info fields
+                        if self_kmer_info.ksize != other_kmer_info.ksize {
+                            return Ok(false);
+                        }
+                        if self_kmer_info.hashval != other_kmer_info.hashval {
+                            return Ok(false);
+                        }
+                        if self_kmer_info.encoded_kmer != other_kmer_info.encoded_kmer {
+                            return Ok(false);
+                        }
+
+                        // Compare original_kmer_to_position maps
+                        if self_kmer_info.original_kmer_to_position.len()
+                            != other_kmer_info.original_kmer_to_position.len()
+                        {
+                            return Ok(false);
+                        }
+
+                        for (original_kmer, self_positions) in
+                            &self_kmer_info.original_kmer_to_position
+                        {
+                            if let Some(other_positions) =
+                                other_kmer_info.original_kmer_to_position.get(original_kmer)
+                            {
+                                if self_positions != other_positions {
+                                    return Ok(false);
+                                }
+                            } else {
+                                return Ok(false);
+                            }
+                        }
+                    } else {
+                        return Ok(false);
+                    }
+                }
             } else {
                 return Ok(false);
             }
@@ -300,6 +346,35 @@ impl ProteomeIndex {
         println!("  Seed: {}", self.seed);
         println!("  Number of signatures: {}", self.signature_count());
         println!("  Combined minhash size: {}", self.combined_minhash_size());
+    }
+
+    /// Generate a filename based on the index parameters
+    pub fn generate_filename(&self, base_name: &str) -> String {
+        format!(
+            "{}.{}.k{}.scaled{}.kmerseek.rocksdb",
+            base_name, self.moltype, self.ksize, self.scaled
+        )
+    }
+
+    /// Create a new index with automatic filename generation
+    pub fn new_with_auto_filename<P: AsRef<Path>>(
+        base_path: P,
+        ksize: u32,
+        scaled: u32,
+        moltype: &str,
+        seed: u64,
+    ) -> Result<Self> {
+        let base_path = base_path.as_ref();
+        let filename = format!(
+            "{}.{}.k{}.scaled{}.kmerseek.rocksdb",
+            base_path.file_name().unwrap().to_string_lossy(),
+            moltype,
+            ksize,
+            scaled
+        );
+        let full_path = base_path.parent().unwrap().join(filename);
+
+        Self::new(full_path, ksize, scaled, moltype, seed)
     }
 
     /// Add a single protein sequence as a signature and process its k-mers
