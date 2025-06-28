@@ -199,6 +199,48 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
     }
 }
 
+fn benchmark_process_fasta_with_efficient_storage(c: &mut Criterion) {
+    let temp_dir = tempdir().unwrap();
+    // Create a temporary FASTA file for testing with distinct sequences
+    let fasta_content = ">sp|O43236|SEPT4_HUMAN Septin-4 OS=Homo sapiens OX=9606 GN=SEPTIN4 PE=1 SV=1
+MDRSLGWQGNSVPEDRTEAGIKRFLEDTTDDGELSKFVKDFSGNASCHPPEAKTWASRPQ
+VPEPRPQAPDLYDDDLEFRPPSRPQSSDNQQYFCAPAPLSPSARPRSPWGKLDPYDSSED
+DKEYVGFATLPNQVHRKSVKKGFDFTLMVAGESGLGKSTLVNSLFLTDLYRDRKLLGAEE
+RIMQTVEITKHAVDIEEKGVRLRLTIVDTPGFGDAVNNTECWKPVAEYIDQQFEQYFRDE
+SGLNRKNIQDNRVHCCLYFISPFGHGLRPLDVEFMKALHQRVNIVPILAKADTLTPPEVD
+HKKRKIREEIEHFGIKIYQFPDCDSDEDEDFKLQDQALKESIPFAVIGSNTVVEARGRRV
+RGRLYPWGIVEVENPGHCDFVKLRTMLVRTHMQDLKDVTRETHYENYRAQCIQSMTRLVV
+KERNRNKLTRESGTDFPIPAVPPGTDPETEKLIREKDEELRRMQEMLHKIQKQMKENY
+>sp|O43521|B2L11_HUMAN Bcl-2-like protein 11 OS=Homo sapiens OX=9606 GN=BCL2L11 PE=1 SV=1
+MAKQPSDVSSECDREGRQLQPAERPPQLRPGAPTSLQTEPQGNPEGNHGGEGDSCPHGSP
+QGPLAPPASPGPFATRSPLFIFMRRSSLLSRSSSGYFSFDTDRSPAPMSCDKSTQTPSPP
+CQAFNHYLSAMASMRQAEPADMRPEIWIAQELRRIGDEFNAYYARRVFLNNYQAAEDHPR
+MVILRLLRYIVRLVWRMH
+>sp|O60238|BNI3L_HUMAN BCL2/adenovirus E1B 19 kDa protein-interacting protein 3-like OS=Homo sapiens OX=9606 GN=BNIP3L PE=1 SV=1
+MSSHLVEPPPPLHNNNNNCEENEQSLPPPAGLNSSWVELPMNSSNGNDNGNGKNGGLEHV
+PSSSSIHNGDMEKILLDAQHESGQSSSRGSSHCDSPSPQEDGQIMFDVEMHTSRDHSSQS
+EEEVVEGEKEVEALKKSADWVSDWSSRPENIPPKEFHFRHPKRSVSLSMRKSGAMKKGGI
+FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
+    let fasta_path = temp_dir.path().join("test.fasta");
+    std::fs::write(&fasta_path, fasta_content).unwrap();
+
+    for moltype in MOLTYPES {
+        for ksize in KSIZES {
+            let temp_dir = tempdir().unwrap();
+            let db_path = temp_dir.path().join(format!("db_efficient_{}_{}", moltype, ksize));
+
+            // Create index with efficient storage enabled (store_raw_sequences = true)
+            let index = ProteomeIndex::new(db_path, ksize, 1, moltype, SEED, true).unwrap();
+
+            c.bench_function(&format!("process_fasta_efficient_{}_{}", moltype, ksize), |b| {
+                b.iter(|| {
+                    index.process_fasta(&fasta_path, 0).unwrap();
+                })
+            });
+        }
+    }
+}
+
 criterion_group!(
     benches,
     benchmark_create_protein_signature,
@@ -207,5 +249,6 @@ criterion_group!(
     benchmark_encodings_encode_kmer_with_encoding_fn,
     benchmark_process_protein_kmers,
     benchmark_process_fasta,
+    benchmark_process_fasta_with_efficient_storage,
 );
 criterion_main!(benches);
