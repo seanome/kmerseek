@@ -2,9 +2,12 @@ use criterion::{criterion_group, criterion_main, Criterion};
 use kmerseek::encoding::{encode_kmer, encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
 use kmerseek::signature::SEED;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
 use std::path::PathBuf;
+use std::time::Instant;
+use sysinfo::System;
 use tempfile::tempdir;
 
 // Test protein sequence
@@ -186,13 +189,64 @@ EEEVVEGEKEVEALKKSADWVSDWSSRPENIPPKEFHFRHPKRSVSLSMRKSGAMKKGGI
 FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
     let fasta_path = temp_dir.path().join("test.fasta");
     std::fs::write(&fasta_path, fasta_content).unwrap();
+
     for moltype in MOLTYPES {
         for ksize in KSIZES {
-            let (index, _) = setup_test_index(ksize, moltype);
+            let temp_dir = tempdir().unwrap();
+            let db_path = temp_dir.path().join(format!("db_{}_{}", moltype, ksize));
+
+            // Create index with efficient storage disabled (store_raw_sequences = false)
+            let index =
+                ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, SEED, false).unwrap();
 
             c.bench_function(&format!("process_fasta_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
+                    // Initialize system info for memory measurement
+                    let mut sys = System::new();
+                    sys.refresh_memory();
+
+                    // Record start time for CPU measurement
+                    let start_time = Instant::now();
+
+                    // Get initial memory usage
+                    let initial_memory = sys.used_memory();
+
+                    // Process the FASTA file
                     index.process_fasta(&fasta_path, 0).unwrap();
+
+                    // Record end time
+                    let end_time = Instant::now();
+                    let cpu_time = end_time.duration_since(start_time);
+
+                    // Get final memory usage
+                    sys.refresh_memory();
+                    let final_memory = sys.used_memory();
+                    let memory_used = final_memory - initial_memory;
+
+                    // Calculate database file size
+                    let mut total_size = 0u64;
+                    if db_path.exists() {
+                        if db_path.is_dir() {
+                            // Sum up all files in the RocksDB directory
+                            for entry in fs::read_dir(&db_path).unwrap() {
+                                if let Ok(entry) = entry {
+                                    if let Ok(metadata) = entry.metadata() {
+                                        total_size += metadata.len();
+                                    }
+                                }
+                            }
+                        } else {
+                            // Single file
+                            if let Ok(metadata) = fs::metadata(&db_path) {
+                                total_size = metadata.len();
+                            }
+                        }
+                    }
+
+                    // Print metrics (these will be captured by criterion)
+                    println!("CPU time: {:?}", cpu_time);
+                    println!("Memory used: {} KB", memory_used);
+                    println!("Database size: {} bytes", total_size);
                 })
             });
         }
@@ -230,11 +284,56 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
             let db_path = temp_dir.path().join(format!("db_efficient_{}_{}", moltype, ksize));
 
             // Create index with efficient storage enabled (store_raw_sequences = true)
-            let index = ProteomeIndex::new(db_path, ksize, 1, moltype, SEED, true).unwrap();
+            let index = ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, SEED, true).unwrap();
 
             c.bench_function(&format!("process_fasta_efficient_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
+                    // Initialize system info for memory measurement
+                    let mut sys = System::new();
+                    sys.refresh_memory();
+
+                    // Record start time for CPU measurement
+                    let start_time = Instant::now();
+
+                    // Get initial memory usage
+                    let initial_memory = sys.used_memory();
+
+                    // Process the FASTA file
                     index.process_fasta(&fasta_path, 0).unwrap();
+
+                    // Record end time
+                    let end_time = Instant::now();
+                    let cpu_time = end_time.duration_since(start_time);
+
+                    // Get final memory usage
+                    sys.refresh_memory();
+                    let final_memory = sys.used_memory();
+                    let memory_used = final_memory - initial_memory;
+
+                    // Calculate database file size
+                    let mut total_size = 0u64;
+                    if db_path.exists() {
+                        if db_path.is_dir() {
+                            // Sum up all files in the RocksDB directory
+                            for entry in fs::read_dir(&db_path).unwrap() {
+                                if let Ok(entry) = entry {
+                                    if let Ok(metadata) = entry.metadata() {
+                                        total_size += metadata.len();
+                                    }
+                                }
+                            }
+                        } else {
+                            // Single file
+                            if let Ok(metadata) = fs::metadata(&db_path) {
+                                total_size = metadata.len();
+                            }
+                        }
+                    }
+
+                    // Print metrics (these will be captured by criterion)
+                    println!("CPU time: {:?}", cpu_time);
+                    println!("Memory used: {} KB", memory_used);
+                    println!("Database size: {} bytes", total_size);
                 })
             });
         }

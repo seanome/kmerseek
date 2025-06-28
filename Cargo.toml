@@ -39,6 +39,7 @@ human_bytes = "0.4.3"
 half = "=2.2.1"
 assert_cmd = "2.0"
 predicates = "3.0"
+sysinfo = "0.30"
 
 [profile.release]
 debug = "line-tables-only"
