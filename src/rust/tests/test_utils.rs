@@ -6,7 +6,7 @@ pub fn print_kmer_infos(protein_signature: &ProteinSignature) {
     println!("Name: {}", protein_signature.signature().name);
     println!("Len of Kmer infos: {}", protein_signature.kmer_infos().len());
     println!("Kmer Info Details:");
-    println!("Hash\t\t{}\tOrig\tPos", protein_signature.moltype());
+    println!("Hash\t\t\t{}\tOrig\tPos", protein_signature.moltype());
     println!("----------------------------------------");
     for (hash, kmer_info) in protein_signature.kmer_infos().iter() {
         for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
