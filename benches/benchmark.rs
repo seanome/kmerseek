@@ -27,7 +27,7 @@ fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     let mut file = File::create(&fasta_path).unwrap();
     writeln!(file, ">test_protein\n{}", TEST_PROTEIN).unwrap();
 
-    let index = ProteomeIndex::new(db_path, ksize, 1, moltype, SEED).unwrap();
+    let index = ProteomeIndex::new(db_path, ksize, 1, moltype, SEED, false).unwrap();
     (index, fasta_path)
 }
 

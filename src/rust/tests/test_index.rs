@@ -28,6 +28,7 @@ fn test_process_kmers_moltype_protein() -> Result<()> {
         1,             // scaled=1 to capture all kmers
         moltype,
         SEED,
+        false,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -131,6 +132,7 @@ fn test_process_kmers_moltype_dayhoff() -> Result<()> {
         1,             // scaled=1 to capture all kmers
         "dayhoff",
         SEED,
+        false,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -254,6 +256,7 @@ fn test_process_kmers_moltype_hp() -> Result<()> {
         1,             // scaled=1 to capture all kmers
         moltype,
         SEED,
+        false,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -385,6 +388,7 @@ fn test_create_protein_signature_moltype_protein() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -436,6 +440,7 @@ fn test_create_protein_signature_moltype_dayhoff() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -487,6 +492,7 @@ fn test_create_protein_signature_moltype_hp() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     let sequence = TEST_PROTEIN;
@@ -538,6 +544,7 @@ fn test_process_fasta_moltype_protein() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Create a temporary FASTA file for testing with distinct sequences
@@ -598,6 +605,7 @@ fn test_process_fasta_moltype_dayhoff() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Create a temporary FASTA file for testing with distinct sequences
@@ -658,6 +666,7 @@ fn test_process_fasta_moltype_hp() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Create a temporary FASTA file for testing with distinct sequences
@@ -718,6 +727,7 @@ fn test_process_fasta_gz_moltype_protein() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Process the FASTA file
@@ -775,6 +785,7 @@ fn test_process_fasta_gz_moltype_dayhoff() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Process the FASTA file
@@ -839,6 +850,7 @@ fn test_process_fasta_gz_moltype_hp() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Process the FASTA file
@@ -896,6 +908,7 @@ fn test_create_protein_signature_amino_acid_validation_moltype_protein() -> Resu
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Test valid sequences (including those with ambiguous amino acids that should be resolved)
@@ -990,6 +1003,7 @@ fn test_create_protein_signature_amino_acid_validation_moltype_dayhoff() -> Resu
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Test that ambiguous characters are resolved (not rejected)
@@ -1076,6 +1090,7 @@ fn test_create_protein_signature_amino_acid_validation_moltype_hp() -> Result<()
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Test that ambiguous characters are resolved (not rejected)
@@ -1162,6 +1177,7 @@ fn test_process_fasta_amino_acid_validation() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Create a temporary FASTA file with both valid and invalid sequences
@@ -1214,6 +1230,7 @@ fn test_create_protein_signature_no_ambiguous_chars() -> Result<()> {
         1, // scaled=1 to capture all kmers for testing
         moltype,
         SEED,
+        false,
     )?;
 
     // Test a sequence with no ambiguous characters
@@ -1241,8 +1258,8 @@ fn test_index_equivalence() {
     let db_path2 = temp_dir.path().join("test2.db");
 
     // Create two indices with the same parameters
-    let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED).unwrap();
-    let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED).unwrap();
+    let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED, false).unwrap();
+    let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED, false).unwrap();
 
     // Add the same signatures to both indices
     let sig1_1 = index1.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
@@ -1263,7 +1280,8 @@ fn test_index_equivalence() {
 
     // Test that different indices are not equivalent
     let index3 =
-        ProteomeIndex::new(&temp_dir.path().join("test3.db"), 10, 1, "protein", SEED).unwrap();
+        ProteomeIndex::new(&temp_dir.path().join("test3.db"), 10, 1, "protein", SEED, false)
+            .unwrap();
     assert!(!index1.is_equivalent_to(&index3).unwrap());
 }
 
@@ -1273,7 +1291,7 @@ fn test_index_stats() {
     let db_path = temp_dir.path().join("test.db");
 
     // Create a new index
-    let index = ProteomeIndex::new(&db_path, 10, 5, "hp", SEED).unwrap();
+    let index = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED, false).unwrap();
 
     // Add a test signature
     let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test").unwrap();
@@ -1298,7 +1316,8 @@ fn test_index_bcl2_processing() {
 
     // Test automatic filename generation
     println!("Testing automatic filename generation with BCL2 FASTA...");
-    let auto_index = ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp", SEED).unwrap();
+    let auto_index =
+        ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp", SEED, false).unwrap();
 
     // Verify the generated filename
     let expected_filename = "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.hp.k16.scaled5.kmerseek.rocksdb";
@@ -1323,7 +1342,7 @@ fn test_index_bcl2_processing() {
     println!("Creating comparison index...");
     let temp_dir = tempdir().unwrap();
     let comparison_path = temp_dir.path().join("comparison.hp.k16.scaled5.kmerseek.rocksdb");
-    let comparison_index = ProteomeIndex::new(&comparison_path, 16, 5, "hp", SEED).unwrap();
+    let comparison_index = ProteomeIndex::new(&comparison_path, 16, 5, "hp", SEED, false).unwrap();
     comparison_index.process_fasta(&fasta_path, 5).unwrap();
 
     // Test equivalence
@@ -1348,8 +1367,9 @@ fn test_automatic_filename_generation() {
     ];
 
     for (ksize, scaled, moltype, expected) in test_cases {
-        let index = ProteomeIndex::new_with_auto_filename(&base_path, ksize, scaled, moltype, SEED)
-            .unwrap();
+        let index =
+            ProteomeIndex::new_with_auto_filename(&base_path, ksize, scaled, moltype, SEED, false)
+                .unwrap();
         let generated = index.generate_filename("test.fasta");
         assert_eq!(
             generated, expected,
@@ -1365,7 +1385,7 @@ fn test_comprehensive_save_load() {
     let db_path = temp_dir.path().join("comprehensive_test.hp.k8.scaled10.kmerseek.rocksdb");
 
     // Create a comprehensive index with multiple signatures
-    let index1 = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED).unwrap();
+    let index1 = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED, false).unwrap();
 
     // Add multiple signatures with different characteristics
     let sequences = vec![
@@ -1419,6 +1439,7 @@ fn test_comprehensive_save_load() {
                 10,
                 "hp",
                 SEED,
+                false,
             )
             .unwrap();
 
@@ -1468,7 +1489,7 @@ fn test_bcl2_processing_workflow() {
 
         // Create index with automatic filename generation
         let auto_index =
-            ProteomeIndex::new_with_auto_filename(&fasta_path, ksize, scaled, moltype, SEED)
+            ProteomeIndex::new_with_auto_filename(&fasta_path, ksize, scaled, moltype, SEED, false)
                 .unwrap();
 
         // Verify the generated filename
@@ -1517,8 +1538,8 @@ fn test_equivalence_workflow() {
     let db_path2 = temp_dir.path().join("index2.db");
 
     // Create two indices with the same parameters
-    let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED).unwrap();
-    let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED).unwrap();
+    let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED, false).unwrap();
+    let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED, false).unwrap();
 
     // Add the same protein sequences to both indices
     let sequences = vec![
@@ -1546,7 +1567,8 @@ fn test_equivalence_workflow() {
 
     // Create a third index with different parameters
     let index3 =
-        ProteomeIndex::new(&temp_dir.path().join("index3.db"), 10, 1, "protein", SEED).unwrap();
+        ProteomeIndex::new(&temp_dir.path().join("index3.db"), 10, 1, "protein", SEED, false)
+            .unwrap();
 
     // Test that different indices are not equivalent
     let are_equivalent_3 = index1.is_equivalent_to(&index3).unwrap();
@@ -1554,7 +1576,8 @@ fn test_equivalence_workflow() {
 
     // Test with different sequences
     let index4 =
-        ProteomeIndex::new(&temp_dir.path().join("index4.db"), 5, 1, "protein", SEED).unwrap();
+        ProteomeIndex::new(&temp_dir.path().join("index4.db"), 5, 1, "protein", SEED, false)
+            .unwrap();
     let sig4 = index4.create_protein_signature("DIFFERENTSEQUENCE", "different").unwrap();
     index4.store_signatures(vec![sig4]).unwrap();
 
@@ -1582,7 +1605,8 @@ fn test_automatic_filename_generation_edge_cases() {
 
     for (base_name, expected) in test_cases {
         let base_path = temp_dir.path().join(base_name);
-        let index = ProteomeIndex::new_with_auto_filename(&base_path, 16, 5, "hp", SEED).unwrap();
+        let index =
+            ProteomeIndex::new_with_auto_filename(&base_path, 16, 5, "hp", SEED, false).unwrap();
         let generated = index.generate_filename(base_name);
         assert_eq!(generated, expected, "Failed for base_name: {}", base_name);
     }
@@ -1598,7 +1622,7 @@ fn test_automatic_filename_generation_edge_cases() {
     for (moltype, expected) in moltype_cases {
         let base_path = temp_dir.path().join("test.fasta");
         let index =
-            ProteomeIndex::new_with_auto_filename(&base_path, 8, 10, moltype, SEED).unwrap();
+            ProteomeIndex::new_with_auto_filename(&base_path, 8, 10, moltype, SEED, false).unwrap();
         let generated = index.generate_filename("test.fasta");
         assert_eq!(generated, expected, "Failed for moltype: {}", moltype);
     }
@@ -1615,7 +1639,7 @@ fn test_serialization_issue_demonstration() {
     let db_path = temp_dir.path().join("serialization_test.hp.k8.scaled10.kmerseek.rocksdb");
 
     // Create a simple index
-    let index = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED).unwrap();
+    let index = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED, false).unwrap();
 
     // Add a simple signature
     let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test_protein").unwrap();
@@ -1672,4 +1696,152 @@ fn test_serialization_issue_demonstration() {
             println!("The save_state() and load_state() methods work for in-memory operations but fail for persistent storage.");
         }
     }
+}
+
+#[test]
+fn test_efficient_storage_basic() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with raw sequence storage enabled
+    let index = ProteomeIndex::new(
+        dir.path().join("test_efficient_basic.db"),
+        5,         // k-mer size
+        1,         // scaled
+        "protein", // molecular type
+        42,        // seed
+        true,      // store raw sequences
+    )?;
+
+    // Add a protein sequence
+    let sequence = "ACDEFGHIKLMNPQRSTVWY";
+    let signature = index.create_protein_signature(sequence, "test_protein")?;
+
+    // Verify raw sequence is stored
+    assert!(signature.has_efficient_data());
+    let raw_sequence = signature.get_raw_sequence();
+    assert!(raw_sequence.is_some());
+    assert_eq!(raw_sequence.unwrap(), sequence);
+
+    // Store the signature
+    index.store_signatures(vec![signature])?;
+
+    // Verify the index has the correct configuration
+    assert_eq!(index.store_raw_sequences(), true);
+    assert_eq!(index.signature_count(), 1);
+
+    // Get the signature and verify raw sequence is preserved
+    let signatures = index.get_signatures().lock().unwrap();
+    let signature = signatures.values().next().unwrap();
+    assert!(signature.has_efficient_data());
+    let raw_sequence = signature.get_raw_sequence();
+    assert!(raw_sequence.is_some());
+    assert_eq!(raw_sequence.unwrap(), sequence);
+
+    Ok(())
+}
+
+#[test]
+fn test_efficient_storage_with_raw_sequences() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with raw sequence storage enabled
+    let index = ProteomeIndex::new(
+        dir.path().join("test_efficient.db"),
+        5,         // k-mer size
+        1,         // scaled
+        "protein", // molecular type
+        42,        // seed
+        true,      // store raw sequences
+    )?;
+
+    // Add a protein sequence
+    let sequence = "ACDEFGHIKLMNPQRSTVWY";
+    let signature = index.create_protein_signature(sequence, "test_protein")?;
+
+    // Verify raw sequence is stored
+    assert!(signature.has_efficient_data());
+    let raw_sequence = signature.get_raw_sequence();
+    assert!(raw_sequence.is_some());
+    assert_eq!(raw_sequence.unwrap(), sequence);
+
+    // Store the signature
+    index.store_signatures(vec![signature])?;
+
+    // Save and reload the index
+    index.save_state()?;
+
+    // Create a new index and load the state
+    let loaded_index =
+        ProteomeIndex::new(dir.path().join("test_efficient.db"), 5, 1, "protein", 42, true)?;
+
+    loaded_index.load_state()?;
+
+    // Verify the loaded index has the same configuration
+    assert_eq!(loaded_index.store_raw_sequences(), true);
+    assert_eq!(loaded_index.signature_count(), 1);
+
+    // Get the signature and verify raw sequence is preserved
+    let signatures = loaded_index.get_signatures().lock().unwrap();
+    let signature = signatures.values().next().unwrap();
+    assert!(signature.has_efficient_data());
+    let raw_sequence = signature.get_raw_sequence();
+    assert!(raw_sequence.is_some());
+    assert_eq!(raw_sequence.unwrap(), sequence);
+
+    Ok(())
+}
+
+#[test]
+fn test_efficient_storage_without_raw_sequences() -> Result<()> {
+    let dir = tempdir()?;
+
+    // Create index with raw sequence storage disabled
+    let index = ProteomeIndex::new(
+        dir.path().join("test_efficient_no_seq.db"),
+        5,         // k-mer size
+        1,         // scaled
+        "protein", // molecular type
+        42,        // seed
+        false,     // don't store raw sequences
+    )?;
+
+    // Add a protein sequence
+    let sequence = "ACDEFGHIKLMNPQRSTVWY";
+    let signature = index.create_protein_signature(sequence, "test_protein")?;
+
+    // Verify raw sequence is not stored
+    assert!(!signature.has_efficient_data());
+    let raw_sequence = signature.get_raw_sequence();
+    assert!(raw_sequence.is_none());
+
+    // Store the signature
+    index.store_signatures(vec![signature])?;
+
+    // Save and reload the index
+    index.save_state()?;
+
+    // Create a new index and load the state
+    let loaded_index = ProteomeIndex::new(
+        dir.path().join("test_efficient_no_seq.db"),
+        5,
+        1,
+        "protein",
+        42,
+        false,
+    )?;
+
+    loaded_index.load_state()?;
+
+    // Verify the loaded index has the same configuration
+    assert_eq!(loaded_index.store_raw_sequences(), false);
+    assert_eq!(loaded_index.signature_count(), 1);
+
+    // Get the signature and verify raw sequence is not stored
+    let signatures = loaded_index.get_signatures().lock().unwrap();
+    let signature = signatures.values().next().unwrap();
+    assert!(!signature.has_efficient_data());
+    let raw_sequence = signature.get_raw_sequence();
+    assert!(raw_sequence.is_none());
+
+    Ok(())
 }

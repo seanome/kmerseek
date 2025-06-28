@@ -20,7 +20,9 @@ use crate::encoding::{
     encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::kmer::KmerInfo;
-use crate::signature::{ProteinSignature, SerializableSignature, SignatureAccess};
+use crate::signature::{
+    ProteinSignature, ProteinSignatureData, SerializableSignature, SignatureAccess,
+};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,16 +31,19 @@ pub struct ProteomeIndexKmerStats {
     pub frequency: HashMap<u64, f64>, // Raw frequency for each k-mer hashvalue
 }
 
-// Represents the serializable state of ProteomeIndex
+// Represents the serializable state of ProteomeIndex using efficient storage
 #[derive(Serialize, Deserialize)]
 struct ProteomeIndexState {
-    // Store signatures instead of Collection
-    signatures: Vec<ProteinSignature>,
-    combined_minhash: KmerMinHash,
+    // Store efficient signature data instead of full signatures
+    signature_data: Vec<ProteinSignatureData>,
+    combined_mins: Vec<u64>,
+    combined_abunds: Option<Vec<u64>>,
     moltype: String,
     ksize: u32,
     scaled: u32,
     seed: u64,
+    // Configuration for raw sequence storage
+    store_raw_sequences: bool,
 }
 
 pub struct ProteomeIndex {
@@ -75,6 +80,9 @@ pub struct ProteomeIndex {
 
     // Add seed field for serialization
     seed: u64,
+
+    // Configuration for raw sequence storage
+    store_raw_sequences: bool,
 }
 
 impl ProteomeIndex {
@@ -84,6 +92,7 @@ impl ProteomeIndex {
         scaled: u32,
         moltype: &str,
         seed: u64,
+        store_raw_sequences: bool,
     ) -> Result<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
@@ -125,6 +134,7 @@ impl ProteomeIndex {
             scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             seed,
+            store_raw_sequences,
         })
     }
 
@@ -138,113 +148,80 @@ impl ProteomeIndex {
         &self.combined_minhash
     }
 
-    /// Save the current index state to RocksDB
+    /// Save the current index state to RocksDB using efficient storage format
     pub fn save_state(&self) -> Result<()> {
         let signatures_map = self.signatures.lock().unwrap();
         let combined_minhash = self.combined_minhash.lock().unwrap();
 
-        // Create a serializable state that avoids the problematic KmerMinHash
+        // Convert signatures to efficient storage format
         let mut signature_data = Vec::new();
         for sig in signatures_map.values() {
-            let minhash = sig.signature().get_minhash();
-            signature_data.push((
-                sig.signature().name.clone(),
-                sig.signature().md5sum.clone(),
-                minhash.mins().to_vec(),
-                minhash.abunds().map(|abunds| abunds.to_vec()),
-                sig.kmer_infos().clone(),
-            ));
+            let efficient_data = sig.to_efficient_data(self.store_raw_sequences);
+            signature_data.push(efficient_data);
         }
 
-        let state_data = (
+        // Create state with raw data
+        let state = ProteomeIndexState {
             signature_data,
-            combined_minhash.mins().to_vec(),
-            combined_minhash.abunds().map(|abunds| abunds.to_vec()),
-            self.moltype.clone(),
-            self.ksize,
-            self.scaled,
-            self.seed,
-        );
+            combined_mins: combined_minhash.mins().to_vec(),
+            combined_abunds: combined_minhash.abunds().map(|abunds| abunds.to_vec()),
+            moltype: self.moltype.clone(),
+            ksize: self.ksize,
+            scaled: self.scaled,
+            seed: self.seed,
+            store_raw_sequences: self.store_raw_sequences,
+        };
 
-        let serialized = bincode::serialize(&state_data)?;
+        let serialized = bincode::serialize(&state)?;
         self.db.put(b"index_state", &serialized)?;
 
         Ok(())
     }
 
-    /// Load index state from RocksDB
+    /// Load index state from RocksDB using efficient storage format
     pub fn load_state(&self) -> Result<()> {
         let serialized = self.db.get(b"index_state")?;
         if let Some(data) = serialized {
-            let state_data: (
-                Vec<(String, String, Vec<u64>, Option<Vec<u64>>, HashMap<u64, KmerInfo>)>,
-                Vec<u64>,
-                Option<Vec<u64>>,
-                String,
-                u32,
-                u32,
-                u64,
-            ) = bincode::deserialize(&data)?;
+            let state: ProteomeIndexState = bincode::deserialize(&data)?;
 
-            let (signature_data, combined_mins, combined_abunds, moltype, ksize, scaled, seed) =
-                state_data;
+            // Reconstruct signatures from efficient data
+            let mut signatures_map = HashMap::new();
+            for signature_data in state.signature_data {
+                let protein_sig = ProteinSignature::from_efficient_data(
+                    signature_data,
+                    state.moltype.clone(),
+                    state.ksize,
+                    state.scaled,
+                    state.seed,
+                )?;
+
+                let md5sum = protein_sig.signature().md5sum.clone();
+                signatures_map.insert(md5sum.to_string(), protein_sig);
+            }
 
             // Reconstruct the combined minhash
-            let hash_function = get_hash_function_from_moltype(&moltype)?;
-            let minhash_ksize = ksize * 3;
+            let hash_function = get_hash_function_from_moltype(&state.moltype)?;
+            let minhash_ksize = state.ksize * 3;
             let mut combined_minhash = KmerMinHash::new(
-                scaled,
+                state.scaled,
                 minhash_ksize,
                 hash_function,
-                seed,
+                state.seed,
                 true, // track_abundance
                 0,    // num (use scaled instead)
             );
 
-            if let Some(abunds) = combined_abunds {
+            if let Some(abunds) = &state.combined_abunds {
                 combined_minhash.add_many_with_abund(
-                    &combined_mins.into_iter().zip(abunds.into_iter()).collect::<Vec<_>>(),
+                    &state
+                        .combined_mins
+                        .clone()
+                        .into_iter()
+                        .zip(abunds.iter().cloned())
+                        .collect::<Vec<_>>(),
                 )?;
             } else {
-                combined_minhash.add_many(&combined_mins)?;
-            }
-
-            // Reconstruct signatures
-            let mut signatures_map = HashMap::new();
-            for (name, md5sum, mins, abunds, kmer_infos) in signature_data {
-                // Reconstruct the minhash for this signature
-                let sig_hash_function = get_hash_function_from_moltype(&moltype)?;
-                let mut minhash = KmerMinHash::new(
-                    scaled,
-                    minhash_ksize,
-                    sig_hash_function,
-                    seed,
-                    true, // track_abundance
-                    0,    // num (use scaled instead)
-                );
-
-                if let Some(abunds) = abunds {
-                    minhash.add_many_with_abund(
-                        &mins.into_iter().zip(abunds.into_iter()).collect::<Vec<_>>(),
-                    )?;
-                } else {
-                    minhash.add_many(&mins)?;
-                }
-
-                // Create the SerializableSignature
-                let signature =
-                    SerializableSignature { location: "".to_string(), name, md5sum, minhash };
-
-                // Create the ProteinSignature using the new constructor
-                let protein_sig = ProteinSignature::from_existing_data(
-                    signature,
-                    moltype.clone(),
-                    ksize,
-                    kmer_infos,
-                );
-
-                let md5sum = protein_sig.signature().md5sum.clone();
-                signatures_map.insert(md5sum.to_string(), protein_sig);
+                combined_minhash.add_many(&state.combined_mins)?;
             }
 
             // Update the current index state
@@ -283,10 +260,35 @@ impl ProteomeIndex {
             let _hash_function = get_hash_function_from_moltype(&state.moltype)?;
             let encoding_fn = get_encoding_fn_from_moltype(&state.moltype)?;
 
+            // Reconstruct the combined minhash from raw data
+            let hash_function = get_hash_function_from_moltype(&state.moltype)?;
+            let minhash_ksize = state.ksize * 3;
+            let mut combined_minhash = KmerMinHash::new(
+                state.scaled,
+                minhash_ksize,
+                hash_function,
+                state.seed,
+                true, // track_abundance
+                0,    // num (use scaled instead)
+            );
+
+            if let Some(abunds) = &state.combined_abunds {
+                combined_minhash.add_many_with_abund(
+                    &state
+                        .combined_mins
+                        .clone()
+                        .into_iter()
+                        .zip(abunds.iter().cloned())
+                        .collect::<Vec<_>>(),
+                )?;
+            } else {
+                combined_minhash.add_many(&state.combined_mins)?;
+            }
+
             let index = Self {
                 db,
                 signatures: Arc::new(Mutex::new(HashMap::new())),
-                combined_minhash: Arc::new(Mutex::new(state.combined_minhash.clone())),
+                combined_minhash: Arc::new(Mutex::new(combined_minhash)),
                 aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
                 encoding_fn,
                 moltype: state.moltype,
@@ -295,6 +297,7 @@ impl ProteomeIndex {
                 scaled: state.scaled,
                 stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
                 seed: state.seed,
+                store_raw_sequences: state.store_raw_sequences,
             };
 
             // Load the actual state
@@ -426,6 +429,15 @@ impl ProteomeIndex {
         println!("  Seed: {}", self.seed);
         println!("  Number of signatures: {}", self.signature_count());
         println!("  Combined minhash size: {}", self.combined_minhash_size());
+        println!(
+            "  Raw sequence storage: {}",
+            if self.store_raw_sequences { "enabled" } else { "disabled" }
+        );
+    }
+
+    /// Get the raw sequence storage configuration
+    pub fn store_raw_sequences(&self) -> bool {
+        self.store_raw_sequences
     }
 
     /// Generate a filename based on the index parameters
@@ -443,6 +455,7 @@ impl ProteomeIndex {
         scaled: u32,
         moltype: &str,
         seed: u64,
+        store_raw_sequences: bool,
     ) -> Result<Self> {
         let base_path = base_path.as_ref();
         let filename = format!(
@@ -454,7 +467,7 @@ impl ProteomeIndex {
         );
         let full_path = base_path.parent().unwrap().join(filename);
 
-        Self::new(full_path, ksize, scaled, moltype, seed)
+        Self::new(full_path, ksize, scaled, moltype, seed, store_raw_sequences)
     }
 
     /// Add a single protein sequence as a signature and process its k-mers
@@ -491,6 +504,7 @@ impl ProteomeIndex {
     ///         1,        // scaled (1 = capture all k-mers)
     ///         "protein", // molecular type
     ///         42,       // seed
+    ///         false,    // store raw sequences
     ///     )?;
     ///     
     ///     // Add a protein sequence
@@ -514,6 +528,15 @@ impl ProteomeIndex {
 
         // Process the k-mers to get detailed k-mer information
         self.process_kmers(&processed_sequence, &mut protein_sig)?;
+
+        // If raw sequence storage is enabled, create efficient data with the sequence
+        if self.store_raw_sequences {
+            let efficient_data =
+                protein_sig.to_efficient_data_with_capacity(processed_sequence.len());
+            let mut efficient_data_with_sequence = efficient_data;
+            efficient_data_with_sequence.set_raw_sequence(processed_sequence.to_string());
+            protein_sig.set_efficient_data(efficient_data_with_sequence);
+        }
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)
