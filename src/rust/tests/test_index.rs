@@ -1385,7 +1385,7 @@ fn test_comprehensive_save_load() {
     let db_path = temp_dir.path().join("comprehensive_test.hp.k8.scaled10.kmerseek.rocksdb");
 
     // Create a comprehensive index with multiple signatures
-    let index1 = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED, false).unwrap();
+    let index1 = ProteomeIndex::new(&db_path, 8, 2, "hp", SEED, false).unwrap();
 
     // Add multiple signatures with different characteristics
     let sequences = vec![
@@ -1401,21 +1401,26 @@ fn test_comprehensive_save_load() {
         index1.store_signatures(vec![sig]).unwrap();
     }
 
+    // Print kmer infos for each signature in index1
+    let signatures = index1.get_signatures().lock().unwrap();
+    for (md5, sig) in signatures.iter() {
+        println!("\nKmer infos for signature {}:", md5);
+        print_kmer_infos(sig);
+    }
+
     println!("Index 1 stats before saving:");
     index1.print_stats();
 
     // Save the state
     println!("Saving index state...");
-    match index1.save_state() {
+    let save_result = index1.save_state();
+    match save_result {
         Ok(_) => println!("Save successful!"),
         Err(e) => {
             println!("Save failed: {}", e);
             return; // Skip the rest of the test if save fails
         }
     }
-
-    // Drop the first index to release RocksDB lock
-    drop(index1);
 
     // Try to load the index
     println!("Attempting to load index...");
