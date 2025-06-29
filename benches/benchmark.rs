@@ -5,9 +5,9 @@ use kmerseek::signature::SEED;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
+use std::mem;
 use std::path::PathBuf;
 use std::time::Instant;
-use sysinfo::System;
 use tempfile::tempdir;
 
 // Test protein sequence
@@ -44,7 +44,24 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
                 &format!("create_protein_signature_standard_{}_{}", moltype, ksize),
                 |b| {
                     b.iter(|| {
-                        index.create_protein_signature(TEST_PROTEIN, "test_protein").unwrap();
+                        // Record start time for CPU measurement
+                        let start_time = Instant::now();
+
+                        // Create protein signature
+                        let signature =
+                            index.create_protein_signature(TEST_PROTEIN, "test_protein").unwrap();
+
+                        // Record end time
+                        let end_time = Instant::now();
+                        let cpu_time = end_time.duration_since(start_time);
+
+                        // Measure basic memory usage (stack size)
+                        let memory_used = mem::size_of_val(&signature);
+
+                        // Print metrics
+                        println!("CPU time: {:?}", cpu_time);
+                        println!("Stack memory: {} bytes", memory_used);
+                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -54,12 +71,28 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
                 &format!("create_protein_signature_ambiguous_{}_{}", moltype, ksize),
                 |b| {
                     b.iter(|| {
-                        index
+                        // Record start time for CPU measurement
+                        let start_time = Instant::now();
+
+                        // Create protein signature
+                        let signature = index
                             .create_protein_signature(
                                 TEST_PROTEIN_WITH_AMBIGUOUS,
                                 "test_protein_ambiguous",
                             )
                             .unwrap();
+
+                        // Record end time
+                        let end_time = Instant::now();
+                        let cpu_time = end_time.duration_since(start_time);
+
+                        // Measure basic memory usage (stack size)
+                        let memory_used = mem::size_of_val(&signature);
+
+                        // Print metrics
+                        println!("CPU time: {:?}", cpu_time);
+                        println!("Stack memory: {} bytes", memory_used);
+                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -69,12 +102,28 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
                 &format!("create_protein_signature_special_{}_{}", moltype, ksize),
                 |b| {
                     b.iter(|| {
-                        index
+                        // Record start time for CPU measurement
+                        let start_time = Instant::now();
+
+                        // Create protein signature
+                        let signature = index
                             .create_protein_signature(
                                 TEST_PROTEIN_WITH_SPECIAL,
                                 "test_protein_special",
                             )
                             .unwrap();
+
+                        // Record end time
+                        let end_time = Instant::now();
+                        let cpu_time = end_time.duration_since(start_time);
+
+                        // Measure basic memory usage (stack size)
+                        let memory_used = mem::size_of_val(&signature);
+
+                        // Print metrics
+                        println!("CPU time: {:?}", cpu_time);
+                        println!("Stack memory: {} bytes", memory_used);
+                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -84,9 +133,25 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
                 &format!("create_protein_signature_stop_{}_{}", moltype, ksize),
                 |b| {
                     b.iter(|| {
-                        index
+                        // Record start time for CPU measurement
+                        let start_time = Instant::now();
+
+                        // Create protein signature
+                        let signature = index
                             .create_protein_signature(TEST_PROTEIN_WITH_STOP, "test_protein_stop")
                             .unwrap();
+
+                        // Record end time
+                        let end_time = Instant::now();
+                        let cpu_time = end_time.duration_since(start_time);
+
+                        // Measure basic memory usage (stack size)
+                        let memory_used = mem::size_of_val(&signature);
+
+                        // Print metrics
+                        println!("CPU time: {:?}", cpu_time);
+                        println!("Stack memory: {} bytes", memory_used);
+                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -97,14 +162,31 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
     for moltype in MOLTYPES {
         for ksize in KSIZES {
-            let (index, _) = setup_test_index(ksize, moltype);
+            let (_index, _) = setup_test_index(ksize, moltype);
             let encoding_fn = kmerseek::encoding::get_encoding_fn_from_moltype(moltype).unwrap();
             c.bench_function(&format!("proteome_index_encode_kmer_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
-                    kmerseek::encoding::encode_kmer_with_encoding_fn(
+                    // Record start time for CPU measurement
+                    let start_time = Instant::now();
+
+                    // Encode kmer
+                    let encoded = kmerseek::encoding::encode_kmer_with_encoding_fn(
                         &TEST_PROTEIN[..ksize as usize],
                         encoding_fn,
                     )
+                    .unwrap();
+
+                    // Record end time
+                    let end_time = Instant::now();
+                    let cpu_time = end_time.duration_since(start_time);
+
+                    // Measure basic memory usage (stack size)
+                    let memory_used = mem::size_of_val(&encoded);
+
+                    // Print metrics
+                    println!("CPU time: {:?}", cpu_time);
+                    println!("Stack memory: {} bytes", memory_used);
+                    println!("Encoded kmer: {:?}", encoded);
                 })
             });
         }
@@ -115,7 +197,25 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
     for moltype in MOLTYPES {
         for ksize in KSIZES {
             c.bench_function(&format!("encodings_encode_kmer_{}_{}", moltype, ksize), |b| {
-                b.iter(|| encode_kmer(&TEST_PROTEIN[..ksize as usize], moltype))
+                b.iter(|| {
+                    // Record start time for CPU measurement
+                    let start_time = Instant::now();
+
+                    // Encode kmer
+                    let encoded = encode_kmer(&TEST_PROTEIN[..ksize as usize], moltype);
+
+                    // Record end time
+                    let end_time = Instant::now();
+                    let cpu_time = end_time.duration_since(start_time);
+
+                    // Measure basic memory usage (stack size)
+                    let memory_used = mem::size_of_val(&encoded);
+
+                    // Print metrics
+                    println!("CPU time: {:?}", cpu_time);
+                    println!("Stack memory: {} bytes", memory_used);
+                    println!("Encoded kmer: {:?}", encoded);
+                })
             });
         }
     }
@@ -129,7 +229,26 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
                 &format!("encodings_encode_kmer_with_encoding_fn_{}_{}", moltype, ksize),
                 |b| {
                     b.iter(|| {
-                        encode_kmer_with_encoding_fn(&TEST_PROTEIN[..ksize as usize], encoding_fn)
+                        // Record start time for CPU measurement
+                        let start_time = Instant::now();
+
+                        // Encode kmer
+                        let encoded = encode_kmer_with_encoding_fn(
+                            &TEST_PROTEIN[..ksize as usize],
+                            encoding_fn,
+                        );
+
+                        // Record end time
+                        let end_time = Instant::now();
+                        let cpu_time = end_time.duration_since(start_time);
+
+                        // Measure basic memory usage (stack size)
+                        let memory_used = mem::size_of_val(&encoded);
+
+                        // Print metrics
+                        println!("CPU time: {:?}", cpu_time);
+                        println!("Stack memory: {} bytes", memory_used);
+                        println!("Encoded kmer: {:?}", encoded);
                     })
                 },
             );
@@ -157,8 +276,24 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
 
             c.bench_function(&format!("process_protein_kmers_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
+                    // Record start time for CPU measurement
+                    let start_time = Instant::now();
+
+                    // Process kmers
                     let mut sig = protein_sig.clone();
                     index.process_kmers(TEST_PROTEIN, &mut sig).unwrap();
+
+                    // Record end time
+                    let end_time = Instant::now();
+                    let cpu_time = end_time.duration_since(start_time);
+
+                    // Measure basic memory usage (stack size)
+                    let memory_used = mem::size_of_val(&sig);
+
+                    // Print metrics
+                    println!("CPU time: {:?}", cpu_time);
+                    println!("Stack memory: {} bytes", memory_used);
+                    println!("Processed kmer count: {}", sig.kmer_infos().len());
                 })
             });
         }
@@ -201,15 +336,8 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 
             c.bench_function(&format!("process_fasta_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
-                    // Initialize system info for memory measurement
-                    let mut sys = System::new();
-                    sys.refresh_memory();
-
                     // Record start time for CPU measurement
                     let start_time = Instant::now();
-
-                    // Get initial memory usage
-                    let initial_memory = sys.used_memory();
 
                     // Process the FASTA file
                     index.process_fasta(&fasta_path, 0).unwrap();
@@ -217,11 +345,6 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
                     // Record end time
                     let end_time = Instant::now();
                     let cpu_time = end_time.duration_since(start_time);
-
-                    // Get final memory usage
-                    sys.refresh_memory();
-                    let final_memory = sys.used_memory();
-                    let memory_used = final_memory - initial_memory;
 
                     // Calculate database file size
                     let mut total_size = 0u64;
@@ -245,7 +368,6 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 
                     // Print metrics (these will be captured by criterion)
                     println!("CPU time: {:?}", cpu_time);
-                    println!("Memory used: {} KB", memory_used);
                     println!("Database size: {} bytes", total_size);
                 })
             });
@@ -288,15 +410,8 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 
             c.bench_function(&format!("process_fasta_efficient_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
-                    // Initialize system info for memory measurement
-                    let mut sys = System::new();
-                    sys.refresh_memory();
-
                     // Record start time for CPU measurement
                     let start_time = Instant::now();
-
-                    // Get initial memory usage
-                    let initial_memory = sys.used_memory();
 
                     // Process the FASTA file
                     index.process_fasta(&fasta_path, 0).unwrap();
@@ -304,11 +419,6 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
                     // Record end time
                     let end_time = Instant::now();
                     let cpu_time = end_time.duration_since(start_time);
-
-                    // Get final memory usage
-                    sys.refresh_memory();
-                    let final_memory = sys.used_memory();
-                    let memory_used = final_memory - initial_memory;
 
                     // Calculate database file size
                     let mut total_size = 0u64;
@@ -332,7 +442,6 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 
                     // Print metrics (these will be captured by criterion)
                     println!("CPU time: {:?}", cpu_time);
-                    println!("Memory used: {} KB", memory_used);
                     println!("Database size: {} bytes", total_size);
                 })
             });
