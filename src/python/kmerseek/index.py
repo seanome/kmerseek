@@ -58,9 +58,6 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
 
     siglist = _make_siglist_file(sig)
 
-    # Colors set to false because that's what the sourmash_plugin_branchwater code does
-    colors = False
-
     # internal storage is false: don't store the signatures in the index, since the signatures are
     # in the same filesystem, "next door" in the same folder
     internal_storage = False
@@ -71,7 +68,6 @@ def make_rocksdb_index(sig, moltype, ksize, scaled):
         scaled,
         moltype,
         output,
-        colors,
         internal_storage,
     )
     if status == 0:

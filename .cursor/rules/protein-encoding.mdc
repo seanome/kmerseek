@@ -1,0 +1,37 @@
+---
+description: 
+globs: 
+alwaysApply: false
+---
+# Protein Sequence Handling in Sourmash
+
+When working with protein sequences in sourmash, follow these guidelines:
+
+## Encoding Types
+Sourmash supports three protein encoding types:
+1. Raw protein (default) - No transformation
+2. Dayhoff encoding - Groups amino acids by physicochemical properties
+3. HP (hydrophobic-polar) encoding - Binary encoding based on hydrophobicity
+
+## Key Files for Reference
+- Encoding functions: `REFERENCE_sourmash/src/core/src/encodings.rs`
+  - Contains `aa_to_dayhoff()` and `aa_to_hp()`
+- Hash functions: `REFERENCE_sourmash/src/core/src/sketch/minhash.rs`
+  - `HashFunctions` enum defines `Murmur64Protein`, `Murmur64Dayhoff`, `Murmur64Hp`
+
+## Amino Acid Handling
+- Standard amino acids: A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y
+- Ambiguity codes:
+  - X: Any amino acid
+  - B: D or N (Aspartic acid or Asparagine)
+  - Z: E or Q (Glutamic acid or Glutamine)
+  - J: I or L (Isoleucine or Leucine)
+
+## Implementation Notes
+1. Always validate input sequences before processing
+2. Handle ambiguity codes appropriately
+3. Use sourmash's built-in encoding functions
+4. Match hash functions with encoding types:
+   - Raw protein → `Murmur64Protein`
+   - Dayhoff → `Murmur64Dayhoff`
+   - HP → `Murmur64Hp`
