@@ -12,6 +12,7 @@ echo
 # Test file
 TEST_FILE="tests/testdata/fasta/ced9.fasta"
 TEST_FILE_GZ="tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz"
+TEST_FILE_LARGE="tests/testdata/fasta/uniprotkb_protein_name_Uncharacterized_2025_04_15.fasta.gz"
 
 # Create temporary directory
 TEMP_DIR=$(mktemp -d)
@@ -73,15 +74,45 @@ echo "  Python: ${PYTHON_TIME}s, ${PYTHON_SIZE}"
 echo "  Speedup: $(echo "scale=2; $PYTHON_TIME / $RUST_TIME" | bc)x"
 echo
 
-echo "Test 3: Memory usage comparison"
+echo "Test 3: Large uncharacterized protein dataset (~2800 sequences)"
+echo "---------------------------------------------------------------"
+
+# Clean up previous outputs
+rm -f "$TEST_FILE_LARGE.protein.k10.scaled5.sig.zip"
+rm -rf "$TEMP_DIR/rust_output3.db"
+
+# Rust version
+echo "Rust CLI:"
+RUST_START=$(date +%s.%N)
+kmerseek-rust index --input "$TEST_FILE_LARGE" --output "$TEMP_DIR/rust_output3.db" --ksize 10 --encoding protein
+RUST_END=$(date +%s.%N)
+RUST_TIME=$(echo "$RUST_END - $RUST_START" | bc)
+RUST_SIZE=$(du -h "$TEMP_DIR/rust_output3.db" | cut -f1)
+
+# Python version
+echo "Python CLI:"
+PYTHON_START=$(date +%s.%N)
+kmerseek index "$TEST_FILE_LARGE" --extract-kmers --moltype protein --ksize 10 --scaled 5 --force
+PYTHON_END=$(date +%s.%N)
+PYTHON_TIME=$(echo "$PYTHON_END - $PYTHON_START" | bc)
+PYTHON_SIZE=$(du -h "$TEST_FILE_LARGE.protein.k10.scaled5.sig.zip" | cut -f1)
+
+echo
+echo "Results for large uncharacterized protein dataset:"
+echo "  Rust:   ${RUST_TIME}s, ${RUST_SIZE}"
+echo "  Python: ${PYTHON_TIME}s, ${PYTHON_SIZE}"
+echo "  Speedup: $(echo "scale=2; $PYTHON_TIME / $RUST_TIME" | bc)x"
+echo
+
+echo "Test 4: Memory usage comparison"
 echo "-------------------------------"
 
 # Memory usage for larger file
 echo "Rust memory usage:"
-RUST_MEMORY=$(/usr/bin/time -l kmerseek-rust index --input "$TEST_FILE_GZ" --output "$TEMP_DIR/rust_memory.db" --ksize 10 --encoding protein 2>&1 | grep "maximum resident set size" | awk '{print $1}')
+RUST_MEMORY=$(/usr/bin/time -l kmerseek-rust index --input "$TEST_FILE_LARGE" --output "$TEMP_DIR/rust_memory.db" --ksize 10 --encoding protein 2>&1 | grep "maximum resident set size" | awk '{print $1}')
 
 echo "Python memory usage:"
-PYTHON_MEMORY=$(/usr/bin/time -l kmerseek index "$TEST_FILE_GZ" --extract-kmers --moltype protein --ksize 10 --scaled 1 --force 2>&1 | grep "maximum resident set size" | awk '{print $1}')
+PYTHON_MEMORY=$(/usr/bin/time -l kmerseek index "$TEST_FILE_LARGE" --extract-kmers --moltype protein --ksize 10 --scaled 5 --force 2>&1 | grep "maximum resident set size" | awk '{print $1}')
 
 echo
 echo "Memory usage (KB):"
