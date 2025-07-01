@@ -16,6 +16,14 @@ import sourmash
 from .logging import logger
 
 
+KMERS_CSV_SCHEMA = {
+    "sequence_file": pl.Utf8,
+    "sequence_name": pl.Utf8,
+    "kmer": pl.Utf8,
+    "hashval": pl.UInt64,
+}
+
+
 def _make_kmer_filename(sig):
     return f"{sig}.kmers.pq"
 
@@ -89,9 +97,8 @@ def add_encoding_to_kmers_pl(kmers, moltype):
             pl.col("kmer")
             # Need to specify return type as return_dtype=pl.Utf8, otherwise polars
             # refuses to sink to parquet because it doesn't know the datatype
-            .map_elements(
-                lambda x: encode_protein(x, moltype), return_dtype=pl.Utf8
-            ).alias("encoded")
+            .map_elements(lambda x: encode_protein(x, moltype), return_dtype=pl.Utf8)
+            .alias("encoded")
         )
     else:
         kmers_with_encoding = kmers
@@ -164,7 +171,7 @@ def postprocess_kmers(
     """
     logger.info(f"Reading in k-mers, adding {moltype} encoded values")
     # Read in as a LazyFrame to not load everything into memory
-    kmers = pl.scan_csv(in_csv)
+    kmers = pl.scan_csv(in_csv, schema=KMERS_CSV_SCHEMA)
 
     kmers_with_encoding = add_encoding_to_kmers_pl(kmers, moltype)
     kmers_with_encoding_and_starts = add_start_position_to_kmers_pl(
@@ -172,38 +179,40 @@ def postprocess_kmers(
     )
 
     # TODO: Could this be sink_parquet and be properly streaming?
-    kmers_with_encoding_and_starts.collect(streaming=True).write_parquet(out_pq)
+    kmers_with_encoding_and_starts.collect().write_parquet(out_pq)
 
 
 def get_kmers_cli(sig, fasta, moltype, ksize, scaled):
     # Create a temporary file for kmers CSV
     # TODO: Could potentially run out of temporary disk space but ...
     # maybe can stream the output to a parquet file / polars lazyframe?
-    with NamedTemporaryFile(suffix=".csv") as tmp_kmers, NamedTemporaryFile(
-        suffix=".fasta"
-    ) as tmp_fasta:
-        args = Args(
-            sig=sig,
-            fasta=fasta,
-            moltype=moltype,  # or "dna", "dayhoff", "hp"
-            ksize=ksize,
-            scaled=scaled,
-            save_kmers=tmp_kmers.name,  # Use the temp csv path for save_kmers
-            save_sequences=tmp_fasta.name,  # Use the temp fasta path for save_sequences
-        )
+    # with NamedTemporaryFile(suffix=".csv") as tmp_kmers, NamedTemporaryFile(
+    #     suffix=".fasta"
+    # ) as tmp_fasta:
+    save_kmers = f"{sig}.kmers.csv"
+    save_sequences = f"{sig}.fasta"
+    args = Args(
+        sig=sig,
+        fasta=fasta,
+        moltype=moltype,  # or "dna", "dayhoff", "hp"
+        ksize=ksize,
+        scaled=scaled,
+        save_kmers=save_kmers,  # Use the temp csv path for save_kmers
+        save_sequences=save_sequences,  # Use the temp fasta path for save_sequences
+    )
 
-        # TODO: this "works" but calls what's normally a CLI as a Python method...
-        # would love for this to be just a regular Python method that you could
-        # feed sigs and fastas to
-        logger.info(f"Calling get_kmers_cli on {sig} with {fasta}")
-        logger.info(f"Saving matches to {args.save_kmers}")
-        # CLI call: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/cli/sig/kmers.py#L96
-        # Actual code that gets run: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/sig/__main__.py#L1087
-        sourmash.sig.__main__.kmers(args)
+    # TODO: this "works" but calls what's normally a CLI as a Python method...
+    # would love for this to be just a regular Python method that you could
+    # feed sigs and fastas to
+    logger.info(f"Calling get_kmers_cli on {sig} with {fasta}")
+    logger.info(f"Saving matches to {args.save_kmers}")
+    # CLI call: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/cli/sig/kmers.py#L96
+    # Actual code that gets run: https://github.com/sourmash-bio/sourmash/blob/c209e7d39d80aa8eceed8d5a0c91568f96fded3f/src/sourmash/sig/__main__.py#L1087
+    sourmash.sig.__main__.kmers(args)
 
-        out_pq = _make_kmer_filename(sig)
+    out_pq = _make_kmer_filename(sig)
 
-        # Process the temp CSV file
-        postprocess_kmers(tmp_kmers.name, tmp_fasta.name, moltype, out_pq, ksize)
+    # Process the temp CSV file
+    postprocess_kmers(save_kmers, save_sequences, moltype, out_pq, ksize)
 
-        return out_pq
+    return out_pq
