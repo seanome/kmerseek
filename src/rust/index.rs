@@ -285,9 +285,24 @@ impl ProteomeIndex {
                 combined_minhash.add_many(&state.combined_mins)?;
             }
 
+            // Reconstruct signatures from efficient data
+            let mut signatures_map = HashMap::new();
+            for signature_data in state.signature_data {
+                let protein_sig = ProteinSignature::from_efficient_data(
+                    signature_data,
+                    state.moltype.clone(),
+                    state.ksize,
+                    state.scaled,
+                    state.seed,
+                )?;
+
+                let md5sum = protein_sig.signature().md5sum.clone();
+                signatures_map.insert(md5sum.to_string(), protein_sig);
+            }
+
             let index = Self {
                 db,
-                signatures: Arc::new(Mutex::new(HashMap::new())),
+                signatures: Arc::new(Mutex::new(signatures_map)),
                 combined_minhash: Arc::new(Mutex::new(combined_minhash)),
                 aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
                 encoding_fn,
@@ -299,9 +314,6 @@ impl ProteomeIndex {
                 seed: state.seed,
                 store_raw_sequences: state.store_raw_sequences,
             };
-
-            // Load the actual state
-            index.load_state()?;
 
             Ok(index)
         } else {
@@ -345,7 +357,8 @@ impl ProteomeIndex {
             return Ok(false);
         }
 
-        // Compare signatures
+        // Compare signatures - use consistent lock ordering to avoid deadlocks
+        // Always lock self before other to prevent deadlocks
         let self_signatures = self.signatures.lock().unwrap();
         let other_signatures = other.signatures.lock().unwrap();
 
@@ -407,7 +420,11 @@ impl ProteomeIndex {
             }
         }
 
-        // Compare combined minhashes
+        // Drop the signature locks before acquiring minhash locks to prevent deadlocks
+        drop(self_signatures);
+        drop(other_signatures);
+
+        // Compare combined minhashes - use consistent lock ordering
         let self_combined = self.combined_minhash.lock().unwrap();
         let other_combined = other.combined_minhash.lock().unwrap();
 
