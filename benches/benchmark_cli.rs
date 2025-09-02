@@ -21,23 +21,27 @@ fn benchmark_rust_cli_performance(c: &mut Criterion) {
             // Test different encodings
             for encoding in ["protein", "hp", "dayhoff"] {
                 let benchmark_name = format!("{}_{}_k{}", name, encoding, ksize);
-                
+
                 group.bench_function(&benchmark_name, |b| {
                     b.iter(|| {
                         let temp_dir = tempdir().unwrap();
                         let output_path = temp_dir.path().join("test_output.db");
-                        
+
                         let status = Command::new("kmerseek-rust")
                             .args([
                                 "index",
-                                "--input", file_path,
-                                "--output", output_path.to_str().unwrap(),
-                                "--ksize", &ksize.to_string(),
-                                "--encoding", encoding,
+                                "--input",
+                                file_path,
+                                "--output",
+                                output_path.to_str().unwrap(),
+                                "--ksize",
+                                &ksize.to_string(),
+                                "--encoding",
+                                encoding,
                             ])
                             .status()
                             .expect("Failed to execute kmerseek-rust");
-                        
+
                         assert!(status.success(), "kmerseek-rust failed");
                     });
                 });
@@ -91,20 +95,24 @@ fn benchmark_output_size(c: &mut Criterion) {
         b.iter(|| {
             let temp_dir = tempdir().unwrap();
             let output_path = temp_dir.path().join("test_output.db");
-            
+
             let status = Command::new("kmerseek-rust")
                 .args([
                     "index",
-                    "--input", test_file,
-                    "--output", output_path.to_str().unwrap(),
-                    "--ksize", "10",
-                    "--encoding", "protein",
+                    "--input",
+                    test_file,
+                    "--output",
+                    output_path.to_str().unwrap(),
+                    "--ksize",
+                    "10",
+                    "--encoding",
+                    "protein",
                 ])
                 .status()
                 .expect("Failed to execute kmerseek-rust");
-            
+
             assert!(status.success(), "kmerseek-rust failed");
-            
+
             // Measure output size
             let metadata = std::fs::metadata(&output_path).unwrap();
             let size_mb = metadata.len() as f64 / (1024.0 * 1024.0);
@@ -121,4 +129,4 @@ criterion_group!(
     benchmark_memory_usage,
     benchmark_output_size,
 );
-criterion_main!(benches); 
+criterion_main!(benches);
