@@ -619,7 +619,7 @@ impl ProteomeIndex {
                 let minhash = sig.signature().get_minhash();
                 // If abundance is tracked, use to_vec_abunds, else use mins with abundance 1
                 if let Some(abunds) = minhash.abunds() {
-                    minhash.mins().into_iter().zip(abunds.into_iter()).collect::<Vec<_>>()
+                    minhash.mins().into_iter().zip(abunds).collect::<Vec<_>>()
                 } else {
                     minhash.mins().into_iter().map(|h| (h, 1)).collect::<Vec<_>>()
                 }
