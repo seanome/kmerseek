@@ -61,6 +61,8 @@ pub struct ProteomeIndex {
     encoding_fn: fn(u8) -> u8,
 
     // Statistics for k-mer frequencies and IDF
+    // Not currently used, but will be used in the future
+    #[allow(dead_code)]
     stats: ProteomeIndexKmerStats,
 
     // Add moltype field for serialization
@@ -71,6 +73,8 @@ pub struct ProteomeIndex {
 
     // Add minhash_ksize field for serialization
     // MinHash k-mer size is protein_ksize * 3, as a legacy from Sourmash which was originally designed for DNA
+    // Not currently used, but will be used in the future
+    #[allow(dead_code)]
     minhash_ksize: u32,
 
     // Add scaled field for serialization

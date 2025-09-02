@@ -60,6 +60,8 @@ fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
 
 #[pyclass]
 pub struct PyProteomeIndex {
+    // Not currently used, but will be used in the future
+    #[allow(dead_code)]
     index: crate::index::ProteomeIndex,
 }
 
