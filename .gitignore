@@ -195,3 +195,13 @@ REFERENCE*
 
 # Ignore cargo flamegraph output from profiling
 flamegraph.svg
+
+# RocksDB files
+*.rocksdb/
+*.sst
+*.log
+MANIFEST-*
+OPTIONS-*
+CURRENT
+IDENTITY
+LOCK
