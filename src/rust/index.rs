@@ -20,9 +20,7 @@ use crate::encoding::{
     encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::kmer::KmerInfo;
-use crate::signature::{
-    ProteinSignature, ProteinSignatureData, SignatureAccess,
-};
+use crate::signature::{ProteinSignature, ProteinSignatureData, SignatureAccess};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -588,11 +586,7 @@ impl ProteomeIndex {
                         original_kmer_to_position: HashMap::new(),
                     });
 
-                kmer_info
-                    .original_kmer_to_position
-                    .entry(original_kmer)
-                    .or_default()
-                    .push(i);
+                kmer_info.original_kmer_to_position.entry(original_kmer).or_default().push(i);
             }
         }
 
