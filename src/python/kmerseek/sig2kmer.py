@@ -97,8 +97,9 @@ def add_encoding_to_kmers_pl(kmers, moltype):
             pl.col("kmer")
             # Need to specify return type as return_dtype=pl.Utf8, otherwise polars
             # refuses to sink to parquet because it doesn't know the datatype
-            .map_elements(lambda x: encode_protein(x, moltype), return_dtype=pl.Utf8)
-            .alias("encoded")
+            .map_elements(
+                lambda x: encode_protein(x, moltype), return_dtype=pl.Utf8
+            ).alias("encoded")
         )
     else:
         kmers_with_encoding = kmers
