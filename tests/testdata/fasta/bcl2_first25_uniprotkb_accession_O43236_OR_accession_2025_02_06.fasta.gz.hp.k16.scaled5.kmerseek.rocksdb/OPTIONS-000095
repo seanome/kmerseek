@@ -86,7 +86,7 @@
   use_adaptive_mutex=false
   prefix_seek_opt_in_only=false
   wal_filter=nullptr
-  create_if_missing=true
+  create_if_missing=false
   enforce_single_del_contracts=true
   allow_mmap_writes=false
   verify_sst_unique_id_in_manifest=true
