@@ -62,7 +62,7 @@ fn benchmark_memory_usage(c: &mut Criterion) {
         b.iter(|| {
             let temp_dir = tempdir().unwrap();
             let output_path = temp_dir.path().join("test_output.db");
-            
+
             // Use /usr/bin/time to measure memory usage on Unix systems
             let output = Command::new("sh")
                 .arg("-c")
@@ -73,7 +73,7 @@ fn benchmark_memory_usage(c: &mut Criterion) {
                 ))
                 .output()
                 .expect("Failed to execute command");
-            
+
             // Parse memory usage from output (macOS format)
             let output_str = String::from_utf8_lossy(&output.stdout);
             if let Some(memory_line) = output_str.lines().find(|line| line.contains("maximum resident set size")) {
