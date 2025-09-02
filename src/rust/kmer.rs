@@ -26,6 +26,6 @@ impl KmerInfo {
     pub fn add_kmer_position(&mut self, kmer: &str, position: usize) {
         let mut key = String::with_capacity(self.ksize);
         key.push_str(kmer);
-        self.original_kmer_to_position.entry(key).or_insert_with(Vec::new).push(position);
+        self.original_kmer_to_position.entry(key).or_default().push(position);
     }
 }

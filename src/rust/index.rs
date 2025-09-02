@@ -21,7 +21,7 @@ use crate::encoding::{
 };
 use crate::kmer::KmerInfo;
 use crate::signature::{
-    ProteinSignature, ProteinSignatureData, SerializableSignature, SignatureAccess,
+    ProteinSignature, ProteinSignatureData, SignatureAccess,
 };
 
 /// Statistics for k-mer frequency analysis
@@ -129,8 +129,8 @@ impl ProteomeIndex {
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             encoding_fn,
             moltype: moltype.to_string(),
-            ksize: ksize,
-            minhash_ksize: minhash_ksize,
+            ksize,
+            minhash_ksize,
             scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             seed,
@@ -173,7 +173,7 @@ impl ProteomeIndex {
         };
 
         let serialized = bincode::serialize(&state)?;
-        self.db.put(b"index_state", &serialized)?;
+        self.db.put(b"index_state", serialized)?;
 
         Ok(())
     }
@@ -565,7 +565,7 @@ impl ProteomeIndex {
         protein_signature: &mut ProteinSignature,
     ) -> Result<()> {
         let ksize = self.ksize as usize;
-        let seed = self.seed as u64;
+        let seed = self.seed;
         let hashvals = &protein_signature.signature().get_minhash().to_vec();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
@@ -582,8 +582,8 @@ impl ProteomeIndex {
             if hashvals.contains(&hashval) {
                 let kmer_info =
                     protein_signature.kmer_infos_mut().entry(hashval).or_insert_with(|| KmerInfo {
-                        ksize: ksize,
-                        hashval: hashval,
+                        ksize,
+                        hashval,
                         encoded_kmer: encoded_kmer.clone(),
                         original_kmer_to_position: HashMap::new(),
                     });
@@ -591,7 +591,7 @@ impl ProteomeIndex {
                 kmer_info
                     .original_kmer_to_position
                     .entry(original_kmer)
-                    .or_insert_with(Vec::new)
+                    .or_default()
                     .push(i);
             }
         }

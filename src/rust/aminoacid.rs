@@ -19,6 +19,12 @@ pub struct AminoAcidAmbiguity {
     replacements: HashMap<char, Vec<char>>,
 }
 
+impl Default for AminoAcidAmbiguity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AminoAcidAmbiguity {
     pub fn new() -> Self {
         let mut replacements = HashMap::new();
