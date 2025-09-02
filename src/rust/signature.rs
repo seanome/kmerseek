@@ -410,7 +410,7 @@ impl ProteinSignatureData {
         }
 
         // Kmer infos size (approximate)
-        for (_, kmer_info) in &self.kmer_infos {
+        for (kmer_info) in self.kmer_infos.values() {
             size += 8; // hashval
             size += 4; // ksize
             size += kmer_info.encoded_kmer.len();
