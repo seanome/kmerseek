@@ -2063,46 +2063,40 @@ mod tests {
     fn test_save_load_index() {
         // Define paths
         let fasta_path = PathBuf::from("tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz");
-        let _index_dir = PathBuf::from("tests/testdata/kmerseek-rust-index");
+        let index_dir = PathBuf::from("tests/testdata/kmerseek-rust-index");
 
         // Ensure the FASTA file exists
         assert!(fasta_path.exists(), "BCL2 FASTA file not found at {:?}", fasta_path);
 
-        // Test automatic filename generation
-        println!("Testing automatic filename generation with BCL2 FASTA...");
-        let auto_index =
-            ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp", SEED, false).unwrap();
+        let bcl2_index = ProteomeIndex::new(index_dir.clone(), 16, 5, "hp", SEED, false).unwrap();
 
         // Process the FASTA file
         println!("Processing FASTA file: {:?}", fasta_path);
-        auto_index.process_fasta(&fasta_path, 0).unwrap();
+        bcl2_index.process_fasta(&fasta_path, 0).unwrap();
 
         // Print stats
         println!("Index stats after processing:");
-        auto_index.print_stats();
+        bcl2_index.print_stats();
 
         // Verify the index has content
-        assert!(auto_index.signature_count() == 25, "Index should have 25 signatures");
+        assert!(bcl2_index.signature_count() == 25, "Index should have 25 signatures");
         assert!(
-            auto_index.combined_minhash_size() == 1603,
+            bcl2_index.combined_minhash_size() == 1603,
             "Index should have combined minhash of size 1603"
         );
 
         println!("Saving index state...");
-        auto_index.save_state().unwrap();
+        bcl2_index.save_state().unwrap();
 
         // Load the index
         println!("Loading index state...");
-        let loaded_index = ProteomeIndex::load(&auto_index.generate_filename(
-            "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz",
-        ))
-        .unwrap();
+        let loaded_index = ProteomeIndex::load(index_dir).unwrap();
 
         // Verify the loaded index has content
         println!("Loaded index stats:");
         loaded_index.print_stats();
 
-        let are_equivalent = auto_index.is_equivalent_to(&loaded_index).unwrap();
+        let are_equivalent = bcl2_index.is_equivalent_to(&loaded_index).unwrap();
         assert!(are_equivalent, "Indices should be equivalent");
     }
 
