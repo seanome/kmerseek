@@ -238,7 +238,6 @@ impl ProteomeIndex {
                     state.moltype.clone(),
                     state.ksize,
                     state.scaled,
-                    SEED,
                 )?;
 
                 let md5sum = protein_sig.signature().md5sum.clone();
@@ -339,7 +338,6 @@ impl ProteomeIndex {
                     state.moltype.clone(),
                     state.ksize,
                     state.scaled,
-                    SEED,
                 )?;
 
                 let md5sum = protein_sig.signature().md5sum.clone();
@@ -576,8 +574,7 @@ impl ProteomeIndex {
         let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence)?;
 
         // Create a new protein signature
-        let mut protein_sig =
-            ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype, SEED)?;
+        let mut protein_sig = ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype)?;
 
         // Add the protein sequence to the signature
         protein_sig.add_protein(processed_sequence.as_bytes())?;
@@ -796,7 +793,6 @@ mod tests {
     use crate::signature::ProteinSignature;
     use crate::tests::test_fixtures::{TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_PROTEIN};
     use crate::tests::test_utils::{self, print_kmer_infos};
-    use crate::SEED;
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -929,7 +925,6 @@ mod tests {
             protein_ksize,
             1, // scaled
             "dayhoff",
-            SEED,
         )?;
 
         // Add the sequence
@@ -1041,7 +1036,6 @@ mod tests {
             protein_ksize, // protein ksize
             1,             // scaled=1 to capture all kmers
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1053,7 +1047,6 @@ mod tests {
             protein_ksize,
             1, // scaled
             moltype,
-            SEED,
         )?;
 
         // Add the sequence
@@ -1173,7 +1166,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1327,7 +1319,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1388,7 +1379,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1449,7 +1439,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1510,7 +1499,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1568,7 +1556,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1633,7 +1620,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1691,7 +1677,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1796,7 +1781,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1883,7 +1867,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1970,7 +1953,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -2023,7 +2005,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -2175,10 +2156,9 @@ mod tests {
         ];
 
         for (ksize, scaled, moltype, expected) in test_cases {
-            let index = ProteomeIndex::new_with_auto_filename(
-                &base_path, ksize, scaled, moltype, SEED, false,
-            )
-            .unwrap();
+            let index =
+                ProteomeIndex::new_with_auto_filename(&base_path, ksize, scaled, moltype, false)
+                    .unwrap();
             let generated = index.generate_filename("test.fasta");
             assert_eq!(
                 generated, expected,
@@ -2207,15 +2187,9 @@ mod tests {
             println!("Testing: {}", description);
 
             // Create index with automatic filename generation
-            let auto_index = ProteomeIndex::new_with_auto_filename(
-                &fasta_path,
-                ksize,
-                scaled,
-                moltype,
-                SEED,
-                false,
-            )
-            .unwrap();
+            let auto_index =
+                ProteomeIndex::new_with_auto_filename(&fasta_path, ksize, scaled, moltype, false)
+                    .unwrap();
 
             // Verify the generated filename
             let expected_filename = format!("bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.{}.k{}.scaled{}.kmerseek.rocksdb", moltype, ksize, scaled);
@@ -2263,8 +2237,8 @@ mod tests {
         let db_path2 = temp_dir.path().join("index2.db");
 
         // Create two indices with the same parameters
-        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED, false).unwrap();
-        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED, false).unwrap();
+        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", false).unwrap();
+        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", false).unwrap();
 
         // Add the same protein sequences to both indices
         let sequences = vec![
@@ -2292,7 +2266,7 @@ mod tests {
 
         // Create a third index with different parameters
         let index3 =
-            ProteomeIndex::new(&temp_dir.path().join("index3.db"), 10, 1, "protein", SEED, false)
+            ProteomeIndex::new(&temp_dir.path().join("index3.db"), 10, 1, "protein", false)
                 .unwrap();
 
         // Test that different indices are not equivalent
@@ -2301,8 +2275,7 @@ mod tests {
 
         // Test with different sequences
         let index4 =
-            ProteomeIndex::new(&temp_dir.path().join("index4.db"), 5, 1, "protein", SEED, false)
-                .unwrap();
+            ProteomeIndex::new(&temp_dir.path().join("index4.db"), 5, 1, "protein", false).unwrap();
         let sig4 = index4.create_protein_signature("DIFFERENTSEQUENCE", "different").unwrap();
         index4.store_signatures(vec![sig4]).unwrap();
 
@@ -2330,8 +2303,8 @@ mod tests {
 
         for (base_name, expected) in test_cases {
             let base_path = temp_dir.path().join(base_name);
-            let index = ProteomeIndex::new_with_auto_filename(&base_path, 16, 5, "hp", SEED, false)
-                .unwrap();
+            let index =
+                ProteomeIndex::new_with_auto_filename(&base_path, 16, 5, "hp", false).unwrap();
             let generated = index.generate_filename(base_name);
             assert_eq!(generated, expected, "Failed for base_name: {}", base_name);
         }
@@ -2347,8 +2320,7 @@ mod tests {
         for (moltype, expected) in moltype_cases {
             let base_path = temp_dir.path().join("test.fasta");
             let index =
-                ProteomeIndex::new_with_auto_filename(&base_path, 8, 10, moltype, SEED, false)
-                    .unwrap();
+                ProteomeIndex::new_with_auto_filename(&base_path, 8, 10, moltype, false).unwrap();
             let generated = index.generate_filename("test.fasta");
             assert_eq!(generated, expected, "Failed for moltype: {}", moltype);
         }
@@ -2365,7 +2337,7 @@ mod tests {
         let db_path = temp_dir.path().join("serialization_test.hp.k8.scaled10.kmerseek.rocksdb");
 
         // Create a simple index
-        let index = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED, false).unwrap();
+        let index = ProteomeIndex::new(&db_path, 8, 10, "hp", false).unwrap();
 
         // Add a simple signature
         let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test_protein").unwrap();
@@ -2438,7 +2410,6 @@ mod tests {
             5,         // k-mer size
             1,         // scaled
             "protein", // molecular type
-            42,        // seed
             true,      // store raw sequences
         )?;
 

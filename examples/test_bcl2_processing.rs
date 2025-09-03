@@ -26,14 +26,8 @@ fn main() -> anyhow::Result<()> {
         println!("\n=== {} ===", description);
 
         // Create index with automatic filename generation
-        let auto_index = ProteomeIndex::new_with_auto_filename(
-            &fasta_path,
-            ksize,
-            scaled,
-            moltype,
-            SEED,
-            false,
-        )?;
+        let auto_index =
+            ProteomeIndex::new_with_auto_filename(&fasta_path, ksize, scaled, moltype, false)?;
 
         // Show the generated filename
         let generated_filename = auto_index.generate_filename(

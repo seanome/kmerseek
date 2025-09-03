@@ -46,11 +46,10 @@ fn main() -> anyhow::Result<()> {
         .store_raw_sequences(true)
         .build()?;
     println!(
-        "   ✓ Created index with ksize={}, scaled={}, moltype={}, seed={}, store_raw_sequences={}",
+        "   ✓ Created index with ksize={}, scaled={}, moltype={}, store_raw_sequences={}",
         index3.ksize(),
         index3.scaled(),
         index3.moltype(),
-        index3.seed(),
         index3.store_raw_sequences()
     );
 
