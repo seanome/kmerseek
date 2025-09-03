@@ -30,7 +30,7 @@ fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     let mut file = File::create(&fasta_path).unwrap();
     writeln!(file, ">test_protein\n{}", TEST_PROTEIN).unwrap();
 
-    let index = ProteomeIndex::new(db_path, ksize, 1, moltype, SEED, false).unwrap();
+    let index = ProteomeIndex::new(db_path, ksize, 1, moltype, false).unwrap();
     (index, fasta_path)
 }
 
@@ -331,8 +331,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
             let db_path = temp_dir.path().join(format!("db_{}_{}", moltype, ksize));
 
             // Create index with efficient storage disabled (store_raw_sequences = false)
-            let index =
-                ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, SEED, false).unwrap();
+            let index = ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, false).unwrap();
 
             c.bench_function(&format!("process_fasta_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
@@ -406,7 +405,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
             let db_path = temp_dir.path().join(format!("db_efficient_{}_{}", moltype, ksize));
 
             // Create index with efficient storage enabled (store_raw_sequences = true)
-            let index = ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, SEED, true).unwrap();
+            let index = ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, true).unwrap();
 
             c.bench_function(&format!("process_fasta_efficient_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {

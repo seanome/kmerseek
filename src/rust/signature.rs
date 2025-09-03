@@ -114,13 +114,7 @@ pub struct ProteinSignature {
 // Represents a single protein's k-mer signature and hashval -> kmer info mapping
 impl ProteinSignature {
     /// Create a new ProteinSignature with the given protein k-mer size
-    pub fn new(
-        name: &str,
-        protein_ksize: u32,
-        scaled: u32,
-        moltype: &str,
-        seed: u64,
-    ) -> Result<Self> {
+    pub fn new(name: &str, protein_ksize: u32, scaled: u32, moltype: &str) -> Result<Self> {
         let hash_function = get_hash_function_from_moltype(moltype)?;
         let minhash_ksize = protein_ksize * 3; // Convert protein ksize to minhash ksize
 
@@ -128,7 +122,7 @@ impl ProteinSignature {
             scaled,
             minhash_ksize,
             hash_function,
-            seed,
+            SEED,
             true, // track_abundance
             0,    // num (use scaled instead)
         );
@@ -166,7 +160,6 @@ impl ProteinSignature {
         moltype: String,
         protein_ksize: u32,
         scaled: u32,
-        seed: u64,
     ) -> Result<Self> {
         let hash_function = get_hash_function_from_moltype(&moltype)?;
         let minhash_ksize = protein_ksize * 3;
@@ -176,7 +169,7 @@ impl ProteinSignature {
             scaled,
             minhash_ksize,
             hash_function,
-            seed,
+            SEED,
             true, // track_abundance
             0,    // num (use scaled instead)
         );

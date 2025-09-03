@@ -20,7 +20,7 @@ use crate::encoding::{
     encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::kmer::KmerInfo;
-use crate::signature::{ProteinSignature, ProteinSignatureData, SignatureAccess};
+use crate::signature::{ProteinSignature, ProteinSignatureData, SignatureAccess, SEED};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -39,7 +39,6 @@ struct ProteomeIndexState {
     moltype: String,
     ksize: u32,
     scaled: u32,
-    seed: u64,
     // Configuration for raw sequence storage
     store_raw_sequences: bool,
 }
@@ -80,9 +79,6 @@ pub struct ProteomeIndex {
     // Add scaled field for serialization
     scaled: u32,
 
-    // Add seed field for serialization
-    seed: u64,
-
     // Configuration for raw sequence storage
     store_raw_sequences: bool,
 }
@@ -94,12 +90,36 @@ impl Drop for ProteomeIndex {
 }
 
 impl ProteomeIndex {
+    /// Create a new ProteomeIndex using the builder pattern
+    ///
+    /// This method returns a builder for configuring index parameters.
+    /// Use the builder methods to configure the index parameters and then call
+    /// `.build()` or `.build_with_auto_filename()` to create the index.
+    ///
+    /// # Example
+    ///
+    /// ```rust,no_run
+    /// use kmerseek::index::ProteomeIndex;
+    ///
+    /// fn main() -> anyhow::Result<()> {
+    ///     let index = ProteomeIndex::builder()
+    ///         .path("/path/to/database.db")
+    ///         .ksize(5)
+    ///         .scaled(1)
+    ///         .moltype("protein")
+    ///         .build()?;
+    ///     Ok(())
+    /// }
+    /// ```
+    pub fn builder() -> ProteomeIndexBuilder {
+        ProteomeIndexBuilder::new()
+    }
+
     pub fn new<P: AsRef<Path>>(
         path: P,
         ksize: u32,
         scaled: u32,
         moltype: &str,
-        seed: u64,
         store_raw_sequences: bool,
     ) -> Result<Self> {
         // Create RocksDB options
@@ -124,7 +144,7 @@ impl ProteomeIndex {
             scaled,
             minhash_ksize,
             hash_function,
-            seed, // seed
+            SEED, // seed
             true, // track_abundance
             0,    // num (use scaled instead)
         );
@@ -146,7 +166,6 @@ impl ProteomeIndex {
             minhash_ksize,
             scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
-            seed,
             store_raw_sequences,
         })
     }
@@ -159,6 +178,21 @@ impl ProteomeIndex {
     /// Get a reference to the combined minhash (for testing)
     pub fn get_combined_minhash(&self) -> &Arc<Mutex<KmerMinHash>> {
         &self.combined_minhash
+    }
+
+    /// Get the k-mer size
+    pub fn ksize(&self) -> u32 {
+        self.ksize
+    }
+
+    /// Get the scaled value
+    pub fn scaled(&self) -> u32 {
+        self.scaled
+    }
+
+    /// Get the molecular type
+    pub fn moltype(&self) -> &str {
+        &self.moltype
     }
 
     /// Save the current index state to RocksDB using efficient storage format
@@ -181,7 +215,6 @@ impl ProteomeIndex {
             moltype: self.moltype.clone(),
             ksize: self.ksize,
             scaled: self.scaled,
-            seed: self.seed,
             store_raw_sequences: self.store_raw_sequences,
         };
 
@@ -205,7 +238,7 @@ impl ProteomeIndex {
                     state.moltype.clone(),
                     state.ksize,
                     state.scaled,
-                    state.seed,
+                    SEED,
                 )?;
 
                 let md5sum = protein_sig.signature().md5sum.clone();
@@ -219,7 +252,7 @@ impl ProteomeIndex {
                 state.scaled,
                 minhash_ksize,
                 hash_function,
-                state.seed,
+                SEED,
                 true, // track_abundance
                 0,    // num (use scaled instead)
             );
@@ -280,7 +313,7 @@ impl ProteomeIndex {
                 state.scaled,
                 minhash_ksize,
                 hash_function,
-                state.seed,
+                SEED,
                 true, // track_abundance
                 0,    // num (use scaled instead)
             );
@@ -306,7 +339,7 @@ impl ProteomeIndex {
                     state.moltype.clone(),
                     state.ksize,
                     state.scaled,
-                    state.seed,
+                    SEED,
                 )?;
 
                 let md5sum = protein_sig.signature().md5sum.clone();
@@ -324,7 +357,6 @@ impl ProteomeIndex {
                 minhash_ksize: state.ksize * 3,
                 scaled: state.scaled,
                 stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
-                seed: state.seed,
                 store_raw_sequences: state.store_raw_sequences,
             };
 
@@ -354,9 +386,6 @@ impl ProteomeIndex {
             return Ok(false);
         }
         if self.moltype != other.moltype {
-            return Ok(false);
-        }
-        if self.seed != other.seed {
             return Ok(false);
         }
 
@@ -456,7 +485,6 @@ impl ProteomeIndex {
         println!("  K-mer size: {}", self.ksize);
         println!("  Scaled: {}", self.scaled);
         println!("  Molecular type: {}", self.moltype);
-        println!("  Seed: {}", self.seed);
         // println!("  Number of signatures: {}", self.signature_count());
         println!("  Combined minhash size: {}", self.combined_minhash_size());
         println!(
@@ -484,7 +512,6 @@ impl ProteomeIndex {
         ksize: u32,
         scaled: u32,
         moltype: &str,
-        seed: u64,
         store_raw_sequences: bool,
     ) -> Result<Self> {
         let base_path = base_path.as_ref();
@@ -497,7 +524,7 @@ impl ProteomeIndex {
         );
         let full_path = base_path.parent().unwrap().join(filename);
 
-        Self::new(full_path, ksize, scaled, moltype, seed, store_raw_sequences)
+        Self::new(full_path, ksize, scaled, moltype, store_raw_sequences)
     }
 
     /// Add a single protein sequence as a signature and process its k-mers
@@ -533,7 +560,6 @@ impl ProteomeIndex {
     ///         5,        // k-mer size
     ///         1,        // scaled (1 = capture all k-mers)
     ///         "protein", // molecular type
-    ///         42,       // seed
     ///         false,    // store raw sequences
     ///     )?;
     ///     
@@ -551,7 +577,7 @@ impl ProteomeIndex {
 
         // Create a new protein signature
         let mut protein_sig =
-            ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype, self.seed)?;
+            ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype, SEED)?;
 
         // Add the protein sequence to the signature
         protein_sig.add_protein(processed_sequence.as_bytes())?;
@@ -578,7 +604,7 @@ impl ProteomeIndex {
         protein_signature: &mut ProteinSignature,
     ) -> Result<()> {
         let ksize = self.ksize as usize;
-        let seed = self.seed;
+        let seed = SEED;
         let hashvals = &protein_signature.signature().get_minhash().to_vec();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
@@ -790,7 +816,6 @@ mod tests {
             protein_ksize, // protein ksize
             1,             // scaled=1 to capture all kmers
             moltype,
-            SEED,
             false,
         )?;
 
@@ -802,7 +827,6 @@ mod tests {
             protein_ksize,
             1, // scaled
             moltype,
-            SEED,
         )?;
 
         // Add the sequence
@@ -894,7 +918,6 @@ mod tests {
             protein_ksize, // protein ksize
             1,             // scaled=1 to capture all kmers
             "dayhoff",
-            SEED,
             false,
         )?;
 
@@ -1202,7 +1225,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -1254,7 +1276,6 @@ mod tests {
             protein_ksize,
             1, // scaled=1 to capture all kmers for testing
             moltype,
-            SEED,
             false,
         )?;
 
@@ -2031,8 +2052,8 @@ mod tests {
         let db_path2 = temp_dir.path().join("test2.db");
 
         // Create two indices with the same parameters
-        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", SEED, false).unwrap();
-        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", SEED, false).unwrap();
+        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", false).unwrap();
+        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", false).unwrap();
 
         // Add the same signatures to both indices
         let sig1_1 = index1.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
@@ -2053,8 +2074,7 @@ mod tests {
 
         // Test that different indices are not equivalent
         let index3 =
-            ProteomeIndex::new(&temp_dir.path().join("test3.db"), 10, 1, "protein", SEED, false)
-                .unwrap();
+            ProteomeIndex::new(&temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
     }
 
@@ -2064,7 +2084,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create a new index
-        let index = ProteomeIndex::new(&db_path, 8, 10, "hp", SEED, false).unwrap();
+        let index = ProteomeIndex::new(&db_path, 8, 10, "hp", false).unwrap();
 
         // Add a test signature
         let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test").unwrap();
@@ -2092,7 +2112,7 @@ mod tests {
 
         // Create index with manual path in temp directory
         let manual_index =
-            ProteomeIndex::new(manual_index_dir.clone(), 16, 5, "hp", SEED, false).unwrap();
+            ProteomeIndex::new(manual_index_dir.clone(), 16, 5, "hp", false).unwrap();
 
         // Process the FASTA file
         println!("Processing FASTA file: {:?}", fasta_path);
@@ -2115,7 +2135,7 @@ mod tests {
         // Create a new auto-generated index in the temp directory
         println!("Creating auto-generated index in temp directory...");
         let auto_index =
-            ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp", SEED, false).unwrap();
+            ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp", false).unwrap();
 
         // Process the same FASTA file
         auto_index.process_fasta(&fasta_path, 0).unwrap();
@@ -2460,7 +2480,6 @@ mod tests {
             &db_path, 5,         // k-mer size
             1,         // scaled
             "protein", // molecular type
-            42,        // seed
             true,      // store raw sequences
         )?;
 
@@ -2507,8 +2526,7 @@ mod tests {
             &db_path, 5,         // k-mer size
             1,         // scaled
             "protein", // molecular type
-            42,        // seed
-            false,     // don't store raw sequences
+            false,     // don't store raw sequences,
         )?;
 
         // Add a protein sequence
@@ -2540,5 +2558,120 @@ mod tests {
         index.save_state()?;
 
         Ok(())
+    }
+}
+
+/// Builder for creating ProteomeIndex instances with sensible defaults
+///
+/// This builder provides a fluent interface for configuring ProteomeIndex parameters.
+///
+/// # Examples
+///
+/// ```rust,no_run
+/// use kmerseek::index::ProteomeIndex;
+///
+/// fn main() -> anyhow::Result<()> {
+///     // Basic usage with explicit path
+///     let index = ProteomeIndex::builder()
+///         .path("/path/to/database.db")
+///         .ksize(5)
+///         .scaled(1)
+///         .moltype("protein")
+///         .build()?;
+///
+///     // With auto filename generation
+///     let index = ProteomeIndex::builder()
+///         .path("/path/to/base")
+///         .ksize(5)
+///         .scaled(1)
+///         .moltype("protein")
+///         .build_with_auto_filename()?;
+///
+///     // With raw sequence storage
+///     let index = ProteomeIndex::builder()
+///         .path("/path/to/database.db")
+///         .ksize(5)
+///         .scaled(1)
+///         .moltype("protein")
+///         .store_raw_sequences(true)
+///         .build()?;
+///     
+///     Ok(())
+/// }
+/// ```
+pub struct ProteomeIndexBuilder {
+    path: Option<String>,
+    ksize: Option<u32>,
+    scaled: Option<u32>,
+    moltype: Option<String>,
+    store_raw_sequences: bool,
+}
+
+impl Default for ProteomeIndexBuilder {
+    fn default() -> Self {
+        Self { path: None, ksize: None, scaled: None, moltype: None, store_raw_sequences: false }
+    }
+}
+
+impl ProteomeIndexBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Set the database path
+    pub fn path<P: AsRef<Path>>(mut self, path: P) -> Self {
+        self.path = Some(path.as_ref().to_string_lossy().to_string());
+        self
+    }
+
+    /// Set the k-mer size
+    pub fn ksize(mut self, ksize: u32) -> Self {
+        self.ksize = Some(ksize);
+        self
+    }
+
+    /// Set the scaled value
+    pub fn scaled(mut self, scaled: u32) -> Self {
+        self.scaled = Some(scaled);
+        self
+    }
+
+    /// Set the molecular type
+    pub fn moltype(mut self, moltype: &str) -> Self {
+        self.moltype = Some(moltype.to_string());
+        self
+    }
+
+    /// Set whether to store raw sequences (defaults to false)
+    pub fn store_raw_sequences(mut self, store_raw_sequences: bool) -> Self {
+        self.store_raw_sequences = store_raw_sequences;
+        self
+    }
+
+    /// Build the ProteomeIndex
+    pub fn build(self) -> Result<ProteomeIndex> {
+        let path = self.path.ok_or_else(|| anyhow::anyhow!("Database path is required"))?;
+        let ksize = self.ksize.ok_or_else(|| anyhow::anyhow!("K-mer size is required"))?;
+        let scaled = self.scaled.ok_or_else(|| anyhow::anyhow!("Scaled value is required"))?;
+        let moltype = self.moltype.ok_or_else(|| anyhow::anyhow!("Molecular type is required"))?;
+
+        ProteomeIndex::new(path, ksize, scaled, &moltype, self.store_raw_sequences)
+    }
+
+    /// Build the ProteomeIndex with automatic filename generation
+    pub fn build_with_auto_filename(self) -> Result<ProteomeIndex> {
+        let base_path = self.path.ok_or_else(|| anyhow::anyhow!("Base path is required"))?;
+        let ksize = self.ksize.ok_or_else(|| anyhow::anyhow!("K-mer size is required"))?;
+        let scaled = self.scaled.ok_or_else(|| anyhow::anyhow!("Scaled value is required"))?;
+        let moltype = self.moltype.ok_or_else(|| anyhow::anyhow!("Molecular type is required"))?;
+
+        ProteomeIndex::new_with_auto_filename(
+            base_path,
+            ksize,
+            scaled,
+            &moltype,
+            self.store_raw_sequences,
+        )
     }
 }

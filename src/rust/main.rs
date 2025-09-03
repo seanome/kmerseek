@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use kmerseek::{ProteomeIndex, SEED};
+use kmerseek::ProteomeIndex;
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -95,7 +95,6 @@ fn main() -> anyhow::Result<()> {
                     ksize,
                     scaled,
                     encoding.into(),
-                    SEED,
                     store_raw_sequences,
                 )?;
 
@@ -121,7 +120,6 @@ fn main() -> anyhow::Result<()> {
                 ksize,
                 scaled,
                 encoding.into(),
-                SEED,
                 store_raw_sequences,
             )?;
 
