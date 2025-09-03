@@ -90,7 +90,6 @@ pub struct ProteomeIndex {
 impl Drop for ProteomeIndex {
     fn drop(&mut self) {
         // RocksDB will be automatically closed when the struct is dropped
-        // The issue might be with the RocksDB configuration
     }
 }
 
@@ -2453,15 +2452,93 @@ mod tests {
 
     #[test]
     fn test_efficient_storage_with_raw_sequences() -> Result<()> {
-        // Skip this test for now due to RocksDB lock issues in CI
-        // TODO: Fix RocksDB configuration to allow multiple connections
-        return Ok(());
+        let dir = tempdir()?;
+        let db_path = dir.path().join("test_efficient_with_raw_sequences.db");
+
+        // Create index with raw sequence storage enabled
+        let index = ProteomeIndex::new(
+            &db_path, 5,         // k-mer size
+            1,         // scaled
+            "protein", // molecular type
+            42,        // seed
+            true,      // store raw sequences
+        )?;
+
+        // Add a protein sequence
+        let sequence = "ACDEFGHIKLMNPQRSTVWY";
+        let signature = index.create_protein_signature(sequence, "test_protein")?;
+
+        // Verify raw sequence is stored
+        assert!(signature.has_efficient_data());
+        let raw_sequence = signature.get_raw_sequence();
+        assert!(raw_sequence.is_some());
+        assert_eq!(raw_sequence.unwrap(), sequence);
+
+        // Store the signature
+        index.store_signatures(vec![signature])?;
+
+        // Verify the index has the correct configuration
+        assert_eq!(index.store_raw_sequences(), true);
+        assert_eq!(index.signature_count(), 1);
+
+        // Get the signature and verify raw sequence is preserved
+        {
+            let signatures = index.get_signatures().lock().unwrap();
+            let signature = signatures.values().next().unwrap();
+            assert!(signature.has_efficient_data());
+            let raw_sequence = signature.get_raw_sequence();
+            assert!(raw_sequence.is_some());
+            assert_eq!(raw_sequence.unwrap(), sequence);
+        }
+
+        // Test that we can save state without errors
+        index.save_state()?;
+
+        Ok(())
     }
 
     #[test]
     fn test_efficient_storage_without_raw_sequences() -> Result<()> {
-        // Skip this test for now due to RocksDB lock issues in CI
-        // TODO: Fix RocksDB configuration to allow multiple connections
-        return Ok(());
+        let dir = tempdir()?;
+        let db_path = dir.path().join("test_efficient_without_raw_sequences.db");
+
+        // Create index with raw sequence storage disabled
+        let index = ProteomeIndex::new(
+            &db_path, 5,         // k-mer size
+            1,         // scaled
+            "protein", // molecular type
+            42,        // seed
+            false,     // don't store raw sequences
+        )?;
+
+        // Add a protein sequence
+        let sequence = "ACDEFGHIKLMNPQRSTVWY";
+        let signature = index.create_protein_signature(sequence, "test_protein")?;
+
+        // Verify raw sequence is not stored
+        assert!(!signature.has_efficient_data());
+        let raw_sequence = signature.get_raw_sequence();
+        assert!(raw_sequence.is_none());
+
+        // Store the signature
+        index.store_signatures(vec![signature])?;
+
+        // Verify the index has the correct configuration
+        assert_eq!(index.store_raw_sequences(), false);
+        assert_eq!(index.signature_count(), 1);
+
+        // Get the signature and verify raw sequence is not stored
+        {
+            let signatures = index.get_signatures().lock().unwrap();
+            let signature = signatures.values().next().unwrap();
+            assert!(!signature.has_efficient_data());
+            let raw_sequence = signature.get_raw_sequence();
+            assert!(raw_sequence.is_none());
+        }
+
+        // Test that we can save state without errors
+        index.save_state()?;
+
+        Ok(())
     }
 }
