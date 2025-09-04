@@ -18,14 +18,30 @@ impl KmerInfo {
             ksize,
             hashval,
             encoded_kmer: String::with_capacity(ksize),
-            original_kmer_to_position: HashMap::new(),
+            original_kmer_to_position: HashMap::with_capacity(ksize),
         }
     }
 
     /// Adds a k-mer position with a pre-allocated string
     pub fn add_kmer_position(&mut self, kmer: &str, position: usize) {
-        let mut key = String::with_capacity(self.ksize);
-        key.push_str(kmer);
-        self.original_kmer_to_position.entry(key).or_default().push(position);
+        self.original_kmer_to_position
+            .entry(kmer.to_string())
+            .or_insert_with(|| Vec::with_capacity(1))
+            .push(position);
+    }
+
+    /// Get the number of unique original k-mers
+    pub fn unique_kmer_count(&self) -> usize {
+        self.original_kmer_to_position.len()
+    }
+
+    /// Get the total number of k-mer occurrences
+    pub fn total_occurrences(&self) -> usize {
+        self.original_kmer_to_position.values().map(|positions| positions.len()).sum()
+    }
+
+    /// Check if this k-mer appears at a specific position
+    pub fn has_position(&self, position: usize) -> bool {
+        self.original_kmer_to_position.values().any(|positions| positions.contains(&position))
     }
 }

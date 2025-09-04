@@ -1,11 +1,10 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::Duration;
 
-use anyhow::{bail, Result};
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sourmash::_hash_murmur;
@@ -19,8 +18,11 @@ use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{
     encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
+use crate::errors::{IndexError, IndexResult};
 use crate::kmer::KmerInfo;
-use crate::signature::{ProteinSignature, ProteinSignatureData, SignatureAccess, SEED};
+use crate::signature::{
+    ProteinSignature, ProteinSignatureData, SignatureAccess, PROTEIN_TO_MINHASH_RATIO, SEED,
+};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -121,7 +123,7 @@ impl ProteomeIndex {
         scaled: u32,
         moltype: &str,
         store_raw_sequences: bool,
-    ) -> Result<Self> {
+    ) -> IndexResult<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
         opts.create_if_missing(true);
@@ -196,7 +198,7 @@ impl ProteomeIndex {
     }
 
     /// Save the current index state to RocksDB using efficient storage format
-    pub fn save_state(&self) -> Result<()> {
+    pub fn save_state(&self) -> IndexResult<()> {
         let signatures_map = self.signatures.lock().unwrap();
         let combined_minhash = self.combined_minhash.lock().unwrap();
 
@@ -225,7 +227,7 @@ impl ProteomeIndex {
     }
 
     /// Load index state from RocksDB using efficient storage format
-    pub fn load_state(&self) -> Result<()> {
+    pub fn load_state(&self) -> IndexResult<()> {
         let serialized = self.db.get(b"index_state")?;
         if let Some(data) = serialized {
             let state: ProteomeIndexState = bincode::deserialize(&data)?;
@@ -282,14 +284,14 @@ impl ProteomeIndex {
 
             Ok(())
         } else {
-            bail!("No saved state found in database")
+            return Err(IndexError::NoSavedState);
         }
     }
 
     /// Load an existing ProteomeIndex from a RocksDB path
     /// Note: This method has known issues with serialization and may not work reliably.
     /// For now, it's recommended to use save_state() and load_state() on existing indices.
-    pub fn load<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         // Create RocksDB options
         let mut opts = Options::default();
         opts.create_if_missing(false); // Don't create if missing
@@ -360,7 +362,7 @@ impl ProteomeIndex {
 
             Ok(index)
         } else {
-            bail!("No saved state found in database")
+            return Err(IndexError::NoSavedState);
         }
     }
 
@@ -375,7 +377,7 @@ impl ProteomeIndex {
     }
 
     /// Compare this index with another for equivalency
-    pub fn is_equivalent_to(&self, other: &ProteomeIndex) -> Result<bool> {
+    pub fn is_equivalent_to(&self, other: &ProteomeIndex) -> IndexResult<bool> {
         // Check basic configuration
         if self.ksize != other.ksize {
             return Ok(false);

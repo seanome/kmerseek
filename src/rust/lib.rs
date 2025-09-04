@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 pub mod aminoacid;
 pub mod encoding;
+pub mod errors;
 pub mod index;
 pub mod kmer;
 pub mod signature;

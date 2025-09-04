@@ -10,6 +10,7 @@ use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 use crate::{encoding::get_hash_function_from_moltype, kmer::KmerInfo};
 
 pub const SEED: u64 = 42;
+pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
 
 /// Trait for accessing signature information
 pub trait SignatureAccess {
@@ -74,6 +75,7 @@ impl SignatureAccess for &SerializableSignature {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(crate = "serde")]
 pub struct SerializableSignature {
     pub location: String,
     pub name: String,
@@ -100,6 +102,7 @@ impl From<SigStore> for SerializableSignature {
 
 /// A wrapper around SmallSignature that handles protein k-mer size conversions
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(crate = "serde")]
 pub struct ProteinSignature {
     signature: SerializableSignature,
     moltype: String,
@@ -116,7 +119,7 @@ impl ProteinSignature {
     /// Create a new ProteinSignature with the given protein k-mer size
     pub fn new(name: &str, protein_ksize: u32, scaled: u32, moltype: &str) -> Result<Self> {
         let hash_function = get_hash_function_from_moltype(moltype)?;
-        let minhash_ksize = protein_ksize * 3; // Convert protein ksize to minhash ksize
+        let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO; // Convert protein ksize to minhash ksize
 
         let minhash = KmerMinHash::new(
             scaled,
@@ -128,9 +131,9 @@ impl ProteinSignature {
         );
 
         let signature = SerializableSignature {
-            location: "".to_string(),
+            location: String::new(),
             name: name.to_string(),
-            md5sum: "".to_string(),
+            md5sum: String::new(),
             minhash,
         };
 
@@ -162,7 +165,7 @@ impl ProteinSignature {
         scaled: u32,
     ) -> Result<Self> {
         let hash_function = get_hash_function_from_moltype(&moltype)?;
-        let minhash_ksize = protein_ksize * 3;
+        let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO;
 
         // Reconstruct the minhash from raw data
         let mut minhash = KmerMinHash::new(
@@ -183,14 +186,11 @@ impl ProteinSignature {
         }
 
         // Generate md5sum from mins
-        let mut hash = 0u64;
-        for min in &data.mins {
-            hash = hash.wrapping_add(*min);
-        }
-        let md5sum = format!("{:x}", hash);
+        let md5sum = data.mins.iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
+        let md5sum = format!("{:x}", md5sum);
 
         let signature = SerializableSignature {
-            location: "".to_string(),
+            location: String::new(),
             name: data.name.clone(),
             md5sum,
             minhash,
@@ -274,12 +274,9 @@ impl ProteinSignature {
         self.signature.minhash.add_protein(sequence)?;
 
         // Generate a simple hash-based identifier from the minhash data
-        let mins = self.signature.minhash.mins();
-        let mut hash = 0u64;
-        for min in mins {
-            hash = hash.wrapping_add(min);
-        }
-        self.signature.md5sum = format!("{:x}", hash);
+        let md5sum =
+            self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
+        self.signature.md5sum = format!("{:x}", md5sum);
 
         Ok(())
     }
@@ -296,7 +293,7 @@ impl ProteinSignature {
 
     /// Get the minhash k-mer size
     pub fn minhash_ksize(&self) -> u32 {
-        self.protein_ksize * 3
+        self.protein_ksize * PROTEIN_TO_MINHASH_RATIO
     }
 
     /// Get the underlying SmallSignature
@@ -323,6 +320,7 @@ impl ProteinSignature {
 /// Efficient storage structure for protein signatures
 /// Stores raw values to avoid serialization overhead and optionally includes raw sequences
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(crate = "serde")]
 pub struct ProteinSignatureData {
     /// Protein name/identifier
     pub name: String,
