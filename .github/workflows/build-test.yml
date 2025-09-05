@@ -75,6 +75,9 @@ jobs:
       - name: build
         run: make
 
+      - name: build binary for tests
+        run: cargo build --bin kmerseek-rust
+
       - name: cargo test
         run: cargo test --all-features --workspace
 
