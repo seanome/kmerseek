@@ -95,7 +95,13 @@ impl AminoAcidAmbiguity {
             }
         }
 
-        Ok(if has_ambiguous { Cow::Owned(result) } else { Cow::Borrowed(sequence) })
+        // If we processed the sequence (ambiguous chars or stop codon truncation), return the result
+        // Otherwise, return the original sequence
+        if has_ambiguous || result.len() != sequence.len() {
+            Ok(Cow::Owned(result))
+        } else {
+            Ok(Cow::Borrowed(sequence))
+        }
     }
 }
 

@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use kmerseek::errors::IndexResult;
 use kmerseek::ProteomeIndex;
 use std::path::PathBuf;
 
@@ -65,7 +66,7 @@ impl From<ProteinEncoding> for &'static str {
     }
 }
 
-fn main() -> anyhow::Result<()> {
+fn main() -> IndexResult<()> {
     let cli = Cli::parse();
 
     match cli.command {

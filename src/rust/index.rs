@@ -20,9 +20,7 @@ use crate::encoding::{
 };
 use crate::errors::{IndexError, IndexResult};
 use crate::kmer::KmerInfo;
-use crate::signature::{
-    ProteinSignature, ProteinSignatureData, SignatureAccess, PROTEIN_TO_MINHASH_RATIO, SEED,
-};
+use crate::signature::{ProteinSignature, ProteinSignatureData, SignatureAccess, SEED};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -136,9 +134,11 @@ impl ProteomeIndex {
         // Open the database
         let db = DB::open(&opts, path)?;
 
-        let hash_function = get_hash_function_from_moltype(moltype)?;
+        let hash_function = get_hash_function_from_moltype(moltype)
+            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
-        let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
+        let encoding_fn = get_encoding_fn_from_moltype(moltype)
+            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
         let minhash_ksize = ksize * 3;
         // Create the minhash sketch
@@ -199,8 +199,13 @@ impl ProteomeIndex {
 
     /// Save the current index state to RocksDB using efficient storage format
     pub fn save_state(&self) -> IndexResult<()> {
-        let signatures_map = self.signatures.lock().unwrap();
-        let combined_minhash = self.combined_minhash.lock().unwrap();
+        let signatures_map = self.signatures.lock().map_err(|e| {
+            IndexError::LockError(format!("Failed to acquire signatures lock: {}", e))
+        })?;
+        let combined_minhash = self
+            .combined_minhash
+            .lock()
+            .map_err(|e| IndexError::LockError(format!("Failed to acquire minhash lock: {}", e)))?;
 
         // Convert signatures to efficient storage format
         let mut signature_data = Vec::new();
@@ -259,16 +264,20 @@ impl ProteomeIndex {
             );
 
             if let Some(abunds) = &state.combined_abunds {
-                combined_minhash.add_many_with_abund(
-                    &state
-                        .combined_mins
-                        .clone()
-                        .into_iter()
-                        .zip(abunds.iter().cloned())
-                        .collect::<Vec<_>>(),
-                )?;
+                combined_minhash
+                    .add_many_with_abund(
+                        &state
+                            .combined_mins
+                            .clone()
+                            .into_iter()
+                            .zip(abunds.iter().cloned())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             } else {
-                combined_minhash.add_many(&state.combined_mins)?;
+                combined_minhash
+                    .add_many(&state.combined_mins)
+                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             }
 
             // Update the current index state
@@ -304,11 +313,14 @@ impl ProteomeIndex {
         if let Some(data) = serialized {
             let state: ProteomeIndexState = bincode::deserialize(&data)?;
 
-            let _hash_function = get_hash_function_from_moltype(&state.moltype)?;
-            let encoding_fn = get_encoding_fn_from_moltype(&state.moltype)?;
+            let _hash_function = get_hash_function_from_moltype(&state.moltype)
+                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
+            let encoding_fn = get_encoding_fn_from_moltype(&state.moltype)
+                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
             // Reconstruct the combined minhash from raw data
-            let hash_function = get_hash_function_from_moltype(&state.moltype)?;
+            let hash_function = get_hash_function_from_moltype(&state.moltype)
+                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             let minhash_ksize = state.ksize * 3;
             let mut combined_minhash = KmerMinHash::new(
                 state.scaled,
@@ -320,16 +332,20 @@ impl ProteomeIndex {
             );
 
             if let Some(abunds) = &state.combined_abunds {
-                combined_minhash.add_many_with_abund(
-                    &state
-                        .combined_mins
-                        .clone()
-                        .into_iter()
-                        .zip(abunds.iter().cloned())
-                        .collect::<Vec<_>>(),
-                )?;
+                combined_minhash
+                    .add_many_with_abund(
+                        &state
+                            .combined_mins
+                            .clone()
+                            .into_iter()
+                            .zip(abunds.iter().cloned())
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             } else {
-                combined_minhash.add_many(&state.combined_mins)?;
+                combined_minhash
+                    .add_many(&state.combined_mins)
+                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             }
 
             // Reconstruct signatures from efficient data
@@ -368,12 +384,12 @@ impl ProteomeIndex {
 
     /// Get the number of signatures in the index
     pub fn signature_count(&self) -> usize {
-        self.signatures.lock().unwrap().len()
+        self.signatures.lock().map(|lock| lock.len()).unwrap_or(0)
     }
 
     /// Get the combined minhash size
     pub fn combined_minhash_size(&self) -> usize {
-        self.combined_minhash.lock().unwrap().size()
+        self.combined_minhash.lock().map(|lock| lock.size()).unwrap_or(0)
     }
 
     /// Compare this index with another for equivalency
@@ -513,7 +529,7 @@ impl ProteomeIndex {
         scaled: u32,
         moltype: &str,
         store_raw_sequences: bool,
-    ) -> Result<Self> {
+    ) -> IndexResult<Self> {
         let base_path = base_path.as_ref();
         let filename = format!(
             "{}.{}.k{}.scaled{}.kmerseek.rocksdb",
@@ -571,7 +587,11 @@ impl ProteomeIndex {
     ///     Ok(())
     /// }
     /// ```
-    pub fn create_protein_signature(&self, sequence: &str, name: &str) -> Result<ProteinSignature> {
+    pub fn create_protein_signature(
+        &self,
+        sequence: &str,
+        name: &str,
+    ) -> IndexResult<ProteinSignature> {
         // Validate and resolve ambiguity if needed
         let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence)?;
 
@@ -601,7 +621,7 @@ impl ProteomeIndex {
         &self,
         sequence: &str,
         protein_signature: &mut ProteinSignature,
-    ) -> Result<()> {
+    ) -> IndexResult<()> {
         let ksize = self.ksize as usize;
         let seed = SEED;
         let hashvals = &protein_signature.signature().get_minhash().to_vec();
@@ -610,23 +630,26 @@ impl ProteomeIndex {
             let kmer = &sequence[i..i + ksize];
 
             // Process the k-mer to get encoded version
-            let (encoded_kmer, original_kmer) =
-                encode_kmer_with_encoding_fn(kmer, self.encoding_fn)?;
+            if let Ok((encoded_kmer, original_kmer)) =
+                encode_kmer_with_encoding_fn(kmer, self.encoding_fn)
+            {
+                // Get the hash from the minhash implementation
+                let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
-            // Get the hash from the minhash implementation
-            let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
+                // If this hashval is in the minhash, then save its k-mer positions
+                if hashvals.contains(&hashval) {
+                    let kmer_info = protein_signature
+                        .kmer_infos_mut()
+                        .entry(hashval)
+                        .or_insert_with(|| KmerInfo {
+                            ksize,
+                            hashval,
+                            encoded_kmer: encoded_kmer.clone(),
+                            original_kmer_to_position: HashMap::new(),
+                        });
 
-            // If this hashval is in the minhash, then save its k-mer positions
-            if hashvals.contains(&hashval) {
-                let kmer_info =
-                    protein_signature.kmer_infos_mut().entry(hashval).or_insert_with(|| KmerInfo {
-                        ksize,
-                        hashval,
-                        encoded_kmer: encoded_kmer.clone(),
-                        original_kmer_to_position: HashMap::new(),
-                    });
-
-                kmer_info.original_kmer_to_position.entry(original_kmer).or_default().push(i);
+                    kmer_info.original_kmer_to_position.entry(original_kmer).or_default().push(i);
+                }
             }
         }
 
@@ -645,7 +668,7 @@ impl ProteomeIndex {
     /// # Returns
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
-    pub fn store_signatures(&self, protein_signatures: Vec<ProteinSignature>) -> Result<()> {
+    pub fn store_signatures(&self, protein_signatures: Vec<ProteinSignature>) -> IndexResult<()> {
         // Collect the minhash data from new signatures before storing them
         let new_hashes_and_abunds: Vec<(u64, u64)> = protein_signatures
             .iter()
@@ -671,7 +694,9 @@ impl ProteomeIndex {
 
         // Update the combined minhash with only the new signatures
         let mut combined_minhash = self.combined_minhash.lock().unwrap();
-        combined_minhash.add_many_with_abund(&new_hashes_and_abunds)?;
+        combined_minhash
+            .add_many_with_abund(&new_hashes_and_abunds)
+            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
         Ok(())
     }
@@ -698,7 +723,7 @@ impl ProteomeIndex {
         &self,
         fasta_path: P,
         progress_interval: u32,
-    ) -> Result<()> {
+    ) -> IndexResult<()> {
         use needletail::parse_fastx_file;
         use rayon::prelude::*;
 
@@ -707,13 +732,14 @@ impl ProteomeIndex {
         }
 
         // Open and parse the FASTA file using needletail
-        let mut reader = parse_fastx_file(&fasta_path)?;
+        let mut reader =
+            parse_fastx_file(&fasta_path).map_err(|e| IndexError::ParseError(e.to_string()))?;
 
         // Convert records into a vector for parallel processing
         let mut records = Vec::new();
         let mut record_count = 0;
         while let Some(record) = reader.next() {
-            let record = record?;
+            let record = record.map_err(|e| IndexError::ParseError(e.to_string()))?;
             // Clone the record data to avoid borrowing issues
             let sequence = record.seq().to_vec();
             let id = record.id().to_vec();
@@ -752,7 +778,7 @@ impl ProteomeIndex {
         }
 
         // Process records in parallel and collect signatures
-        let signatures: Result<Vec<ProteinSignature>> = records
+        let signatures: Result<Vec<ProteinSignature>, IndexError> = records
             .par_iter()
             .map(|(seq_bytes, id_bytes)| {
                 let sequence = std::str::from_utf8(seq_bytes)?;
@@ -2543,7 +2569,7 @@ mod tests {
 /// ```rust,no_run
 /// use kmerseek::index::ProteomeIndex;
 ///
-/// fn main() -> anyhow::Result<()> {
+/// fn main() -> kmerseek::errors::IndexResult<()> {
 ///     // Basic usage with explicit path
 ///     let index = ProteomeIndex::builder()
 ///         .path("/path/to/database.db")
@@ -2573,7 +2599,7 @@ mod tests {
 /// }
 /// ```
 pub struct ProteomeIndexBuilder {
-    path: Option<String>,
+    path: Option<PathBuf>,
     ksize: Option<u32>,
     scaled: Option<u32>,
     moltype: Option<String>,
@@ -2594,7 +2620,7 @@ impl ProteomeIndexBuilder {
 
     /// Set the database path
     pub fn path<P: AsRef<Path>>(mut self, path: P) -> Self {
-        self.path = Some(path.as_ref().to_string_lossy().to_string());
+        self.path = Some(path.as_ref().to_path_buf());
         self
     }
 
@@ -2623,21 +2649,37 @@ impl ProteomeIndexBuilder {
     }
 
     /// Build the ProteomeIndex
-    pub fn build(self) -> Result<ProteomeIndex> {
-        let path = self.path.ok_or_else(|| anyhow::anyhow!("Database path is required"))?;
-        let ksize = self.ksize.ok_or_else(|| anyhow::anyhow!("K-mer size is required"))?;
-        let scaled = self.scaled.ok_or_else(|| anyhow::anyhow!("Scaled value is required"))?;
-        let moltype = self.moltype.ok_or_else(|| anyhow::anyhow!("Molecular type is required"))?;
+    pub fn build(self) -> IndexResult<ProteomeIndex> {
+        let path = self
+            .path
+            .ok_or_else(|| IndexError::BuilderError("Database path is required".to_string()))?;
+        let ksize = self
+            .ksize
+            .ok_or_else(|| IndexError::BuilderError("K-mer size is required".to_string()))?;
+        let scaled = self
+            .scaled
+            .ok_or_else(|| IndexError::BuilderError("Scaled value is required".to_string()))?;
+        let moltype = self
+            .moltype
+            .ok_or_else(|| IndexError::BuilderError("Molecular type is required".to_string()))?;
 
         ProteomeIndex::new(path, ksize, scaled, &moltype, self.store_raw_sequences)
     }
 
     /// Build the ProteomeIndex with automatic filename generation
-    pub fn build_with_auto_filename(self) -> Result<ProteomeIndex> {
-        let base_path = self.path.ok_or_else(|| anyhow::anyhow!("Base path is required"))?;
-        let ksize = self.ksize.ok_or_else(|| anyhow::anyhow!("K-mer size is required"))?;
-        let scaled = self.scaled.ok_or_else(|| anyhow::anyhow!("Scaled value is required"))?;
-        let moltype = self.moltype.ok_or_else(|| anyhow::anyhow!("Molecular type is required"))?;
+    pub fn build_with_auto_filename(self) -> IndexResult<ProteomeIndex> {
+        let base_path = self
+            .path
+            .ok_or_else(|| IndexError::BuilderError("Base path is required".to_string()))?;
+        let ksize = self
+            .ksize
+            .ok_or_else(|| IndexError::BuilderError("K-mer size is required".to_string()))?;
+        let scaled = self
+            .scaled
+            .ok_or_else(|| IndexError::BuilderError("Scaled value is required".to_string()))?;
+        let moltype = self
+            .moltype
+            .ok_or_else(|| IndexError::BuilderError("Molecular type is required".to_string()))?;
 
         ProteomeIndex::new_with_auto_filename(
             base_path,

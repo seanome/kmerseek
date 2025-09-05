@@ -17,6 +17,7 @@ path = "src/rust/main.rs"
 [dependencies]
 pyo3 = { version = "0.25.0", features = ["extension-module", "anyhow"] }
 anyhow = "1.0"
+thiserror = "1.0"
 rayon = "1.10"
 rand = "0.9.1"
 sourmash = { version = "0.20.0", features = ["branchwater"] }

@@ -31,6 +31,18 @@ pub enum IndexError {
 
     #[error("FASTA parsing error: {0}")]
     FastaParsing(String),
+
+    #[error("Builder error: {0}")]
+    BuilderError(String),
+
+    #[error("Sourmash error: {0}")]
+    SourmashError(String),
+
+    #[error("Parse error: {0}")]
+    ParseError(String),
+
+    #[error("Anyhow error: {0}")]
+    AnyhowError(#[from] anyhow::Error),
 }
 
 pub type IndexResult<T> = Result<T, IndexError>;

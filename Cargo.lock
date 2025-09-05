@@ -1076,6 +1076,7 @@ dependencies = [
  "sourmash",
  "sourmash_plugin_branchwater",
  "tempfile",
+ "thiserror 1.0.69",
  "zip",
 ]
 
