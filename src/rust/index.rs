@@ -2624,8 +2624,6 @@ pub struct ProteomeIndexBuilder {
     store_raw_sequences: bool,
 }
 
-
-
 impl ProteomeIndexBuilder {
     /// Create a new builder with default values
     pub fn new() -> Self {
