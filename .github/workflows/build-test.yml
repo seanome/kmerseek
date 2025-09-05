@@ -45,27 +45,40 @@ jobs:
       - name: install system dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
+          sudo apt-get install -y pkg-config libssl-dev build-essential
 
       - name: install rust
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.82.0
 
+      - name: setup environment for rust builds
+        run: |
+          # Ensure we use system compiler and OpenSSL instead of conda ones
+          export CC=gcc
+          export CXX=g++
+          export PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig
+          export OPENSSL_DIR=/usr
+          export OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu
+          export OPENSSL_INCLUDE_DIR=/usr/include
+          echo "CC=gcc" >> $GITHUB_ENV
+          echo "CXX=g++" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/x86_64-linux-gnu/pkgconfig:/usr/share/pkgconfig" >> $GITHUB_ENV
+          echo "OPENSSL_DIR=/usr" >> $GITHUB_ENV
+          echo "OPENSSL_LIB_DIR=/usr/lib/x86_64-linux-gnu" >> $GITHUB_ENV
+          echo "OPENSSL_INCLUDE_DIR=/usr/include" >> $GITHUB_ENV
+
       - name: install python dependencies
         shell: bash -l {0}
         run: mamba install compilers polars sourmash sourmash_plugin_branchwater click pytest pandas
 
       - name: build
-        shell: bash -l {0}
         run: make
 
       - name: cargo test
-        shell: bash -l {0}
         run: cargo test --all-features --workspace
 
       - name: Generate coverage report
-        shell: bash -l {0}
         run: |
           cargo install cargo-tarpaulin
           cargo tarpaulin --out Xml --output-dir coverage/
@@ -80,7 +93,6 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: test rust cli
-        shell: bash -l {0}
         run: |
           cargo run --bin kmerseek-rust -- --help
           cargo run --bin kmerseek-rust -- index --help
