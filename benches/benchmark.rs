@@ -56,11 +56,6 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Measure basic memory usage (stack size)
                         let memory_used = mem::size_of_val(&signature);
-
-                        // Print metrics
-                        println!("CPU time: {:?}", cpu_time);
-                        println!("Stack memory: {} bytes", memory_used);
-                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -87,11 +82,6 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Measure basic memory usage (stack size)
                         let memory_used = mem::size_of_val(&signature);
-
-                        // Print metrics
-                        println!("CPU time: {:?}", cpu_time);
-                        println!("Stack memory: {} bytes", memory_used);
-                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -118,11 +108,6 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Measure basic memory usage (stack size)
                         let memory_used = mem::size_of_val(&signature);
-
-                        // Print metrics
-                        println!("CPU time: {:?}", cpu_time);
-                        println!("Stack memory: {} bytes", memory_used);
-                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -146,11 +131,6 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Measure basic memory usage (stack size)
                         let memory_used = mem::size_of_val(&signature);
-
-                        // Print metrics
-                        println!("CPU time: {:?}", cpu_time);
-                        println!("Stack memory: {} bytes", memory_used);
-                        println!("Signature kmer count: {}", signature.kmer_infos().len());
                     })
                 },
             );
@@ -181,11 +161,6 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
 
                     // Measure basic memory usage (stack size)
                     let memory_used = mem::size_of_val(&encoded);
-
-                    // Print metrics
-                    println!("CPU time: {:?}", cpu_time);
-                    println!("Stack memory: {} bytes", memory_used);
-                    println!("Encoded kmer: {:?}", encoded);
                 })
             });
         }
@@ -209,11 +184,6 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
 
                     // Measure basic memory usage (stack size)
                     let memory_used = mem::size_of_val(&encoded);
-
-                    // Print metrics
-                    println!("CPU time: {:?}", cpu_time);
-                    println!("Stack memory: {} bytes", memory_used);
-                    println!("Encoded kmer: {:?}", encoded);
                 })
             });
         }
@@ -243,11 +213,6 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
 
                         // Measure basic memory usage (stack size)
                         let memory_used = mem::size_of_val(&encoded);
-
-                        // Print metrics
-                        println!("CPU time: {:?}", cpu_time);
-                        println!("Stack memory: {} bytes", memory_used);
-                        println!("Encoded kmer: {:?}", encoded);
                     })
                 },
             );
@@ -287,11 +252,6 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
 
                     // Measure basic memory usage (stack size)
                     let memory_used = mem::size_of_val(&sig);
-
-                    // Print metrics
-                    println!("CPU time: {:?}", cpu_time);
-                    println!("Stack memory: {} bytes", memory_used);
-                    println!("Processed kmer count: {}", sig.kmer_infos().len());
                 })
             });
         }
