@@ -56,6 +56,21 @@ jobs:
         shell: bash -l {0}
         run: cargo test --all-features --workspace
 
+      - name: Generate coverage report
+        shell: bash -l {0}
+        run: |
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --out Xml --output-dir coverage/
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/cobertura.xml
+          flags: unittests
+          name: codecov-umbrella
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
       - name: test rust cli
         shell: bash -l {0}
         run: |

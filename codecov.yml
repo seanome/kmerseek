@@ -1,0 +1,28 @@
+# Codecov configuration for kmerseek
+# https://docs.codecov.io/docs/codecovyml-reference
+
+coverage:
+  status:
+    project:
+      default:
+        target: 80%
+        threshold: 1%
+    patch:
+      default:
+        target: 60%
+        threshold: 1%
+
+comment:
+  layout: "header,diff,files,footer"
+  behavior: default
+  require_changes: false
+
+github_checks:
+  annotations: true
+
+ignore:
+  - "tests/"
+  - "benches/"
+  - "examples/"
+  - "target/"
+  - "REFERENCE_*/"
