@@ -1,7 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use kmerseek::encoding::{encode_kmer, encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
-use kmerseek::signature::SEED;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -267,7 +266,6 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
                 ksize,
                 1, // scaled
                 moltype,
-                kmerseek::signature::SEED,
             )
             .unwrap();
 
