@@ -47,6 +47,10 @@ cargo-tarpaulin = "0.28"
 [profile.release]
 debug = "line-tables-only"
 
+[[example]]
+name = "test_bcl2_processing"
+path = "examples/test_bcl2_processing.rs"
+
 [[bench]]
 name = "benchmark"
 harness = false

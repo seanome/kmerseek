@@ -14,42 +14,54 @@ fn main() -> anyhow::Result<()> {
         return Ok(());
     }
 
-    // Test different parameter combinations
+    // Test different parameter combinations - run multiple times for better profiling
     let test_cases = vec![
         (7, 1, "protein", "BCL2 with protein encoding, k=7, scaled=1"),
         (10, 1, "dayhoff", "BCL2 with dayhoff encoding, k=10, scaled=1"),
         (14, 1, "hp", "BCL2 with hp encoding, k=14, scaled=1"),
     ];
 
-    for (ksize, scaled, moltype, description) in test_cases {
-        println!("\n=== {} ===", description);
+    // Run multiple iterations to get more profiling data
+    let iterations = 5;
 
-        // Create index with automatic filename generation
-        let auto_index =
-            ProteomeIndex::new_with_auto_filename(&fasta_path, ksize, scaled, moltype, false)?;
+    for iteration in 0..iterations {
+        println!("\n=== ITERATION {} ===", iteration + 1);
 
-        // Show the generated filename
-        let generated_filename = auto_index.generate_filename(
-            "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz",
-        );
-        println!("Generated filename: {}", generated_filename);
+        for (ksize, scaled, moltype, description) in &test_cases {
+            println!("\n--- {} ---", description);
 
-        // Process the FASTA file
-        println!("Processing FASTA file...");
-        auto_index.process_fasta(&fasta_path, 10)?;
+            // Create index with automatic filename generation
+            let auto_index = ProteomeIndex::new_with_auto_filename(
+                &fasta_path,
+                *ksize,
+                *scaled,
+                moltype,
+                false,
+            )?;
 
-        // Print statistics
-        println!("Index statistics:");
-        auto_index.print_stats();
+            // Show the generated filename
+            let generated_filename = auto_index.generate_filename(
+                "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz",
+            );
+            println!("Generated filename: {}", generated_filename);
 
-        // Show some example signatures
-        let signatures = auto_index.get_signatures();
-        let sig_map = signatures;
-        println!("First few signatures:");
-        for (i, entry) in sig_map.iter().take(3).enumerate() {
-            let md5 = entry.key();
-            let sig = entry.value();
-            println!("  {}. {} (md5: {})", i + 1, sig.signature().name, md5);
+            // Process the FASTA file
+            println!("Processing FASTA file...");
+            auto_index.process_fasta(&fasta_path, 10)?;
+
+            // Print statistics
+            println!("Index statistics:");
+            auto_index.print_stats();
+
+            // Show some example signatures
+            let signatures = auto_index.get_signatures();
+            let sig_map = signatures;
+            println!("First few signatures:");
+            for (i, entry) in sig_map.iter().take(3).enumerate() {
+                let md5 = entry.key();
+                let sig = entry.value();
+                println!("  {}. {} (md5: {})", i + 1, sig.signature().name, md5);
+            }
         }
     }
 
