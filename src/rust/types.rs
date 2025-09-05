@@ -40,9 +40,24 @@ pub struct Scaled(pub u32);
 
 impl Scaled {
     /// Create a new scaled value with validation
+    ///
+    /// Scaled represents the sampling rate (1/scaled), so:
+    /// - scaled=1: take every k-mer (100% sampling)
+    /// - scaled=2: take every 2nd k-mer (50% sampling)  
+    /// - scaled=5: take every 5th k-mer (20% sampling)
+    /// - scaled=10: take every 10th k-mer (10% sampling)
+    ///
+    /// For protein analysis, we typically want scaled ≤ 10 to ensure
+    /// meaningful k-mer coverage. Higher values result in too sparse sampling.
     pub fn new(scaled: u32) -> Result<Self, String> {
         if scaled == 0 {
             Err("Scaled value must be greater than 0".to_string())
+        } else if scaled > 10 {
+            Err(format!(
+                "Scaled value too large: {}. For protein analysis, scaled should be ≤ 10 to ensure meaningful k-mer coverage. \
+                Higher values result in too sparse sampling (e.g., scaled=100 means only ~1 k-mer per 100-amino acid protein).",
+                scaled
+            ))
         } else {
             Ok(Scaled(scaled))
         }
@@ -149,7 +164,18 @@ mod tests {
     fn test_scaled_validation() {
         assert!(Scaled::new(0).is_err());
         assert!(Scaled::new(1).is_ok());
-        assert!(Scaled::new(1000).is_ok());
+        assert!(Scaled::new(2).is_ok());
+        assert!(Scaled::new(5).is_ok());
+        assert!(Scaled::new(10).is_ok());
+        assert!(Scaled::new(11).is_err());
+        assert!(Scaled::new(100).is_err());
+        assert!(Scaled::new(1000).is_err());
+
+        // Test error message for large values
+        let error = Scaled::new(100).unwrap_err();
+        assert!(error.contains("too large"));
+        assert!(error.contains("≤ 10"));
+        assert!(error.contains("sparse sampling"));
     }
 
     #[test]
