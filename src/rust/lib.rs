@@ -3,11 +3,15 @@ use pyo3::types::PyType;
 use std::path::PathBuf;
 
 pub mod aminoacid;
+pub mod config;
 pub mod encoding;
 pub mod errors;
 pub mod index;
+pub mod iterators;
 pub mod kmer;
+pub mod metrics;
 pub mod signature;
+pub mod types;
 
 #[cfg(test)]
 mod tests;

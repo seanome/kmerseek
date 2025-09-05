@@ -45,9 +45,11 @@ fn main() -> anyhow::Result<()> {
 
         // Show some example signatures
         let signatures = auto_index.get_signatures();
-        let sig_map = signatures.lock().unwrap();
+        let sig_map = signatures;
         println!("First few signatures:");
-        for (i, (md5, sig)) in sig_map.iter().take(3).enumerate() {
+        for (i, entry) in sig_map.iter().take(3).enumerate() {
+            let md5 = entry.key();
+            let sig = entry.value();
             println!("  {}. {} (md5: {})", i + 1, sig.signature().name, md5);
         }
     }

@@ -1,7 +1,9 @@
+use dashmap::DashMap;
+use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::thread;
 use std::time::Duration;
 
@@ -50,8 +52,8 @@ pub struct ProteomeIndex {
     // Combined minhash of all proteins for statistics
     combined_minhash: Arc<Mutex<KmerMinHash>>,
 
-    // Map of signature md5 -> protein signature
-    signatures: Arc<Mutex<HashMap<String, ProteinSignature>>>,
+    // Map of signature md5 -> protein signature (thread-safe concurrent map)
+    signatures: DashMap<String, ProteinSignature>,
 
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
@@ -159,7 +161,7 @@ impl ProteomeIndex {
 
         Ok(Self {
             db,
-            signatures: Arc::new(Mutex::new(HashMap::new())),
+            signatures: DashMap::new(),
             combined_minhash: Arc::new(Mutex::new(minhash)),
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             encoding_fn,
@@ -173,7 +175,7 @@ impl ProteomeIndex {
     }
 
     /// Get a reference to the signatures map (for testing)
-    pub fn get_signatures(&self) -> &Arc<Mutex<HashMap<String, ProteinSignature>>> {
+    pub fn get_signatures(&self) -> &DashMap<String, ProteinSignature> {
         &self.signatures
     }
 
@@ -199,18 +201,13 @@ impl ProteomeIndex {
 
     /// Save the current index state to RocksDB using efficient storage format
     pub fn save_state(&self) -> IndexResult<()> {
-        let signatures_map = self.signatures.lock().map_err(|e| {
-            IndexError::LockError(format!("Failed to acquire signatures lock: {}", e))
-        })?;
-        let combined_minhash = self
-            .combined_minhash
-            .lock()
-            .map_err(|e| IndexError::LockError(format!("Failed to acquire minhash lock: {}", e)))?;
+        // DashMap is already thread-safe, no need to lock
+        let combined_minhash = self.combined_minhash.lock();
 
         // Convert signatures to efficient storage format
         let mut signature_data = Vec::new();
-        for sig in signatures_map.values() {
-            let efficient_data = sig.to_efficient_data(self.store_raw_sequences);
+        for sig in self.signatures.iter() {
+            let efficient_data = sig.value().to_efficient_data(self.store_raw_sequences);
             signature_data.push(efficient_data);
         }
 
@@ -282,12 +279,15 @@ impl ProteomeIndex {
 
             // Update the current index state
             {
-                let mut current_signatures = self.signatures.lock().unwrap();
-                *current_signatures = signatures_map;
+                // Clear existing signatures and insert new ones
+                self.signatures.clear();
+                for (key, value) in signatures_map {
+                    self.signatures.insert(key, value);
+                }
             }
 
             {
-                let mut current_combined = self.combined_minhash.lock().unwrap();
+                let mut current_combined = self.combined_minhash.lock();
                 *current_combined = combined_minhash;
             }
 
@@ -364,7 +364,7 @@ impl ProteomeIndex {
 
             let index = Self {
                 db,
-                signatures: Arc::new(Mutex::new(signatures_map)),
+                signatures: signatures_map.into_iter().collect(),
                 combined_minhash: Arc::new(Mutex::new(combined_minhash)),
                 aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
                 encoding_fn,
@@ -384,12 +384,12 @@ impl ProteomeIndex {
 
     /// Get the number of signatures in the index
     pub fn signature_count(&self) -> usize {
-        self.signatures.lock().map(|lock| lock.len()).unwrap_or(0)
+        self.signatures.len()
     }
 
     /// Get the combined minhash size
     pub fn combined_minhash_size(&self) -> usize {
-        self.combined_minhash.lock().map(|lock| lock.size()).unwrap_or(0)
+        self.combined_minhash.lock().size()
     }
 
     /// Compare this index with another for equivalency
@@ -417,10 +417,13 @@ impl ProteomeIndex {
 
         // Compare signatures - use consistent lock ordering to avoid deadlocks
         // Always lock self before other to prevent deadlocks
-        let self_signatures = self.signatures.lock().unwrap();
-        let other_signatures = other.signatures.lock().unwrap();
+        // DashMap is already thread-safe, no need to lock
+        let self_signatures = &self.signatures;
+        let other_signatures = &other.signatures;
 
-        for (md5, self_sig) in self_signatures.iter() {
+        for entry in self_signatures.iter() {
+            let md5 = entry.key();
+            let self_sig = entry.value();
             if let Some(other_sig) = other_signatures.get(md5) {
                 let self_mins = self_sig.signature().get_minhash().mins();
                 let other_mins = other_sig.signature().get_minhash().mins();
@@ -478,13 +481,11 @@ impl ProteomeIndex {
             }
         }
 
-        // Drop the signature locks before acquiring minhash locks to prevent deadlocks
-        drop(self_signatures);
-        drop(other_signatures);
+        // DashMap references don't need to be dropped explicitly
 
         // Compare combined minhashes - use consistent lock ordering
-        let self_combined = self.combined_minhash.lock().unwrap();
-        let other_combined = other.combined_minhash.lock().unwrap();
+        let self_combined = self.combined_minhash.lock();
+        let other_combined = other.combined_minhash.lock();
 
         let self_mins = self_combined.mins();
         let other_mins = other_combined.mins();
@@ -685,15 +686,14 @@ impl ProteomeIndex {
 
         // Store all signatures in the signatures map
         {
-            let mut signatures_map = self.signatures.lock().unwrap();
             for protein_signature in protein_signatures {
                 let md5sum = protein_signature.signature().md5sum.clone();
-                signatures_map.insert(md5sum.to_string(), protein_signature);
+                self.signatures.insert(md5sum.to_string(), protein_signature);
             }
         }
 
         // Update the combined minhash with only the new signatures
-        let mut combined_minhash = self.combined_minhash.lock().unwrap();
+        let mut combined_minhash = self.combined_minhash.lock();
         combined_minhash
             .add_many_with_abund(&new_hashes_and_abunds)
             .map_err(|e| IndexError::SourmashError(e.to_string()))?;
@@ -1219,13 +1219,13 @@ mod tests {
 
         // Verify the signature was added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
         }
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             assert!(combined_minhash.size() == 17, "Combined minhash should contain 17 hashes");
         }
 
@@ -1270,13 +1270,13 @@ mod tests {
 
         // Verify the signature was added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
         }
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             assert!(combined_minhash.size() == 17, "Combined minhash should contain hashes");
         }
 
@@ -1321,13 +1321,13 @@ mod tests {
 
         // Verify the signature was added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 1, "Expected 1 signature to be stored");
         }
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             assert!(combined_minhash.size() == 14, "Combined minhash should contain 14 hashes");
         }
 
@@ -1360,11 +1360,13 @@ mod tests {
 
         // Verify the signatures were added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
 
             // Verify each signature has the expected number of k-mers
-            for (md5sum, stored_signature) in signatures.iter() {
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
                 if md5sum == "f7661cd829e75c0d" {
                     assert!(
                         stored_signature.kmer_infos().len() == 7,
@@ -1386,7 +1388,7 @@ mod tests {
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(combined_minhash.size() == 24, "Combined minhash should contain 24 hashes");
         }
@@ -1420,11 +1422,13 @@ mod tests {
 
         // Verify the signatures were added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
 
             // Verify each signature has the expected number of k-mers
-            for (md5sum, stored_signature) in signatures.iter() {
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
                 if md5sum == "a963d06839b6d6a9" {
                     assert!(
                         stored_signature.kmer_infos().len() == 7,
@@ -1446,7 +1450,7 @@ mod tests {
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(combined_minhash.size() == 24, "Combined minhash should contain 24 hashes");
         }
@@ -1480,11 +1484,13 @@ mod tests {
 
         // Verify the signatures were added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
 
             // Verify each signature has the expected number of k-mers
-            for (md5sum, stored_signature) in signatures.iter() {
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
                 if md5sum == "24ca8d939672666b" {
                     assert!(
                         stored_signature.kmer_infos().len() == 6,
@@ -1506,7 +1512,7 @@ mod tests {
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(combined_minhash.size() == 16, "Combined minhash should contain 16 hashes");
         }
@@ -1535,11 +1541,13 @@ mod tests {
 
         // Verify the signatures were added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 25, "Expected 25 signatures to be stored");
 
             // Check a few signatures
-            for (md5sum, stored_signature) in signatures.iter() {
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
@@ -1560,7 +1568,7 @@ mod tests {
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(
                 combined_minhash.size() == 9049,
@@ -1592,11 +1600,13 @@ mod tests {
 
         // Verify the signatures were added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 25, "Expected 25 signatures to be stored");
 
             // Check a few signatures
-            for (md5sum, stored_signature) in signatures.iter() {
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
@@ -1617,7 +1627,7 @@ mod tests {
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(
                 combined_minhash.size() == 2730,
@@ -1656,11 +1666,13 @@ mod tests {
 
         // Verify the signatures were added to the signatures map
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 25, "Expected 25 signatures to be stored");
 
             // Check a few signatures
-            for (md5sum, stored_signature) in signatures.iter() {
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
@@ -1681,7 +1693,7 @@ mod tests {
 
         // Verify the combined minhash was updated
         {
-            let combined_minhash = index.get_combined_minhash().lock().unwrap();
+            let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(
                 combined_minhash.size() == 3549,
@@ -2013,7 +2025,7 @@ mod tests {
 
         // Verify that the signatures were added
         {
-            let signatures = index.get_signatures().lock().unwrap();
+            let signatures = index.get_signatures();
             assert_eq!(signatures.len(), 4, "Expected 4 signatures to be stored");
         }
 
@@ -2247,11 +2259,13 @@ mod tests {
 
             // Verify we can access signatures
             let signatures = auto_index.get_signatures();
-            let sig_map = signatures.lock().unwrap();
+            let sig_map = signatures;
             assert!(!sig_map.is_empty(), "Signature map should not be empty for {}", description);
 
             // Test that signatures have the expected structure
-            for (md5, sig) in sig_map.iter().take(3) {
+            for entry in sig_map.iter().take(3) {
+                let md5 = entry.key();
+                let sig = entry.value();
                 assert!(!md5.is_empty(), "MD5 should not be empty");
                 assert!(!sig.signature().name.is_empty(), "Signature name should not be empty");
             }
@@ -2459,8 +2473,9 @@ mod tests {
         assert_eq!(index.signature_count(), 1);
 
         // Get the signature and verify raw sequence is preserved
-        let signatures = index.get_signatures().lock().unwrap();
-        let signature = signatures.values().next().unwrap();
+        let signatures = index.get_signatures();
+        let entry = signatures.iter().next().unwrap();
+        let signature = entry.value();
         assert!(signature.has_efficient_data());
         let raw_sequence = signature.get_raw_sequence();
         assert!(raw_sequence.is_some());
@@ -2501,8 +2516,9 @@ mod tests {
 
         // Get the signature and verify raw sequence is preserved
         {
-            let signatures = index.get_signatures().lock().unwrap();
-            let signature = signatures.values().next().unwrap();
+            let signatures = index.get_signatures();
+            let entry = signatures.iter().next().unwrap();
+            let signature = entry.value();
             assert!(signature.has_efficient_data());
             let raw_sequence = signature.get_raw_sequence();
             assert!(raw_sequence.is_some());
@@ -2546,8 +2562,9 @@ mod tests {
 
         // Get the signature and verify raw sequence is not stored
         {
-            let signatures = index.get_signatures().lock().unwrap();
-            let signature = signatures.values().next().unwrap();
+            let signatures = index.get_signatures();
+            let entry = signatures.iter().next().unwrap();
+            let signature = entry.value();
             assert!(!signature.has_efficient_data());
             let raw_sequence = signature.get_raw_sequence();
             assert!(raw_sequence.is_none());
