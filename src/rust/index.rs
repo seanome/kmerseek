@@ -293,7 +293,7 @@ impl ProteomeIndex {
 
             Ok(())
         } else {
-            return Err(IndexError::NoSavedState);
+            Err(IndexError::NoSavedState)
         }
     }
 
@@ -378,7 +378,7 @@ impl ProteomeIndex {
 
             Ok(index)
         } else {
-            return Err(IndexError::NoSavedState);
+            Err(IndexError::NoSavedState)
         }
     }
 
@@ -2615,6 +2615,7 @@ mod tests {
 ///     Ok(())
 /// }
 /// ```
+#[derive(Default)]
 pub struct ProteomeIndexBuilder {
     path: Option<PathBuf>,
     ksize: Option<u32>,
@@ -2623,11 +2624,7 @@ pub struct ProteomeIndexBuilder {
     store_raw_sequences: bool,
 }
 
-impl Default for ProteomeIndexBuilder {
-    fn default() -> Self {
-        Self { path: None, ksize: None, scaled: None, moltype: None, store_raw_sequences: false }
-    }
-}
+
 
 impl ProteomeIndexBuilder {
     /// Create a new builder with default values
