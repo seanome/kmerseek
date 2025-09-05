@@ -1,5 +1,4 @@
 use kmerseek::index::ProteomeIndex;
-use kmerseek::signature::SEED;
 use std::path::PathBuf;
 
 fn main() -> anyhow::Result<()> {
@@ -17,9 +16,9 @@ fn main() -> anyhow::Result<()> {
 
     // Test different parameter combinations
     let test_cases = vec![
-        (16, 5, "hp", "BCL2 with hp encoding, k=16, scaled=5"),
-        (10, 1, "protein", "BCL2 with protein encoding, k=10, scaled=1"),
-        (8, 100, "dayhoff", "BCL2 with dayhoff encoding, k=8, scaled=100"),
+        (7, 1, "protein", "BCL2 with protein encoding, k=7, scaled=1"),
+        (10, 1, "dayhoff", "BCL2 with dayhoff encoding, k=10, scaled=1"),
+        (14, 1, "hp", "BCL2 with hp encoding, k=14, scaled=1"),
     ];
 
     for (ksize, scaled, moltype, description) in test_cases {
