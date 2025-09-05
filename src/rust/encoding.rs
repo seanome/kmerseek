@@ -26,6 +26,7 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
     }
 }
 
+#[allow(clippy::doc_overindented_list_items)]
 /// Return an amino acid encoding function for a given `moltype` string.
 ///
 /// # Arguments
@@ -77,6 +78,7 @@ pub fn encode_kmer(kmer: &str, moltype: &str) -> Result<(String, String)> {
     Ok((encoded, original))
 }
 
+#[allow(clippy::doc_overindented_list_items)]
 /// Process a k-mer to get its encoded version based on the specified moltype and hash function.
 ///
 /// # Arguments
