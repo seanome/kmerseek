@@ -21,6 +21,8 @@ jobs:
 
       - name: cache rust
         uses: Swatinem/rust-cache@v2
+        with:
+          key: 1.82.0
 
       - name: setup conda
         uses: conda-incubator/setup-miniconda@v3
@@ -40,9 +42,15 @@ jobs:
 
       - run: mamba search rust
 
+      - name: install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pkg-config libssl-dev
+
       - name: install rust
-        shell: bash -l {0}
-        run: mamba install rust==1.82.0
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.82.0
 
       - name: install python dependencies
         shell: bash -l {0}
