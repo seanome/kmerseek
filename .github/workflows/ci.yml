@@ -15,10 +15,10 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        rust: [1.75.0, stable, nightly]
+        rust: [1.82.0, stable, nightly]
         include:
-          - rust: 1.75.0
-            cache-key: "1.75.0"
+          - rust: 1.82.0
+            cache-key: "1.82.0"
           - rust: stable
             cache-key: stable
           - rust: nightly
@@ -81,7 +81,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.75.0
+          toolchain: 1.82.0
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
@@ -130,7 +130,7 @@ jobs:
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
-          toolchain: 1.75.0
+          toolchain: 1.82.0
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
