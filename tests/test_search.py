@@ -1,12 +1,9 @@
 import os
 import polars as pl
-from click.testing import CliRunner
 from io import StringIO
 from polars.testing import assert_frame_equal
 import subprocess
 import sys
-
-from kmerseek.main import cli
 
 
 def test_search(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
@@ -42,7 +39,23 @@ sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239
 """
         )
     ).sort("match_name")
-    test_output = pl.read_csv(StringIO(result.stdout)).sort("match_name")
+
+    # Extract CSV data from stdout (skip any non-CSV content that comes before it)
+    stdout_lines = result.stdout.split("\n")
+    csv_start = None
+    for i, line in enumerate(stdout_lines):
+        if line.startswith("query_name,query_md5,match_name"):
+            csv_start = i
+            break
+
+    if csv_start is not None:
+        csv_content = "\n".join(stdout_lines[csv_start:])
+        test_output = pl.read_csv(StringIO(csv_content)).sort("match_name")
+    else:
+        # Fallback: try to parse the entire stdout with truncate_ragged_lines
+        test_output = pl.read_csv(
+            StringIO(result.stdout), truncate_ragged_lines=True
+        ).sort("match_name")
 
     assert_frame_equal(test_output, true_output)
 
