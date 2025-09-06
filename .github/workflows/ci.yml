@@ -50,7 +50,7 @@ jobs:
         if: matrix.rust == 'stable'
         run: |
           cargo install cargo-tarpaulin
-          cargo tarpaulin --out Xml --output-dir coverage/
+          cargo tarpaulin --out Xml --output-dir coverage/ --exclude-files 'src/rust/lib.rs'
 
       - name: Upload coverage to Codecov
         if: matrix.rust == 'stable'
