@@ -84,20 +84,6 @@ jobs:
       - name: cargo test
         run: cargo test --all-features --workspace
 
-      - name: Generate coverage report
-        run: |
-          cargo install cargo-tarpaulin
-          cargo tarpaulin --out Xml --output-dir coverage/
-
-      - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage/cobertura.xml
-          flags: unittests
-          name: codecov-umbrella
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
-
       - name: test rust cli
         run: |
           cargo run --bin kmerseek-rust -- --help
