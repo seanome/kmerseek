@@ -76,7 +76,10 @@ jobs:
         run: make
 
       - name: build binary for tests
-        run: cargo build --bin kmerseek-rust
+        run: |
+          cargo build --bin kmerseek-rust --all-features
+          ls -la target/debug/
+          ls -la target/debug/kmerseek-rust || echo "Binary not found in target/debug/"
 
       - name: cargo test
         run: cargo test --all-features --workspace

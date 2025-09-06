@@ -44,7 +44,7 @@ jobs:
         run: cargo test --verbose
 
       - name: Run CLI tests
-        run: cargo test --test test_cli --verbose
+        run: cargo test tests::test_cli --verbose
 
       - name: Generate coverage report
         if: matrix.rust == 'stable'
