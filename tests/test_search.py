@@ -2,23 +2,28 @@ import os
 import polars as pl
 from click.testing import CliRunner
 from io import StringIO
+from polars.testing import assert_frame_equal
+import subprocess
+import sys
 
 from kmerseek.main import cli
 
 
 def test_search(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "search",
-            "--ksize",
-            "16",
-            ced9,
-            bcl2_first25,
-        ],
-    )
-    assert result.exit_code == 0
+    # Use subprocess to properly capture stderr separately
+    cmd = [
+        sys.executable,
+        "-m",
+        "kmerseek.main",
+        "search",
+        "--ksize",
+        "16",
+        ced9,
+        bcl2_first25,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
+    assert result.returncode == 0
 
     # TODO: Actually test for the signature in this file by reading it in with
     # `sourmash.load_file_as_signatures`
@@ -30,32 +35,34 @@ def test_search(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
         StringIO(
             """query_name,query_md5,match_name,containment,intersect_hashes,ksize,scaled,moltype,match_md5,jaccard,max_containment,average_abund,median_abund,std_abund,query_containment_ani,match_containment_ani,average_containment_ani,max_containment_ani,n_weighted_found,total_weighted_hashes,containment_target_in_query,f_weighted_target_in_query
 sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,sp|Q12982|BNIP2_HUMAN BCL2/adenovirus E1B 19 kDa protein-interacting protein 2 OS=Homo sapiens OX=9606 GN=BNIP2 PE=1 SV=1,0.04081632653061224,2,48,5,hp,7bbc6e2ea3a472034fc31321943032ee,0.02040816326530612,0.04081632653061224,1.0,1.0,0.0,0.9355328459682174,0.934753456124389,0.9351431510463032,0.9355328459682174,2,51,0.0392156862745098,0.0392156862745098
-sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,sp|Q13625|ASPP2_HUMAN Apoptosis-stimulating of p53 protein 2 OS=Homo sapiens OX=9606 GN=TP53BP2 PE=1 SV=2,0.02040816326530612,1,48,5,hp,35da5dcf3561c6c0b0aaa34a118eabef,0.0036101083032490976,0.02040816326530612,1.0,1.0,0.0,0.9221202973899911,0.8929697781452893,0.9075450377676402,0.9221202973899911,1,230,0.004347826086956522,0.004347826086956522
+sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,sp|Q13625|ASPP2_HUMAN Apoptosis-stimulating of p53 protein 2 OS=Homo sapiens OX=9606 GN=TP53BP2 PE=1 SV=2,0.02040816326530612,1,48,5,hp,35da5dcf3561c6c0b0aaa34a118eabef,0.0036101083032490976,0.02040816326530612,1.0,1.0,0.0,0.9221202973899911,0.8929697781452893,0.9075450377676402,0.9221202973899911,1,230,0.004366812227074236,0.004347826086956522
 sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,sp|Q16611|BAK_HUMAN Bcl-2 homologous antagonist/killer OS=Homo sapiens OX=9606 GN=BAK1 PE=1 SV=1,0.02040816326530612,1,48,5,hp,1f59cdb10b02a7c6baff18b034518599,0.011111111111111112,0.023809523809523808,1.0,1.0,0.0,0.9221202973899911,0.9250864216273635,0.9236033595086773,0.9250864216273635,1,42,0.023809523809523808,0.023809523809523808
 sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,"sp|Q9BXH1|BBC3_HUMAN Bcl-2-binding component 3, isoforms 1/2 OS=Homo sapiens OX=9606 GN=BBC3 PE=1 SV=1",0.04081632653061224,2,48,5,hp,1d49aa1205276b9ba0176c6680cacd6d,0.024390243902439025,0.05714285714285714,1.0,1.0,0.0,0.9355328459682174,0.9421138187376149,0.9388233323529162,0.9421138187376149,2,35,0.05714285714285714,0.05714285714285714
-sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,sp|Q9UK96|FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE=1 SV=3,0.061224489795918366,3,48,5,hp,97f5f83c6214d6792113785b96747383,0.014354066985645933,0.061224489795918366,1.0,1.0,0.0,0.9434689410983454,0.9201376138657374,0.9318032774820415,0.9434689410983454,3,164,0.018292682926829268,0.018292682926829268
+sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1,fe3714626e8180caf90f78091563aae6,sp|Q9UK96|FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE=1 SV=3,0.061224489795918366,3,48,5,hp,97f5f83c6214d6792113785b96747383,0.014354066985645933,0.061224489795918366,1.0,1.0,0.0,0.9434689410983454,0.9201376138657374,0.9318032774820415,0.9434689410983454,3,164,0.018404907975460124,0.018292682926829267
 """
         )
     ).sort("match_name")
     test_output = pl.read_csv(StringIO(result.stdout)).sort("match_name")
 
-    assert test_output.equals(true_output)
+    assert_frame_equal(test_output, true_output)
 
 
 def test_search_extract_kmers(ced9, bcl2_first25, bcl2_hp_k16_sig_zip):
-    runner = CliRunner()
-    result = runner.invoke(
-        cli,
-        [
-            "search",
-            "--extract-kmers",
-            "--ksize",
-            "16",
-            ced9,
-            bcl2_first25,
-        ],
-    )
-    assert result.exit_code == 0
+    # Use subprocess to properly capture stderr separately
+    cmd = [
+        sys.executable,
+        "-m",
+        "kmerseek.main",
+        "search",
+        "--extract-kmers",
+        "--ksize",
+        "16",
+        ced9,
+        bcl2_first25,
+    ]
+
+    result = subprocess.run(cmd, capture_output=True, text=True, cwd=os.getcwd())
+    assert result.returncode == 0
 
     # TODO: Actually test for the signature in this file by reading it in with
     # `sourmash.load_file_as_signatures`
@@ -74,9 +81,11 @@ sp|Q9UK96|FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE
 """
         )
     ).sort("match_name")
+
+    # CSV data should be in stdout, visual output should be in stderr
     test_output = pl.read_csv(StringIO(result.stdout)).sort("match_name")
 
-    assert test_output.equals(true_output)
+    assert_frame_equal(test_output, true_output)
 
     assert (
         """---

@@ -12,3 +12,7 @@ def cli():
 
 cli.add_command(index)
 cli.add_command(search)
+
+
+if __name__ == "__main__":
+    cli()
