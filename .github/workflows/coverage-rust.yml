@@ -1,0 +1,54 @@
+name: Rust Coverage
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  coverage:
+    name: Rust Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: stable
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: stable
+
+      - name: Build
+        run: cargo build --verbose --no-default-features
+
+      - name: Build binary for tests
+        run: |
+          cargo build --bin kmerseek-rust --all-features --no-default-features
+          ls -la target/debug/
+          ls -la target/debug/kmerseek-rust || echo "Binary not found in target/debug/"
+
+      - name: Run tests
+        run: cargo test --verbose --no-default-features
+
+      - name: Generate coverage report
+        run: |
+          cargo install cargo-tarpaulin
+          cargo tarpaulin --out Xml --output-dir coverage/ --no-default-features
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage/cobertura.xml
+          flags: rust
+          name: codecov-rust
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}

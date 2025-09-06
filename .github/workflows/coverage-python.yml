@@ -1,0 +1,58 @@
+name: Python Coverage
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main]
+
+jobs:
+  coverage:
+    name: Python Coverage
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: cache conda
+        uses: actions/cache@v4
+        env:
+          CACHE_NUMBER: 1
+        with:
+          path: ~/conda_pkgs_dir
+          key: ${{ runner.os }}-conda-${{ env.CACHE_NUMBER }}-${{ hashFiles('environment.yml') }}
+
+      - name: setup conda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          auto-update-conda: true
+          python-version: 3.12
+          channels: conda-forge,bioconda
+          miniforge-version: latest
+          use-mamba: true
+          mamba-version: "*"
+          activate-environment: kmerseek-dev
+          auto-activate-base: false
+
+      - name: install python dependencies
+        shell: bash -l {0}
+        run: mamba install compilers polars sourmash sourmash_plugin_branchwater click pytest pandas pytest-cov coverage
+
+      - name: build
+        run: make
+
+      - name: pytest with coverage
+        shell: bash -l {0}
+        run: |
+          pytest -vv --cov=src/python/kmerseek --cov-report=xml --cov-report=html --cov-report=term
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v4
+        with:
+          file: ./coverage.xml
+          flags: python
+          name: codecov-python
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
