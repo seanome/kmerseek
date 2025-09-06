@@ -27,6 +27,12 @@ jobs:
         with:
           key: stable
 
+      - name: Cache cargo-tarpaulin
+        uses: actions/cache@v3
+        with:
+          path: ~/.cargo/bin/cargo-tarpaulin
+          key: cargo-tarpaulin-${{ hashFiles('Cargo.lock') }}
+
       - name: Build
         run: cargo build --verbose --no-default-features
 
@@ -42,7 +48,7 @@ jobs:
       - name: Generate coverage report
         run: |
           cargo install cargo-tarpaulin
-          cargo tarpaulin --out Xml --output-dir coverage/ --no-default-features
+          cargo tarpaulin --out Xml --output-dir coverage/ --no-default-features --timeout 120 --skip-clean
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@v4
