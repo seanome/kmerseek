@@ -38,19 +38,19 @@ jobs:
           key: ${{ matrix.cache-key }}
 
       - name: Build
-        run: cargo build --verbose
+        run: cargo build --verbose --no-default-features
 
       - name: Run tests
-        run: cargo test --verbose
+        run: cargo test --verbose --no-default-features
 
       - name: Run CLI tests
-        run: cargo test tests::test_cli --verbose
+        run: cargo test tests::test_cli --verbose --no-default-features
 
       - name: Generate coverage report
         if: matrix.rust == 'stable'
         run: |
           cargo install cargo-tarpaulin
-          cargo tarpaulin --out Xml --output-dir coverage/ --exclude-files 'src/rust/lib.rs'
+          cargo tarpaulin --out Xml --output-dir coverage/ --no-default-features
 
       - name: Upload coverage to Codecov
         if: matrix.rust == 'stable'
@@ -63,12 +63,12 @@ jobs:
           token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Build release
-        run: cargo build --release --verbose
+        run: cargo build --release --verbose --no-default-features
 
       - name: Test CLI binary
         run: |
-          cargo run --bin kmerseek-rust -- --help
-          cargo run --bin kmerseek-rust -- index --help
+          cargo run --bin kmerseek-rust --no-default-features -- --help
+          cargo run --bin kmerseek-rust --no-default-features -- index --help
 
   cli-integration:
     name: CLI Integration Tests
@@ -87,26 +87,26 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Build
-        run: cargo build --release
+        run: cargo build --release --no-default-features
 
       - name: Test CLI with real data
         run: |
           # Test basic indexing
-          cargo run --bin kmerseek-rust -- index \
+          cargo run --bin kmerseek-rust --no-default-features -- index \
             --input tests/testdata/fasta/ced9.fasta \
             --output test_output.db \
             --ksize 5 \
             --encoding protein
 
           # Test gzipped file
-          cargo run --bin kmerseek-rust -- index \
+          cargo run --bin kmerseek-rust --no-default-features -- index \
             --input tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
             --output test_output_gz.db \
             --ksize 10 \
             --encoding hp
 
           # Test different encodings
-          cargo run --bin kmerseek-rust -- index \
+          cargo run --bin kmerseek-rust --no-default-features -- index \
             --input tests/testdata/fasta/ced9.fasta \
             --output test_output_dayhoff.db \
             --ksize 8 \
@@ -137,7 +137,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Run benchmarks
-        run: cargo bench --verbose -- --output-format json > benchmark_results.json
+        run: cargo bench --verbose --no-default-features -- --output-format json > benchmark_results.json
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1

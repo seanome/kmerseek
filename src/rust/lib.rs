@@ -1,5 +1,8 @@
+#[cfg(feature = "python")]
 use pyo3::prelude::*;
+#[cfg(feature = "python")]
 use pyo3::types::PyType;
+#[cfg(feature = "python")]
 use std::path::PathBuf;
 
 pub mod aminoacid;
@@ -21,6 +24,7 @@ pub use aminoacid::AminoAcidAmbiguity;
 pub use index::ProteomeIndex;
 pub use signature::SEED;
 
+#[cfg(feature = "python")]
 #[pyclass]
 #[derive(Clone, Copy)]
 pub enum PyProteinEncoding {
@@ -29,6 +33,7 @@ pub enum PyProteinEncoding {
     HP,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl PyProteinEncoding {
     #[classmethod]
@@ -47,6 +52,7 @@ impl PyProteinEncoding {
     }
 }
 
+#[cfg(feature = "python")]
 impl From<PyProteinEncoding> for String {
     fn from(py_encoding: PyProteinEncoding) -> Self {
         match py_encoding {
@@ -57,12 +63,14 @@ impl From<PyProteinEncoding> for String {
     }
 }
 
+#[cfg(feature = "python")]
 /// Formats the sum of two numbers as string.
 #[pyfunction]
 fn sum_as_string(a: usize, b: usize) -> PyResult<String> {
     Ok((a + b).to_string())
 }
 
+#[cfg(feature = "python")]
 #[pyclass]
 pub struct PyProteomeIndex {
     // Not currently used, but will be used in the future
@@ -70,6 +78,7 @@ pub struct PyProteomeIndex {
     index: crate::index::ProteomeIndex,
 }
 
+#[cfg(feature = "python")]
 #[pymethods]
 impl PyProteomeIndex {
     #[new]
@@ -82,6 +91,7 @@ impl PyProteomeIndex {
     }
 }
 
+#[cfg(feature = "python")]
 /// A Python module implemented in Rust.
 #[pymodule]
 fn kmerseek(_py: Python<'_>, m: &Bound<'_, PyModule>) -> PyResult<()> {
