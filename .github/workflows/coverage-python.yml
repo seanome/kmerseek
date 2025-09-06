@@ -8,7 +8,7 @@ on:
 
 jobs:
   coverage:
-    name: Python Coverage
+    name: pytest-cov
     runs-on: ubuntu-latest
 
     steps:

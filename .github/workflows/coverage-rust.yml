@@ -11,7 +11,7 @@ env:
 
 jobs:
   coverage:
-    name: Rust Coverage
+    name: cargo-tarpaulin
     runs-on: ubuntu-latest
 
     steps:
