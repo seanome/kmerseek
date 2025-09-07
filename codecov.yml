@@ -26,3 +26,6 @@ ignore:
   - "examples/"
   - "target/"
   - "REFERENCE_*/"
+
+codecov:
+  require_ci_to_pass: false
