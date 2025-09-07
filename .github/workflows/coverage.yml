@@ -60,10 +60,6 @@ jobs:
         shell: bash -l {0}
         run: mamba install compilers polars sourmash sourmash_plugin_branchwater click pytest pandas pytest-cov coverage
 
-      - name: Install Python development libraries
-        run: |
-          sudo apt-get update && sudo apt-get install -y python3-dev python3-distutils libpython3.12-dev
-
       - name: build
         run: make
 
