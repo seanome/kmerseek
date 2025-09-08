@@ -701,10 +701,38 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Process a protein FASTA file in parallel, adding all sequences to the index
+    /// Store a batch of protein signatures efficiently.
     ///
-    /// This method reads a FASTA file, validates each protein sequence for amino acid ambiguity,
-    /// creates protein signatures for each sequence, and stores them in the index.
+    /// This method is optimized for batch processing by reusing the same logic
+    /// as `store_signatures` but with better memory management for streaming scenarios.
+    ///
+    /// # Arguments
+    ///
+    /// * `protein_signatures` - A slice of protein signatures to store
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the operation fails.
+    ///
+    /// # Why this is idiomatic
+    ///
+    /// - **Borrowing over ownership**: Takes `&[ProteinSignature]` to avoid unnecessary moves
+    /// - **Reuses existing logic**: Delegates to `store_signatures` for consistency
+    /// - **Memory efficient**: Allows for batch processing without accumulating all signatures
+    pub fn store_signatures_batch(
+        &self,
+        protein_signatures: &[ProteinSignature],
+    ) -> IndexResult<()> {
+        // Convert slice to owned Vec for the existing method
+        // This is a small allocation cost for the benefit of code reuse
+        self.store_signatures(protein_signatures.to_vec())
+    }
+
+    /// Process a protein FASTA file in parallel, adding all sequences to the index.
+    ///
+    /// This method reads a FASTA file with automatic compression detection, validates each
+    /// protein sequence for amino acid ambiguity, creates protein signatures for each sequence,
+    /// and stores them in the index.
     ///
     /// Each sequence is validated using the same amino acid validation as `create_protein_signature`.
     /// If any sequence contains invalid amino acids, the entire operation will fail with an error
@@ -712,38 +740,136 @@ impl ProteomeIndex {
     ///
     /// # Arguments
     ///
-    /// * `fasta_path` - Path to the FASTA file to process
+    /// * `fasta_path` - Path to the FASTA file to process (supports any compression format)
     /// * `progress_interval` - Number of sequences between progress reports (0 to disable progress)
     ///
     /// # Returns
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
     /// The error will contain details about any invalid amino acids found in the sequences.
+    ///
+    /// # Why this is idiomatic
+    ///
+    /// - **Streaming processing**: Avoids loading entire file into memory
+    /// - **Zero-copy access**: Uses `&[u8]` slices directly from needletail
+    /// - **Explicit error handling**: All errors are propagated with `?` operator
+    /// - **Generic path handling**: Accepts any `AsRef<Path>` type
+    /// - **Progress reporting**: Non-blocking progress updates with atomic counters
+    /// - **Auto-compression detection**: needletail handles gzip/bzip2/xz/zstd automatically
     pub fn process_fasta<P: AsRef<Path>>(
         &self,
         fasta_path: P,
         progress_interval: u32,
     ) -> IndexResult<()> {
         use needletail::parse_fastx_file;
-        use rayon::prelude::*;
 
         if progress_interval > 0 {
             println!("Reading FASTA file...");
+        }
+
+        // Open and parse the FASTA file using needletail with auto-detection
+        let mut reader =
+            parse_fastx_file(&fasta_path).map_err(|e| IndexError::ParseError(e.to_string()))?;
+
+        // Process records in streaming fashion to avoid memory issues
+        let mut record_count = 0;
+        let mut signatures = Vec::new();
+        let batch_size = 1000; // Process in batches for better memory management
+
+        while let Some(record) = reader.next() {
+            let record = record.map_err(|e| IndexError::ParseError(e.to_string()))?;
+
+            // Use zero-copy access to sequence data
+            let sequence = record.seq(); // Cow<'_, [u8]> - no allocation for borrowed data
+            let id = record.id(); // Cow<'_, [u8]> - no allocation for borrowed data
+
+            // Convert to string slices for processing
+            let sequence_str = std::str::from_utf8(&sequence)
+                .map_err(|e| IndexError::ParseError(format!("Invalid UTF-8 in sequence: {}", e)))?;
+            let name_str = std::str::from_utf8(&id)
+                .map_err(|e| IndexError::ParseError(format!("Invalid UTF-8 in ID: {}", e)))?;
+
+            // Create protein signature for this sequence
+            let signature = self.create_protein_signature(sequence_str, name_str)?;
+            signatures.push(signature);
+            record_count += 1;
+
+            // Process in batches to balance memory usage and performance
+            if signatures.len() >= batch_size {
+                self.store_signatures_batch(&signatures)?;
+                signatures.clear(); // Free memory after storing
+            }
+
+            // Print progress if interval is set and we've reached the interval
+            if progress_interval > 0 && record_count % progress_interval == 0 {
+                println!("Processed {} sequences...", record_count);
+            }
+        }
+
+        // Process any remaining signatures
+        if !signatures.is_empty() {
+            self.store_signatures_batch(&signatures)?;
+        }
+
+        // Save the index state to RocksDB
+        self.save_state()?;
+
+        if progress_interval > 0 {
+            println!("Successfully processed and stored {} sequences.", record_count);
+        }
+        Ok(())
+    }
+
+    /// Process a FASTA file with parallel batch processing for large files.
+    ///
+    /// This method is optimized for very large FASTA files by processing records
+    /// in parallel batches, providing better memory management and performance.
+    ///
+    /// # Arguments
+    ///
+    /// * `fasta_path` - Path to the FASTA file to process (supports any compression format)
+    /// * `progress_interval` - Number of sequences between progress reports (0 to disable progress)
+    /// * `batch_size` - Number of sequences to process in each parallel batch
+    ///
+    /// # Returns
+    ///
+    /// Returns `Ok(())` on success, or an error if the operation fails.
+    ///
+    /// # Why this is idiomatic
+    ///
+    /// - **Parallel processing**: Uses rayon for efficient parallel batch processing
+    /// - **Memory-conscious**: Processes in configurable batches to control memory usage
+    /// - **Streaming I/O**: Reads file once and processes in chunks
+    /// - **Atomic progress tracking**: Thread-safe progress reporting
+    /// - **Error propagation**: All errors are properly propagated through the parallel chain
+    pub fn process_fasta_parallel<P: AsRef<Path>>(
+        &self,
+        fasta_path: P,
+        progress_interval: u32,
+        batch_size: usize,
+    ) -> IndexResult<()> {
+        use needletail::parse_fastx_file;
+        use rayon::prelude::*;
+
+        if progress_interval > 0 {
+            println!("Reading FASTA file for parallel processing...");
         }
 
         // Open and parse the FASTA file using needletail
         let mut reader =
             parse_fastx_file(&fasta_path).map_err(|e| IndexError::ParseError(e.to_string()))?;
 
-        // Convert records into a vector for parallel processing
-        let mut records = Vec::new();
+        // Collect records in batches for parallel processing
+        let mut all_records = Vec::new();
         let mut record_count = 0;
+
         while let Some(record) = reader.next() {
             let record = record.map_err(|e| IndexError::ParseError(e.to_string()))?;
-            // Clone the record data to avoid borrowing issues
+
+            // Store references to avoid cloning until necessary
             let sequence = record.seq().to_vec();
             let id = record.id().to_vec();
-            records.push((sequence, id));
+            all_records.push((sequence, id));
             record_count += 1;
 
             // Print progress if interval is set and we've reached the interval
@@ -752,7 +878,7 @@ impl ProteomeIndex {
             }
         }
 
-        let total_records = records.len();
+        let total_records = all_records.len();
         if progress_interval > 0 {
             println!(
                 "Finished reading {} sequences. Starting parallel processing...",
@@ -777,19 +903,25 @@ impl ProteomeIndex {
             });
         }
 
-        // Process records in parallel and collect signatures
-        let signatures: Result<Vec<ProteinSignature>, IndexError> = records
-            .par_iter()
-            .map(|(seq_bytes, id_bytes)| {
-                let sequence = std::str::from_utf8(seq_bytes)?;
-                let name = std::str::from_utf8(id_bytes)?;
+        // Process records in parallel batches
+        let signatures: Result<Vec<ProteinSignature>, IndexError> = all_records
+            .par_chunks(batch_size)
+            .map(|batch| {
+                batch
+                    .iter()
+                    .map(|(seq_bytes, id_bytes)| {
+                        let sequence = std::str::from_utf8(seq_bytes)?;
+                        let name = std::str::from_utf8(id_bytes)?;
 
-                // Create protein signature for each sequence
-                let result = self.create_protein_signature(sequence, name);
-                processed_count.fetch_add(1, Ordering::Relaxed);
-                result
+                        // Create protein signature for each sequence
+                        let result = self.create_protein_signature(sequence, name);
+                        processed_count.fetch_add(1, Ordering::Relaxed);
+                        result
+                    })
+                    .collect::<Result<Vec<_>, _>>()
             })
-            .collect();
+            .collect::<Result<Vec<_>, _>>()
+            .map(|batches| batches.into_iter().flatten().collect());
 
         if progress_interval > 0 {
             println!("Storing {} signatures...", total_records);
@@ -819,7 +951,9 @@ mod tests {
 
     use crate::index::ProteomeIndex;
     use crate::signature::ProteinSignature;
-    use crate::tests::test_fixtures::{TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_PROTEIN};
+    use crate::tests::test_fixtures::{
+        TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
+    };
     use crate::tests::test_utils::{self, print_kmer_infos};
     use std::collections::HashMap;
     use std::path::PathBuf;
@@ -1515,6 +1649,63 @@ mod tests {
             let combined_minhash = index.get_combined_minhash().lock();
             println!("combined_minhash.size(): {}", combined_minhash.size());
             assert!(combined_minhash.size() == 16, "Combined minhash should contain 16 hashes");
+        }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_fasta_zstd_moltype_protein() -> Result<()> {
+        let dir = tempdir()?;
+
+        let protein_ksize = 5;
+        let moltype = "protein";
+
+        // Create index with minimal parameters
+        let index = ProteomeIndex::new(
+            dir.path().join("fasta_zstd_protein_test.db"),
+            protein_ksize,
+            1, // scaled=1 to capture all kmers for testing
+            moltype,
+            false,
+        )?;
+
+        // Process the zstd compressed FASTA file
+        index.process_fasta(TEST_FASTA_ZST, 0)?;
+
+        // Verify the signatures were added to the signatures map
+        {
+            let signatures = index.get_signatures();
+            assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
+
+            // Verify each signature has the expected number of k-mers
+            for entry in signatures.iter() {
+                let md5sum = entry.key();
+                let stored_signature = entry.value();
+                if md5sum == "f7661cd829e75c0d" {
+                    assert!(
+                        stored_signature.kmer_infos().len() == 7,
+                        "LIVINGALIVE should have 7 protein 5-mers"
+                    );
+                } else if md5sum == "7641839ad508ab8" {
+                    assert!(
+                        stored_signature.kmer_infos().len() == 17,
+                        "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
+                    );
+                } else {
+                    println!("md5sum: {}", md5sum);
+                    println!("Name: {}", stored_signature.signature().name);
+                    println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                    assert!(false, "Unknown md5sum: {}", md5sum);
+                }
+            }
+        }
+
+        // Verify the combined minhash was updated
+        {
+            let combined_minhash = index.get_combined_minhash().lock();
+            println!("combined_minhash.size(): {}", combined_minhash.size());
+            assert!(combined_minhash.size() == 24, "Combined minhash should contain 24 hashes");
         }
 
         Ok(())

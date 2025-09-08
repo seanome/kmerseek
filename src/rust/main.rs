@@ -14,9 +14,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index a FASTA file (supports .gz compression)
+    /// Index a FASTA file (supports all compression formats)
     Index {
-        /// Input FASTA file path (supports .gz compression)
+        /// Input FASTA file path (supports gzip, bzip2, xz, zstd, and uncompressed)
         #[arg(short, long)]
         input: PathBuf,
 

@@ -10,6 +10,7 @@ pub mod config;
 pub mod encoding;
 pub mod errors;
 pub mod index;
+pub mod io;
 pub mod iterators;
 pub mod kmer;
 pub mod metrics;
