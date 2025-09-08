@@ -182,7 +182,9 @@ class KmerseekResultsBase:
 
     def write_to_file(self, df, filename):
         if filename is None:
-            sys.stdout.write(df.write_csv())
+            csv_output = df.write_csv()
+            sys.stdout.write(csv_output)
+            sys.stdout.flush()  # Ensure stdout is flushed
         else:
             df.write_csv(filename)
 
@@ -238,12 +240,11 @@ class KmerseekResultsWithKmerExtraction(KmerseekResultsBase):
         ).collect()
 
     def show_results_per_gene(self, per_gene_stitched_kmers):
-        click.echo(
-            per_gene_stitched_kmers.select(pl.col("to_print")).write_csv(
-                quote_style="never", include_header=False
-            ),
-            err=True,
+        visual_output = per_gene_stitched_kmers.select(pl.col("to_print")).write_csv(
+            quote_style="never", include_header=False
         )
+        click.echo(visual_output, err=True)
+        sys.stderr.flush()  # Ensure stderr is flushed before stdout
 
     def make_combined_df_for_output(self, search_with_per_gene_stitched_kmers):
         return search_with_per_gene_stitched_kmers.select(

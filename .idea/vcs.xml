@@ -2,5 +2,7 @@
 <project version="4">
   <component name="VcsDirectoryMappings">
     <mapping directory="" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/REFERENCE_sourmash" vcs="Git" />
+    <mapping directory="$PROJECT_DIR$/REFERENCE_sourmash_plugin_branchwater" vcs="Git" />
   </component>
 </project>

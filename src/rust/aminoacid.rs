@@ -1,0 +1,249 @@
+use rand::prelude::*;
+use std::borrow::Cow;
+use std::collections::HashMap;
+
+use crate::errors::{IndexError, IndexResult};
+
+/// Standard amino acids and their properties
+pub const STANDARD_AA: [char; 20] = [
+    'A', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'K', 'L', 'M', 'N', 'P', 'Q', 'R', 'S', 'T', 'V', 'W',
+    'Y',
+];
+
+/// Special amino acids that are valid but not ambiguous
+pub const SPECIAL_AA: [char; 4] = ['X', 'U', 'O', '*'];
+
+/// Represents amino acid ambiguity codes and their possible resolutions
+#[derive(Debug)]
+pub struct AminoAcidAmbiguity {
+    /// Maps ambiguous amino acid codes to their possible resolutions
+    replacements: HashMap<char, Vec<char>>,
+}
+
+impl Default for AminoAcidAmbiguity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl AminoAcidAmbiguity {
+    pub fn new() -> Self {
+        let mut replacements = HashMap::new();
+
+        // Add ambiguous amino acid codes
+        replacements.insert('B', vec!['D', 'N']); // Aspartic acid or Asparagine
+        replacements.insert('Z', vec!['E', 'Q']); // Glutamic acid or Glutamine
+        replacements.insert('J', vec!['I', 'L']); // Isoleucine or Leucine
+
+        AminoAcidAmbiguity { replacements }
+    }
+
+    fn is_valid_aa(&self, aa: char) -> bool {
+        STANDARD_AA.contains(&aa) || SPECIAL_AA.contains(&aa) || self.replacements.contains_key(&aa)
+    }
+
+    fn resolve_ambiguity(&self, aa: char) -> Option<char> {
+        if let Some(possible_aas) = self.replacements.get(&aa) {
+            // Randomly choose one of the possibilities
+            let mut rng = rand::rng();
+            Some(*possible_aas.choose(&mut rng).unwrap_or(&aa))
+        } else {
+            // If not found in replacements, return the original character
+            None
+        }
+    }
+
+    /// Validates a protein sequence and returns an error if invalid characters are found
+    /// Stops reading at the first stop codon (*)
+    pub fn validate_sequence(&self, sequence: &str) -> IndexResult<()> {
+        for (i, c) in sequence.chars().enumerate() {
+            if c == '*' {
+                // Stop codon - this is valid, but we stop reading here
+                return Ok(());
+            }
+            if !self.is_valid_aa(c) {
+                return Err(IndexError::InvalidAminoAcid(c, i + 1));
+            }
+        }
+        Ok(())
+    }
+
+    /// Validates a protein sequence and resolves ambiguity if needed.
+    /// Returns Ok(Cow<str>) with ambiguity resolved if needed, or an error if invalid characters are found.
+    /// Stops processing at the first stop codon (*).
+    pub fn validate_and_resolve<'a>(&self, sequence: &'a str) -> IndexResult<Cow<'a, str>> {
+        let mut result = String::new();
+        let mut has_ambiguous = false;
+
+        for c in sequence.chars() {
+            if c == '*' {
+                // Stop codon - this is valid, but we stop reading here
+                result.push(c);
+                break;
+            }
+
+            if !self.is_valid_aa(c) {
+                return Err(IndexError::InvalidAminoAcid(c, result.len() + 1));
+            }
+
+            // Check if this character is ambiguous
+            if let Some(resolved) = self.resolve_ambiguity(c) {
+                has_ambiguous = true;
+                result.push(resolved);
+            } else {
+                result.push(c);
+            }
+        }
+
+        // If we processed the sequence (ambiguous chars or stop codon truncation), return the result
+        // Otherwise, return the original sequence
+        if has_ambiguous || result.len() != sequence.len() {
+            Ok(Cow::Owned(result))
+        } else {
+            Ok(Cow::Borrowed(sequence))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::tests::test_fixtures::{TEST_PROTEIN, TEST_PROTEIN_INVALID};
+
+    #[test]
+    fn test_valid_amino_acids() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test standard amino acids
+        for c in STANDARD_AA.iter() {
+            assert!(aa.is_valid_aa(*c));
+        }
+
+        // Test ambiguous codes
+        assert!(aa.is_valid_aa('B'));
+        assert!(aa.is_valid_aa('Z'));
+        assert!(aa.is_valid_aa('J'));
+
+        // Test special amino acids
+        assert!(aa.is_valid_aa('X'));
+        assert!(aa.is_valid_aa('U'));
+        assert!(aa.is_valid_aa('O'));
+        assert!(aa.is_valid_aa('*'));
+
+        // Test invalid characters
+        assert!(!aa.is_valid_aa('1'));
+        assert!(!aa.is_valid_aa('$'));
+        assert!(!aa.is_valid_aa('@'));
+    }
+
+    #[test]
+    fn test_ambiguity_resolution() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test standard amino acids (should return None since they're not ambiguous)
+        for c in STANDARD_AA.iter() {
+            assert_eq!(aa.resolve_ambiguity(*c), None);
+        }
+
+        // Test special amino acids (should return None since they're not ambiguous)
+        assert_eq!(aa.resolve_ambiguity('X'), None);
+        assert_eq!(aa.resolve_ambiguity('U'), None);
+        assert_eq!(aa.resolve_ambiguity('O'), None);
+        assert_eq!(aa.resolve_ambiguity('*'), None);
+
+        // Test ambiguous codes (should return one of their possible resolutions)
+        let b_resolution = aa.resolve_ambiguity('B');
+        assert!(vec!['D', 'N'].contains(&b_resolution.unwrap()));
+
+        let z_resolution = aa.resolve_ambiguity('Z');
+        assert!(vec!['E', 'Q'].contains(&z_resolution.unwrap()));
+
+        let j_resolution = aa.resolve_ambiguity('J');
+        assert!(vec!['I', 'L'].contains(&j_resolution.unwrap()));
+    }
+
+    #[test]
+    fn test_sequence_validation() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test valid sequence
+        assert!(aa.validate_sequence(TEST_PROTEIN).is_ok());
+        assert!(aa.validate_sequence("ACDEFGHIKLMNPQRSTVWY").is_ok());
+        assert!(aa.validate_sequence("ACDEFXBZJ").is_ok());
+
+        // Test sequences with special amino acids
+        assert!(aa.validate_sequence("ACDEFXUO").is_ok());
+        assert!(aa.validate_sequence("ACDEF*").is_ok());
+        assert!(aa.validate_sequence("ACDEF*GHI").is_ok()); // Should stop at *
+
+        // Test invalid sequence
+        let result = aa.validate_sequence(TEST_PROTEIN_INVALID);
+        assert!(result.is_err());
+        // Contains invalid character '1'
+        let error = result.unwrap_err();
+        match error {
+            IndexError::InvalidAminoAcid(c, pos) => {
+                assert_eq!(c, '1');
+                assert!(pos > 0);
+            }
+            _ => panic!("Expected InvalidAminoAcid error, got {:?}", error),
+        }
+    }
+
+    #[test]
+    fn test_validate_and_resolve_with_stop_codon() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test sequence with stop codon
+        let result = aa.validate_and_resolve("ACDEF*GHI");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_ref(), "ACDEF*");
+
+        // Test sequence with stop codon and ambiguous amino acids
+        let result = aa.validate_and_resolve("ACDEFB*GHI");
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert!(resolved.as_ref().starts_with("ACDEF"));
+        assert!(resolved.as_ref().ends_with("*"));
+        // The B should be resolved to either D or N
+        let fifth_char = resolved.as_ref().chars().nth(5).unwrap();
+        assert!(vec!['D', 'N'].contains(&fifth_char));
+    }
+
+    #[test]
+    fn test_validate_and_resolve_special_amino_acids() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test sequence with X, U, O
+        let result = aa.validate_and_resolve("ACDEFXUO");
+        assert!(result.is_ok());
+        assert_eq!(result.unwrap().as_ref(), "ACDEFXUO");
+
+        // Test sequence with X, U, O and ambiguous amino acids
+        let result = aa.validate_and_resolve("ACDEFXBZJ");
+        assert!(result.is_ok());
+        let resolved = result.unwrap();
+        assert!(resolved.as_ref().starts_with("ACDEFX"));
+        // The B, Z, J should be resolved
+        let seventh_char = resolved.as_ref().chars().nth(6).unwrap();
+        let eighth_char = resolved.as_ref().chars().nth(7).unwrap();
+        let ninth_char = resolved.as_ref().chars().nth(8).unwrap();
+        assert!(vec!['D', 'N'].contains(&seventh_char));
+        assert!(vec!['E', 'Q'].contains(&eighth_char));
+        assert!(vec!['I', 'L'].contains(&ninth_char));
+    }
+
+    #[test]
+    fn test_validate_and_resolve_no_ambiguous() {
+        let aa = AminoAcidAmbiguity::new();
+
+        // Test sequence with no ambiguous amino acids
+        let result = aa.validate_and_resolve("ACDEFGHIKLMNPQRSTVWY");
+        assert!(result.is_ok());
+        // Should return borrowed string (no allocation)
+        match result.unwrap() {
+            Cow::Borrowed(s) => assert_eq!(s, "ACDEFGHIKLMNPQRSTVWY"),
+            Cow::Owned(_) => panic!("Expected borrowed string for non-ambiguous sequence"),
+        }
+    }
+}
