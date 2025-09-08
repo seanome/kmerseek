@@ -784,8 +784,11 @@ impl ProteomeIndex {
                 let sequence = std::str::from_utf8(seq_bytes)?;
                 let name = std::str::from_utf8(id_bytes)?;
 
+                // Uppercase the sequence before processing
+                let sequence = sequence.to_uppercase();
+
                 // Create protein signature for each sequence
-                let result = self.create_protein_signature(sequence, name);
+                let result = self.create_protein_signature(&sequence, name);
                 processed_count.fetch_add(1, Ordering::Relaxed);
                 result
             })
@@ -2568,6 +2571,124 @@ mod tests {
             assert!(!signature.has_efficient_data());
             let raw_sequence = signature.get_raw_sequence();
             assert!(raw_sequence.is_none());
+        }
+
+        // Test that we can save state without errors
+        index.save_state()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_fasta_mixed_case_sequences() -> Result<()> {
+        let dir = tempdir()?;
+
+        let protein_ksize = 3;
+        let moltype = "protein";
+
+        // Create index with minimal parameters
+        let index = ProteomeIndex::new(
+            dir.path().join("mixed_case_test.db"),
+            protein_ksize,
+            1, // scaled=1 to capture all kmers for testing
+            moltype,
+            true,
+        )?;
+
+        // Create a temporary FASTA file with mixed case sequences
+        let fasta_content = crate::tests::test_fixtures::TEST_FASTA_MIXED_CASE_CONTENT;
+        let fasta_path = dir.path().join("test_mixed_case.fasta");
+        std::fs::write(&fasta_path, fasta_content)?;
+
+        // Process the FASTA file
+        index.process_fasta(&fasta_path, 0)?;
+
+        // Verify the signatures were added to the signatures map
+        {
+            let signatures = index.get_signatures();
+            assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
+        }
+
+        // Verify that the sequences were processed correctly by checking specific k-mers
+        // and that raw sequences are stored and properly uppercased
+        // The first sequence "mAaGgCcTt" should be uppercased to "MAAGGCCTT"
+        // The second sequence should also be uppercased
+        {
+            let signatures = index.get_signatures();
+
+            // Check that we have signatures for both sequences
+            let mut found_first = false;
+            let mut found_second = false;
+            let mut total_raw_sequences = 0;
+            let mut uppercased_sequences = 0;
+
+            for entry in signatures.iter() {
+                let _md5sum = entry.key();
+                let signature = entry.value();
+
+                // Check k-mer counts to verify sequences were processed correctly
+                let kmer_count = signature.kmer_infos().len();
+                if kmer_count == 7 {
+                    // The first sequence "mAaGgCcTt" uppercased to "MAAGGCCTT" should have 7 k-mers (length 9 - ksize 3 + 1)
+                    found_first = true;
+                } else if kmer_count > 10 {
+                    // The second sequence is much longer, so it should have many more k-mers
+                    found_second = true;
+                }
+
+                // Check if this signature has raw sequence data and verify uppercasing
+                if signature.has_efficient_data() {
+                    if let Some(raw_sequence) = signature.get_raw_sequence() {
+                        total_raw_sequences += 1;
+
+                        // Verify that the raw sequence is uppercased
+                        // It should not contain any lowercase letters
+                        let has_lowercase = raw_sequence.chars().any(|c| c.is_lowercase());
+                        if !has_lowercase {
+                            // Verify that the sequence contains only valid amino acid characters
+                            let valid_chars = raw_sequence
+                                .chars()
+                                .all(|c| c.is_ascii_alphabetic() && (c.is_uppercase() || c == '*'));
+                            if valid_chars {
+                                uppercased_sequences += 1;
+                                // Print the raw sequence for verification (in test output)
+                                println!("Raw sequence stored: {}", raw_sequence);
+                            } else {
+                                panic!(
+                                    "Raw sequence should contain only valid uppercase amino acid characters, but found: {}",
+                                    raw_sequence
+                                );
+                            }
+                        } else {
+                            panic!(
+                                "Raw sequence should be uppercased, but found lowercase letters in: {}",
+                                raw_sequence
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Verify all our expectations
+            assert!(
+                found_first,
+                "Expected to find signature with 7 k-mers for first mixed case sequence"
+            );
+            assert!(
+                found_second,
+                "Expected to find signature with many k-mers for second mixed case sequence"
+            );
+            assert!(
+                total_raw_sequences > 0,
+                "Expected to find at least one signature with raw sequence data"
+            );
+            assert_eq!(
+                uppercased_sequences,
+                total_raw_sequences,
+                "Expected ALL {} raw sequences to be uppercased, but only {} were properly uppercased",
+                total_raw_sequences,
+                uppercased_sequences
+            );
         }
 
         // Test that we can save state without errors
