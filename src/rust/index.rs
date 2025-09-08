@@ -2582,113 +2582,85 @@ mod tests {
     #[test]
     fn test_process_fasta_mixed_case_sequences() -> Result<()> {
         let dir = tempdir()?;
-
-        let protein_ksize = 3;
-        let moltype = "protein";
+        const EXPECTED_SIGNATURES: usize = 2;
+        const SHORT_SEQUENCE_KMERS: usize = 7; // "mAaGgCcTt" -> "MAAGGCCTT" (length 9 - ksize 3 + 1)
+        const MIN_LONG_SEQUENCE_KMERS: usize = 10;
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
             dir.path().join("mixed_case_test.db"),
-            protein_ksize,
+            3, // ksize
             1, // scaled=1 to capture all kmers for testing
-            moltype,
-            true,
+            "protein",
+            true, // store_raw_sequences
         )?;
 
-        // Create a temporary FASTA file with mixed case sequences
-        let fasta_content = crate::tests::test_fixtures::TEST_FASTA_MIXED_CASE_CONTENT;
+        // Create and process FASTA file with mixed case sequences
         let fasta_path = dir.path().join("test_mixed_case.fasta");
-        std::fs::write(&fasta_path, fasta_content)?;
-
-        // Process the FASTA file
+        std::fs::write(&fasta_path, crate::tests::test_fixtures::TEST_FASTA_MIXED_CASE_CONTENT)?;
         index.process_fasta(&fasta_path, 0)?;
 
-        // Verify the signatures were added to the signatures map
-        {
-            let signatures = index.get_signatures();
-            assert_eq!(signatures.len(), 2, "Expected 2 signatures to be stored");
-        }
+        // Verify signatures were added
+        let signatures = index.get_signatures();
+        assert_eq!(
+            signatures.len(),
+            EXPECTED_SIGNATURES,
+            "Expected {EXPECTED_SIGNATURES} signatures to be stored"
+        );
 
-        // Verify that the sequences were processed correctly by checking specific k-mers
-        // and that raw sequences are stored and properly uppercased
-        // The first sequence "mAaGgCcTt" should be uppercased to "MAAGGCCTT"
-        // The second sequence should also be uppercased
-        {
-            let signatures = index.get_signatures();
+        // Extract k-mer counts and raw sequences using functional programming
+        let kmer_counts: Vec<usize> =
+            signatures.iter().map(|entry| entry.value().kmer_infos().len()).collect();
 
-            // Check that we have signatures for both sequences
-            let mut found_first = false;
-            let mut found_second = false;
-            let mut total_raw_sequences = 0;
-            let mut uppercased_sequences = 0;
-
-            for entry in signatures.iter() {
-                let _md5sum = entry.key();
+        let raw_sequences: Vec<String> = signatures
+            .iter()
+            .filter_map(|entry| {
                 let signature = entry.value();
+                signature
+                    .has_efficient_data()
+                    .then(|| signature.get_raw_sequence())
+                    .flatten()
+                    .map(|s| s.to_string())
+            })
+            .collect();
 
-                // Check k-mer counts to verify sequences were processed correctly
-                let kmer_count = signature.kmer_infos().len();
-                if kmer_count == 7 {
-                    // The first sequence "mAaGgCcTt" uppercased to "MAAGGCCTT" should have 7 k-mers (length 9 - ksize 3 + 1)
-                    found_first = true;
-                } else if kmer_count > 10 {
-                    // The second sequence is much longer, so it should have many more k-mers
-                    found_second = true;
+        // Verify k-mer counts using pattern matching
+        let has_short_sequence = kmer_counts.contains(&SHORT_SEQUENCE_KMERS);
+        let has_long_sequence = kmer_counts.iter().any(|&count| count > MIN_LONG_SEQUENCE_KMERS);
+
+        assert!(has_short_sequence, "Expected to find signature with {SHORT_SEQUENCE_KMERS} k-mers for first mixed case sequence");
+        assert!(
+            has_long_sequence,
+            "Expected to find signature with many k-mers for second mixed case sequence"
+        );
+
+        assert!(
+            !raw_sequences.is_empty(),
+            "Expected to find at least one signature with raw sequence data"
+        );
+
+        // Validate all raw sequences are uppercased and contain valid amino acids
+        let validation_results: Vec<Result<(), String>> = raw_sequences
+            .iter()
+            .map(|sequence| {
+                // Check for lowercase letters
+                if sequence.chars().any(|c| c.is_lowercase()) {
+                    return Err(format!("Raw sequence should be uppercased, but found lowercase letters in: {sequence}"));
                 }
 
-                // Check if this signature has raw sequence data and verify uppercasing
-                if signature.has_efficient_data() {
-                    if let Some(raw_sequence) = signature.get_raw_sequence() {
-                        total_raw_sequences += 1;
-
-                        // Verify that the raw sequence is uppercased
-                        // It should not contain any lowercase letters
-                        let has_lowercase = raw_sequence.chars().any(|c| c.is_lowercase());
-                        if !has_lowercase {
-                            // Verify that the sequence contains only valid amino acid characters
-                            let valid_chars = raw_sequence
-                                .chars()
-                                .all(|c| c.is_ascii_alphabetic() && (c.is_uppercase() || c == '*'));
-                            if valid_chars {
-                                uppercased_sequences += 1;
-                                // Print the raw sequence for verification (in test output)
-                                println!("Raw sequence stored: {}", raw_sequence);
-                            } else {
-                                panic!(
-                                    "Raw sequence should contain only valid uppercase amino acid characters, but found: {}",
-                                    raw_sequence
-                                );
-                            }
-                        } else {
-                            panic!(
-                                "Raw sequence should be uppercased, but found lowercase letters in: {}",
-                                raw_sequence
-                            );
-                        }
-                    }
+                // Check for valid amino acid characters
+                if !sequence.chars().all(|c| c.is_ascii_alphabetic() && (c.is_uppercase() || c == '*')) {
+                    return Err(format!("Raw sequence should contain only valid uppercase amino acid characters, but found: {sequence}"));
                 }
-            }
 
-            // Verify all our expectations
-            assert!(
-                found_first,
-                "Expected to find signature with 7 k-mers for first mixed case sequence"
-            );
-            assert!(
-                found_second,
-                "Expected to find signature with many k-mers for second mixed case sequence"
-            );
-            assert!(
-                total_raw_sequences > 0,
-                "Expected to find at least one signature with raw sequence data"
-            );
-            assert_eq!(
-                uppercased_sequences,
-                total_raw_sequences,
-                "Expected ALL {} raw sequences to be uppercased, but only {} were properly uppercased",
-                total_raw_sequences,
-                uppercased_sequences
-            );
+                println!("Raw sequence stored: {sequence}");
+                Ok(())
+            })
+            .collect();
+
+        // Ensure all validations passed
+        for result in validation_results {
+            result.map_err(|e| anyhow::anyhow!(e))?;
         }
 
         // Test that we can save state without errors
