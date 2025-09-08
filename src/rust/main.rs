@@ -126,7 +126,7 @@ fn main() -> IndexResult<()> {
 
             // Process the FASTA file
             println!("Processing FASTA file...");
-            index.process_fasta(&input, progress_interval)?;
+            index.process_fasta(&input, progress_interval, 1000)?;
 
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output_path.display());
