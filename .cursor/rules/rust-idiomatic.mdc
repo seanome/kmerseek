@@ -1,0 +1,891 @@
+---
+description: Write idiomatic Rust code with detailed explanations of WHY each choice follows Rust best practices
+globs: ["**/*.rs"]
+alwaysApply: true
+---
+
+# Idiomatic Rust Development Guide
+
+## Core Principle
+
+Always write idiomatic Rust code as if you are a very experienced, seasoned Rustacean. For every code change or suggestion, explain WHY it's idiomatic Rust and what makes it follow Rust best practices. Focus on the reasoning behind the code, not just what it does.
+
+## Error Handling Philosophy
+
+**WHY**: Rust's error handling is designed to make failures explicit and composable. Unlike languages with exceptions, Rust forces you to handle errors at compile time, preventing silent failures that can crash scientific computations.
+
+```rust
+// Idiomatic: Explicit error handling with Result
+fn process_sequence(data: &str) -> Result<Vec<u8>, ParseError> {
+    data.chars()
+        .map(|c| match c {
+            'A' | 'a' => Ok(0),
+            'T' | 't' => Ok(1),
+            'G' | 'g' => Ok(2),
+            'C' | 'c' => Ok(3),
+            _ => Err(ParseError::InvalidBase(c)),
+        })
+        .collect() // collect() propagates the first error automatically
+}
+```
+
+**Why this is idiomatic**:
+
+- `Result<T, E>` makes error cases explicit in the type system
+- The `?` operator (implicit in `collect()`) provides clean error propagation
+- Pattern matching is exhaustive, preventing missed error cases
+- No panics in library code - errors are recoverable
+
+## Ownership and Borrowing Strategy
+
+**WHY**: Rust's ownership system prevents data races and memory issues at compile time. Borrowing reduces allocations and makes APIs more flexible, crucial for performance-critical bioinformatics code.
+
+```rust
+// Idiomatic: Borrow when you don't need ownership
+fn analyze_kmers(sequence: &str, k: usize) -> Vec<&str> {
+    sequence
+        .char_indices()
+        .filter_map(|(i, _)| {
+            if i + k <= sequence.len() {
+                Some(&sequence[i..i + k])
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+
+// Idiomatic: Use Cow for flexible ownership
+use std::borrow::Cow;
+fn normalize_sequence(input: &str) -> Cow<'_, str> {
+    if input.chars().all(|c| c.is_ascii_uppercase()) {
+        Cow::Borrowed(input) // No allocation needed
+    } else {
+        Cow::Owned(input.to_uppercase()) // Only allocate when necessary
+    }
+}
+```
+
+**Why this is idiomatic**:
+
+- `&str` parameter avoids unnecessary `String` allocations
+- `Cow<'_, str>` provides zero-cost abstraction for owned vs borrowed data
+- Slicing with `&sequence[i..i + k]` creates views without copying
+- The borrow checker ensures memory safety without runtime overhead
+
+## Parallel Processing with Rayon
+
+**WHY**: Rayon provides data parallelism with minimal overhead. For bioinformatics workloads processing large sequences, parallelization is essential for performance.
+
+```rust
+use rayon::prelude::*;
+
+// Idiomatic: Use rayon for parallel iteration
+fn process_sequences_parallel(sequences: &[String]) -> Vec<Vec<u8>> {
+    sequences
+        .par_iter() // Parallel iteration
+        .map(|seq| encode_sequence(seq))
+        .collect()
+}
+
+// Idiomatic: Parallel processing with error handling
+fn validate_sequences_parallel(sequences: &[String]) -> Result<Vec<bool>, ValidationError> {
+    sequences
+        .par_iter()
+        .map(|seq| validate_sequence(seq))
+        .collect::<Result<Vec<_>, _>>() // Collect Results in parallel
+}
+
+// Idiomatic: Parallel reduction for aggregations
+fn count_total_kmers(sequences: &[String], k: usize) -> usize {
+    sequences
+        .par_iter()
+        .map(|seq| count_kmers_in_sequence(seq, k))
+        .sum() // Parallel reduction
+}
+```
+
+**Why this is idiomatic**:
+
+- `par_iter()` provides automatic work-stealing parallelism
+- Rayon's parallel iterators have the same API as sequential ones
+- `collect()` handles parallel collection efficiently
+- Parallel reduction with `sum()` is much faster than sequential accumulation
+- Rayon automatically handles thread pool management
+
+## Memory Management for Genomic Data
+
+**WHY**: Genomic datasets can be massive. Rust's zero-cost abstractions let you write high-level code without performance penalties, while the type system prevents memory leaks.
+
+```rust
+// Idiomatic: Pre-allocate with known capacity
+fn build_kmer_index(sequences: &[String], k: usize) -> HashMap<String, Vec<usize>> {
+    let estimated_kmers = sequences.len() * 1000; // Rough estimate
+    let mut index = HashMap::with_capacity(estimated_kmers);
+
+    for (seq_idx, sequence) in sequences.iter().enumerate() {
+        for kmer in sequence.chars().collect::<Vec<_>>().windows(k) {
+            let kmer_str: String = kmer.iter().collect();
+            index.entry(kmer_str).or_insert_with(Vec::new).push(seq_idx);
+        }
+    }
+    index
+}
+
+// Idiomatic: Use appropriate smart pointers
+use std::sync::Arc;
+use parking_lot::RwLock;
+
+struct SharedIndex {
+    data: Arc<RwLock<HashMap<String, Vec<usize>>>>,
+}
+
+impl SharedIndex {
+    fn new() -> Self {
+        Self {
+            data: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+
+    fn insert(&self, key: String, value: Vec<usize>) {
+        self.data.write().insert(key, value);
+    }
+}
+```
+
+**Why this is idiomatic**:
+
+- `HashMap::with_capacity()` prevents multiple reallocations
+- `Arc<RwLock<T>>` provides thread-safe shared ownership
+- `parking_lot::RwLock` is faster than `std::sync::RwLock`
+- `or_insert_with(Vec::new)` avoids unnecessary allocations
+- The type system prevents data races at compile time
+
+## Functional Programming with Iterators
+
+**WHY**: Rust's iterators are lazy and composable, often more efficient than explicit loops. They also make the code more readable and less error-prone.
+
+```rust
+// Idiomatic: Iterator chains for data transformation
+fn find_common_kmers(seq1: &str, seq2: &str, k: usize) -> Vec<String> {
+    let kmers1: HashSet<String> = extract_kmers(seq1, k).collect();
+    let kmers2: HashSet<String> = extract_kmers(seq2, k).collect();
+
+    kmers1
+        .intersection(&kmers2)
+        .map(|kmer| kmer.clone())
+        .collect()
+}
+
+fn extract_kmers(sequence: &str, k: usize) -> impl Iterator<Item = String> + '_ {
+    sequence
+        .char_indices()
+        .filter_map(move |(i, _)| {
+            if i + k <= sequence.len() {
+                Some(sequence[i..i + k].to_string())
+            } else {
+                None
+            }
+        })
+}
+
+// Idiomatic: Parallel functional programming
+fn calculate_similarity_matrix(sequences: &[String], k: usize) -> Vec<Vec<f64>> {
+    sequences
+        .par_iter()
+        .enumerate()
+        .map(|(i, seq1)| {
+            sequences
+                .iter()
+                .enumerate()
+                .map(|(j, seq2)| {
+                    if i == j {
+                        1.0
+                    } else {
+                        jaccard_similarity(seq1, seq2, k)
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+```
+
+**Why this is idiomatic**:
+
+- `impl Iterator<Item = T> + '_` returns a lazy iterator without boxing
+- Iterator chains are composable and readable
+- `filter_map` combines filtering and mapping efficiently
+- Parallel iterators maintain the same functional style
+- The borrow checker ensures the iterator doesn't outlive the data
+
+## Pattern Matching for Exhaustive Logic
+
+**WHY**: Pattern matching is exhaustive and prevents bugs from missed cases. It's more readable than long if-else chains and catches errors at compile time.
+
+```rust
+// Idiomatic: Exhaustive pattern matching
+#[derive(Debug, Clone, Copy)]
+enum Nucleotide {
+    A, T, G, C, N, // N for unknown
+}
+
+impl Nucleotide {
+    fn from_char(c: char) -> Result<Self, ParseError> {
+        match c.to_ascii_uppercase() {
+            'A' => Ok(Nucleotide::A),
+            'T' => Ok(Nucleotide::T),
+            'G' => Ok(Nucleotide::G),
+            'C' => Ok(Nucleotide::C),
+            'N' => Ok(Nucleotide::N),
+            _ => Err(ParseError::InvalidNucleotide(c)),
+        }
+    }
+
+    fn complement(self) -> Self {
+        match self {
+            Nucleotide::A => Nucleotide::T,
+            Nucleotide::T => Nucleotide::A,
+            Nucleotide::G => Nucleotide::C,
+            Nucleotide::C => Nucleotide::G,
+            Nucleotide::N => Nucleotide::N, // N maps to itself
+        }
+    }
+}
+
+// Idiomatic: Using matches! macro for boolean logic
+fn is_valid_dna_sequence(sequence: &str) -> bool {
+    sequence.chars().all(|c| matches!(c, 'A' | 'T' | 'G' | 'C' | 'a' | 't' | 'g' | 'c'))
+}
+```
+
+**Why this is idiomatic**:
+
+- Pattern matching is exhaustive - the compiler ensures all cases are handled
+- `matches!` macro provides clean boolean pattern matching
+- No runtime overhead - pattern matching compiles to efficient code
+- The type system prevents invalid states from being represented
+- Easy to extend with new variants without breaking existing code
+
+## Type Safety for Scientific Computing
+
+**WHY**: Rust's type system catches errors at compile time, preventing runtime failures in scientific computations. Newtypes prevent mixing up similar types.
+
+```rust
+// Idiomatic: Newtype pattern for type safety
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct KmerSize(usize);
+
+impl KmerSize {
+    fn new(size: usize) -> Result<Self, ValidationError> {
+        if size == 0 || size > 32 {
+            Err(ValidationError::InvalidKmerSize(size))
+        } else {
+            Ok(KmerSize(size))
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+struct SequenceLength(usize);
+
+// Idiomatic: PhantomData for type-level programming
+use std::marker::PhantomData;
+
+struct Index<T> {
+    data: HashMap<String, Vec<usize>>,
+    _marker: PhantomData<T>,
+}
+
+impl<T> Index<T> {
+    fn new() -> Self {
+        Self {
+            data: HashMap::new(),
+            _marker: PhantomData,
+        }
+    }
+}
+
+// Usage prevents mixing up different index types
+type DnaIndex = Index<DnaSequence>;
+type ProteinIndex = Index<ProteinSequence>;
+```
+
+**Why this is idiomatic**:
+
+- Newtypes prevent mixing up `KmerSize` and `SequenceLength`
+- `PhantomData<T>` allows type-level programming without runtime overhead
+- The type system catches errors at compile time
+- Validation is built into the type construction
+- Zero-cost abstractions - no runtime performance impact
+
+## Performance Optimization Patterns
+
+**WHY**: Rust's zero-cost abstractions mean you can write high-level code without performance penalties. Understanding when to optimize is key.
+
+```rust
+// Idiomatic: Inline small, frequently-called functions
+#[inline]
+fn hash_kmer(kmer: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    kmer.hash(&mut hasher);
+    hasher.finish()
+}
+
+// Idiomatic: Pre-allocate collections when size is known
+fn process_large_dataset(sequences: &[String]) -> Vec<ProcessedSequence> {
+    let mut results = Vec::with_capacity(sequences.len());
+
+    for sequence in sequences {
+        results.push(process_sequence(sequence));
+    }
+
+    results
+}
+
+// Idiomatic: Use SmallVec for small collections
+use smallvec::SmallVec;
+
+fn extract_small_kmers(sequence: &str, k: usize) -> SmallVec<[String; 16]> {
+    sequence
+        .char_indices()
+        .filter_map(|(i, _)| {
+            if i + k <= sequence.len() {
+                Some(sequence[i..i + k].to_string())
+            } else {
+                None
+            }
+        })
+        .collect()
+}
+```
+
+**Why this is idiomatic**:
+
+- `#[inline]` hints to the compiler for small, hot functions
+- `Vec::with_capacity()` prevents multiple reallocations
+- `SmallVec` avoids heap allocation for small collections
+- The compiler can optimize these patterns aggressively
+- Zero-cost abstractions mean high-level code performs like low-level code
+
+## Clippy and Linting Best Practices
+
+**WHY**: Clippy catches common mistakes and suggests more idiomatic code. Following clippy suggestions helps maintain code quality and consistency across the project.
+
+```rust
+// Idiomatic: Follow clippy suggestions
+fn process_sequences(sequences: &[String]) -> Vec<ProcessedSequence> {
+    sequences
+        .iter()
+        .map(|seq| process_sequence(seq))
+        .collect()
+}
+
+// Idiomatic: Use clippy::pedantic for stricter linting
+#[allow(clippy::cast_precision_loss)] // We know this is safe in our context
+fn calculate_percentage(count: usize, total: usize) -> f64 {
+    (count as f64 / total as f64) * 100.0
+}
+```
+
+**Why this is idiomatic**:
+
+- Clippy suggestions are based on Rust best practices and common pitfalls
+- `#[allow(clippy::lint_name)]` with comments explains why we're ignoring specific lints
+- `clippy::pedantic` provides stricter linting for higher code quality
+- Following clippy suggestions prevents common bugs and performance issues
+
+## Cargo and Dependency Management
+
+**WHY**: Rust's package manager is designed for reproducible builds and clear dependency management. Keeping dependencies minimal and well-maintained reduces security risks and build times.
+
+```rust
+// In Cargo.toml - idiomatic dependency management
+[dependencies]
+# Core dependencies
+anyhow = "1.0"           # Application-level error handling
+thiserror = "1.0"        # Library-level error types
+parking_lot = "0.12"     # Better performance than std::sync
+dashmap = "5.5"          # Concurrent HashMap
+rayon = "1.10"           # Data parallelism
+
+# Domain-specific dependencies
+sourmash = { version = "0.20.0", features = ["branchwater"] }
+
+# Optional dependencies with feature flags
+pyo3 = { version = "0.25.0", features = ["extension-module"], optional = true }
+
+[features]
+default = ["python"]
+python = ["pyo3"]
+```
+
+**Why this is idiomatic**:
+
+- Feature flags allow optional functionality without bloating the binary
+- Minimal dependencies reduce attack surface and build times
+- Well-maintained crates provide better long-term support
+- `cargo add` automatically updates Cargo.toml with proper version constraints
+
+## Code Organization and Module Structure
+
+**WHY**: Good organization makes code more maintainable and easier to understand. Rust's module system encourages clear separation of concerns.
+
+```rust
+// Idiomatic: Clear module organization
+pub mod encoding {
+    pub mod dna;
+    pub mod protein;
+    pub mod dayhoff;
+}
+
+pub mod indexing {
+    pub mod kmer_index;
+    pub mod signature_index;
+}
+
+pub mod similarity {
+    pub mod jaccard;
+    pub mod containment;
+}
+
+// Idiomatic: Use pub(crate) for internal APIs
+pub(crate) mod internal {
+    pub(crate) fn helper_function() {
+        // Internal implementation details
+    }
+}
+
+// Idiomatic: Group imports logically
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use anyhow::Result;
+use thiserror::Error;
+
+use crate::encoding::dna::DnaEncoder;
+use crate::indexing::kmer_index::KmerIndex;
+```
+
+**Why this is idiomatic**:
+
+- `pub(crate)` restricts visibility to the current crate, preventing accidental external usage
+- Logical module organization makes code easier to navigate and maintain
+- Grouped imports (std, external crates, internal modules) improve readability
+- Clear separation of concerns makes testing and refactoring easier
+
+## Testing and Documentation Culture
+
+**WHY**: Testing is built into Rust's toolchain and culture. Good documentation helps with API usability and is part of Rust's philosophy.
+
+````rust
+/// Calculates the Jaccard similarity between two sequences.
+///
+/// The Jaccard similarity is the size of the intersection divided by the size of the union
+/// of the k-mer sets from both sequences.
+///
+/// # Arguments
+/// * `seq1` - First sequence to compare
+/// * `seq2` - Second sequence to compare
+/// * `k` - Size of k-mers to use for comparison
+///
+/// # Returns
+/// A similarity score between 0.0 and 1.0, where 1.0 means identical sequences.
+///
+/// # Examples
+/// ```
+/// use kmerseek::similarity::jaccard_similarity;
+///
+/// let seq1 = "ATCGATCG";
+/// let seq2 = "ATCGATCG";
+/// let similarity = jaccard_similarity(seq1, seq2, 3)?;
+/// assert_eq!(similarity, 1.0);
+/// ```
+///
+/// # Errors
+/// Returns an error if the sequences contain invalid characters or if k is invalid.
+pub fn jaccard_similarity(seq1: &str, seq2: &str, k: usize) -> Result<f64, SimilarityError> {
+    // Implementation here
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::TempDir;
+
+    #[test]
+    fn test_jaccard_similarity_identical_sequences() {
+        let seq1 = "ATCGATCG";
+        let seq2 = "ATCGATCG";
+        let result = jaccard_similarity(seq1, seq2, 3).unwrap();
+        assert_eq!(result, 1.0);
+    }
+
+    #[test]
+    fn test_jaccard_similarity_different_sequences() {
+        let seq1 = "ATCGATCG";
+        let seq2 = "GCTAGCTA";
+        let result = jaccard_similarity(seq1, seq2, 3).unwrap();
+        assert!(result < 1.0);
+    }
+
+    #[test]
+    fn test_jaccard_similarity_with_temp_files() {
+        let temp_dir = TempDir::new().unwrap();
+        // Test with temporary files
+    }
+}
+````
+
+**Why this is idiomatic**:
+
+- Doc comments with `///` are part of Rust's documentation culture
+- Examples in documentation help users understand the API
+- `#[cfg(test)]` keeps tests close to the code they test
+- `tempfile` crate provides safe temporary file handling
+- Tests are first-class citizens in Rust projects
+
+## Response Format for Code Changes
+
+When making code changes or suggestions:
+
+1. **Show the idiomatic Rust code** with proper error handling, ownership, and performance considerations
+2. **Explain WHY it's idiomatic** - what Rust principle it follows and why that principle exists
+3. **Mention performance, safety, or maintainability benefits** - how the idiomatic approach helps
+4. **Compare alternatives** when relevant - explain why this approach is preferred over others
+5. **Focus on the reasoning** - explain the "why" behind the code, not just the "what"
+
+## Project-Specific Guidelines for Bioinformatics
+
+**WHY**: Domain-specific knowledge helps write more appropriate and efficient code. This is a bioinformatics project dealing with k-mers and signatures, so we need to consider the specific requirements of genomic data processing.
+
+```rust
+// Idiomatic: Use appropriate data structures for genomic data
+use sourmash::sketch::Sketch;
+
+struct GenomicIndex {
+    kmer_size: KmerSize,
+    sequences: Vec<Sequence>,
+    signatures: Vec<Sketch>,
+}
+
+impl GenomicIndex {
+    // Idiomatic: Consider memory usage for large genomic datasets
+    fn new(kmer_size: KmerSize) -> Self {
+        Self {
+            kmer_size,
+            sequences: Vec::with_capacity(1000), // Pre-allocate for expected size
+            signatures: Vec::new(),
+        }
+    }
+
+    // Idiomatic: Use sourmash types appropriately
+    fn add_sequence(&mut self, sequence: &str) -> Result<(), IndexError> {
+        let sketch = self.create_sketch(sequence)?;
+        self.signatures.push(sketch);
+        Ok(())
+    }
+
+    // Idiomatic: Parallel processing for sequence analysis
+    fn process_sequences_parallel(&self, sequences: &[String]) -> Vec<ProcessedResult> {
+        sequences
+            .par_iter()
+            .map(|seq| self.analyze_sequence(seq))
+            .collect()
+    }
+}
+```
+
+**Why this is idiomatic for bioinformatics**:
+
+- `sourmash` types are designed specifically for genomic data analysis
+- Pre-allocation with `Vec::with_capacity()` is crucial for large genomic datasets
+- Parallel processing with `rayon` is essential for performance with large sequences
+- Memory-conscious design prevents out-of-memory errors with genomic data
+- Domain-specific error types make debugging easier in scientific contexts
+
+## Response Format for Code Changes
+
+When making code changes or suggestions:
+
+1. **Show the idiomatic Rust code** with proper error handling, ownership, and performance considerations
+2. **Explain WHY it's idiomatic** - what Rust principle it follows and why that principle exists
+3. **Mention performance, safety, or maintainability benefits** - how the idiomatic approach helps
+4. **Compare alternatives** when relevant - explain why this approach is preferred over others
+5. **Focus on the reasoning** - explain the "why" behind the code, not just the "what"
+
+## Practical Implementation Patterns for Bioinformatics
+
+**WHY**: Domain-specific patterns help implement common bioinformatics workflows efficiently. These patterns combine Rust's type safety with practical I/O and data processing needs.
+
+### Compressed I/O Handling
+
+**WHY**: Bioinformatics files are often compressed. Auto-detection prevents code duplication and provides a clean API for handling multiple compression formats.
+
+```rust
+use std::{fs::File, io::{self, BufRead, BufReader}, path::Path};
+use anyhow::Result;
+
+pub fn open_maybe_compressed<P: AsRef<Path>>(p: P) -> Result<Box<dyn BufRead>> {
+    let file = File::open(p)?;
+    // niffler autodetects gzip/bzip2/xz/zstd/uncompressed
+    let (reader, _format) = niffler::get_reader(Box::new(file))?; // -> Box<dyn Read>
+    Ok(Box::new(BufReader::new(reader)))
+}
+```
+
+**Why this is idiomatic**:
+
+- Generic over `AsRef<Path>` accepts both `&str` and `PathBuf`
+- Returns `Box<dyn BufRead>` for maximum flexibility
+- `niffler` provides zero-cost auto-detection
+- Error handling is explicit with `Result`
+
+### FASTA/FASTQ Streaming
+
+**WHY**: Genomic sequences can be massive. Streaming prevents memory exhaustion and provides zero-copy access to sequence data.
+
+```rust
+use anyhow::Result;
+use needletail::parse_fastx_file;
+use std::path::Path;
+
+pub fn for_each_fasta<P: AsRef<Path>, F: FnMut(&[u8], &[u8]) -> Result<()>>(path: P, mut f: F) -> Result<()> {
+    let mut reader = parse_fastx_file(path)?;
+    while let Some(rec) = reader.next() {
+        let rec = rec?;                    // use `?`, never unwrap
+        let id  = rec.id();                // &[u8]
+        let seq = rec.seq();               // &[u8]
+        f(id, seq)?;
+    }
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- `parse_fastx_file` auto-detects compression and format
+- `&[u8]` provides zero-copy access to sequence data
+- Generic closure allows flexible processing
+- Error propagation with `?` operator
+
+### XML Streaming for BLAST/GFF
+
+**WHY**: XML files can be huge. SAX parsing with streaming prevents memory issues and provides efficient processing.
+
+```rust
+use anyhow::Result;
+use quick_xml::{events::Event, Reader};
+use std::io::BufRead;
+
+pub fn scan_xml<R: BufRead, F: FnMut(&[u8], &[u8]) -> Result<()>>(mut r: R, mut on_tag: F) -> Result<()> {
+    let mut reader = Reader::from_reader(&mut r);
+    reader.trim_text(true);
+    let mut buf = Vec::new();
+
+    loop {
+        match reader.read_event_into(&mut buf)? {
+            Event::Start(e) if e.name().as_ref() == b"Hit" => {
+                // Example: pull attributes/text as needed
+                // on_tag(name, value)?;
+            }
+            Event::Eof => break,
+            _ => {}
+        }
+        buf.clear();
+    }
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- Generic `R: BufRead` works with any reader (including compressed)
+- Buffer reuse prevents allocations
+- Pattern matching on XML events is exhaustive
+- `trim_text(true)` handles whitespace automatically
+
+### CSV Output with Serde
+
+**WHY**: Typed serialization prevents CSV formatting errors and provides compile-time safety for data structures.
+
+```rust
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct AnnotRow<'a> {
+    #[serde(borrow)] id:  &'a str,
+    score: f32,
+    family: &'a str,
+}
+
+pub fn write_csv<I, P>(rows: I, path: P) -> anyhow::Result<()>
+where
+    I: IntoIterator<Item = AnnotRow<'static>>,
+    P: AsRef<std::path::Path>,
+{
+    let mut w = csv::Writer::from_path(path)?;
+    for row in rows { w.serialize(row)?; }
+    w.flush()?;
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- `#[serde(borrow)]` avoids unnecessary allocations
+- Generic `IntoIterator` accepts various collection types
+- `AsRef<Path>` provides flexible path handling
+- Serde handles escaping and formatting automatically
+
+### Parquet Output with Arrow
+
+**WHY**: Parquet provides efficient columnar storage. Arrow's type system ensures data integrity and performance.
+
+```rust
+use std::fs::File;
+use std::sync::Arc;
+use arrow_array::{ArrayRef, Float32Array, StringArray, RecordBatch};
+use arrow_schema::{DataType, Field, Schema};
+use parquet::arrow::ArrowWriter;
+use anyhow::Result;
+
+pub fn write_parquet(ids: &[String], scores: &[f32], families: &[String], path: &std::path::Path) -> Result<()> {
+    let schema = Arc::new(Schema::new(vec![
+        Field::new("id", DataType::Utf8, false),
+        Field::new("score", DataType::Float32, false),
+        Field::new("family", DataType::Utf8, false),
+    ]));
+
+    let batch = RecordBatch::try_new(
+        schema.clone(),
+        vec![
+            Arc::new(StringArray::from(ids.to_vec())) as ArrayRef,
+            Arc::new(Float32Array::from(scores.to_vec())),
+            Arc::new(StringArray::from(families.to_vec())),
+        ],
+    )?;
+
+    let file = File::create(path)?;
+    let mut writer = ArrowWriter::try_new(file, schema, None)?;
+    writer.write(&batch)?;
+    writer.close()?;
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- Arrow's type system prevents data corruption
+- Batching avoids per-row overhead
+- `Arc` enables shared ownership of schema
+- Error handling is explicit throughout
+
+### CLI Design with Clap
+
+**WHY**: Clap provides validation, help generation, and argument parsing. Keeping CLI thin allows library reuse.
+
+```rust
+use clap::Parser;
+use std::{io::{self, BufRead, BufReader}, fs::File, path::PathBuf};
+
+/// Fast functional annotation for proteins
+#[derive(Parser, Debug)]
+#[command(author, version, about, arg_required_else_help=true)]
+struct Cli {
+    /// Input FASTA/FASTQ/FASTA.gz/…
+    #[arg(short, long)]
+    input: PathBuf,
+    /// Output (CSV or Parquet by extension)
+    #[arg(short, long)]
+    output: PathBuf,
+}
+
+fn stdin_reader() -> Box<dyn BufRead> {
+    Box::new(BufReader::new(io::stdin()))
+}
+
+fn main() -> anyhow::Result<()> {
+    let args = Cli::parse();
+
+    let rdr: Box<dyn BufRead> = if args.input.to_string_lossy() == "-" {
+        stdin_reader()
+    } else {
+        kmerseek::open_maybe_compressed(&args.input)?
+    };
+
+    // …call library: parse FASTA/XML and write CSV/Parquet based on extension…
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- `derive(Parser)` generates validation and help automatically
+- `PathBuf` provides type-safe path handling
+- `Box<dyn BufRead>` enables polymorphic I/O
+- Library separation keeps logic testable
+
+### Python Bindings with PyO3
+
+**WHY**: PyO3 provides safe FFI between Rust and Python. GIL management enables parallel processing.
+
+```rust
+use pyo3::prelude::*;
+
+#[pyfunction]
+fn annotate_py(py: Python<'_>, seqs: Vec<&PyAny>) -> PyResult<Vec<f32>> {
+    py.allow_threads(|| {
+        // do CPU-heavy Rust work here; map errors to PyErr
+        Ok(vec![]) // placeholder
+    })
+}
+
+#[pymodule]
+fn kmerseek_py(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+    m.add_function(wrap_pyfunction!(annotate_py, m)?)?;
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- `PyResult<T>` converts Rust errors to Python exceptions
+- `allow_threads()` releases GIL for parallel processing
+- No panics cross the FFI boundary
+- Thin bindings keep Python overhead minimal
+
+### Library-First Design
+
+**WHY**: Separating library from CLI enables testing, Python bindings, and code reuse. Generic APIs provide maximum flexibility.
+
+```rust
+// Library: generic, testable, reusable
+pub fn annotate_records<R: BufRead>(r: R) -> impl Iterator<Item = Result<Annot, Error>> {
+    // Implementation here
+}
+
+// CLI: thin wrapper that calls library
+fn main() -> anyhow::Result<()> {
+    let args = Cli::parse();
+    let reader = open_maybe_compressed(&args.input)?;
+
+    for result in annotate_records(reader) {
+        let annot = result?;
+        // Process annotation
+    }
+    Ok(())
+}
+```
+
+**Why this is idiomatic**:
+
+- Generic `R: BufRead` works with any input source
+- Iterator return type enables lazy processing
+- Library logic is testable in isolation
+- CLI provides user-friendly interface
+
+Remember: Rust's philosophy is about "fearless concurrency" and memory safety without sacrificing performance. Every idiomatic choice should reflect these principles.
