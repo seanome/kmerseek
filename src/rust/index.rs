@@ -784,8 +784,11 @@ impl ProteomeIndex {
                 let sequence = std::str::from_utf8(seq_bytes)?;
                 let name = std::str::from_utf8(id_bytes)?;
 
+                // Uppercase the sequence before processing
+                let sequence = sequence.to_uppercase();
+
                 // Create protein signature for each sequence
-                let result = self.create_protein_signature(sequence, name);
+                let result = self.create_protein_signature(&sequence, name);
                 processed_count.fetch_add(1, Ordering::Relaxed);
                 result
             })
@@ -2568,6 +2571,96 @@ mod tests {
             assert!(!signature.has_efficient_data());
             let raw_sequence = signature.get_raw_sequence();
             assert!(raw_sequence.is_none());
+        }
+
+        // Test that we can save state without errors
+        index.save_state()?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_process_fasta_mixed_case_sequences() -> Result<()> {
+        let dir = tempdir()?;
+        const EXPECTED_SIGNATURES: usize = 2;
+        const SHORT_SEQUENCE_KMERS: usize = 7; // "mAaGgCcTt" -> "MAAGGCCTT" (length 9 - ksize 3 + 1)
+        const MIN_LONG_SEQUENCE_KMERS: usize = 10;
+
+        // Create index with minimal parameters
+        let index = ProteomeIndex::new(
+            dir.path().join("mixed_case_test.db"),
+            3, // ksize
+            1, // scaled=1 to capture all kmers for testing
+            "protein",
+            true, // store_raw_sequences
+        )?;
+
+        // Create and process FASTA file with mixed case sequences
+        let fasta_path = dir.path().join("test_mixed_case.fasta");
+        std::fs::write(&fasta_path, crate::tests::test_fixtures::TEST_FASTA_MIXED_CASE_CONTENT)?;
+        index.process_fasta(&fasta_path, 0)?;
+
+        // Verify signatures were added
+        let signatures = index.get_signatures();
+        assert_eq!(
+            signatures.len(),
+            EXPECTED_SIGNATURES,
+            "Expected {EXPECTED_SIGNATURES} signatures to be stored"
+        );
+
+        // Extract k-mer counts and raw sequences using functional programming
+        let kmer_counts: Vec<usize> =
+            signatures.iter().map(|entry| entry.value().kmer_infos().len()).collect();
+
+        let raw_sequences: Vec<String> = signatures
+            .iter()
+            .filter_map(|entry| {
+                let signature = entry.value();
+                signature
+                    .has_efficient_data()
+                    .then(|| signature.get_raw_sequence())
+                    .flatten()
+                    .map(|s| s.to_string())
+            })
+            .collect();
+
+        // Verify k-mer counts using pattern matching
+        let has_short_sequence = kmer_counts.contains(&SHORT_SEQUENCE_KMERS);
+        let has_long_sequence = kmer_counts.iter().any(|&count| count > MIN_LONG_SEQUENCE_KMERS);
+
+        assert!(has_short_sequence, "Expected to find signature with {SHORT_SEQUENCE_KMERS} k-mers for first mixed case sequence");
+        assert!(
+            has_long_sequence,
+            "Expected to find signature with many k-mers for second mixed case sequence"
+        );
+
+        assert!(
+            !raw_sequences.is_empty(),
+            "Expected to find at least one signature with raw sequence data"
+        );
+
+        // Validate all raw sequences are uppercased and contain valid amino acids
+        let validation_results: Vec<Result<(), String>> = raw_sequences
+            .iter()
+            .map(|sequence| {
+                // Check for lowercase letters
+                if sequence.chars().any(|c| c.is_lowercase()) {
+                    return Err(format!("Raw sequence should be uppercased, but found lowercase letters in: {sequence}"));
+                }
+
+                // Check for valid amino acid characters
+                if !sequence.chars().all(|c| c.is_ascii_alphabetic() && (c.is_uppercase() || c == '*')) {
+                    return Err(format!("Raw sequence should contain only valid uppercase amino acid characters, but found: {sequence}"));
+                }
+
+                println!("Raw sequence stored: {sequence}");
+                Ok(())
+            })
+            .collect();
+
+        // Ensure all validations passed
+        for result in validation_results {
+            result.map_err(|e| anyhow::anyhow!(e))?;
         }
 
         // Test that we can save state without errors

@@ -109,11 +109,12 @@ fn main() -> IndexResult<()> {
                 output_path
             };
 
-            println!("K-mer size: {}", ksize);
+            println!("\n-------\nK-mer size: {}", ksize);
             println!("Scaled: {}", scaled);
             println!("Encoding: {:?}", encoding);
             println!("Progress interval: {}", progress_interval);
             println!("Store raw sequences: {}", store_raw_sequences);
+            println!("-------\n");
 
             // Create the index
             let index = ProteomeIndex::new(
