@@ -2862,7 +2862,7 @@ mod tests {
         // Create and process FASTA file with mixed case sequences
         let fasta_path = dir.path().join("test_mixed_case.fasta");
         std::fs::write(&fasta_path, crate::tests::test_fixtures::TEST_FASTA_MIXED_CASE_CONTENT)?;
-        index.process_fasta(&fasta_path, 0)?;
+        index.process_fasta(&fasta_path, 0, 1000)?;
 
         // Verify signatures were added
         let signatures = index.get_signatures();
