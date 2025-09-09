@@ -74,14 +74,6 @@ enum Commands {
         #[arg(long, default_value = "0.0")]
         threshold: f64,
 
-        /// Whether to calculate TF-IDF scores
-        #[arg(long, default_value = "false")]
-        calculate_tfidf: bool,
-
-        /// Whether to calculate overlap probabilities
-        #[arg(long, default_value = "false")]
-        calculate_probability: bool,
-
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -178,18 +170,7 @@ fn main() -> IndexResult<()> {
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output_path.display());
         }
-        Commands::Search {
-            query,
-            target,
-            output,
-            ksize,
-            scaled,
-            encoding,
-            threshold,
-            calculate_tfidf,
-            calculate_probability,
-            verbose,
-        } => {
+        Commands::Search { query, target, output, ksize, scaled, encoding, threshold, verbose } => {
             println!("Searching query sequences against target database");
             println!("Query: {}", query.display());
             println!("Target: {}", target.display());
@@ -197,8 +178,6 @@ fn main() -> IndexResult<()> {
             println!("Scaled: {}", scaled);
             println!("Encoding: {:?}", encoding);
             println!("Threshold: {}", threshold);
-            println!("Calculate TF-IDF: {}", calculate_tfidf);
-            println!("Calculate probability: {}", calculate_probability);
             println!("Verbose output: {}", verbose);
 
             // Load the target database
@@ -280,37 +259,32 @@ fn main() -> IndexResult<()> {
                 writer.flush()?;
             }
 
-            // Calculate additional metrics if requested
-            if calculate_tfidf || calculate_probability {
-                println!("\nAdditional metrics:");
+            // Always calculate TF-IDF and overlap probabilities
+            println!("\n=== TF-IDF Analysis ===");
+            for query_sig in &query_signatures {
+                let tfidf = searcher.calculate_tfidf(query_sig);
+                println!("TF-IDF for {}: {:.6}", query_sig.signature().name, tfidf);
+            }
 
-                for query_sig in &query_signatures {
-                    if calculate_tfidf {
-                        let tfidf = searcher.calculate_tfidf(query_sig);
-                        println!("TF-IDF for {}: {:.6}", query_sig.signature().name, tfidf);
-                    }
+            println!("\n=== Overlap Probability Analysis ===");
+            for query_sig in &query_signatures {
+                // Calculate probability against top matches
+                let targets: Vec<_> = searcher
+                    .index()
+                    .get_signatures()
+                    .iter()
+                    .take(5) // Limit to first 5 for demo
+                    .map(|entry| entry.value().clone())
+                    .collect();
 
-                    if calculate_probability {
-                        // Calculate probability against first few targets as example
-                        let targets: Vec<_> = searcher
-                            .index()
-                            .get_signatures()
-                            .iter()
-                            .take(5) // Limit to first 5 for demo
-                            .map(|entry| entry.value().clone())
-                            .collect();
-
-                        for target_sig in &targets {
-                            let prob =
-                                searcher.calculate_overlap_probability(query_sig, target_sig);
-                            println!(
-                                "Overlap probability {} vs {}: {:.6}",
-                                query_sig.signature().name,
-                                target_sig.signature().name,
-                                prob
-                            );
-                        }
-                    }
+                for target_sig in &targets {
+                    let prob = searcher.calculate_overlap_probability(query_sig, target_sig);
+                    println!(
+                        "Overlap probability {} vs {}: {:.6}",
+                        query_sig.signature().name,
+                        target_sig.signature().name,
+                        prob
+                    );
                 }
             }
         }
