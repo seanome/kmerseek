@@ -1717,6 +1717,7 @@ dependencies = [
  "cargo-tarpaulin",
  "clap 4.5.40",
  "criterion",
+ "csv",
  "dashmap",
  "flate2",
  "half",

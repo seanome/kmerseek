@@ -77,6 +77,10 @@ enum Commands {
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
+
+        /// Whether to treat query as a pre-indexed database instead of FASTA file
+        #[arg(long, default_value = "false")]
+        query_is_index: bool,
     },
 }
 
@@ -170,7 +174,17 @@ fn main() -> IndexResult<()> {
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output_path.display());
         }
-        Commands::Search { query, target, output, ksize, scaled, encoding, threshold, verbose } => {
+        Commands::Search {
+            query,
+            target,
+            output,
+            ksize,
+            scaled,
+            encoding,
+            threshold,
+            verbose,
+            query_is_index,
+        } => {
             println!("Searching query sequences against target database");
             println!("Query: {}", query.display());
             println!("Target: {}", target.display());
@@ -179,26 +193,32 @@ fn main() -> IndexResult<()> {
             println!("Encoding: {:?}", encoding);
             println!("Threshold: {}", threshold);
             println!("Verbose output: {}", verbose);
+            println!("Query is pre-indexed: {}", query_is_index);
 
             // Load the target database
             println!("Loading target database...");
             let searcher = ProteinSearcher::load(&target)?;
 
-            // Process query sequences and create signatures
-            println!("Processing query sequences...");
-            let query_index = ProteomeIndex::new_with_auto_filename(
-                &query,
-                ksize,
-                scaled,
-                encoding.into(),
-                false, // Don't store raw sequences for query
-            )?;
-
-            query_index.process_fasta(&query, 1000, 1000)?;
-
             // Get query signatures
-            let query_signatures: Vec<_> =
-                query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+            let query_signatures: Vec<_> = if query_is_index {
+                // Load pre-indexed query database
+                println!("Loading pre-indexed query database...");
+                let query_index = ProteomeIndex::load(&query)?;
+                query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
+            } else {
+                // Process query sequences and create signatures
+                println!("Processing query sequences...");
+                let query_index = ProteomeIndex::new_with_auto_filename(
+                    &query,
+                    ksize,
+                    scaled,
+                    encoding.into(),
+                    false, // Don't store raw sequences for query
+                )?;
+
+                query_index.process_fasta(&query, 1000, 1000)?;
+                query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
+            };
 
             if query_signatures.is_empty() {
                 eprintln!("No query signatures found!");
