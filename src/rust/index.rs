@@ -42,6 +42,19 @@ struct ProteomeIndexState {
     store_raw_sequences: bool,
 }
 
+// Metadata for chunked storage format
+#[derive(Serialize, Deserialize)]
+struct ProteomeIndexMetadata {
+    total_signatures: usize,
+    chunk_count: usize,
+    combined_mins: Vec<u64>,
+    combined_abunds: Option<Vec<u64>>,
+    moltype: String,
+    ksize: u32,
+    scaled: u32,
+    store_raw_sequences: bool,
+}
+
 pub struct ProteomeIndex {
     // RocksDB instance for persistent storage
     db: DB,
@@ -121,7 +134,7 @@ impl ProteomeIndex {
         moltype: &str,
         store_raw_sequences: bool,
     ) -> IndexResult<Self> {
-        // Create RocksDB options
+        // Create RocksDB options optimized for large datasets
         let mut opts = Options::default();
         opts.create_if_missing(true);
         // Allow multiple connections to the same database
@@ -129,6 +142,17 @@ impl ProteomeIndex {
         opts.set_use_fsync(false);
         opts.set_allow_mmap_reads(true);
         opts.set_allow_mmap_writes(true);
+
+        // Optimize for large datasets
+        opts.set_max_bytes_for_level_base(256 * 1024 * 1024); // 256MB
+        opts.set_target_file_size_base(64 * 1024 * 1024); // 64MB
+        opts.set_write_buffer_size(128 * 1024 * 1024); // 128MB write buffer
+
+        // Optimize for bulk loading
+        opts.set_disable_auto_compactions(true);
+        opts.set_level_zero_file_num_compaction_trigger(8);
+        opts.set_level_zero_slowdown_writes_trigger(17);
+        opts.set_level_zero_stop_writes_trigger(24);
 
         // Open the database
         let db = DB::open(&opts, path)?;
@@ -196,7 +220,10 @@ impl ProteomeIndex {
         &self.moltype
     }
 
-    /// Save the current index state to RocksDB using efficient storage format
+    /// Save the current index state to RocksDB using chunked storage format
+    ///
+    /// This method stores signatures in chunks to avoid RocksDB value size limits.
+    /// Each chunk contains a maximum number of signatures to keep serialized data manageable.
     pub fn save_state(&self) -> IndexResult<()> {
         // DashMap is already thread-safe, no need to lock
         let combined_minhash = self.combined_minhash.lock();
@@ -208,9 +235,21 @@ impl ProteomeIndex {
             signature_data.push(efficient_data);
         }
 
-        // Create state with raw data
-        let state = ProteomeIndexState {
-            signature_data,
+        // Store signatures in chunks to avoid RocksDB value size limits
+        // Use smaller chunks for better memory efficiency and faster loading
+        const CHUNK_SIZE: usize = 100; // Store 100 signatures per chunk
+        let total_signatures = signature_data.len();
+
+        for (chunk_idx, chunk) in signature_data.chunks(CHUNK_SIZE).enumerate() {
+            let chunk_key = format!("signatures_chunk_{}", chunk_idx);
+            let serialized_chunk = bincode::serialize(chunk)?;
+            self.db.put(chunk_key.as_bytes(), serialized_chunk)?;
+        }
+
+        // Store metadata separately
+        let metadata = ProteomeIndexMetadata {
+            total_signatures,
+            chunk_count: (total_signatures + CHUNK_SIZE - 1) / CHUNK_SIZE,
             combined_mins: combined_minhash.mins().to_vec(),
             combined_abunds: combined_minhash.abunds().map(|abunds| abunds.to_vec()),
             moltype: self.moltype.clone(),
@@ -219,26 +258,53 @@ impl ProteomeIndex {
             store_raw_sequences: self.store_raw_sequences,
         };
 
-        let serialized = bincode::serialize(&state)?;
-        self.db.put(b"index_state", serialized)?;
+        let serialized_metadata = bincode::serialize(&metadata)?;
+        self.db.put(b"index_metadata", serialized_metadata)?;
 
         Ok(())
     }
 
-    /// Load index state from RocksDB using efficient storage format
+    /// Enable compactions after bulk loading for better performance
+    ///
+    /// This method should be called after all signatures have been loaded
+    /// to optimize the database for read operations.
+    pub fn enable_compactions(&self) -> IndexResult<()> {
+        // Enable auto compactions
+        let mut opts = Options::default();
+        opts.set_disable_auto_compactions(false);
+
+        // Compact the database to optimize for reads
+        self.db.compact_range::<&[u8], &[u8]>(None, None);
+
+        Ok(())
+    }
+
+    /// Load index state from RocksDB using chunked storage format
     pub fn load_state(&self) -> IndexResult<()> {
-        let serialized = self.db.get(b"index_state")?;
-        if let Some(data) = serialized {
-            let state: ProteomeIndexState = bincode::deserialize(&data)?;
+        // Try to load from new chunked format first
+        let metadata_serialized = self.db.get(b"index_metadata")?;
+        if let Some(metadata_data) = metadata_serialized {
+            let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
+
+            // Load all signature chunks
+            let mut all_signature_data = Vec::new();
+            for chunk_idx in 0..metadata.chunk_count {
+                let chunk_key = format!("signatures_chunk_{}", chunk_idx);
+                let chunk_data = self.db.get(chunk_key.as_bytes())?;
+                if let Some(data) = chunk_data {
+                    let chunk: Vec<ProteinSignatureData> = bincode::deserialize(&data)?;
+                    all_signature_data.extend(chunk);
+                }
+            }
 
             // Reconstruct signatures from efficient data
             let mut signatures_map = HashMap::new();
-            for signature_data in state.signature_data {
+            for signature_data in all_signature_data {
                 let protein_sig = ProteinSignature::from_efficient_data(
                     signature_data,
-                    state.moltype.clone(),
-                    state.ksize,
-                    state.scaled,
+                    metadata.moltype.clone(),
+                    metadata.ksize,
+                    metadata.scaled,
                 )?;
 
                 let md5sum = protein_sig.signature().md5sum.clone();
@@ -246,10 +312,10 @@ impl ProteomeIndex {
             }
 
             // Reconstruct the combined minhash
-            let hash_function = get_hash_function_from_moltype(&state.moltype)?;
-            let minhash_ksize = state.ksize * 3;
+            let hash_function = get_hash_function_from_moltype(&metadata.moltype)?;
+            let minhash_ksize = metadata.ksize * 3;
             let mut combined_minhash = KmerMinHash::new(
-                state.scaled,
+                metadata.scaled,
                 minhash_ksize,
                 hash_function,
                 SEED,
@@ -257,10 +323,10 @@ impl ProteomeIndex {
                 0,    // num (use scaled instead)
             );
 
-            if let Some(abunds) = &state.combined_abunds {
+            if let Some(abunds) = &metadata.combined_abunds {
                 combined_minhash
                     .add_many_with_abund(
-                        &state
+                        &metadata
                             .combined_mins
                             .clone()
                             .into_iter()
@@ -270,7 +336,7 @@ impl ProteomeIndex {
                     .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             } else {
                 combined_minhash
-                    .add_many(&state.combined_mins)
+                    .add_many(&metadata.combined_mins)
                     .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             }
 
@@ -290,7 +356,72 @@ impl ProteomeIndex {
 
             Ok(())
         } else {
-            Err(IndexError::NoSavedState)
+            // Fallback to old format for backward compatibility
+            let serialized = self.db.get(b"index_state")?;
+            if let Some(data) = serialized {
+                let state: ProteomeIndexState = bincode::deserialize(&data)?;
+
+                // Reconstruct signatures from efficient data
+                let mut signatures_map = HashMap::new();
+                for signature_data in state.signature_data {
+                    let protein_sig = ProteinSignature::from_efficient_data(
+                        signature_data,
+                        state.moltype.clone(),
+                        state.ksize,
+                        state.scaled,
+                    )?;
+
+                    let md5sum = protein_sig.signature().md5sum.clone();
+                    signatures_map.insert(md5sum.to_string(), protein_sig);
+                }
+
+                // Reconstruct the combined minhash
+                let hash_function = get_hash_function_from_moltype(&state.moltype)?;
+                let minhash_ksize = state.ksize * 3;
+                let mut combined_minhash = KmerMinHash::new(
+                    state.scaled,
+                    minhash_ksize,
+                    hash_function,
+                    SEED,
+                    true, // track_abundance
+                    0,    // num (use scaled instead)
+                );
+
+                if let Some(abunds) = &state.combined_abunds {
+                    combined_minhash
+                        .add_many_with_abund(
+                            &state
+                                .combined_mins
+                                .clone()
+                                .into_iter()
+                                .zip(abunds.iter().cloned())
+                                .collect::<Vec<_>>(),
+                        )
+                        .map_err(|e| IndexError::SourmashError(e.to_string()))?;
+                } else {
+                    combined_minhash
+                        .add_many(&state.combined_mins)
+                        .map_err(|e| IndexError::SourmashError(e.to_string()))?;
+                }
+
+                // Update the current index state
+                {
+                    // Clear existing signatures and insert new ones
+                    self.signatures.clear();
+                    for (key, value) in signatures_map {
+                        self.signatures.insert(key, value);
+                    }
+                }
+
+                {
+                    let mut current_combined = self.combined_minhash.lock();
+                    *current_combined = combined_minhash;
+                }
+
+                Ok(())
+            } else {
+                Err(IndexError::NoSavedState)
+            }
         }
     }
 

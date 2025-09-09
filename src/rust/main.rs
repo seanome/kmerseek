@@ -129,6 +129,10 @@ fn main() -> IndexResult<()> {
             println!("Processing FASTA file...");
             index.process_fasta(&input, progress_interval, 1000)?;
 
+            // Enable compactions for better read performance
+            println!("Optimizing database for read operations...");
+            index.enable_compactions()?;
+
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output_path.display());
         }
