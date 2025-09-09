@@ -47,7 +47,7 @@ fn main() -> anyhow::Result<()> {
 
             // Process the FASTA file
             println!("Processing FASTA file...");
-            auto_index.process_fasta(&fasta_path, 10)?;
+            auto_index.process_fasta(&fasta_path, 10, 1000)?;
 
             // Print statistics
             println!("Index statistics:");

@@ -297,7 +297,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
                     let start_time = Instant::now();
 
                     // Process the FASTA file
-                    index.process_fasta(&fasta_path, 0).unwrap();
+                    index.process_fasta(&fasta_path, 0, 1000).unwrap();
 
                     // Record end time
                     let end_time = Instant::now();
@@ -371,7 +371,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
                     let start_time = Instant::now();
 
                     // Process the FASTA file
-                    index.process_fasta(&fasta_path, 0).unwrap();
+                    index.process_fasta(&fasta_path, 0, 1000).unwrap();
 
                     // Record end time
                     let end_time = Instant::now();

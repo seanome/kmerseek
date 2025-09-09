@@ -14,9 +14,9 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Index a FASTA file (supports .gz compression)
+    /// Index a FASTA file (supports all compression formats)
     Index {
-        /// Input FASTA file path (supports .gz compression)
+        /// Input FASTA file path (supports gzip, bzip2, xz, zstd, and uncompressed)
         #[arg(short, long)]
         input: PathBuf,
 
@@ -127,7 +127,11 @@ fn main() -> IndexResult<()> {
 
             // Process the FASTA file
             println!("Processing FASTA file...");
-            index.process_fasta(&input, progress_interval)?;
+            index.process_fasta(&input, progress_interval, 1000)?;
+
+            // Enable compactions for better read performance
+            println!("Optimizing database for read operations...");
+            index.enable_compactions()?;
 
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output_path.display());
