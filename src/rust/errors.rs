@@ -44,6 +44,9 @@ pub enum IndexError {
     #[error("Anyhow error: {0}")]
     AnyhowError(#[from] anyhow::Error),
 
+    #[error("CSV error: {0}")]
+    CsvError(#[from] csv::Error),
+
     #[error("Validation error: {message}")]
     ValidationError { message: String },
 
