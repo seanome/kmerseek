@@ -249,7 +249,7 @@ impl ProteomeIndex {
         // Store metadata separately
         let metadata = ProteomeIndexMetadata {
             total_signatures,
-            chunk_count: (total_signatures + CHUNK_SIZE - 1) / CHUNK_SIZE,
+            chunk_count: total_signatures.div_ceil(CHUNK_SIZE),
             combined_mins: combined_minhash.mins().to_vec(),
             combined_abunds: combined_minhash.abunds().map(|abunds| abunds.to_vec()),
             moltype: self.moltype.clone(),
@@ -1000,10 +1000,7 @@ impl ProteomeIndex {
                 let sequence = sequence.to_uppercase();
 
                 // Create protein signature for each sequence
-                let result = self.create_protein_signature(&sequence, name);
-                processed_count.fetch_add(1, Ordering::Relaxed);
-                result
-
+                self.create_protein_signature(&sequence, name)
             })
             .collect();
 
