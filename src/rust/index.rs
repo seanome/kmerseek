@@ -1285,9 +1285,9 @@ mod tests {
 
             // Verify each original k-mer and its positions
             for (original_kmer, expected_positions) in expected_originals {
-                let positions = protein_sig.kmer_infos().get(hash).unwrap().positions;
+                let positions = &protein_sig.kmer_infos().get(hash).unwrap().positions;
                 assert_eq!(
-                    positions, expected_positions,
+                    positions, &expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
                     original_kmer, expected_positions, positions
                 );
@@ -1399,9 +1399,9 @@ mod tests {
 
             // Verify each original k-mer and its positions
             for (original_kmer, expected_positions) in expected_originals {
-                let positions = protein_sig.kmer_infos().get(hash).unwrap().positions;
+                let positions = &protein_sig.kmer_infos().get(hash).unwrap().positions;
                 assert_eq!(
-                    positions, expected_positions,
+                    positions, &expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
                     original_kmer, expected_positions, positions
                 );

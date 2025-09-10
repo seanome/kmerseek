@@ -330,7 +330,7 @@ impl ProteinSearcher {
         } else {
             // Use a logarithmic relationship for ANI
             let ani = 1.0 - (-containment.ln()).exp();
-            ani.max(0.0).min(1.0)
+            ani.clamp(0.0, 1.0)
         }
     }
 
@@ -525,23 +525,20 @@ impl ProteinSearcher {
         query_signature: &ProteinSignature,
     ) -> Option<DetailedSearchResult> {
         // Find the best matching region based on k-mer positions
-        let matching_regions = self.find_matching_regions_with_signatures(
-            query_signature,
-            match_name, 
-            intersection
-        )?;
-        
+        let matching_regions =
+            self.find_matching_regions_with_signatures(query_signature, match_name, intersection)?;
+
         // Extract the matching regions from the sequences
         let query_region = &query_seq[matching_regions.query_start..matching_regions.query_end];
         let target_region = &target_seq[matching_regions.match_start..matching_regions.match_end];
-        
+
         // Get the encoded sequence for the query region
         // Always generate the encoded sequence from the extracted query_region to ensure correct length
         let encoded_seq = self.encode_sequence_hp(query_region);
 
         let to_print = format!(
             "---\nQuery Name: {}\nMatch Name: {}\nquery: {} ({}-{})\nalpha: {}\nmatch: {} ({}-{})\n",
-            query_name, match_name, query_region, matching_regions.query_start, matching_regions.query_end, 
+            query_name, match_name, query_region, matching_regions.query_start, matching_regions.query_end,
             encoded_seq, target_region, matching_regions.match_start, matching_regions.match_end
         );
 
@@ -680,14 +677,14 @@ impl ProteinSearcher {
     ) -> Option<MatchingRegion> {
         // Find the target signature in the index
         let target_sig = self.find_signature_by_name(match_name)?;
-        
+
         // Get the k-mer size
         let ksize = query_signature.protein_ksize() as usize;
-        
+
         // Collect all positions for intersecting k-mers from both signatures
         let mut query_positions = Vec::new();
         let mut target_positions = Vec::new();
-        
+
         for &hashval in intersection {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
                 (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
@@ -696,41 +693,42 @@ impl ProteinSearcher {
                 target_positions.extend(&target_kmer_info.positions);
             }
         }
-        
+
         if query_positions.is_empty() || target_positions.is_empty() {
             return None;
         }
-        
+
         // Sort positions
         query_positions.sort();
         target_positions.sort();
-        
+
         // Find the best matching region by looking for the longest contiguous sequence
         // of overlapping k-mers. For now, use a simpler approach: find the region
         // with the most k-mers in a reasonable window size.
-        
+
         // Use a sliding window approach to find the best matching region
         let mut best_query_start = 0;
         let mut best_query_end = 0;
         let mut best_target_start = 0;
         let mut best_target_end = 0;
         let mut max_kmer_count = 0;
-        
+
         // Try different window sizes to find the best match
         for window_size in [16, 32, 48, 64, 96, 128] {
             for &query_start in &query_positions {
                 let query_end = query_start + window_size;
-                
+
                 // Count how many k-mers fall within this window
-                let kmer_count = query_positions.iter()
+                let kmer_count = query_positions
+                    .iter()
                     .filter(|&&pos| pos >= query_start && pos + ksize <= query_end)
                     .count();
-                
+
                 if kmer_count > max_kmer_count && kmer_count >= 2 {
                     max_kmer_count = kmer_count;
                     best_query_start = query_start;
                     best_query_end = query_end;
-                    
+
                     // Find corresponding target region
                     // For simplicity, use the first target position that overlaps
                     if let Some(&target_start) = target_positions.first() {
@@ -740,7 +738,7 @@ impl ProteinSearcher {
                 }
             }
         }
-        
+
         // If we found a good match, use it; otherwise fall back to the simple approach
         if max_kmer_count >= 2 {
             Some(MatchingRegion {
@@ -755,7 +753,7 @@ impl ProteinSearcher {
             let query_end = *query_positions.last()? + ksize;
             let target_start = *target_positions.first()?;
             let target_end = *target_positions.last()? + ksize;
-            
+
             Some(MatchingRegion {
                 query_start,
                 query_end,
@@ -764,7 +762,6 @@ impl ProteinSearcher {
             })
         }
     }
-
 
     /// Find a signature by name in the index
     fn find_signature_by_name(&self, name: &str) -> Option<ProteinSignature> {

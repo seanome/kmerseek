@@ -202,7 +202,7 @@ impl<'de> Deserialize<'de> for SerializableSignature {
 
                 // Add the stored data
                 if let Some(abunds) = abunds {
-                    let data: Vec<(u64, u64)> = mins.into_iter().zip(abunds.into_iter()).collect();
+                    let data: Vec<(u64, u64)> = mins.into_iter().zip(abunds).collect();
                     minhash.add_many_with_abund(&data).map_err(de::Error::custom)?;
                 } else {
                     minhash.add_many(&mins).map_err(de::Error::custom)?;
@@ -212,7 +212,7 @@ impl<'de> Deserialize<'de> for SerializableSignature {
             }
         }
 
-        const FIELDS: &'static [&'static str] =
+        const FIELDS: &[&str] =
             &["location", "name", "md5sum", "mins", "abunds", "scaled", "ksize"];
         deserializer.deserialize_struct(
             "SerializableSignature",
@@ -343,8 +343,7 @@ impl<'de> Deserialize<'de> for ProteinSignature {
             }
         }
 
-        const FIELDS: &'static [&'static str] =
-            &["signature", "moltype", "protein_ksize", "kmer_infos"];
+        const FIELDS: &[&str] = &["signature", "moltype", "protein_ksize", "kmer_infos"];
         deserializer.deserialize_struct("ProteinSignature", FIELDS, ProteinSignatureVisitor)
     }
 }
