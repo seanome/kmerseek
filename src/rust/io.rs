@@ -152,7 +152,7 @@ mod tests {
         let reader = open_input("-")?;
         // Just verify we get a reader back - this is sufficient to test the function works
         // The actual stdin reading is tested through integration tests or manual testing
-        assert!(std::ptr::addr_of!(reader) != std::ptr::null());
+        assert!(!std::ptr::addr_of!(reader).is_null());
         Ok(())
     }
 

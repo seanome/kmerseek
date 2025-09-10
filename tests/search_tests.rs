@@ -137,7 +137,7 @@ fn test_overlap_probability() -> IndexResult<()> {
 
     // Calculate overlap probability
     let prob = searcher.calculate_overlap_probability(&query_signatures[0], &target_signatures[0]);
-    assert!(prob >= 0.0 && prob <= 1.0, "Probability should be between 0 and 1");
+    assert!((0.0..=1.0).contains(&prob), "Probability should be between 0 and 1");
 
     Ok(())
 }

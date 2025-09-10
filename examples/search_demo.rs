@@ -89,7 +89,7 @@ fn main() -> IndexResult<()> {
         let target_signatures: Vec<_> =
             searcher.index().get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-        for (_i, result) in results.iter().take(3).enumerate() {
+        for result in results.iter().take(3) {
             if let Some(target_sig) =
                 target_signatures.iter().find(|sig| sig.signature().name == result.match_name)
             {

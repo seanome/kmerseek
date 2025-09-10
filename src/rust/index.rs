@@ -1158,8 +1158,9 @@ mod tests {
 
         // Verify each kmer info matches expected values
         for (hash, kmer_info) in protein_sig.kmer_infos().iter() {
-            let (expected_kmer, expected_positions) =
-                expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
+            let (expected_kmer, expected_positions) = expected_kmers
+                .get(hash)
+                .unwrap_or_else(|| panic!("Missing expected hash {}", hash));
 
             // Verify the k-mer
             assert_eq!(
@@ -1169,9 +1170,10 @@ mod tests {
             );
 
             // Verify positions for the k-mer
-            let expected_pos = expected_positions
-                .get(&kmer_info.encoded_kmer)
-                .expect(&format!("Missing positions for k-mer {}", kmer_info.encoded_kmer));
+            let expected_pos =
+                expected_positions.get(&kmer_info.encoded_kmer).unwrap_or_else(|| {
+                    panic!("Missing positions for k-mer {}", kmer_info.encoded_kmer)
+                });
             assert_eq!(
                 &kmer_info.positions, expected_pos,
                 "Position mismatch for k-mer {}: expected {:?}, got {:?}",
@@ -1273,8 +1275,9 @@ mod tests {
 
         // Verify each kmer info matches expected values
         for (hash, kmer_info) in protein_sig.kmer_infos().iter() {
-            let (expected_encoded, expected_originals) =
-                expected_kmers.get(hash).expect(&format!("Missing expected hash {}", hash));
+            let (expected_encoded, expected_originals) = expected_kmers
+                .get(hash)
+                .unwrap_or_else(|| panic!("Missing expected hash {}", hash));
 
             // Verify the encoded k-mer
             assert_eq!(
@@ -1287,7 +1290,7 @@ mod tests {
             for (original_kmer, expected_positions) in expected_originals {
                 let positions = &protein_sig.kmer_infos().get(hash).unwrap().positions;
                 assert_eq!(
-                    positions, &expected_positions,
+                    positions, expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
                     original_kmer, expected_positions, positions
                 );
@@ -1388,7 +1391,7 @@ mod tests {
         // Verify each kmer info matches expected values
         for (hash, kmer_info) in protein_sig.kmer_infos().iter() {
             let (expected_encoded, expected_originals) =
-                kmer_data.get(hash).expect(&format!("Missing expected hash {}", hash));
+                kmer_data.get(hash).unwrap_or_else(|| panic!("Missing expected hash {}", hash));
 
             // Verify the encoded k-mer
             assert_eq!(
@@ -1401,7 +1404,7 @@ mod tests {
             for (original_kmer, expected_positions) in expected_originals {
                 let positions = &protein_sig.kmer_infos().get(hash).unwrap().positions;
                 assert_eq!(
-                    positions, &expected_positions,
+                    positions, expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
                     original_kmer, expected_positions, positions
                 );
@@ -1621,7 +1624,7 @@ mod tests {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
                     println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
-                    assert!(false, "Unknown md5sum: {}", md5sum);
+                    panic!("Unknown md5sum: {}", md5sum);
                 }
             }
         }
@@ -1683,7 +1686,7 @@ mod tests {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
                     println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
-                    assert!(false, "Unknown md5sum: {}", md5sum);
+                    panic!("Unknown md5sum: {}", md5sum);
                 }
             }
         }
@@ -1745,7 +1748,7 @@ mod tests {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
                     println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
-                    assert!(false, "Unknown md5sum: {}", md5sum);
+                    panic!("Unknown md5sum: {}", md5sum);
                 }
             }
         }
@@ -1802,7 +1805,7 @@ mod tests {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
                     println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
-                    assert!(false, "Unknown md5sum: {}", md5sum);
+                    panic!("Unknown md5sum: {}", md5sum);
                 }
             }
         }
@@ -2047,8 +2050,7 @@ mod tests {
                 if protein_signature.kmer_infos().len() == 5 {
                     // This is the expected case for ACDEFXBZJ
                 } else {
-                    assert!(
-                        false,
+                    panic!(
                         "Unexpected kmer count: {} for md5sum: {}",
                         protein_signature.kmer_infos().len(),
                         protein_signature.signature().md5sum
@@ -2392,7 +2394,7 @@ mod tests {
 
         // Test that different indices are not equivalent
         let index3 =
-            ProteomeIndex::new(&temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
     }
 
@@ -2605,8 +2607,7 @@ mod tests {
 
         // Create a third index with different parameters
         let index3 =
-            ProteomeIndex::new(&temp_dir.path().join("index3.db"), 10, 1, "protein", false)
-                .unwrap();
+            ProteomeIndex::new(temp_dir.path().join("index3.db"), 10, 1, "protein", false).unwrap();
 
         // Test that different indices are not equivalent
         let are_equivalent_3 = index1.is_equivalent_to(&index3).unwrap();
@@ -2614,7 +2615,7 @@ mod tests {
 
         // Test with different sequences
         let index4 =
-            ProteomeIndex::new(&temp_dir.path().join("index4.db"), 5, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("index4.db"), 5, 1, "protein", false).unwrap();
         let sig4 = index4.create_protein_signature("DIFFERENTSEQUENCE", "different").unwrap();
         index4.store_signatures(vec![sig4]).unwrap();
 
@@ -2766,7 +2767,7 @@ mod tests {
         index.store_signatures(vec![signature])?;
 
         // Verify the index has the correct configuration
-        assert_eq!(index.store_raw_sequences(), true);
+        assert!(index.store_raw_sequences());
         assert_eq!(index.signature_count(), 1);
 
         // Get the signature and verify raw sequence is preserved
@@ -2808,7 +2809,7 @@ mod tests {
         index.store_signatures(vec![signature])?;
 
         // Verify the index has the correct configuration
-        assert_eq!(index.store_raw_sequences(), true);
+        assert!(index.store_raw_sequences());
         assert_eq!(index.signature_count(), 1);
 
         // Get the signature and verify raw sequence is preserved
@@ -2854,7 +2855,7 @@ mod tests {
         index.store_signatures(vec![signature])?;
 
         // Verify the index has the correct configuration
-        assert_eq!(index.store_raw_sequences(), false);
+        assert!(!index.store_raw_sequences());
         assert_eq!(index.signature_count(), 1);
 
         // Get the signature and verify raw sequence is not stored
