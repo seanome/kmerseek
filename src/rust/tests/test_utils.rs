@@ -9,7 +9,7 @@ pub fn print_kmer_infos(protein_signature: &ProteinSignature) {
     println!("Hash\t\t\t{}\tOrig\tPos", protein_signature.moltype());
     println!("----------------------------------------");
     for (hash, kmer_info) in protein_signature.kmer_infos().iter() {
-        println!("{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, kmer_info.positions);
+        println!("{}\t{}\t{:?}", hash, kmer_info.encoded_kmer, kmer_info.original_kmer_to_position);
     }
     println!("----------------------------------------\n");
 }

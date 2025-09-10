@@ -575,11 +575,15 @@ impl ProteinSearcher {
                 (query.kmer_infos().get(&hashval), target.kmer_infos().get(&hashval))
             {
                 // Collect k-mer positions - we'll extract the actual k-mers from raw sequences
-                for &pos in &query_kmer_info.positions {
-                    query_kmers.push((pos, String::new())); // Will be filled from raw sequence
+                for positions in query_kmer_info.original_kmer_to_position.values() {
+                    for &pos in positions {
+                        query_kmers.push((pos, String::new())); // Will be filled from raw sequence
+                    }
                 }
-                for &pos in &target_kmer_info.positions {
-                    target_kmers.push((pos, String::new())); // Will be filled from raw sequence
+                for positions in target_kmer_info.original_kmer_to_position.values() {
+                    for &pos in positions {
+                        target_kmers.push((pos, String::new())); // Will be filled from raw sequence
+                    }
                 }
             }
         }
@@ -689,8 +693,13 @@ impl ProteinSearcher {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
                 (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
             {
-                query_positions.extend(&query_kmer_info.positions);
-                target_positions.extend(&target_kmer_info.positions);
+                // Collect all positions from the HashMap
+                for positions in query_kmer_info.original_kmer_to_position.values() {
+                    query_positions.extend(positions);
+                }
+                for positions in target_kmer_info.original_kmer_to_position.values() {
+                    target_positions.extend(positions);
+                }
             }
         }
 

@@ -665,7 +665,11 @@ impl ProteinSignatureData {
             size += 8; // hashval
             size += 4; // ksize
             size += kmer_info.encoded_kmer.len();
-            size += kmer_info.positions.len() * 8; // rough estimate
+            // Calculate size for the HashMap structure
+            for (kmer, positions) in &kmer_info.original_kmer_to_position {
+                size += kmer.len(); // original k-mer string
+                size += positions.len() * 8; // positions
+            }
         }
 
         // Raw sequence size if present

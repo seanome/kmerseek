@@ -594,8 +594,10 @@ impl ProteomeIndex {
                             return Ok(false);
                         }
 
-                        // Compare positions
-                        if self_kmer_info.positions != other_kmer_info.positions {
+                        // Compare positions - need to compare the HashMap structure
+                        if self_kmer_info.original_kmer_to_position
+                            != other_kmer_info.original_kmer_to_position
+                        {
                             return Ok(false);
                         }
                     } else {
@@ -817,12 +819,11 @@ impl ProteomeIndex {
                         .or_insert_with(|| KmerInfo {
                             ksize,
                             hashval,
-                            original_kmer: original_kmer.clone(),
                             encoded_kmer: encoded_kmer.clone(),
-                            positions: Vec::new(),
+                            original_kmer_to_position: HashMap::new(),
                         });
 
-                    kmer_info.add_position(i);
+                    kmer_info.add_position(&original_kmer, i);
                 }
             }
         }
@@ -1170,15 +1171,11 @@ mod tests {
                 hash, expected_kmer, kmer_info.encoded_kmer
             );
 
-            // Verify positions for the k-mer
-            let expected_pos =
-                expected_positions.get(&kmer_info.encoded_kmer).unwrap_or_else(|| {
-                    panic!("Missing positions for k-mer {}", kmer_info.encoded_kmer)
-                });
+            // Verify positions for the k-mer - now we compare the entire HashMap structure
             assert_eq!(
-                &kmer_info.positions, expected_pos,
+                &kmer_info.original_kmer_to_position, expected_positions,
                 "Position mismatch for k-mer {}: expected {:?}, got {:?}",
-                kmer_info.encoded_kmer, expected_pos, &kmer_info.positions
+                kmer_info.encoded_kmer, expected_positions, &kmer_info.original_kmer_to_position
             );
         }
 
@@ -1289,7 +1286,10 @@ mod tests {
 
             // Verify each original k-mer and its positions
             for (original_kmer, expected_positions) in expected_originals {
-                let positions = &protein_sig.kmer_infos().get(hash).unwrap().positions;
+                let positions =
+                    kmer_info.original_kmer_to_position.get(original_kmer).unwrap_or_else(|| {
+                        panic!("Missing original k-mer {} for hash {}", original_kmer, hash)
+                    });
                 assert_eq!(
                     positions, expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
@@ -1403,7 +1403,10 @@ mod tests {
 
             // Verify each original k-mer and its positions
             for (original_kmer, expected_positions) in expected_originals {
-                let positions = &protein_sig.kmer_infos().get(hash).unwrap().positions;
+                let positions =
+                    kmer_info.original_kmer_to_position.get(original_kmer).unwrap_or_else(|| {
+                        panic!("Missing original k-mer {} for hash {}", original_kmer, hash)
+                    });
                 assert_eq!(
                     positions, expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
@@ -1411,14 +1414,14 @@ mod tests {
                 );
             }
 
-            // Verify we have the expected number of positions
+            // Verify we have the expected number of original k-mers
             assert_eq!(
-                kmer_info.positions.len(),
+                kmer_info.original_kmer_to_position.len(),
                 expected_originals.len(),
-                "Expected {} positions for hash {}, got {}",
+                "Expected {} original k-mers for hash {}, got {}",
                 expected_originals.len(),
                 hash,
-                kmer_info.positions.len()
+                kmer_info.original_kmer_to_position.len()
             );
         }
 
