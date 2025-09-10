@@ -39,10 +39,6 @@ enum Commands {
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
         progress_interval: u32,
-
-        /// Whether to store raw protein sequences (increases storage size)
-        #[arg(long, default_value = "false")]
-        store_raw_sequences: bool,
     },
     /// Search query sequences against a protein database
     Search {
@@ -108,15 +104,7 @@ fn main() -> IndexResult<()> {
     let cli = Cli::parse();
 
     match cli.command {
-        Commands::Index {
-            input,
-            output,
-            ksize,
-            scaled,
-            encoding,
-            progress_interval,
-            store_raw_sequences,
-        } => {
+        Commands::Index { input, output, ksize, scaled, encoding, progress_interval } => {
             println!("Indexing FASTA file: {}", input.display());
 
             // Determine output path
@@ -134,7 +122,7 @@ fn main() -> IndexResult<()> {
                     ksize,
                     scaled,
                     encoding.into(),
-                    store_raw_sequences,
+                    true, // Always store raw sequences
                 )?;
 
                 let generated_filename = temp_index.generate_filename(base_name);
@@ -151,7 +139,7 @@ fn main() -> IndexResult<()> {
             println!("Scaled: {}", scaled);
             println!("Encoding: {:?}", encoding);
             println!("Progress interval: {}", progress_interval);
-            println!("Store raw sequences: {}", store_raw_sequences);
+            println!("Store raw sequences: true (always enabled)");
             println!("-------\n");
 
             // Create the index
@@ -160,7 +148,7 @@ fn main() -> IndexResult<()> {
                 ksize,
                 scaled,
                 encoding.into(),
-                store_raw_sequences,
+                true, // Always store raw sequences
             )?;
 
             // Process the FASTA file
@@ -170,6 +158,9 @@ fn main() -> IndexResult<()> {
             // Enable compactions for better read performance
             println!("Optimizing database for read operations...");
             index.enable_compactions()?;
+
+            // Save the index state for loading
+            index.save_state()?;
 
             println!("Indexing completed successfully!");
             println!("Database saved to: {}", output_path.display());

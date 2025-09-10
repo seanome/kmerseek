@@ -1,5 +1,3 @@
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
 
 /// Represents information about a k-mer occurrence
@@ -8,40 +6,32 @@ pub struct KmerInfo {
     pub ksize: usize,
     pub hashval: u64,
     pub encoded_kmer: String,
-    pub original_kmer_to_position: HashMap<String, Vec<usize>>,
+    pub positions: Vec<usize>,
 }
 
 impl KmerInfo {
-    /// Creates a new KmerInfo with pre-allocated strings for k-mers
+    /// Creates a new KmerInfo with pre-allocated capacity
     pub fn new(hashval: u64, ksize: usize) -> Self {
-        Self {
-            ksize,
-            hashval,
-            encoded_kmer: String::with_capacity(ksize),
-            original_kmer_to_position: HashMap::with_capacity(ksize),
-        }
+        Self { ksize, hashval, encoded_kmer: String::with_capacity(ksize), positions: Vec::new() }
     }
 
-    /// Adds a k-mer position with a pre-allocated string
-    pub fn add_kmer_position(&mut self, kmer: &str, position: usize) {
-        self.original_kmer_to_position
-            .entry(kmer.to_string())
-            .or_insert_with(|| Vec::with_capacity(1))
-            .push(position);
+    /// Adds a k-mer position
+    pub fn add_position(&mut self, position: usize) {
+        self.positions.push(position);
     }
 
-    /// Get the number of unique original k-mers
-    pub fn unique_kmer_count(&self) -> usize {
-        self.original_kmer_to_position.len()
-    }
-
-    /// Get the total number of k-mer occurrences
+    /// Get the number of k-mer occurrences
     pub fn total_occurrences(&self) -> usize {
-        self.original_kmer_to_position.values().map(|positions| positions.len()).sum()
+        self.positions.len()
     }
 
     /// Check if this k-mer appears at a specific position
     pub fn has_position(&self, position: usize) -> bool {
-        self.original_kmer_to_position.values().any(|positions| positions.contains(&position))
+        self.positions.contains(&position)
+    }
+
+    /// Get all positions where this k-mer occurs
+    pub fn get_positions(&self) -> &[usize] {
+        &self.positions
     }
 }

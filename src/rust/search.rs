@@ -96,6 +96,15 @@ pub struct SearchStats {
     pub kmer_frequencies: HashMap<u64, usize>,
 }
 
+/// Represents a matching region between query and target sequences
+#[derive(Debug, Clone)]
+struct MatchingRegion {
+    query_start: usize,
+    query_end: usize,
+    match_start: usize,
+    match_end: usize,
+}
+
 impl SearchStats {
     /// Calculate search statistics from a proteome index
     pub fn from_index(index: &ProteomeIndex) -> Self {
@@ -491,6 +500,7 @@ impl ProteinSearcher {
                 query_seq,
                 target_seq,
                 intersection,
+                query,
             );
         }
 
@@ -511,36 +521,41 @@ impl ProteinSearcher {
         match_name: &str,
         query_seq: &str,
         target_seq: &str,
-        _intersection: &HashSet<u64>,
+        intersection: &HashSet<u64>,
+        query_signature: &ProteinSignature,
     ) -> Option<DetailedSearchResult> {
-        // For now, create a simplified result using the full sequences
-        // In a full implementation, we would find the best matching regions
-
-        let query_start = 0;
-        let query_end = query_seq.len() as u32;
-        let match_start = 0;
-        let match_end = target_seq.len() as u32;
-        let length = query_end.min(match_end);
-
-        // Generate encoded sequence (simplified - just use 'h' for all)
-        let encoded_seq = "h".repeat(length as usize);
+        // Find the best matching region based on k-mer positions
+        let matching_regions = self.find_matching_regions_with_signatures(
+            query_signature,
+            match_name, 
+            intersection
+        )?;
+        
+        // Extract the matching regions from the sequences
+        let query_region = &query_seq[matching_regions.query_start..matching_regions.query_end];
+        let target_region = &target_seq[matching_regions.match_start..matching_regions.match_end];
+        
+        // Get the encoded sequence for the query region
+        // Always generate the encoded sequence from the extracted query_region to ensure correct length
+        let encoded_seq = self.encode_sequence_hp(query_region);
 
         let to_print = format!(
             "---\nQuery Name: {}\nMatch Name: {}\nquery: {} ({}-{})\nalpha: {}\nmatch: {} ({}-{})\n",
-            query_name, match_name, query_seq, query_start, query_end, encoded_seq, target_seq, match_start, match_end
+            query_name, match_name, query_region, matching_regions.query_start, matching_regions.query_end, 
+            encoded_seq, target_region, matching_regions.match_start, matching_regions.match_end
         );
 
         Some(DetailedSearchResult {
             match_name: match_name.to_string(),
             query_name: query_name.to_string(),
-            query_start,
-            query_end,
-            query: query_seq.to_string(),
-            match_start,
-            match_end,
-            r#match: target_seq.to_string(),
+            query_start: matching_regions.query_start as u32,
+            query_end: matching_regions.query_end as u32,
+            query: query_region.to_string(),
+            match_start: matching_regions.match_start as u32,
+            match_end: matching_regions.match_end as u32,
+            r#match: target_region.to_string(),
             encoded: encoded_seq,
-            length,
+            length: (matching_regions.query_end - matching_regions.query_start) as u32,
             to_print,
         })
     }
@@ -562,16 +577,12 @@ impl ProteinSearcher {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
                 (query.kmer_infos().get(&hashval), target.kmer_infos().get(&hashval))
             {
-                // Collect k-mer positions and sequences
-                for (kmer, positions) in &query_kmer_info.original_kmer_to_position {
-                    for &pos in positions {
-                        query_kmers.push((pos, kmer.clone()));
-                    }
+                // Collect k-mer positions - we'll extract the actual k-mers from raw sequences
+                for &pos in &query_kmer_info.positions {
+                    query_kmers.push((pos, String::new())); // Will be filled from raw sequence
                 }
-                for (kmer, positions) in &target_kmer_info.original_kmer_to_position {
-                    for &pos in positions {
-                        target_kmers.push((pos, kmer.clone()));
-                    }
+                for &pos in &target_kmer_info.positions {
+                    target_kmers.push((pos, String::new())); // Will be filled from raw sequence
                 }
             }
         }
@@ -597,8 +608,20 @@ impl ProteinSearcher {
 
         let length = query_end - query_start;
 
-        // Generate encoded sequence (simplified - use 'h' for all)
-        let encoded_seq = "h".repeat(length as usize);
+        // Try to get the stored encoded sequence first, otherwise generate it
+        let encoded_seq = if let Some(stored_encoded) = self.get_stored_encoded_sequence(query_name)
+        {
+            // Use the stored encoded sequence for the matching region
+            if query_start < stored_encoded.len() as u32 && query_end <= stored_encoded.len() as u32
+            {
+                stored_encoded[query_start as usize..query_end as usize].to_string()
+            } else {
+                self.encode_sequence_hp(&query_stitched)
+            }
+        } else {
+            // Fallback: generate encoded sequence
+            self.encode_sequence_hp(&query_stitched)
+        };
 
         let to_print = format!(
             "---\nQuery Name: {}\nMatch Name: {}\nquery: {} ({}-{})\nalpha: {}\nmatch: {} ({}-{})\n",
@@ -646,6 +669,191 @@ impl ProteinSearcher {
         }
 
         result
+    }
+
+    /// Find the best matching region based on k-mer positions with both signatures
+    fn find_matching_regions_with_signatures(
+        &self,
+        query_signature: &ProteinSignature,
+        match_name: &str,
+        intersection: &HashSet<u64>,
+    ) -> Option<MatchingRegion> {
+        // Find the target signature in the index
+        let target_sig = self.find_signature_by_name(match_name)?;
+        
+        // Get the k-mer size
+        let ksize = query_signature.protein_ksize() as usize;
+        
+        // Collect all positions for intersecting k-mers from both signatures
+        let mut query_positions = Vec::new();
+        let mut target_positions = Vec::new();
+        
+        for &hashval in intersection {
+            if let (Some(query_kmer_info), Some(target_kmer_info)) =
+                (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
+            {
+                query_positions.extend(&query_kmer_info.positions);
+                target_positions.extend(&target_kmer_info.positions);
+            }
+        }
+        
+        if query_positions.is_empty() || target_positions.is_empty() {
+            return None;
+        }
+        
+        // Sort positions
+        query_positions.sort();
+        target_positions.sort();
+        
+        // Find the best matching region by looking for the longest contiguous sequence
+        // of overlapping k-mers. For now, use a simpler approach: find the region
+        // with the most k-mers in a reasonable window size.
+        
+        // Use a sliding window approach to find the best matching region
+        let mut best_query_start = 0;
+        let mut best_query_end = 0;
+        let mut best_target_start = 0;
+        let mut best_target_end = 0;
+        let mut max_kmer_count = 0;
+        
+        // Try different window sizes to find the best match
+        for window_size in [16, 32, 48, 64, 96, 128] {
+            for &query_start in &query_positions {
+                let query_end = query_start + window_size;
+                
+                // Count how many k-mers fall within this window
+                let kmer_count = query_positions.iter()
+                    .filter(|&&pos| pos >= query_start && pos + ksize <= query_end)
+                    .count();
+                
+                if kmer_count > max_kmer_count && kmer_count >= 2 {
+                    max_kmer_count = kmer_count;
+                    best_query_start = query_start;
+                    best_query_end = query_end;
+                    
+                    // Find corresponding target region
+                    // For simplicity, use the first target position that overlaps
+                    if let Some(&target_start) = target_positions.first() {
+                        best_target_start = target_start;
+                        best_target_end = target_start + window_size;
+                    }
+                }
+            }
+        }
+        
+        // If we found a good match, use it; otherwise fall back to the simple approach
+        if max_kmer_count >= 2 {
+            Some(MatchingRegion {
+                query_start: best_query_start,
+                query_end: best_query_end,
+                match_start: best_target_start,
+                match_end: best_target_end,
+            })
+        } else {
+            // Fallback: use the first and last positions
+            let query_start = *query_positions.first()?;
+            let query_end = *query_positions.last()? + ksize;
+            let target_start = *target_positions.first()?;
+            let target_end = *target_positions.last()? + ksize;
+            
+            Some(MatchingRegion {
+                query_start,
+                query_end,
+                match_start: target_start,
+                match_end: target_end,
+            })
+        }
+    }
+
+    /// Find the best matching region based on k-mer positions
+    fn find_matching_regions(
+        &self,
+        query_name: &str,
+        match_name: &str,
+        intersection: &HashSet<u64>,
+    ) -> Option<MatchingRegion> {
+        // Find the query and target signatures
+        let query_sig = self.find_signature_by_name(query_name)?;
+        let target_sig = self.find_signature_by_name(match_name)?;
+        
+        // Get the k-mer size
+        let ksize = query_sig.protein_ksize() as usize;
+        
+        // Collect all positions for intersecting k-mers
+        let mut query_positions = Vec::new();
+        let mut target_positions = Vec::new();
+        
+        for &hashval in intersection {
+            if let (Some(query_kmer_info), Some(target_kmer_info)) =
+                (query_sig.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
+            {
+                query_positions.extend(&query_kmer_info.positions);
+                target_positions.extend(&target_kmer_info.positions);
+            }
+        }
+        
+        if query_positions.is_empty() || target_positions.is_empty() {
+            return None;
+        }
+        
+        // Sort positions
+        query_positions.sort();
+        target_positions.sort();
+        
+        // Find the best matching region
+        // For now, use the first and last positions as a simple approach
+        let query_start = *query_positions.first()?;
+        let query_end = *query_positions.last()? + ksize;
+        let match_start = *target_positions.first()?;
+        let match_end = *target_positions.last()? + ksize;
+        
+        Some(MatchingRegion {
+            query_start,
+            query_end,
+            match_start,
+            match_end,
+        })
+    }
+
+    /// Find a signature by name in the index
+    fn find_signature_by_name(&self, name: &str) -> Option<ProteinSignature> {
+        for entry in self.index.get_signatures().iter() {
+            let signature = entry.value();
+            if signature.signature().name == name {
+                return Some(signature.clone());
+            }
+        }
+        None
+    }
+
+    /// Get stored encoded sequence for a signature by name
+    fn get_stored_encoded_sequence(&self, signature_name: &str) -> Option<String> {
+        // Find the signature in the index
+        for entry in self.index.get_signatures().iter() {
+            let signature = entry.value();
+            if signature.signature().name == signature_name {
+                return signature.get_encoded_sequence().map(|s| s.to_string());
+            }
+        }
+        None
+    }
+
+    /// Encode a protein sequence using HP encoding (hydrophobic/polar)
+    fn encode_sequence_hp(&self, sequence: &str) -> String {
+        use sourmash::encodings::aa_to_hp;
+
+        let mut encoded = String::with_capacity(sequence.len());
+
+        for byte in sequence.bytes() {
+            let hp_char = aa_to_hp(byte);
+            encoded.push(match hp_char {
+                b'h' => 'h',
+                b'p' => 'p',
+                _ => 'h', // Default to hydrophobic for unknown characters
+            });
+        }
+
+        encoded
     }
 }
 

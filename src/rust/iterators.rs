@@ -102,13 +102,12 @@ pub trait KmerInfoExt {
 
 impl KmerInfoExt for KmerInfo {
     fn positions(&self) -> impl Iterator<Item = Position> + '_ {
-        self.original_kmer_to_position.values().flatten().map(|&pos| Position(pos))
+        self.positions.iter().map(|&pos| Position(pos))
     }
 
     fn original_kmers(&self) -> impl Iterator<Item = (&str, PositionIterator<'_>)> + '_ {
-        self.original_kmer_to_position
-            .iter()
-            .map(|(kmer, positions)| (kmer.as_str(), PositionIterator { inner: positions.iter() }))
+        // Since we no longer store original k-mers, return empty iterator
+        std::iter::empty()
     }
 }
 

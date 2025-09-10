@@ -261,6 +261,9 @@ impl ProteomeIndex {
         let serialized_metadata = bincode::serialize(&metadata)?;
         self.db.put(b"index_metadata", serialized_metadata)?;
 
+        // Flush to ensure data is written to disk
+        self.db.flush()?;
+
         Ok(())
     }
 
@@ -437,21 +440,21 @@ impl ProteomeIndex {
         let db = DB::open(&opts, path)?;
 
         // Try to load state to get configuration
-        let serialized = db.get(b"index_state")?;
+        let serialized = db.get(b"index_metadata")?;
         if let Some(data) = serialized {
-            let state: ProteomeIndexState = bincode::deserialize(&data)?;
+            let metadata: ProteomeIndexMetadata = bincode::deserialize(&data)?;
 
-            let _hash_function = get_hash_function_from_moltype(&state.moltype)
+            let _hash_function = get_hash_function_from_moltype(&metadata.moltype)
                 .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            let encoding_fn = get_encoding_fn_from_moltype(&state.moltype)
+            let encoding_fn = get_encoding_fn_from_moltype(&metadata.moltype)
                 .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
             // Reconstruct the combined minhash from raw data
-            let hash_function = get_hash_function_from_moltype(&state.moltype)
+            let hash_function = get_hash_function_from_moltype(&metadata.moltype)
                 .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            let minhash_ksize = state.ksize * 3;
+            let minhash_ksize = metadata.ksize * 3;
             let mut combined_minhash = KmerMinHash::new(
-                state.scaled,
+                metadata.scaled,
                 minhash_ksize,
                 hash_function,
                 SEED,
@@ -459,10 +462,10 @@ impl ProteomeIndex {
                 0,    // num (use scaled instead)
             );
 
-            if let Some(abunds) = &state.combined_abunds {
+            if let Some(abunds) = &metadata.combined_abunds {
                 combined_minhash
                     .add_many_with_abund(
-                        &state
+                        &metadata
                             .combined_mins
                             .clone()
                             .into_iter()
@@ -472,18 +475,29 @@ impl ProteomeIndex {
                     .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             } else {
                 combined_minhash
-                    .add_many(&state.combined_mins)
+                    .add_many(&metadata.combined_mins)
                     .map_err(|e| IndexError::SourmashError(e.to_string()))?;
+            }
+
+            // Load all signature chunks
+            let mut all_signature_data = Vec::new();
+            for chunk_idx in 0..metadata.chunk_count {
+                let chunk_key = format!("signatures_chunk_{}", chunk_idx);
+                let chunk_data = db.get(chunk_key.as_bytes())?;
+                if let Some(data) = chunk_data {
+                    let chunk: Vec<ProteinSignatureData> = bincode::deserialize(&data)?;
+                    all_signature_data.extend(chunk);
+                }
             }
 
             // Reconstruct signatures from efficient data
             let mut signatures_map = HashMap::new();
-            for signature_data in state.signature_data {
+            for signature_data in all_signature_data {
                 let protein_sig = ProteinSignature::from_efficient_data(
                     signature_data,
-                    state.moltype.clone(),
-                    state.ksize,
-                    state.scaled,
+                    metadata.moltype.clone(),
+                    metadata.ksize,
+                    metadata.scaled,
                 )?;
 
                 let md5sum = protein_sig.signature().md5sum.clone();
@@ -496,12 +510,12 @@ impl ProteomeIndex {
                 combined_minhash: Arc::new(Mutex::new(combined_minhash)),
                 aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
                 encoding_fn,
-                moltype: state.moltype,
-                ksize: state.ksize,
-                minhash_ksize: state.ksize * 3,
-                scaled: state.scaled,
+                moltype: metadata.moltype,
+                ksize: metadata.ksize,
+                minhash_ksize: metadata.ksize * 3,
+                scaled: metadata.scaled,
                 stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
-                store_raw_sequences: state.store_raw_sequences,
+                store_raw_sequences: metadata.store_raw_sequences,
             };
 
             Ok(index)
@@ -580,25 +594,9 @@ impl ProteomeIndex {
                             return Ok(false);
                         }
 
-                        // Compare original_kmer_to_position maps
-                        if self_kmer_info.original_kmer_to_position.len()
-                            != other_kmer_info.original_kmer_to_position.len()
-                        {
+                        // Compare positions
+                        if self_kmer_info.positions != other_kmer_info.positions {
                             return Ok(false);
-                        }
-
-                        for (original_kmer, self_positions) in
-                            &self_kmer_info.original_kmer_to_position
-                        {
-                            if let Some(other_positions) =
-                                other_kmer_info.original_kmer_to_position.get(original_kmer)
-                            {
-                                if self_positions != other_positions {
-                                    return Ok(false);
-                                }
-                            } else {
-                                return Ok(false);
-                            }
                         }
                     } else {
                         return Ok(false);
@@ -733,17 +731,63 @@ impl ProteomeIndex {
         // Process the k-mers to get detailed k-mer information
         self.process_kmers(&processed_sequence, &mut protein_sig)?;
 
-        // If raw sequence storage is enabled, create efficient data with the sequence
-        if self.store_raw_sequences {
-            let efficient_data =
-                protein_sig.to_efficient_data_with_capacity(processed_sequence.len());
-            let mut efficient_data_with_sequence = efficient_data;
-            efficient_data_with_sequence.set_raw_sequence(processed_sequence.to_string());
-            protein_sig.set_efficient_data(efficient_data_with_sequence);
+        // Always create efficient data with the sequence
+        let efficient_data = protein_sig.to_efficient_data_with_capacity(processed_sequence.len());
+        let mut efficient_data_with_sequence = efficient_data;
+        efficient_data_with_sequence.set_raw_sequence(processed_sequence.to_string());
+
+        // Generate and store encoded sequence (unless it's protein encoding)
+        if self.moltype != "protein" {
+            let encoded_sequence = self.encode_sequence(&processed_sequence);
+            efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
         }
+
+        protein_sig.set_efficient_data(efficient_data_with_sequence);
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)
+    }
+
+    /// Encode a protein sequence using the current moltype
+    fn encode_sequence(&self, sequence: &str) -> String {
+        match self.moltype.as_str() {
+            "hp" => self.encode_sequence_hp(sequence),
+            "dayhoff" => self.encode_sequence_dayhoff(sequence),
+            "protein" => sequence.to_string(), // No encoding needed
+            _ => sequence.to_string(),         // Default to no encoding
+        }
+    }
+
+    /// Encode a protein sequence using HP encoding (hydrophobic/polar)
+    fn encode_sequence_hp(&self, sequence: &str) -> String {
+        use sourmash::encodings::aa_to_hp;
+
+        let mut encoded = String::with_capacity(sequence.len());
+
+        for byte in sequence.bytes() {
+            let hp_char = aa_to_hp(byte);
+            encoded.push(match hp_char {
+                b'h' => 'h',
+                b'p' => 'p',
+                _ => 'h', // Default to hydrophobic for unknown characters
+            });
+        }
+
+        encoded
+    }
+
+    /// Encode a protein sequence using Dayhoff encoding
+    fn encode_sequence_dayhoff(&self, sequence: &str) -> String {
+        use sourmash::encodings::aa_to_dayhoff;
+
+        let mut encoded = String::with_capacity(sequence.len());
+
+        for byte in sequence.bytes() {
+            let dayhoff_char = aa_to_dayhoff(byte);
+            encoded.push(dayhoff_char as char);
+        }
+
+        encoded
     }
 
     pub fn process_kmers(
@@ -759,7 +803,7 @@ impl ProteomeIndex {
             let kmer = &sequence[i..i + ksize];
 
             // Process the k-mer to get encoded version
-            if let Ok((encoded_kmer, original_kmer)) =
+            if let Ok((encoded_kmer, _original_kmer)) =
                 encode_kmer_with_encoding_fn(kmer, self.encoding_fn)
             {
                 // Get the hash from the minhash implementation
@@ -774,10 +818,10 @@ impl ProteomeIndex {
                             ksize,
                             hashval,
                             encoded_kmer: encoded_kmer.clone(),
-                            original_kmer_to_position: HashMap::new(),
+                            positions: Vec::new(),
                         });
 
-                    kmer_info.original_kmer_to_position.entry(original_kmer).or_default().push(i);
+                    kmer_info.add_position(i);
                 }
             }
         }
@@ -1124,17 +1168,15 @@ mod tests {
                 hash, expected_kmer, kmer_info.encoded_kmer
             );
 
-            // Verify positions for each original k-mer
-            for (original_kmer, positions) in &kmer_info.original_kmer_to_position {
-                let expected_pos = expected_positions
-                    .get(original_kmer)
-                    .expect(&format!("Missing positions for k-mer {}", original_kmer));
-                assert_eq!(
-                    positions, expected_pos,
-                    "Position mismatch for k-mer {}: expected {:?}, got {:?}",
-                    original_kmer, expected_pos, positions
-                );
-            }
+            // Verify positions for the k-mer
+            let expected_pos = expected_positions
+                .get(&kmer_info.encoded_kmer)
+                .expect(&format!("Missing positions for k-mer {}", kmer_info.encoded_kmer));
+            assert_eq!(
+                &kmer_info.positions, expected_pos,
+                "Position mismatch for k-mer {}: expected {:?}, got {:?}",
+                kmer_info.encoded_kmer, expected_pos, &kmer_info.positions
+            );
         }
 
         Ok(())
@@ -1243,13 +1285,7 @@ mod tests {
 
             // Verify each original k-mer and its positions
             for (original_kmer, expected_positions) in expected_originals {
-                let positions = protein_sig
-                    .kmer_infos()
-                    .get(hash)
-                    .unwrap()
-                    .original_kmer_to_position
-                    .get(original_kmer)
-                    .expect(&format!("Missing positions for k-mer {}", original_kmer));
+                let positions = protein_sig.kmer_infos().get(hash).unwrap().positions;
                 assert_eq!(
                     positions, expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
@@ -1363,13 +1399,7 @@ mod tests {
 
             // Verify each original k-mer and its positions
             for (original_kmer, expected_positions) in expected_originals {
-                let positions = protein_sig
-                    .kmer_infos()
-                    .get(hash)
-                    .unwrap()
-                    .original_kmer_to_position
-                    .get(original_kmer)
-                    .expect(&format!("Missing original k-mer {} for hash {}", original_kmer, hash));
+                let positions = protein_sig.kmer_infos().get(hash).unwrap().positions;
                 assert_eq!(
                     positions, expected_positions,
                     "Position mismatch for k-mer {}: expected {:?}, got {:?}",
@@ -1377,14 +1407,14 @@ mod tests {
                 );
             }
 
-            // Verify no unexpected original k-mers
+            // Verify we have the expected number of positions
             assert_eq!(
-                kmer_info.original_kmer_to_position.len(),
+                kmer_info.positions.len(),
                 expected_originals.len(),
-                "Expected {} original k-mer mappings for hash {}, got {}",
+                "Expected {} positions for hash {}, got {}",
                 expected_originals.len(),
                 hash,
-                kmer_info.original_kmer_to_position.len()
+                kmer_info.positions.len()
             );
         }
 

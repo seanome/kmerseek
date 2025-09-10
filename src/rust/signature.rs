@@ -74,13 +74,152 @@ impl SignatureAccess for &SerializableSignature {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(crate = "serde")]
+#[derive(Debug, Clone)]
 pub struct SerializableSignature {
     pub location: String,
     pub name: String,
     pub md5sum: String,
     pub minhash: KmerMinHash,
+}
+
+// Custom serialization for SerializableSignature to avoid KmerMinHash serialization issues
+impl Serialize for SerializableSignature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("SerializableSignature", 7)?;
+        state.serialize_field("location", &self.location)?;
+        state.serialize_field("name", &self.name)?;
+        state.serialize_field("md5sum", &self.md5sum)?;
+        state.serialize_field("mins", &self.minhash.mins())?;
+        state.serialize_field("abunds", &self.minhash.abunds())?;
+        state.serialize_field("scaled", &self.minhash.scaled())?;
+        state.serialize_field("ksize", &self.minhash.ksize())?;
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for SerializableSignature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct SerializableSignatureVisitor;
+
+        impl<'de> Visitor<'de> for SerializableSignatureVisitor {
+            type Value = SerializableSignature;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct SerializableSignature")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<SerializableSignature, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut location = None;
+                let mut name = None;
+                let mut md5sum = None;
+                let mut mins = None;
+                let mut abunds = None;
+                let mut scaled = None;
+                let mut ksize = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        "location" => {
+                            if location.is_some() {
+                                return Err(de::Error::duplicate_field("location"));
+                            }
+                            location = Some(map.next_value()?);
+                        }
+                        "name" => {
+                            if name.is_some() {
+                                return Err(de::Error::duplicate_field("name"));
+                            }
+                            name = Some(map.next_value()?);
+                        }
+                        "md5sum" => {
+                            if md5sum.is_some() {
+                                return Err(de::Error::duplicate_field("md5sum"));
+                            }
+                            md5sum = Some(map.next_value()?);
+                        }
+                        "mins" => {
+                            if mins.is_some() {
+                                return Err(de::Error::duplicate_field("mins"));
+                            }
+                            mins = Some(map.next_value()?);
+                        }
+                        "abunds" => {
+                            if abunds.is_some() {
+                                return Err(de::Error::duplicate_field("abunds"));
+                            }
+                            abunds = Some(map.next_value()?);
+                        }
+                        "scaled" => {
+                            if scaled.is_some() {
+                                return Err(de::Error::duplicate_field("scaled"));
+                            }
+                            scaled = Some(map.next_value()?);
+                        }
+                        "ksize" => {
+                            if ksize.is_some() {
+                                return Err(de::Error::duplicate_field("ksize"));
+                            }
+                            ksize = Some(map.next_value()?);
+                        }
+                        _ => {
+                            let _ = map.next_value::<de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                let location = location.ok_or_else(|| de::Error::missing_field("location"))?;
+                let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
+                let md5sum = md5sum.ok_or_else(|| de::Error::missing_field("md5sum"))?;
+                let mins: Vec<u64> = mins.ok_or_else(|| de::Error::missing_field("mins"))?;
+                let abunds: Option<Vec<u64>> =
+                    abunds.ok_or_else(|| de::Error::missing_field("abunds"))?;
+                let scaled: u32 = scaled.ok_or_else(|| de::Error::missing_field("scaled"))?;
+                let ksize: u32 = ksize.ok_or_else(|| de::Error::missing_field("ksize"))?;
+
+                // Reconstruct KmerMinHash from the stored data with correct parameters
+                // We'll use a default hash function since we don't store the specific one
+                let mut minhash = KmerMinHash::new(
+                    scaled,
+                    ksize,
+                    sourmash::encodings::HashFunctions::Murmur64Protein, // default hash function
+                    42,                                                  // seed
+                    true,                                                // track_abundance
+                    0,                                                   // num
+                );
+
+                // Add the stored data
+                if let Some(abunds) = abunds {
+                    let data: Vec<(u64, u64)> = mins.into_iter().zip(abunds.into_iter()).collect();
+                    minhash.add_many_with_abund(&data).map_err(de::Error::custom)?;
+                } else {
+                    minhash.add_many(&mins).map_err(de::Error::custom)?;
+                }
+
+                Ok(SerializableSignature { location, name, md5sum, minhash })
+            }
+        }
+
+        const FIELDS: &'static [&'static str] =
+            &["location", "name", "md5sum", "mins", "abunds", "scaled", "ksize"];
+        deserializer.deserialize_struct(
+            "SerializableSignature",
+            FIELDS,
+            SerializableSignatureVisitor,
+        )
+    }
 }
 
 impl From<SmallSignature> for SerializableSignature {
@@ -101,8 +240,7 @@ impl From<SigStore> for SerializableSignature {
 }
 
 /// A wrapper around SmallSignature that handles protein k-mer size conversions
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(crate = "serde")]
+#[derive(Debug, Clone)]
 pub struct ProteinSignature {
     signature: SerializableSignature,
     moltype: String,
@@ -110,8 +248,105 @@ pub struct ProteinSignature {
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
     kmer_infos: HashMap<u64, KmerInfo>,
     // Efficient storage data (optional, for performance)
-    #[serde(skip)]
     efficient_data: Option<ProteinSignatureData>,
+}
+
+// Custom serialization for ProteinSignature
+impl Serialize for ProteinSignature {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("ProteinSignature", 4)?;
+        state.serialize_field("signature", &self.signature)?;
+        state.serialize_field("moltype", &self.moltype)?;
+        state.serialize_field("protein_ksize", &self.protein_ksize)?;
+        state.serialize_field("kmer_infos", &self.kmer_infos)?;
+        // Skip efficient_data as it's marked with #[serde(skip)]
+        state.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for ProteinSignature {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::{self, MapAccess, Visitor};
+        use std::fmt;
+
+        struct ProteinSignatureVisitor;
+
+        impl<'de> Visitor<'de> for ProteinSignatureVisitor {
+            type Value = ProteinSignature;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct ProteinSignature")
+            }
+
+            fn visit_map<V>(self, mut map: V) -> Result<ProteinSignature, V::Error>
+            where
+                V: MapAccess<'de>,
+            {
+                let mut signature = None;
+                let mut moltype = None;
+                let mut protein_ksize = None;
+                let mut kmer_infos = None;
+
+                while let Some(key) = map.next_key()? {
+                    match key {
+                        "signature" => {
+                            if signature.is_some() {
+                                return Err(de::Error::duplicate_field("signature"));
+                            }
+                            signature = Some(map.next_value()?);
+                        }
+                        "moltype" => {
+                            if moltype.is_some() {
+                                return Err(de::Error::duplicate_field("moltype"));
+                            }
+                            moltype = Some(map.next_value()?);
+                        }
+                        "protein_ksize" => {
+                            if protein_ksize.is_some() {
+                                return Err(de::Error::duplicate_field("protein_ksize"));
+                            }
+                            protein_ksize = Some(map.next_value()?);
+                        }
+                        "kmer_infos" => {
+                            if kmer_infos.is_some() {
+                                return Err(de::Error::duplicate_field("kmer_infos"));
+                            }
+                            kmer_infos = Some(map.next_value()?);
+                        }
+                        _ => {
+                            let _ = map.next_value::<de::IgnoredAny>()?;
+                        }
+                    }
+                }
+
+                let signature = signature.ok_or_else(|| de::Error::missing_field("signature"))?;
+                let moltype = moltype.ok_or_else(|| de::Error::missing_field("moltype"))?;
+                let protein_ksize =
+                    protein_ksize.ok_or_else(|| de::Error::missing_field("protein_ksize"))?;
+                let kmer_infos =
+                    kmer_infos.ok_or_else(|| de::Error::missing_field("kmer_infos"))?;
+
+                Ok(ProteinSignature {
+                    signature,
+                    moltype,
+                    protein_ksize,
+                    kmer_infos,
+                    efficient_data: None, // Always None when deserializing
+                })
+            }
+        }
+
+        const FIELDS: &'static [&'static str] =
+            &["signature", "moltype", "protein_ksize", "kmer_infos"];
+        deserializer.deserialize_struct("ProteinSignature", FIELDS, ProteinSignatureVisitor)
+    }
 }
 
 // Represents a single protein's k-mer signature and hashval -> kmer info mapping
@@ -222,12 +457,20 @@ impl ProteinSignature {
             None
         };
 
+        // Get encoded sequence if available
+        let encoded_sequence = if let Some(ref data) = self.efficient_data {
+            data.encoded_sequence.clone()
+        } else {
+            None
+        };
+
         ProteinSignatureData::new(
             self.signature.name.clone(),
             mins,
             abunds,
             self.kmer_infos.clone(),
             raw_sequence,
+            encoded_sequence,
         )
     }
 
@@ -267,6 +510,11 @@ impl ProteinSignature {
     /// Get the raw sequence if stored in efficient data
     pub fn get_raw_sequence(&self) -> Option<&str> {
         self.efficient_data.as_ref()?.get_raw_sequence()
+    }
+
+    /// Get the encoded sequence if available
+    pub fn get_encoded_sequence(&self) -> Option<&str> {
+        self.efficient_data.as_ref()?.get_encoded_sequence()
     }
 
     /// Add a protein sequence to the signature
@@ -332,6 +580,8 @@ pub struct ProteinSignatureData {
     pub kmer_infos: HashMap<u64, KmerInfo>,
     /// Raw protein sequence (optional, for performance)
     pub raw_sequence: Option<String>,
+    /// Encoded sequence (hp/dayhoff/protein) - None for protein encoding to save space
+    pub encoded_sequence: Option<String>,
 }
 
 impl ProteinSignatureData {
@@ -342,8 +592,9 @@ impl ProteinSignatureData {
         abunds: Option<Vec<u64>>,
         kmer_infos: HashMap<u64, KmerInfo>,
         raw_sequence: Option<String>,
+        encoded_sequence: Option<String>,
     ) -> Self {
-        Self { name, mins, abunds, kmer_infos, raw_sequence }
+        Self { name, mins, abunds, kmer_infos, raw_sequence, encoded_sequence }
     }
 
     /// Create new signature data with pre-allocated capacity for raw sequence
@@ -360,7 +611,7 @@ impl ProteinSignatureData {
             None
         };
 
-        Self { name, mins, abunds, kmer_infos, raw_sequence }
+        Self { name, mins, abunds, kmer_infos, raw_sequence, encoded_sequence: None }
     }
 
     /// Set the raw sequence (only if storage is enabled)
@@ -370,9 +621,19 @@ impl ProteinSignatureData {
         }
     }
 
+    /// Set the encoded sequence
+    pub fn set_encoded_sequence(&mut self, sequence: String) {
+        self.encoded_sequence = Some(sequence);
+    }
+
     /// Get the raw sequence if stored
     pub fn get_raw_sequence(&self) -> Option<&str> {
         self.raw_sequence.as_deref()
+    }
+
+    /// Get the encoded sequence if stored
+    pub fn get_encoded_sequence(&self) -> Option<&str> {
+        self.encoded_sequence.as_deref()
     }
 
     /// Check if raw sequence storage is enabled
@@ -405,7 +666,7 @@ impl ProteinSignatureData {
             size += 8; // hashval
             size += 4; // ksize
             size += kmer_info.encoded_kmer.len();
-            size += kmer_info.original_kmer_to_position.len() * 16; // rough estimate
+            size += kmer_info.positions.len() * 8; // rough estimate
         }
 
         // Raw sequence size if present
