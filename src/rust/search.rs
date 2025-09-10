@@ -765,55 +765,6 @@ impl ProteinSearcher {
         }
     }
 
-    /// Find the best matching region based on k-mer positions
-    fn find_matching_regions(
-        &self,
-        query_name: &str,
-        match_name: &str,
-        intersection: &HashSet<u64>,
-    ) -> Option<MatchingRegion> {
-        // Find the query and target signatures
-        let query_sig = self.find_signature_by_name(query_name)?;
-        let target_sig = self.find_signature_by_name(match_name)?;
-        
-        // Get the k-mer size
-        let ksize = query_sig.protein_ksize() as usize;
-        
-        // Collect all positions for intersecting k-mers
-        let mut query_positions = Vec::new();
-        let mut target_positions = Vec::new();
-        
-        for &hashval in intersection {
-            if let (Some(query_kmer_info), Some(target_kmer_info)) =
-                (query_sig.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
-            {
-                query_positions.extend(&query_kmer_info.positions);
-                target_positions.extend(&target_kmer_info.positions);
-            }
-        }
-        
-        if query_positions.is_empty() || target_positions.is_empty() {
-            return None;
-        }
-        
-        // Sort positions
-        query_positions.sort();
-        target_positions.sort();
-        
-        // Find the best matching region
-        // For now, use the first and last positions as a simple approach
-        let query_start = *query_positions.first()?;
-        let query_end = *query_positions.last()? + ksize;
-        let match_start = *target_positions.first()?;
-        let match_end = *target_positions.last()? + ksize;
-        
-        Some(MatchingRegion {
-            query_start,
-            query_end,
-            match_start,
-            match_end,
-        })
-    }
 
     /// Find a signature by name in the index
     fn find_signature_by_name(&self, name: &str) -> Option<ProteinSignature> {
