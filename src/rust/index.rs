@@ -803,7 +803,7 @@ impl ProteomeIndex {
             let kmer = &sequence[i..i + ksize];
 
             // Process the k-mer to get encoded version
-            if let Ok((encoded_kmer, _original_kmer)) =
+            if let Ok((encoded_kmer, original_kmer)) =
                 encode_kmer_with_encoding_fn(kmer, self.encoding_fn)
             {
                 // Get the hash from the minhash implementation
@@ -817,6 +817,7 @@ impl ProteomeIndex {
                         .or_insert_with(|| KmerInfo {
                             ksize,
                             hashval,
+                            original_kmer: original_kmer.clone(),
                             encoded_kmer: encoded_kmer.clone(),
                             positions: Vec::new(),
                         });

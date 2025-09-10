@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 pub struct KmerInfo {
     pub ksize: usize,
     pub hashval: u64,
+    pub original_kmer: String,
     pub encoded_kmer: String,
     pub positions: Vec<usize>,
 }
@@ -12,7 +13,7 @@ pub struct KmerInfo {
 impl KmerInfo {
     /// Creates a new KmerInfo with pre-allocated capacity
     pub fn new(hashval: u64, ksize: usize) -> Self {
-        Self { ksize, hashval, encoded_kmer: String::with_capacity(ksize), positions: Vec::new() }
+        Self { ksize, hashval, original_kmer: String::with_capacity(ksize), encoded_kmer: String::with_capacity(ksize), positions: Vec::new() }
     }
 
     /// Adds a k-mer position
