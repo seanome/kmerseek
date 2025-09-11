@@ -56,6 +56,10 @@ pub struct SearchResult {
     pub containment_target_in_query: f64,
     /// Weighted fraction of target in query
     pub f_weighted_target_in_query: f64,
+    /// TF-IDF score for the query signature
+    pub tfidf: f64,
+    /// Probability of overlap between query and target
+    pub overlap_probability: f64,
 }
 
 /// Detailed search result with k-mer information for stitched output
@@ -154,47 +158,60 @@ impl ProteinSearcher {
         Ok(Self { index, stats })
     }
 
-    /// Search a single query signature against the database
-    pub fn search_single(&self, query: &ProteinSignature) -> Result<Vec<SearchResult>> {
-        let query_mins: HashSet<u64> = query.signature().minhash.mins().iter().cloned().collect();
-        let query_abunds = query.signature().minhash.abunds();
-        let query_name = query.signature().name.clone();
-        let query_md5 = query.signature().md5sum.clone();
-
-        let results: Vec<SearchResult> = self
-            .index
-            .get_signatures()
+    /// Comprehensive search method that calculates all metrics including TF-IDF and overlap probability
+    ///
+    /// This is the single, idiomatic search method that replaces search_single, search_multiple,
+    /// and search_with_kmer_extraction. It performs parallel processing for multiple queries
+    /// and calculates all similarity metrics in one pass for efficiency.
+    ///
+    /// # Arguments
+    /// * `queries` - Slice of query signatures to search against the database
+    ///
+    /// # Returns
+    /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    pub fn search(&self, queries: &[ProteinSignature]) -> Result<Vec<SearchResult>> {
+        // Calculate TF-IDF for each query signature once (used in all results for that query)
+        let query_tfidf: HashMap<String, f64> = queries
             .iter()
-            .filter_map(|entry| {
-                let target = entry.value();
-                self.calculate_similarity(
-                    query,
-                    target,
-                    &query_mins,
-                    query_abunds.as_deref(),
-                    &query_name,
-                    &query_md5,
-                )
+            .map(|query| {
+                let name = query.signature().name.clone();
+                let tfidf = self.calculate_tfidf(query);
+                (name, tfidf)
             })
             .collect();
 
-        // Sort by containment score (descending)
-        let mut sorted_results = results;
-        sorted_results.sort_by(|a, b| {
-            b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
-        });
-
-        Ok(sorted_results)
-    }
-
-    /// Search multiple query signatures against the database
-    pub fn search_multiple(&self, queries: &[ProteinSignature]) -> Result<Vec<SearchResult>> {
+        // Perform parallel search across all queries
         let all_results: Vec<SearchResult> = queries
             .par_iter()
-            .flat_map(|query| self.search_single(query).unwrap_or_default())
+            .flat_map(|query| {
+                let query_mins: HashSet<u64> =
+                    query.signature().minhash.mins().iter().cloned().collect();
+                let query_abunds = query.signature().minhash.abunds();
+                let query_name = query.signature().name.clone();
+                let query_md5 = query.signature().md5sum.clone();
+                let query_tfidf = query_tfidf.get(&query_name).copied().unwrap_or(0.0);
+
+                // Search this query against all targets
+                self.index
+                    .get_signatures()
+                    .iter()
+                    .filter_map(|entry| {
+                        let target = entry.value();
+                        self.calculate_comprehensive_similarity(
+                            query,
+                            target,
+                            &query_mins,
+                            query_abunds.as_deref(),
+                            &query_name,
+                            &query_md5,
+                            query_tfidf,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+            })
             .collect();
 
-        // Sort by containment score (descending)
+        // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
         sorted_results.sort_by(|a, b| {
             b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
@@ -203,8 +220,11 @@ impl ProteinSearcher {
         Ok(sorted_results)
     }
 
-    /// Calculate similarity between query and target signatures
-    fn calculate_similarity(
+    /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
+    ///
+    /// This method calculates all similarity metrics in one pass for efficiency, including the new
+    /// TF-IDF and overlap probability metrics that are now part of SearchResult.
+    fn calculate_comprehensive_similarity(
         &self,
         query: &ProteinSignature,
         target: &ProteinSignature,
@@ -212,6 +232,7 @@ impl ProteinSearcher {
         query_abunds: Option<&[u64]>,
         query_name: &str,
         query_md5: &str,
+        query_tfidf: f64,
     ) -> Option<SearchResult> {
         let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
         let target_abunds = target.signature().minhash.abunds();
@@ -255,6 +276,9 @@ impl ProteinSearcher {
         let (n_weighted_found, total_weighted_hashes, f_weighted_target_in_query) =
             self.calculate_weighted_metrics(&intersection, query_abunds, target_abunds.as_deref());
 
+        // Calculate overlap probability between query and target
+        let overlap_probability = self.calculate_overlap_probability(query, target);
+
         Some(SearchResult {
             query_name: query_name.to_string(),
             query_md5: query_md5.to_string(),
@@ -278,6 +302,8 @@ impl ProteinSearcher {
             total_weighted_hashes,
             containment_target_in_query,
             f_weighted_target_in_query,
+            tfidf: query_tfidf,
+            overlap_probability,
         })
     }
 
@@ -377,47 +403,49 @@ impl ProteinSearcher {
     }
 
     /// Calculate probability of overlap between query and target
+    ///
+    /// This calculates the probability of overlap based on the query signature's k-mer frequencies
+    /// against the entire database, following the sourmash approach. The probability reflects
+    /// how statistically significant the overlap is given the query's characteristics.
     pub fn calculate_overlap_probability(
         &self,
         query: &ProteinSignature,
         target: &ProteinSignature,
     ) -> f64 {
-        let query_size = query.signature().minhash.mins().len();
-        let target_size = target.signature().minhash.mins().len();
-        let total_kmers = self.stats.total_signatures;
+        let query_mins = query.signature().minhash.mins();
+        let target_mins = target.signature().minhash.mins();
 
-        // Simplified probability calculation
-        // This is a rough approximation - actual probability calculation would be more complex
-        if query_size == 0 || target_size == 0 {
+        // Calculate intersection of k-mers between query and target
+        let query_set: HashSet<u64> = query_mins.iter().cloned().collect();
+        let target_set: HashSet<u64> = target_mins.iter().cloned().collect();
+        let intersection: Vec<u64> = query_set.intersection(&target_set).cloned().collect();
+
+        if intersection.is_empty() {
             return 0.0;
         }
 
-        let expected_overlap = (query_size * target_size) as f64 / total_kmers as f64;
-        let actual_overlap = self.calculate_intersection_size(query, target) as f64;
+        // Calculate probability of overlap using k-mer frequencies from the database
+        // This follows the sourmash approach: sum of (query_freq * target_freq) for intersecting k-mers
+        let prob_overlap: f64 = intersection
+            .par_iter()
+            .map(|&hashval| {
+                // Get frequency of this k-mer in the database (how many signatures contain it)
+                let db_frequency =
+                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
+                let total_signatures = self.stats.total_signatures as f64;
 
-        if expected_overlap <= 0.0 {
-            0.0
-        } else {
-            // Use a Poisson-like probability calculation
-            let ratio = actual_overlap / expected_overlap;
-            if ratio > 1.0 {
-                1.0 - (-ratio).exp()
-            } else {
-                ratio
-            }
-        }
-    }
+                // Normalize frequency to [0,1] range
+                let normalized_frequency = db_frequency / total_signatures;
 
-    /// Calculate the size of intersection between two signatures
-    fn calculate_intersection_size(
-        &self,
-        query: &ProteinSignature,
-        target: &ProteinSignature,
-    ) -> usize {
-        let query_mins: HashSet<u64> = query.signature().minhash.mins().iter().cloned().collect();
-        let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
+                // For the query, we assume each k-mer has equal weight (1.0)
+                // For the target, we use the normalized database frequency
+                // This gives us the probability that both query and target would have this k-mer
+                1.0 * normalized_frequency
+            })
+            .sum();
 
-        query_mins.intersection(&target_mins).count()
+        // Clamp to [0,1] range
+        prob_overlap.min(1.0).max(0.0)
     }
 
     /// Get the underlying index
@@ -430,7 +458,11 @@ impl ProteinSearcher {
         &self.stats
     }
 
-    /// Search with k-mer extraction and stitching (always enabled)
+    /// Search with k-mer extraction and stitching for detailed results
+    ///
+    /// This method provides detailed k-mer level information for matches, including
+    /// stitched sequences and positional information. This is separate from the main
+    /// search method because it provides different output format (DetailedSearchResult).
     pub fn search_with_kmer_extraction(
         &self,
         queries: &[ProteinSignature],
@@ -868,7 +900,7 @@ mod tests {
         assert!(!query_signatures.is_empty(), "Should have at least one query signature");
 
         // Perform search
-        let results = searcher.search_multiple(&query_signatures)?;
+        let results = searcher.search(&query_signatures)?;
 
         // Should find at least one match (exact match)
         assert!(!results.is_empty(), "Should find at least one match");
@@ -986,7 +1018,7 @@ mod tests {
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-        let results = searcher.search_multiple(&query_signatures)?;
+        let results = searcher.search(&query_signatures)?;
 
         if !results.is_empty() {
             let result = &results[0];
@@ -1055,7 +1087,7 @@ mod tests {
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-        let results = searcher.search_multiple(&query_signatures)?;
+        let results = searcher.search(&query_signatures)?;
 
         // Results should be sorted by containment (descending)
         for i in 1..results.len() {

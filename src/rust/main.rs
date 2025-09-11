@@ -80,7 +80,7 @@ enum Commands {
     },
 }
 
-#[derive(ValueEnum, Clone, Copy, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum ProteinEncoding {
     /// Raw protein encoding (20 amino acids)
     Protein,
@@ -179,31 +179,84 @@ fn main() -> IndexResult<()> {
             println!("Searching query sequences against target database");
             println!("Query: {}", query.display());
             println!("Target: {}", target.display());
-            println!("K-mer size: {}", ksize);
-            println!("Scaled: {}", scaled);
-            println!("Encoding: {:?}", encoding);
-            println!("Threshold: {}", threshold);
-            println!("Verbose output: {}", verbose);
-            println!("Query is pre-indexed: {}", query_is_index);
+
+            // Autodetect parameters from the target database
+            println!("Autodetecting parameters from target database...");
+            let (detected_ksize, detected_scaled, detected_moltype) =
+                ProteomeIndex::get_index_parameters(&target)?;
+
+            // Use detected parameters, but allow user overrides
+            let final_ksize = if ksize != 10 {
+                // If user specified non-default ksize
+                println!(
+                    "Warning: Overriding detected ksize {} with user-specified {}",
+                    detected_ksize, ksize
+                );
+                ksize
+            } else {
+                detected_ksize
+            };
+
+            let final_scaled = if scaled != 1 {
+                // If user specified non-default scaled
+                println!(
+                    "Warning: Overriding detected scaled {} with user-specified {}",
+                    detected_scaled, scaled
+                );
+                scaled
+            } else {
+                detected_scaled
+            };
+
+            let final_encoding = if encoding != ProteinEncoding::Protein {
+                // If user specified non-default encoding
+                println!(
+                    "Warning: Overriding detected encoding '{}' with user-specified {:?}",
+                    detected_moltype, encoding
+                );
+                encoding
+            } else {
+                // Convert detected moltype string to enum
+                match detected_moltype.as_str() {
+                    "protein" => ProteinEncoding::Protein,
+                    "dayhoff" => ProteinEncoding::Dayhoff,
+                    "hp" => ProteinEncoding::Hp,
+                    _ => {
+                        println!(
+                            "Warning: Unknown detected encoding '{}', using protein",
+                            detected_moltype
+                        );
+                        ProteinEncoding::Protein
+                    }
+                }
+            };
+
+            println!("Using parameters:");
+            println!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
+            println!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
+            println!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            println!("  Threshold: {}", threshold);
+            println!("  Verbose output: {}", verbose);
+            println!("  Query is pre-indexed: {}", query_is_index);
 
             // Load the target database
             println!("Loading target database...");
             let searcher = ProteinSearcher::load(&target)?;
 
-            // Get query signatures
+            // Get query signatures using the detected parameters
             let query_signatures: Vec<_> = if query_is_index {
                 // Load pre-indexed query database
                 println!("Loading pre-indexed query database...");
                 let query_index = ProteomeIndex::load(&query)?;
                 query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
             } else {
-                // Process query sequences and create signatures
-                println!("Processing query sequences...");
+                // Process query sequences and create signatures using detected parameters
+                println!("Processing query sequences with detected parameters...");
                 let query_index = ProteomeIndex::new_with_auto_filename(
                     &query,
-                    ksize,
-                    scaled,
-                    encoding.into(),
+                    final_ksize,
+                    final_scaled,
+                    final_encoding.into(),
                     false, // Don't store raw sequences for query
                 )?;
 
@@ -218,33 +271,22 @@ fn main() -> IndexResult<()> {
 
             println!("Found {} query signatures", query_signatures.len());
 
-            // Perform search with k-mer extraction (always enabled)
-            println!("Performing search with k-mer extraction...");
-            let detailed_results = searcher.search_with_kmer_extraction(&query_signatures)?;
+            // Perform comprehensive search (includes TF-IDF and overlap probability calculations)
+            println!("Performing comprehensive search...");
+            let search_results = searcher.search(&query_signatures)?;
 
-            // Filter results by threshold (using containment from basic search)
-            let basic_results = searcher.search_multiple(&query_signatures)?;
-            let filtered_basic: Vec<_> = basic_results
+            // Filter results by threshold
+            let filtered_results: Vec<_> = search_results
                 .into_iter()
                 .filter(|result| result.containment >= threshold)
                 .collect();
 
-            // Filter detailed results to match the filtered basic results
-            let filtered_detailed: Vec<_> = detailed_results
-                .into_iter()
-                .filter(|detailed| {
-                    filtered_basic.iter().any(|basic| {
-                        basic.query_name == detailed.query_name
-                            && basic.match_name == detailed.match_name
-                    })
-                })
-                .collect();
+            println!("Found {} matches above threshold {}", filtered_results.len(), threshold);
 
-            println!("Found {} matches above threshold {}", filtered_detailed.len(), threshold);
-
-            // Output detailed results to stderr if verbose
+            // Output detailed k-mer information to stderr if verbose
             if verbose {
-                for result in &filtered_detailed {
+                let detailed_results = searcher.search_with_kmer_extraction(&query_signatures)?;
+                for result in &detailed_results {
                     eprintln!("{}", result.to_print);
                 }
             }
@@ -254,7 +296,7 @@ fn main() -> IndexResult<()> {
                 println!("Writing results to: {}", output_path.display());
                 let mut writer = csv::Writer::from_path(output_path)?;
 
-                for result in &filtered_detailed {
+                for result in &filtered_results {
                     writer.serialize(result)?;
                 }
 
@@ -263,40 +305,29 @@ fn main() -> IndexResult<()> {
                 // Output to stdout
                 let mut writer = csv::Writer::from_writer(std::io::stdout());
 
-                for result in &filtered_detailed {
+                for result in &filtered_results {
                     writer.serialize(result)?;
                 }
 
                 writer.flush()?;
             }
 
-            // Always calculate TF-IDF and overlap probabilities
-            println!("\n=== TF-IDF Analysis ===");
-            for query_sig in &query_signatures {
-                let tfidf = searcher.calculate_tfidf(query_sig);
-                println!("TF-IDF for {}: {:.6}", query_sig.signature().name, tfidf);
-            }
+            // Display summary statistics (TF-IDF and overlap probabilities are now included in results)
+            println!("\n=== Search Summary ===");
+            println!("Total matches found: {}", filtered_results.len());
+            if !filtered_results.is_empty() {
+                let avg_containment: f64 =
+                    filtered_results.iter().map(|r| r.containment).sum::<f64>()
+                        / filtered_results.len() as f64;
+                let avg_tfidf: f64 = filtered_results.iter().map(|r| r.tfidf).sum::<f64>()
+                    / filtered_results.len() as f64;
+                let avg_overlap_prob: f64 =
+                    filtered_results.iter().map(|r| r.overlap_probability).sum::<f64>()
+                        / filtered_results.len() as f64;
 
-            println!("\n=== Overlap Probability Analysis ===");
-            for query_sig in &query_signatures {
-                // Calculate probability against top matches
-                let targets: Vec<_> = searcher
-                    .index()
-                    .get_signatures()
-                    .iter()
-                    .take(5) // Limit to first 5 for demo
-                    .map(|entry| entry.value().clone())
-                    .collect();
-
-                for target_sig in &targets {
-                    let prob = searcher.calculate_overlap_probability(query_sig, target_sig);
-                    println!(
-                        "Overlap probability {} vs {}: {:.6}",
-                        query_sig.signature().name,
-                        target_sig.signature().name,
-                        prob
-                    );
-                }
+                println!("Average containment: {:.6}", avg_containment);
+                println!("Average TF-IDF: {:.6}", avg_tfidf);
+                println!("Average overlap probability: {:.6}", avg_overlap_prob);
             }
         }
     }

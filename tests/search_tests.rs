@@ -10,13 +10,19 @@ fn test_search_basic() -> IndexResult<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
 
-    // Create a simple test FASTA file for query
+    // Create a simple test FASTA file for query (protein sequence)
     let query_fasta = temp_path.join("query.fasta");
-    std::fs::write(&query_fasta, ">test_query\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &query_fasta,
+        ">test_query\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
-    // Create a simple test FASTA file for target
+    // Create a simple test FASTA file for target (protein sequence)
     let target_fasta = temp_path.join("target.fasta");
-    std::fs::write(&target_fasta, ">test_target\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &target_fasta,
+        ">test_target\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     // Create target index
     let target_index_path = temp_path.join("target_index");
@@ -50,8 +56,8 @@ fn test_search_basic() -> IndexResult<()> {
 
     assert!(!query_signatures.is_empty(), "Should have at least one query signature");
 
-    // Perform search
-    let results = searcher.search_multiple(&query_signatures)?;
+    // Perform search using the new comprehensive search method
+    let results = searcher.search(&query_signatures)?;
 
     // Should find at least one match (exact match)
     assert!(!results.is_empty(), "Should find at least one match");
@@ -63,6 +69,9 @@ fn test_search_basic() -> IndexResult<()> {
     assert!(first_result.containment > 0.0);
     assert!(first_result.jaccard > 0.0);
     assert!(first_result.intersect_hashes > 0);
+    // Check that TF-IDF and overlap probability are included
+    assert!(first_result.tfidf >= 0.0);
+    assert!((0.0..=1.0).contains(&first_result.overlap_probability));
 
     Ok(())
 }
@@ -73,9 +82,9 @@ fn test_tfidf_calculation() -> IndexResult<()> {
     let temp_dir = TempDir::new()?;
     let temp_path = temp_dir.path();
 
-    // Create target FASTA with multiple sequences
+    // Create target FASTA with multiple sequences (protein sequences)
     let target_fasta = temp_path.join("target.fasta");
-    std::fs::write(&target_fasta, ">seq1\nATCGATCGATCGATCG\n>seq2\nGCTAGCTAGCTAGCTA")?;
+    std::fs::write(&target_fasta, ">seq1\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL\n>seq2\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL")?;
 
     // Create target index
     let target_index_path = temp_path.join("target_index");
@@ -88,7 +97,10 @@ fn test_tfidf_calculation() -> IndexResult<()> {
 
     // Create query FASTA
     let query_fasta = temp_path.join("query.fasta");
-    std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &query_fasta,
+        ">query\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
 
@@ -112,7 +124,10 @@ fn test_overlap_probability() -> IndexResult<()> {
 
     // Create target FASTA
     let target_fasta = temp_path.join("target.fasta");
-    std::fs::write(&target_fasta, ">target\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &target_fasta,
+        ">target\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     let target_index_path = temp_path.join("target_index");
     let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
@@ -123,7 +138,10 @@ fn test_overlap_probability() -> IndexResult<()> {
 
     // Create query FASTA
     let query_fasta = temp_path.join("query.fasta");
-    std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &query_fasta,
+        ">query\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
 
@@ -150,10 +168,16 @@ fn test_search_result_structure() -> IndexResult<()> {
 
     // Create test data
     let query_fasta = temp_path.join("query.fasta");
-    std::fs::write(&query_fasta, ">test_query\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &query_fasta,
+        ">test_query\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     let target_fasta = temp_path.join("target.fasta");
-    std::fs::write(&target_fasta, ">test_target\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &target_fasta,
+        ">test_target\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     // Create indices
     let target_index_path = temp_path.join("target_index");
@@ -168,7 +192,7 @@ fn test_search_result_structure() -> IndexResult<()> {
     let query_signatures: Vec<_> =
         query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-    let results = searcher.search_multiple(&query_signatures)?;
+    let results = searcher.search(&query_signatures)?;
 
     if !results.is_empty() {
         let result = &results[0];
@@ -218,7 +242,7 @@ fn test_search_results_sorted() -> IndexResult<()> {
 
     // Create target with multiple sequences of different similarity
     let target_fasta = temp_path.join("target.fasta");
-    std::fs::write(&target_fasta, ">exact_match\nATCGATCGATCGATCG\n>partial_match\nATCGATCGATCGATCA\n>no_match\nGGGGGGGGGGGGGGGG")?;
+    std::fs::write(&target_fasta, ">exact_match\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL\n>partial_match\nATCGATCGATCGATCA\n>no_match\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL")?;
 
     let target_index_path = temp_path.join("target_index");
     let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
@@ -228,7 +252,10 @@ fn test_search_results_sorted() -> IndexResult<()> {
 
     // Create query
     let query_fasta = temp_path.join("query.fasta");
-    std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
+    std::fs::write(
+        &query_fasta,
+        ">query\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
+    )?;
 
     let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
     query_index.process_fasta(&query_fasta, 1000, 1000)?;
@@ -236,7 +263,7 @@ fn test_search_results_sorted() -> IndexResult<()> {
     let query_signatures: Vec<_> =
         query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-    let results = searcher.search_multiple(&query_signatures)?;
+    let results = searcher.search(&query_signatures)?;
 
     // Results should be sorted by containment (descending)
     for i in 1..results.len() {

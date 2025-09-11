@@ -60,7 +60,7 @@ fn main() -> IndexResult<()> {
 
     // Perform search
     println!("\nPerforming search...");
-    let results = searcher.search_multiple(&query_signatures)?;
+    let results = searcher.search(&query_signatures)?;
 
     println!("Found {} matches", results.len());
 

@@ -529,6 +529,35 @@ impl ProteomeIndex {
         self.signatures.len()
     }
 
+    /// Get the index parameters (ksize, scaled, moltype) from the database metadata
+    ///
+    /// This method reads the stored metadata to extract the parameters used when
+    /// the index was created, enabling autodetection of correct search parameters.
+    pub fn get_index_parameters<P: AsRef<Path>>(path: P) -> IndexResult<(u32, u32, String)> {
+        // Create RocksDB options
+        let mut opts = Options::default();
+        opts.create_if_missing(false); // Don't create if missing
+
+        // Open the database
+        let db = DB::open(&opts, path)?;
+
+        // Try to load metadata from new chunked format first
+        let metadata_serialized = db.get(b"index_metadata")?;
+        if let Some(metadata_data) = metadata_serialized {
+            let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
+            return Ok((metadata.ksize, metadata.scaled, metadata.moltype));
+        }
+
+        // Fallback to old format for backward compatibility
+        let serialized = db.get(b"index_state")?;
+        if let Some(data) = serialized {
+            let state: ProteomeIndexState = bincode::deserialize(&data)?;
+            return Ok((state.ksize, state.scaled, state.moltype));
+        }
+
+        Err(IndexError::ValidationError { message: "No metadata found in database".to_string() })
+    }
+
     /// Get the combined minhash size
     pub fn combined_minhash_size(&self) -> usize {
         self.combined_minhash.lock().size()
