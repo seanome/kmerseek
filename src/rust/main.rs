@@ -230,13 +230,13 @@ fn main() -> IndexResult<()> {
                 }
             };
 
-            println!("Using parameters:");
+            println!("\n---\nUsing parameters:");
             println!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
             println!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
             println!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
             println!("  Threshold: {}", threshold);
             println!("  Verbose output: {}", verbose);
-            println!("  Query is pre-indexed: {}", query_is_index);
+            println!("  Query is pre-indexed: {}\n---", query_is_index);
 
             // Load the target database
             println!("Loading target database...");
