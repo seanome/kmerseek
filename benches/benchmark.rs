@@ -52,10 +52,10 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Record end time
                         let end_time = Instant::now();
-                        let cpu_time = end_time.duration_since(start_time);
+                        let _cpu_time = end_time.duration_since(start_time);
 
                         // Measure basic memory usage (stack size)
-                        let memory_used = mem::size_of_val(&signature);
+                        let _memory_used = mem::size_of_val(&signature);
                     })
                 },
             );
@@ -78,10 +78,10 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Record end time
                         let end_time = Instant::now();
-                        let cpu_time = end_time.duration_since(start_time);
+                        let _cpu_time = end_time.duration_since(start_time);
 
                         // Measure basic memory usage (stack size)
-                        let memory_used = mem::size_of_val(&signature);
+                        let _memory_used = mem::size_of_val(&signature);
                     })
                 },
             );
@@ -104,10 +104,10 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Record end time
                         let end_time = Instant::now();
-                        let cpu_time = end_time.duration_since(start_time);
+                        let _cpu_time = end_time.duration_since(start_time);
 
                         // Measure basic memory usage (stack size)
-                        let memory_used = mem::size_of_val(&signature);
+                        let _memory_used = mem::size_of_val(&signature);
                     })
                 },
             );
@@ -127,10 +127,10 @@ fn benchmark_create_protein_signature(c: &mut Criterion) {
 
                         // Record end time
                         let end_time = Instant::now();
-                        let cpu_time = end_time.duration_since(start_time);
+                        let _cpu_time = end_time.duration_since(start_time);
 
                         // Measure basic memory usage (stack size)
-                        let memory_used = mem::size_of_val(&signature);
+                        let _memory_used = mem::size_of_val(&signature);
                     })
                 },
             );
@@ -157,10 +157,10 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
 
                     // Record end time
                     let end_time = Instant::now();
-                    let cpu_time = end_time.duration_since(start_time);
+                    let _cpu_time = end_time.duration_since(start_time);
 
                     // Measure basic memory usage (stack size)
-                    let memory_used = mem::size_of_val(&encoded);
+                    let _memory_used = mem::size_of_val(&encoded);
                 })
             });
         }
@@ -180,10 +180,10 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
 
                     // Record end time
                     let end_time = Instant::now();
-                    let cpu_time = end_time.duration_since(start_time);
+                    let _cpu_time = end_time.duration_since(start_time);
 
                     // Measure basic memory usage (stack size)
-                    let memory_used = mem::size_of_val(&encoded);
+                    let _memory_used = mem::size_of_val(&encoded);
                 })
             });
         }
@@ -209,10 +209,10 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
 
                         // Record end time
                         let end_time = Instant::now();
-                        let cpu_time = end_time.duration_since(start_time);
+                        let _cpu_time = end_time.duration_since(start_time);
 
                         // Measure basic memory usage (stack size)
-                        let memory_used = mem::size_of_val(&encoded);
+                        let _memory_used = mem::size_of_val(&encoded);
                     })
                 },
             );
@@ -248,10 +248,10 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
 
                     // Record end time
                     let end_time = Instant::now();
-                    let cpu_time = end_time.duration_since(start_time);
+                    let _cpu_time = end_time.duration_since(start_time);
 
                     // Measure basic memory usage (stack size)
-                    let memory_used = mem::size_of_val(&sig);
+                    let _memory_used = mem::size_of_val(&sig);
                 })
             });
         }
@@ -308,11 +308,9 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
                     if db_path.exists() {
                         if db_path.is_dir() {
                             // Sum up all files in the RocksDB directory
-                            for entry in fs::read_dir(&db_path).unwrap() {
-                                if let Ok(entry) = entry {
-                                    if let Ok(metadata) = entry.metadata() {
-                                        total_size += metadata.len();
-                                    }
+                            for entry in fs::read_dir(&db_path).unwrap().flatten() {
+                                if let Ok(metadata) = entry.metadata() {
+                                    total_size += metadata.len();
                                 }
                             }
                         } else {
@@ -382,11 +380,9 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
                     if db_path.exists() {
                         if db_path.is_dir() {
                             // Sum up all files in the RocksDB directory
-                            for entry in fs::read_dir(&db_path).unwrap() {
-                                if let Ok(entry) = entry {
-                                    if let Ok(metadata) = entry.metadata() {
-                                        total_size += metadata.len();
-                                    }
+                            for entry in fs::read_dir(&db_path).unwrap().flatten() {
+                                if let Ok(metadata) = entry.metadata() {
+                                    total_size += metadata.len();
                                 }
                             }
                         } else {
