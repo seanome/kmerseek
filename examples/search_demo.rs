@@ -14,10 +14,22 @@ fn main() -> IndexResult<()> {
     let target_fasta = temp_path.join("target.fasta");
 
     // Create query sequence (CED9-like sequence)
-    std::fs::write(&query_fasta, ">CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1\nMSIGESIDGKINDWEEPGIVGVVVCGRMMFSLKRLDIEGFVVDYFTHRILFVYTSLFIKTRIRNNKVGRRKQNRRWSMIGAGVTARKQNRRWSMIGAGVTA")?;
+    std::fs::write(&query_fasta, ">sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
+MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM
+SIGESIDGKINDWEEPRLDIEGFVVDYFTHRIRQNGMEWFGAPGLPCGVQPEHEMMRVMG
+TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGF
+VAAKMMESVELQGQVRNLFVYTSLFIKTRIRNNWKEHNRSWDDFMTLGKQMKEDYERAEA
+EKVGRRKQNRRWSMIGAGVTAGAIGIVGVVVCGRMMFSLK")?;
 
     // Create target sequences (BCL2 family proteins)
-    std::fs::write(&target_fasta, ">BNIP2_HUMAN BCL2/adenovirus E1B 19 kDa protein-interacting protein 2 OS=Homo sapiens OX=9606 GN=BNIP2 PE=1 SV=1\nSIEADILAITGPEDQPLLAVTRPFISSKFSQK\n>ASPP2_HUMAN Apoptosis-stimulating of p53 protein 2 OS=Homo sapiens OX=9606 GN=TP53BP2 PE=1 SV=2\nTIIHREDEDEIEWWWA\n>BAK_HUMAN Bcl-2 homologous antagonist/killer OS=Homo sapiens OX=9606 GN=BAK1 PE=1 SV=1\nHQQEQEAEGVAAPADP\n>BBC3_HUMAN Bcl-2-binding component 3, isoforms 1/2 OS=Homo sapiens OX=9606 GN=BBC3 PE=1 SV=1\nAPAAPTLLPAAYLCAPT\n>FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE=1 SV=3\nPNWPNQPDVEPESWREAAGIYILYHGNPVVSGN")?;
+    std::fs::write(
+        &target_fasta,
+        ">sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
+MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDAGDVGAAPPGAAPAPGIFSSQPGHTPHPA
+ASRDPVARTSPLQTPAAPGAAAGPALSPVPPVVHLTLRQAGDDFSRRYRRDFAEMSSQLH
+LTPFTARGRFATVVEELFRDGVNWGRIVAFFEFGGVMCVESVNREMSPLVDNIALWMTEY
+LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
+    )?;
 
     println!("Created test FASTA files:");
     println!("  Query: {}", query_fasta.display());
@@ -28,10 +40,10 @@ fn main() -> IndexResult<()> {
     println!("\nCreating target index...");
     let target_index = ProteomeIndex::new(
         &target_index_path,
-        16,    // ksize
-        5,     // scaled
-        "hp",  // moltype
-        false, // store_raw_sequences
+        10,   // ksize
+        1,    // scaled
+        "hp", // moltype
+        true, // store_raw_sequences
     )?;
 
     target_index.process_fasta(&target_fasta, 1000, 1000)?;
@@ -44,10 +56,10 @@ fn main() -> IndexResult<()> {
     println!("\nProcessing query sequences...");
     let query_index = ProteomeIndex::new_with_auto_filename(
         &query_fasta,
-        16,    // ksize
-        5,     // scaled
-        "hp",  // moltype
-        false, // store_raw_sequences
+        10,   // ksize
+        1,    // scaled
+        "hp", // moltype
+        true, // store_raw_sequences
     )?;
 
     query_index.process_fasta(&query_fasta, 1000, 1000)?;
@@ -112,9 +124,9 @@ fn main() -> IndexResult<()> {
 
     for result in &detailed_results {
         println!("Detailed match:");
-        println!("  Query: {} ({}-{})", result.query, result.query_start, result.query_end);
-        println!("  Target: {} ({}-{})", result.r#match, result.match_start, result.match_end);
+        println!("  Query:   {} ({}-{})", result.query, result.query_start, result.query_end);
         println!("  Encoded: {}", result.encoded);
+        println!("  Target:  {} ({}-{})", result.r#match, result.match_start, result.match_end);
         println!("  Length: {}", result.length);
     }
 
