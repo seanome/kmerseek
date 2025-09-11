@@ -139,7 +139,6 @@ fn main() -> IndexResult<()> {
             println!("Scaled: {}", scaled);
             println!("Encoding: {:?}", encoding);
             println!("Progress interval: {}", progress_interval);
-            println!("Store raw sequences: true (always enabled)");
             println!("-------\n");
 
             // Create the index
