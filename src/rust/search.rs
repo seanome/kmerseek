@@ -781,67 +781,58 @@ impl ProteinSearcher {
             });
         }
 
-        // Since we have hash collisions, we need to use a different approach
-        // The hash values indicate potential matches, but we can't rely on them for exact k-mer matching
-        // Instead, let's use the positions to find the best matching region
+        // Find consecutive k-mer regions by looking for runs of consecutive positions
+        // We want to find the longest consecutive sequence of k-mers
 
-        // Find the best matching region by looking for the longest contiguous sequence
-        // of overlapping k-mers. For now, use a simpler approach: find the region
-        // with the most k-mers in a reasonable window size.
+        let mut best_region = None;
+        let mut best_consecutive_count = 0;
 
-        // Use a sliding window approach to find the best matching region
-        let mut best_query_start = 0;
-        let mut best_query_end = 0;
-        let mut best_target_start = 0;
-        let mut best_target_end = 0;
-        let mut max_kmer_count = 0;
+        // Find all consecutive runs of k-mers
+        let mut i = 0;
+        while i < query_positions.len() {
+            let start_pos = query_positions[i];
+            let mut consecutive_count = 1;
+            let mut j = i + 1;
 
-        // Try different window sizes to find the best match
-        for window_size in [16, 32, 48, 64, 96, 128] {
-            for &query_start in &query_positions {
-                let query_end = query_start + window_size;
+            // Count consecutive k-mers starting from this position
+            while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
+                consecutive_count += 1;
+                j += 1;
+            }
 
-                // Count how many k-mers fall within this window
-                let kmer_count = query_positions
-                    .iter()
-                    .filter(|&&pos| pos >= query_start && pos + ksize <= query_end)
-                    .count();
+            if consecutive_count > best_consecutive_count {
+                best_consecutive_count = consecutive_count;
+                // The end position should be start_pos + consecutive_count + ksize - 1
+                // because we want to include the full k-mers
+                let end_pos = start_pos + consecutive_count + ksize - 1;
 
-                if kmer_count > max_kmer_count && kmer_count >= 2 {
-                    max_kmer_count = kmer_count;
-                    best_query_start = query_start;
-                    best_query_end = query_end;
-
-                    // Find corresponding target region
-                    // For simplicity, use the first target position that overlaps
-                    if let Some(&target_start) = target_positions.first() {
-                        best_target_start = target_start;
-                        best_target_end = target_start + window_size;
-                    }
+                // Find corresponding target region
+                // For now, use the first target position as reference
+                if let Some(&target_start) = target_positions.first() {
+                    best_region = Some(MatchingRegion {
+                        query_start: start_pos,
+                        query_end: end_pos,
+                        match_start: target_start,
+                        match_end: target_start + consecutive_count + ksize - 1,
+                    });
                 }
             }
+
+            i = j;
         }
 
-        // If we found a good match, use it; otherwise fall back to the simple approach
-        if max_kmer_count >= 2 {
-            Some(MatchingRegion {
-                query_start: best_query_start,
-                query_end: best_query_end,
-                match_start: best_target_start,
-                match_end: best_target_end,
-            })
+        // Return the best consecutive region we found, or fall back to the first k-mer
+        if let Some(region) = best_region {
+            Some(region)
         } else {
-            // Fallback: use the first and last positions
             let query_start = *query_positions.first()?;
-            let query_end = *query_positions.last()? + ksize;
             let target_start = *target_positions.first()?;
-            let target_end = *target_positions.last()? + ksize;
 
             Some(MatchingRegion {
                 query_start,
-                query_end,
+                query_end: query_start + ksize,
                 match_start: target_start,
-                match_end: target_end,
+                match_end: target_start + ksize,
             })
         }
     }
