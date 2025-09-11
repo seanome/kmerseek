@@ -40,7 +40,7 @@ LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
     println!("\nCreating target index...");
     let target_index = ProteomeIndex::new(
         &target_index_path,
-        10,   // ksize
+        16,   // ksize
         1,    // scaled
         "hp", // moltype
         true, // store_raw_sequences
@@ -56,7 +56,7 @@ LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
     println!("\nProcessing query sequences...");
     let query_index = ProteomeIndex::new_with_auto_filename(
         &query_fasta,
-        10,   // ksize
+        16,   // ksize
         1,    // scaled
         "hp", // moltype
         true, // store_raw_sequences
