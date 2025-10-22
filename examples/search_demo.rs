@@ -40,7 +40,7 @@ LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
     println!("\nCreating target index...");
     let target_index = ProteomeIndex::new(
         &target_index_path,
-        16,   // ksize
+        10,   // ksize
         1,    // scaled
         "hp", // moltype
         true, // store_raw_sequences
@@ -56,7 +56,7 @@ LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
     println!("\nProcessing query sequences...");
     let query_index = ProteomeIndex::new_with_auto_filename(
         &query_fasta,
-        16,   // ksize
+        10,   // ksize
         1,    // scaled
         "hp", // moltype
         true, // store_raw_sequences
@@ -70,45 +70,39 @@ LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
 
     println!("Found {} query signatures", query_signatures.len());
 
-    // Perform search
-    println!("\nPerforming search...");
-    let results = searcher.search(&query_signatures)?;
+    // Perform basic search first
+    println!("\nPerforming basic search...");
+    let basic_results = searcher.search(&query_signatures)?;
+    println!("Found {} basic matches", basic_results.len());
 
-    println!("Found {} matches", results.len());
-
-    // Display results
-    println!("\n=== Search Results ===");
-    for (i, result) in results.iter().enumerate() {
+    // Display basic results
+    println!("\n=== Basic Search Results ===");
+    for (i, result) in basic_results.iter().enumerate() {
         println!("\nMatch {}:", i + 1);
         println!("  Query: {}", result.query_name);
         println!("  Target: {}", result.match_name);
         println!("  Containment: {:.6}", result.containment);
         println!("  Jaccard: {:.6}", result.jaccard);
         println!("  Intersecting k-mers: {}", result.intersect_hashes);
-        println!("  Max containment: {:.6}", result.max_containment);
-        println!("  Query containment ANI: {:.6}", result.query_containment_ani);
-        println!("  Match containment ANI: {:.6}", result.match_containment_ani);
+        println!("  TF-IDF: {:.6}", result.tfidf);
+        println!("  Overlap probability: {:.6}", result.overlap_probability);
     }
 
-    // Calculate TF-IDF for the query
-    if !query_signatures.is_empty() {
-        println!("\n=== TF-IDF Analysis ===");
-        let tfidf = searcher.calculate_tfidf(&query_signatures[0]);
-        println!("TF-IDF score for query: {:.6}", tfidf);
+    // Perform detailed search with all consecutive regions
+    println!("\nPerforming detailed search (all consecutive regions)...");
+    let detailed_results = searcher.search_with_all_consecutive_regions(&query_signatures)?;
+    println!("Found {} detailed matches across all consecutive regions", detailed_results.len());
 
-        // Calculate overlap probabilities with top matches
-        println!("\n=== Overlap Probability Analysis ===");
-        let target_signatures: Vec<_> =
-            searcher.index().get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        for result in results.iter().take(3) {
-            if let Some(target_sig) =
-                target_signatures.iter().find(|sig| sig.signature().name == result.match_name)
-            {
-                let prob = searcher.calculate_overlap_probability(&query_signatures[0], target_sig);
-                println!("Overlap probability with {}: {:.6}", result.match_name, prob);
-            }
-        }
+    // Display detailed results
+    println!("\n=== Detailed Search Results (All Consecutive Regions) ===");
+    for (i, result) in detailed_results.iter().enumerate() {
+        println!("\nMatch {}:", i + 1);
+        println!("  Query:   {} ({}-{})", result.query, result.query_start, result.query_end);
+        println!("  Encoded: {}", result.encoded);
+        println!("  Target:  {} ({}-{})", result.r#match, result.match_start, result.match_end);
+        println!("  Length: {}", result.length);
+        println!("  Match: {}", result.match_name);
+        println!();
     }
 
     // Display search statistics
@@ -116,19 +110,6 @@ LNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK",
     let stats = searcher.stats();
     println!("Total signatures in database: {}", stats.total_signatures);
     println!("Unique k-mers in database: {}", stats.kmer_frequencies.len());
-
-    // Test k-mer extraction mode
-    println!("\n=== Testing K-mer Extraction Mode ===");
-    let detailed_results = searcher.search_with_kmer_extraction(&query_signatures)?;
-    println!("Found {} detailed matches", detailed_results.len());
-
-    for result in &detailed_results {
-        println!("Detailed match:");
-        println!("  Query:   {} ({}-{})", result.query, result.query_start, result.query_end);
-        println!("  Encoded: {}", result.encoded);
-        println!("  Target:  {} ({}-{})", result.r#match, result.match_start, result.match_end);
-        println!("  Length: {}", result.length);
-    }
 
     println!("\nDemo completed successfully!");
     Ok(())

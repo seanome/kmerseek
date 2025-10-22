@@ -220,6 +220,7 @@ impl ProteinSearcher {
         Ok(sorted_results)
     }
 
+
     /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
     ///
     /// This method calculates all similarity metrics in one pass for efficiency, including the new
@@ -267,6 +268,8 @@ impl ProteinSearcher {
             };
 
         // Calculate ANI (Average Nucleotide Identity) - simplified version
+        // Olga: calculate_ani doesn't need to be a method, it can be a standalone function.
+        // -> Maybe put it into a separate file for metrics
         let query_containment_ani = self.calculate_ani(containment, query_size);
         let match_containment_ani = self.calculate_ani(containment_target_in_query, target_size);
         let average_containment_ani = (query_containment_ani + match_containment_ani) / 2.0;
@@ -348,7 +351,7 @@ impl ProteinSearcher {
     }
 
     /// Calculate ANI (Average Nucleotide Identity) from containment
-    fn calculate_ani(&self, containment: f64, _size: usize) -> f64 {
+fn calculate_ani(&self, containment: f64, _size: usize) -> f64 {
         // Simplified ANI calculation based on containment
         // This is a rough approximation - in practice, ANI calculation is more complex
         if containment <= 0.0 {
@@ -462,6 +465,84 @@ impl ProteinSearcher {
     ///
     /// This method provides detailed k-mer level information for matches, including
     /// stitched sequences and positional information. This is separate from the main
+    /// Search with detailed k-mer extraction for all consecutive regions
+    pub fn search_with_all_consecutive_regions(
+        &self,
+        queries: &[ProteinSignature],
+    ) -> Result<Vec<DetailedSearchResult>> {
+        let mut result = Vec::new();
+
+        for query in queries {
+            let query_mins: HashSet<u64> = query.signature().minhash.mins().iter().cloned().collect();
+
+            for entry in self.index.get_signatures().iter() {
+                let target = entry.value();
+                let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
+                let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+
+                if !intersection.is_empty() {
+                    // Find all consecutive regions for this match
+                    let all_regions = self.find_all_consecutive_regions_with_signatures(
+                        query,
+                        &target.signature().name,
+                        &intersection,
+                    );
+
+                    // Create detailed results for each consecutive region
+                    for region in all_regions {
+                        if let (Some(query_seq), Some(target_seq)) = 
+                            (query.get_raw_sequence(), target.get_raw_sequence()) {
+                            
+                            // Create detailed result directly from the region
+                            let query_region = &query_seq[region.query_start..region.query_end];
+                            let target_region = &target_seq[region.match_start..region.match_end];
+                            
+                            // Create encoded sequence for the query region
+                            let encoded_seq = self.encode_sequence_hp(query_region);
+                            
+                            let to_print = format!(
+                                "---\nQuery Name: {}\nMatch Name: {}\nquery: {} ({}-{})\nalpha: {}\nmatch: {} ({}-{})\n",
+                                query.signature().name,
+                                target.signature().name,
+                                query_region,
+                                region.query_start,
+                                region.query_end,
+                                encoded_seq,
+                                target_region,
+                                region.match_start,
+                                region.match_end
+                            );
+
+                            let detailed_result = DetailedSearchResult {
+                                match_name: target.signature().name.clone(),
+                                query_name: query.signature().name.clone(),
+                                query_start: region.query_start as u32,
+                                query_end: region.query_end as u32,
+                                query: query_region.to_string(),
+                                match_start: region.match_start as u32,
+                                match_end: region.match_end as u32,
+                                r#match: target_region.to_string(),
+                                encoded: encoded_seq,
+                                length: (region.query_end - region.query_start) as u32,
+                                to_print,
+                            };
+                            
+                            result.push(detailed_result);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sort by query name, then by region length (longest first)
+        result.sort_by(|a, b| {
+            a.query_name.cmp(&b.query_name)
+                .then_with(|| (b.query_end - b.query_start).cmp(&(a.query_end - a.query_start)))
+        });
+
+        Ok(result)
+    }
+
     /// search method because it provides different output format (DetailedSearchResult).
     pub fn search_with_kmer_extraction(
         &self,
@@ -713,6 +794,90 @@ impl ProteinSearcher {
         result
     }
 
+    /// Find all consecutive matching regions with signatures for detailed k-mer extraction
+    pub fn find_all_consecutive_regions_with_signatures(
+        &self,
+        query_signature: &ProteinSignature,
+        match_name: &str,
+        intersection: &HashSet<u64>,
+    ) -> Vec<MatchingRegion> {
+        let target_sig = match self.find_signature_by_name(match_name) {
+            Some(sig) => sig,
+            None => return Vec::new(),
+        };
+        let ksize = query_signature.protein_ksize() as usize;
+
+        // Collect original sequence positions from k-mer info
+        // This works correctly even when scaled != 1 because we use original positions
+        // stored in KmerInfo, not the downsampled signature positions
+        let mut query_positions = Vec::new();
+        let mut target_positions = Vec::new();
+
+        for &hashval in intersection {
+            if let (Some(query_kmer_info), Some(target_kmer_info)) =
+                (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
+            {
+                for positions in query_kmer_info.original_kmer_to_position.values() {
+                    query_positions.extend(positions);
+                }
+                for positions in target_kmer_info.original_kmer_to_position.values() {
+                    target_positions.extend(positions);
+                }
+            }
+        }
+
+        if query_positions.is_empty() || target_positions.is_empty() {
+            return Vec::new();
+        }
+
+        // Remove duplicates and sort - important for scaled != 1 cases
+        query_positions.sort();
+        query_positions.dedup();
+        target_positions.sort();
+        target_positions.dedup();
+
+        // Find all consecutive runs of k-mers
+        let mut consecutive_regions = Vec::new();
+        
+        let mut i = 0;
+        while i < query_positions.len() {
+            let start_pos = query_positions[i];
+            let mut consecutive_count = 1;
+            let mut j = i + 1;
+            
+            // Count consecutive k-mers starting from this position
+            while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
+                consecutive_count += 1;
+                j += 1;
+            }
+            
+            // Add all consecutive regions (even single k-mers)
+            let end_pos = start_pos + consecutive_count + ksize - 1;
+            
+            // Find corresponding target region
+            // For now, use the first target position as reference
+            if let Some(&target_start) = target_positions.first() {
+                consecutive_regions.push(MatchingRegion {
+                    query_start: start_pos,
+                    query_end: end_pos,
+                    match_start: target_start,
+                    match_end: target_start + consecutive_count + ksize - 1,
+                });
+            }
+            
+            i = j;
+        }
+        
+        // Sort regions by length (longest first)
+        consecutive_regions.sort_by(|a, b| {
+            let len_a = a.query_end - a.query_start;
+            let len_b = b.query_end - b.query_start;
+            len_b.cmp(&len_a)
+        });
+        
+        consecutive_regions
+    }
+
     /// Find the best matching region based on k-mer positions with both signatures
     fn find_matching_regions_with_signatures(
         &self,
@@ -781,53 +946,57 @@ impl ProteinSearcher {
             });
         }
 
-        // Find consecutive k-mer regions by looking for runs of consecutive positions
-        // We want to find the longest consecutive sequence of k-mers
-
-        let mut best_region = None;
-        let mut best_consecutive_count = 0;
-
+        // Find all consecutive k-mer regions by looking for runs of consecutive positions
+        // Return all consecutive sequences of k-mers
+        
+        let mut consecutive_regions = Vec::new();
+        
         // Find all consecutive runs of k-mers
         let mut i = 0;
         while i < query_positions.len() {
             let start_pos = query_positions[i];
             let mut consecutive_count = 1;
             let mut j = i + 1;
-
+            
             // Count consecutive k-mers starting from this position
             while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
                 consecutive_count += 1;
                 j += 1;
             }
-
-            if consecutive_count > best_consecutive_count {
-                best_consecutive_count = consecutive_count;
-                // The end position should be start_pos + consecutive_count + ksize - 1
-                // because we want to include the full k-mers
-                let end_pos = start_pos + consecutive_count + ksize - 1;
-
-                // Find corresponding target region
-                // For now, use the first target position as reference
-                if let Some(&target_start) = target_positions.first() {
-                    best_region = Some(MatchingRegion {
-                        query_start: start_pos,
-                        query_end: end_pos,
-                        match_start: target_start,
-                        match_end: target_start + consecutive_count + ksize - 1,
-                    });
-                }
+            
+            // Add all consecutive regions (even single k-mers)
+            let end_pos = start_pos + consecutive_count + ksize - 1;
+            
+            // Find corresponding target region
+            // For now, use the first target position as reference
+            if let Some(&target_start) = target_positions.first() {
+                consecutive_regions.push(MatchingRegion {
+                    query_start: start_pos,
+                    query_end: end_pos,
+                    match_start: target_start,
+                    match_end: target_start + consecutive_count + ksize - 1,
+                });
             }
-
+            
             i = j;
         }
-
-        // Return the best consecutive region we found, or fall back to the first k-mer
-        if let Some(region) = best_region {
-            Some(region)
+        
+        // Sort regions by length (longest first) and return the longest one
+        // TODO: In the future, we could modify the return type to return all regions
+        consecutive_regions.sort_by(|a, b| {
+            let len_a = a.query_end - a.query_start;
+            let len_b = b.query_end - b.query_start;
+            len_b.cmp(&len_a)
+        });
+        
+        
+        // Return the longest consecutive region we found, or fall back to the first k-mer
+        if let Some(region) = consecutive_regions.first() {
+            Some(region.clone())
         } else {
             let query_start = *query_positions.first()?;
             let target_start = *target_positions.first()?;
-
+            
             Some(MatchingRegion {
                 query_start,
                 query_end: query_start + ksize,
@@ -1266,6 +1435,120 @@ mod tests {
     }
 
     /// Test that detailed k-mer extraction produces the exact same output as Python test expects
+    #[test]
+    fn test_multiple_consecutive_regions() -> Result<()> {
+        // Test that we can find multiple consecutive regions with smaller k-mer sizes
+        let query_fasta = "tests/testdata/fasta/ced9.fasta";
+        let target_fasta = "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
+
+        if !std::path::Path::new(query_fasta).exists() {
+            println!("Skipping test - query file not found: {}", query_fasta);
+            return Ok(());
+        }
+        if !std::path::Path::new(target_fasta).exists() {
+            println!("Skipping test - target file not found: {}", target_fasta);
+            return Ok(());
+        }
+
+        // Test with k=10 (should find multiple regions)
+        let target_index_path = "tests/testdata/temp_target_index_k10";
+        let target_index = ProteomeIndex::new(target_index_path, 10, 1, "hp", true)?;
+        target_index.process_fasta(target_fasta, 1000, 1000)?;
+
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index = ProteomeIndex::new_with_auto_filename(query_fasta, 10, 1, "hp", true)?;
+        query_index.process_fasta(query_fasta, 1000, 1000)?;
+
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        // Test the new method that returns all consecutive regions
+        let all_regions = searcher.search_with_all_consecutive_regions(&query_signatures)?;
+        
+        // Should find multiple consecutive regions with k=10
+        assert!(all_regions.len() > 1, "Expected multiple consecutive regions with k=10, found {}", all_regions.len());
+        
+        // All regions should be for the same query (CED9)
+        let first_region = &all_regions[0];
+        for region in &all_regions {
+            assert_eq!(region.query_name, first_region.query_name, "All regions should be for the same query");
+        }
+        
+        // Regions should be sorted by length (longest first)
+        for i in 1..all_regions.len() {
+            assert!(all_regions[i-1].length >= all_regions[i].length, 
+                "Regions should be sorted by length, but region {} has length {} and region {} has length {}", 
+                i-1, all_regions[i-1].length, i, all_regions[i].length);
+        }
+        
+        // Should have reasonable region lengths
+        let max_length = all_regions.iter().map(|r| r.length).max().unwrap_or(0);
+        let min_length = all_regions.iter().map(|r| r.length).min().unwrap_or(0);
+        assert!(max_length >= 10, "Expected at least one region with length >= 10, max was {}", max_length);
+        assert!(min_length >= 1, "Expected all regions to have length >= 1, min was {}", min_length);
+        
+        // Count unique target matches
+        let unique_targets: std::collections::HashSet<_> = all_regions.iter().map(|r| &r.match_name).collect();
+        
+        println!("✅ Found {} consecutive regions with k=10", all_regions.len());
+        println!("✅ Region lengths: {} to {} characters", min_length, max_length);
+        println!("✅ Found matches with {} different target sequences", unique_targets.len());
+        println!("✅ All regions are for the same query (CED9)");
+        println!("✅ Regions are sorted by length (longest first)");
+
+        let _ = std::fs::remove_dir_all(target_index_path);
+        Ok(())
+    }
+
+    #[test]
+    fn test_consecutive_regions_with_scaled_signatures() -> Result<()> {
+        // Test that consecutive region finding works correctly with scaled != 1
+        let query_fasta = "tests/testdata/fasta/ced9.fasta";
+        let target_fasta = "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
+
+        if !std::path::Path::new(query_fasta).exists() {
+            println!("Skipping test - query file not found: {}", query_fasta);
+            return Ok(());
+        }
+        if !std::path::Path::new(target_fasta).exists() {
+            println!("Skipping test - target file not found: {}", target_fasta);
+            return Ok(());
+        }
+
+        // Test with scaled=100 (not 1) to ensure original positions are used correctly
+        let target_index_path = "tests/testdata/temp_target_index_scaled100";
+        let target_index = ProteomeIndex::new(target_index_path, 10, 100, "hp", true)?;
+        target_index.process_fasta(target_fasta, 1000, 1000)?;
+
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index = ProteomeIndex::new_with_auto_filename(query_fasta, 10, 100, "hp", true)?;
+        query_index.process_fasta(query_fasta, 1000, 1000)?;
+
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        // Test that we can still find consecutive regions with scaled signatures
+        let all_regions = searcher.search_with_all_consecutive_regions(&query_signatures)?;
+        
+        // Should still find consecutive regions even with scaled signatures
+        assert!(all_regions.len() > 0, "Expected to find consecutive regions with scaled signatures, found {}", all_regions.len());
+        
+        // Verify that regions have reasonable lengths
+        let max_length = all_regions.iter().map(|r| r.length).max().unwrap_or(0);
+        let min_length = all_regions.iter().map(|r| r.length).min().unwrap_or(0);
+        assert!(max_length >= 10, "Expected at least one region with length >= 10, max was {}", max_length);
+        assert!(min_length >= 1, "Expected all regions to have length >= 1, min was {}", min_length);
+        
+        println!("✅ Found {} consecutive regions with scaled=100 signatures", all_regions.len());
+        println!("✅ Region lengths: {} to {} characters", min_length, max_length);
+        println!("✅ Consecutive region finding works correctly with scaled signatures");
+
+        let _ = std::fs::remove_dir_all(target_index_path);
+        Ok(())
+    }
+
     #[test]
     fn test_detailed_output_matches_python_format_exact() -> Result<()> {
         // Use the exact same input files as the Python test

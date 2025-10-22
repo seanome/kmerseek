@@ -184,51 +184,9 @@ fn main() -> IndexResult<()> {
             let (detected_ksize, detected_scaled, detected_moltype) =
                 ProteomeIndex::get_index_parameters(&target)?;
 
-            // Use detected parameters, but allow user overrides
-            let final_ksize = if ksize != 10 {
-                // If user specified non-default ksize
-                println!(
-                    "Warning: Overriding detected ksize {} with user-specified {}",
-                    detected_ksize, ksize
-                );
-                ksize
-            } else {
-                detected_ksize
-            };
-
-            let final_scaled = if scaled != 1 {
-                // If user specified non-default scaled
-                println!(
-                    "Warning: Overriding detected scaled {} with user-specified {}",
-                    detected_scaled, scaled
-                );
-                scaled
-            } else {
-                detected_scaled
-            };
-
-            let final_encoding = if encoding != ProteinEncoding::Protein {
-                // If user specified non-default encoding
-                println!(
-                    "Warning: Overriding detected encoding '{}' with user-specified {:?}",
-                    detected_moltype, encoding
-                );
-                encoding
-            } else {
-                // Convert detected moltype string to enum
-                match detected_moltype.as_str() {
-                    "protein" => ProteinEncoding::Protein,
-                    "dayhoff" => ProteinEncoding::Dayhoff,
-                    "hp" => ProteinEncoding::Hp,
-                    _ => {
-                        println!(
-                            "Warning: Unknown detected encoding '{}', using protein",
-                            detected_moltype
-                        );
-                        ProteinEncoding::Protein
-                    }
-                }
-            };
+            let final_ksize = assign_with_warning(ksize, detected_ksize, "ksize");
+            let final_scaled = assign_with_warning(scaled, detected_scaled, "scaled");
+            let final_encoding = assign_encoding(encoding, &detected_moltype);
 
             println!("\n---\nUsing parameters:");
             println!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
@@ -332,4 +290,40 @@ fn main() -> IndexResult<()> {
     }
 
     Ok(())
+}
+
+fn assign_encoding(encoding: ProteinEncoding, detected_moltype: &str) -> ProteinEncoding {
+    let final_encoding = if encoding != ProteinEncoding::Protein {
+        // If user specified non-default encoding
+        eprintln!(
+            "Warning: Overriding detected encoding {detected_moltype} with user-specified {encoding:?}",
+        );
+        encoding
+    } else {
+        // Convert detected moltype string to enum
+        match detected_moltype {
+            "protein" => ProteinEncoding::Protein,
+            "dayhoff" => ProteinEncoding::Dayhoff,
+            "hp" => ProteinEncoding::Hp,
+            _ => {
+                eprintln!("Warning: Unknown detected encoding {detected_moltype}, using protein",);
+                ProteinEncoding::Protein
+            }
+        }
+    };
+    final_encoding
+}
+
+fn assign_with_warning(value: u32, detected_value: u32, value_name: &str) -> u32 {
+    // Use detected parameters, but allow user overrides
+    let final_value = if value != detected_value {
+        // If user specified non-default ksize
+        println!(
+            "Warning: Overriding detected {value_name} {detected_value} with user-specified {value}",
+        );
+        value
+    } else {
+        detected_value
+    };
+    final_value
 }
