@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::signature::ProteinSignature;
+use crate::significance;
 
 /// Search result for a single query-target pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -48,10 +49,6 @@ pub struct SearchResult {
     pub average_containment_ani: f64,
     /// Maximum containment ANI
     pub max_containment_ani: f64,
-    /// Number of weighted found k-mers
-    pub n_weighted_found: usize,
-    /// Total weighted hashes
-    pub total_weighted_hashes: usize,
     /// Containment of target in query
     pub containment_target_in_query: f64,
     /// Weighted fraction of target in query
@@ -262,22 +259,20 @@ impl ProteinSearcher {
             if let (Some(query_abunds), Some(target_abunds)) =
                 (query_abunds, target_abunds.as_ref())
             {
-                self.calculate_abundance_stats(&intersection, query_abunds, target_abunds)
+                significance::abundance_stats(&intersection, query_abunds, target_abunds)
             } else {
                 (1.0, 1.0, 0.0)
             };
 
         // Calculate ANI (Average Nucleotide Identity) - simplified version
-        // Olga: calculate_ani doesn't need to be a method, it can be a standalone function.
-        // -> Maybe put it into a separate file for metrics
-        let query_containment_ani = self.calculate_ani(containment, query_size);
-        let match_containment_ani = self.calculate_ani(containment_target_in_query, target_size);
+        let query_containment_ani = significance::ani(containment, query_size);
+        let match_containment_ani = significance::ani(containment_target_in_query, target_size);
         let average_containment_ani = (query_containment_ani + match_containment_ani) / 2.0;
         let max_containment_ani = query_containment_ani.max(match_containment_ani);
 
         // Calculate weighted metrics
-        let (n_weighted_found, total_weighted_hashes, f_weighted_target_in_query) =
-            self.calculate_weighted_metrics(&intersection, query_abunds, target_abunds.as_deref());
+        let (f_weighted_target_in_query) =
+            significance::weighted_fraction_target_in_query(&intersection, query_abunds.as_deref(), target_abunds.as_deref());
 
         // Calculate overlap probability between query and target
         let overlap_probability = self.calculate_overlap_probability(query, target);
@@ -301,8 +296,6 @@ impl ProteinSearcher {
             match_containment_ani,
             average_containment_ani,
             max_containment_ani,
-            n_weighted_found,
-            total_weighted_hashes,
             containment_target_in_query,
             f_weighted_target_in_query,
             tfidf: query_tfidf,
@@ -310,84 +303,6 @@ impl ProteinSearcher {
         })
     }
 
-    /// Calculate abundance statistics for intersecting k-mers
-    fn calculate_abundance_stats(
-        &self,
-        intersection: &HashSet<u64>,
-        query_abunds: &[u64],
-        target_abunds: &[u64],
-    ) -> (f64, f64, f64) {
-        let mut abunds = Vec::new();
-
-        // Get abundances for intersecting k-mers
-        for (i, &_min) in intersection.iter().enumerate() {
-            if let (Some(&query_abund), Some(&target_abund)) =
-                (query_abunds.get(i), target_abunds.get(i))
-            {
-                abunds.push((query_abund + target_abund) as f64 / 2.0);
-            }
-        }
-
-        if abunds.is_empty() {
-            return (1.0, 1.0, 0.0);
-        }
-
-        // Calculate statistics
-        let sum: f64 = abunds.iter().sum();
-        let average = sum / abunds.len() as f64;
-
-        abunds.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        let median = if abunds.len() % 2 == 0 {
-            (abunds[abunds.len() / 2 - 1] + abunds[abunds.len() / 2]) / 2.0
-        } else {
-            abunds[abunds.len() / 2]
-        };
-
-        let variance: f64 =
-            abunds.iter().map(|&x| (x - average).powi(2)).sum::<f64>() / abunds.len() as f64;
-        let std_dev = variance.sqrt();
-
-        (average, median, std_dev)
-    }
-
-    /// Calculate ANI (Average Nucleotide Identity) from containment
-fn calculate_ani(&self, containment: f64, _size: usize) -> f64 {
-        // Simplified ANI calculation based on containment
-        // This is a rough approximation - in practice, ANI calculation is more complex
-        if containment <= 0.0 {
-            0.0
-        } else {
-            // Use a logarithmic relationship for ANI
-            let ani = 1.0 - (-containment.ln()).exp();
-            ani.clamp(0.0, 1.0)
-        }
-    }
-
-    /// Calculate weighted metrics
-    fn calculate_weighted_metrics(
-        &self,
-        intersection: &HashSet<u64>,
-        query_abunds: Option<&[u64]>,
-        target_abunds: Option<&[u64]>,
-    ) -> (usize, usize, f64) {
-        let n_weighted_found = intersection.len();
-        let total_weighted_hashes = intersection.len(); // Simplified
-
-        let f_weighted_target_in_query =
-            if let (Some(query_abunds), Some(target_abunds)) = (query_abunds, target_abunds) {
-                let query_weight: f64 = query_abunds.iter().sum::<u64>() as f64;
-                let target_weight: f64 = target_abunds.iter().sum::<u64>() as f64;
-                if query_weight > 0.0 {
-                    target_weight / query_weight
-                } else {
-                    0.0
-                }
-            } else {
-                n_weighted_found as f64 / total_weighted_hashes as f64
-            };
-
-        (n_weighted_found, total_weighted_hashes, f_weighted_target_in_query)
-    }
 
     /// Calculate TF-IDF score for a query signature
     pub fn calculate_tfidf(&self, query: &ProteinSignature) -> f64 {
