@@ -168,6 +168,10 @@ impl ProteinSearcher {
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
     pub fn search(&self, queries: &[ProteinSignature]) -> Result<Vec<SearchResult>> {
         // Calculate TF-IDF for each query signature once (used in all results for that query)
+        let query_hash_to_abundance: HashMap<u64, u64> = queries
+            .iter()
+            .flat_map(|query| query.signature().minhash.abunds().iter().map(|(hash, abundance)| (*hash, *abundance)))
+            .collect();
         let query_tfidf: HashMap<String, f64> = queries
             .iter()
             .map(|query| {
@@ -181,6 +185,8 @@ impl ProteinSearcher {
         let all_results: Vec<SearchResult> = queries
             .par_iter()
             .flat_map(|query| {
+
+                // Olga: Why is this cloned?? Can we avoid copying data here?
                 let query_mins: HashSet<u64> =
                     query.signature().minhash.mins().iter().cloned().collect();
                 let query_abunds = query.signature().minhash.abunds();
@@ -194,7 +200,7 @@ impl ProteinSearcher {
                     .iter()
                     .filter_map(|entry| {
                         let target = entry.value();
-                        self.calculate_comprehensive_similarity(
+                        self.query_target_similarity(
                             query,
                             target,
                             &query_mins,
@@ -222,7 +228,7 @@ impl ProteinSearcher {
     ///
     /// This method calculates all similarity metrics in one pass for efficiency, including the new
     /// TF-IDF and overlap probability metrics that are now part of SearchResult.
-    fn calculate_comprehensive_similarity(
+    fn query_target_similarity(
         &self,
         query: &ProteinSignature,
         target: &ProteinSignature,
@@ -306,7 +312,7 @@ impl ProteinSearcher {
 
     /// Calculate TF-IDF score for a query signature
     pub fn calculate_tfidf(&self, query: &ProteinSignature) -> f64 {
-        let query_mins = query.signature().minhash.mins();
+        let query_mins = query.signature().minhash.();
         let mut tfidf_sum = 0.0;
 
         for min in query_mins {
