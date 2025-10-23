@@ -42,14 +42,6 @@ pub struct SearchResult {
     pub median_abund: f64,
     /// Standard deviation of abundance of intersecting k-mers
     pub std_abund: f64,
-    /// Query containment ANI (Average Nucleotide Identity)
-    pub query_containment_ani: f64,
-    /// Match containment ANI
-    pub match_containment_ani: f64,
-    /// Average containment ANI
-    pub average_containment_ani: f64,
-    /// Maximum containment ANI
-    pub max_containment_ani: f64,
     /// Containment of target in query
     pub containment_target_in_query: f64,
     /// Weighted fraction of target in query
@@ -293,12 +285,6 @@ impl ProteinSearcher {
                 (1.0, 1.0, 0.0)
             };
 
-        // Calculate ANI (Average Nucleotide Identity) - simplified version
-        let query_containment_ani = significance::ani(containment, query_size);
-        let match_containment_ani = significance::ani(containment_target_in_query, target_size);
-        let average_containment_ani = (query_containment_ani + match_containment_ani) / 2.0;
-        let max_containment_ani = query_containment_ani.max(match_containment_ani);
-
         // Calculate weighted metrics
         let f_weighted_target_in_query =
             significance::weighted_fraction_target_in_query( query_abunds.as_deref(), target_abunds.as_deref());
@@ -321,10 +307,6 @@ impl ProteinSearcher {
             average_abund,
             median_abund,
             std_abund,
-            query_containment_ani,
-            match_containment_ani,
-            average_containment_ani,
-            max_containment_ani,
             containment_target_in_query,
             f_weighted_target_in_query,
             tfidf: query_tfidf,
