@@ -55,12 +55,9 @@ pub fn abundance_stats(
 /// Calculate weighted metrics, weighted by abundances:
 /// - Weighted fraction of target in query
 pub fn weighted_fraction_target_in_query(
-    intersection: &HashSet<u64>,
     query_abunds: Option<&[u64]>,
     target_abunds: Option<&[u64]>,
 ) -> f64 {
-    let n_weighted_found = intersection.len();
-
     let f_weighted_target_in_query =
         if let (Some(query_abunds), Some(target_abunds)) = (query_abunds, target_abunds) {
             let query_weight: f64 = query_abunds.iter().sum::<u64>() as f64;
