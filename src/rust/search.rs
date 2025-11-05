@@ -310,9 +310,9 @@ impl ProteinSearcher {
             significance::weighted_fraction_target_in_query( query_abunds.as_deref(), target_abunds.as_deref());
 
         // Calculate overlap probability between query and target
-        let overlap_probability = self.calculate_overlap_probability(query, target);
+        let overlap_probability = self.calculate_overlap_probability(intersection);
 
-        let matched_region = self.find_matched_regions_with_signatures(query, target, &intersection);
+        let matched_regions = self.find_matched_regions_with_signatures(query, target, &intersection);
 
         Some(SearchResult {
             query_name: query_name.to_string(),
@@ -333,6 +333,7 @@ impl ProteinSearcher {
             f_weighted_target_in_query,
             tfidf: query_tfidf,
             overlap_probability,
+            matched_regions,
         })
     }
 
@@ -355,22 +356,12 @@ impl ProteinSearcher {
 
     /// Calculate probability of overlap between query and target
     ///
-    /// This calculates the probability of overlap based on the query signature's k-mer frequencies
-    /// against the entire database, following the sourmash approach. The probability reflects
-    /// how statistically significant the overlap is given the query's characteristics.
+    /// This calculates the probability of the intersecting hashes of query and target against
+    /// the frequency of those hashes in the whole database
     pub fn calculate_overlap_probability(
         &self,
-        query: &ProteinSignature,
-        target: &ProteinSignature,
+        intersection: HashSet<u64>,
     ) -> f64 {
-        let query_mins = query.signature().minhash.mins();
-        let target_mins = target.signature().minhash.mins();
-
-        // Calculate intersection of k-mers between query and target
-        let query_set: HashSet<u64> = query_mins.iter().cloned().collect();
-        let target_set: HashSet<u64> = target_mins.iter().cloned().collect();
-        let intersection: Vec<u64> = query_set.intersection(&target_set).cloned().collect();
-
         if intersection.is_empty() {
             return 0.0;
         }
@@ -408,7 +399,7 @@ impl ProteinSearcher {
     pub fn stats(&self) -> &SearchStats {
         &self.stats
     }
-    
+
 
     /// Identify which regions of query and target match in the encoded sequence space
     fn create_match_region(
