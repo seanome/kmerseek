@@ -8,80 +8,109 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
-use crate::signature::ProteinSignature;
+use crate::signature::{ProteinSignature};
 use crate::significance;
 
 /// Search result for a single query-target pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
+
     /// Query sequence name
     pub query_name: String,
+
     /// Query sequence MD5 hash
     pub query_md5: String,
+    
     /// Target sequence name
-    pub match_name: String,
+    pub target_name: String,
+
+    /// Target sequence MD5 hash
+    pub target_md5: String,
+    
     /// Containment score (intersection / query_size)
     pub containment: f64,
+
     /// Number of intersecting k-mers
-    pub intersect_hashes: usize,
+    pub n_intersecting_hashes: usize,
+
     /// K-mer size used
     pub ksize: u32,
+
     /// Scaled factor used
     pub scaled: u32,
+
     /// Molecular type (hp, dayhoff, protein)
     pub moltype: String,
-    /// Target sequence MD5 hash
-    pub match_md5: String,
+
     /// Jaccard similarity (intersection / union)
     pub jaccard: f64,
+
     /// Maximum containment (max of query->target and target->query containment)
     pub max_containment: f64,
+
     /// Average abundance of intersecting k-mers
     pub average_abund: f64,
+
     /// Median abundance of intersecting k-mers
     pub median_abund: f64,
+
     /// Standard deviation of abundance of intersecting k-mers
     pub std_abund: f64,
+
     /// Containment of target in query
     pub containment_target_in_query: f64,
+
     /// Weighted fraction of target in query
     pub f_weighted_target_in_query: f64,
+
     /// TF-IDF score for the query signature
     pub tfidf: f64,
+
     /// Probability of overlap between query and target
     pub overlap_probability: f64,
+
+    /// 1 or more regions of 1+ k-mers overlapping between query and target
+    pub matched_regions: Vec<MatchedRegion>,
 }
 
 
 
 /// A region of k-mer overlap between the query and target sequences
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MatchRegion {
+pub struct MatchedRegion {
+
     /// Target sequence name
     pub match_name: String,
+
     /// Query sequence name
     pub query_name: String,
+
     /// Query sequence start position
     pub query_start: u32,
+
     /// Query sequence end position
     pub query_end: u32,
+
     /// Query subsequence (stitched k-mers)
     pub query_subseq: String,
+
     /// Target sequence start position
     pub match_start: u32,
+
     /// Target sequence end position
     pub match_end: u32,
+
     /// Target subsequence (stitched k-mers)
     pub match_subseq: String,
+
     /// Encoded sequence (hp/dayhoff/protein encoding)
     pub encoded: String,
+
     /// Length of the match
     pub length: u32,
-    /// Formatted output for stderr display
-    pub to_print: String,
 }
 
-impl Display for MatchRegion {
+impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         write!(f, "
         Query Name: {}
@@ -114,14 +143,6 @@ pub struct SearchStats {
     pub kmer_frequencies: HashMap<u64, usize>,
 }
 
-/// Represents a matching region between query and target sequences
-#[derive(Debug, Clone)]
-struct MatchingRegion {
-    query_start: usize,
-    query_end: usize,
-    match_start: usize,
-    match_end: usize,
-}
 
 impl SearchStats {
     /// Calculate search statistics from a proteome index
@@ -223,8 +244,7 @@ impl ProteinSearcher {
                             query_tfidf,
                         )
                     })
-                    .collect::<Vec<_>>()
-            })
+                    .collect::<Vec<_>>()            })
             .collect();
 
         // Sort by containment score (descending) - this is the primary ranking metric
@@ -232,7 +252,6 @@ impl ProteinSearcher {
         sorted_results.sort_by(|a, b| {
             b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
         });
-
 
 
         Ok(sorted_results)
@@ -253,26 +272,27 @@ impl ProteinSearcher {
         query_md5: &str,
         query_tfidf: f64,
     ) -> Option<SearchResult> {
+
         let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
         let target_abunds = target.signature().minhash.abunds();
 
         // Calculate intersection
         let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
-        let intersect_hashes = intersection.len();
+        let n_intersecting_hashes = intersection.len();
 
         // Skip if no intersection
-        if intersect_hashes == 0 {
+        if n_intersecting_hashes == 0 {
             return None;
         }
 
         let query_size = query_mins.len();
         let target_size = target_mins.len();
-        let union_size = query_size + target_size - intersect_hashes;
+        let union_size = query_size + target_size - n_intersecting_hashes;
 
         // Calculate basic metrics
-        let containment = intersect_hashes as f64 / query_size as f64;
-        let jaccard = intersect_hashes as f64 / union_size as f64;
-        let containment_target_in_query = intersect_hashes as f64 / target_size as f64;
+        let containment = n_intersecting_hashes as f64 / query_size as f64;
+        let jaccard = n_intersecting_hashes as f64 / union_size as f64;
+        let containment_target_in_query = n_intersecting_hashes as f64 / target_size as f64;
         let max_containment = containment.max(containment_target_in_query);
 
         // Calculate abundance statistics
@@ -292,16 +312,18 @@ impl ProteinSearcher {
         // Calculate overlap probability between query and target
         let overlap_probability = self.calculate_overlap_probability(query, target);
 
+        let matched_region = self.find_matched_regions_with_signatures(query, target, &intersection);
+
         Some(SearchResult {
             query_name: query_name.to_string(),
             query_md5: query_md5.to_string(),
-            match_name: target.signature().name.clone(),
+            target_name: target.signature().name.clone(),
+            target_md5: target.signature().md5sum.clone(),
             containment,
-            intersect_hashes,
+            n_intersecting_hashes,
             ksize: query.protein_ksize(),
             scaled: query.signature().minhash.scaled(),
             moltype: query.moltype().to_string(),
-            match_md5: target.signature().md5sum.clone(),
             jaccard,
             max_containment,
             average_abund,
@@ -395,7 +417,7 @@ impl ProteinSearcher {
     pub fn search_with_all_consecutive_regions(
         &self,
         queries: &[ProteinSignature],
-    ) -> Result<Vec<MatchRegion>> {
+    ) -> Result<Vec<MatchedRegion>> {
         let mut match_regions = Vec::new();
 
         for query in queries {
@@ -416,16 +438,16 @@ impl ProteinSearcher {
 
                     // Create detailed results for each consecutive region
                     for region in all_regions {
-                        if let (Some(query_seq), Some(target_seq)) = 
+                        if let (Some(query_seq), Some(target_seq)) =
                             (query.get_raw_sequence(), target.get_raw_sequence()) {
-                            
+
                             // Create detailed result directly from the region
                             let query_region = &query_seq[region.query_start..region.query_end];
                             let target_region = &target_seq[region.match_start..region.match_end];
-                            
+
                             // Create encoded sequence for the query region
                             let encoded_seq = self.encode_sequence_hp(query_region);
-                            
+
                             let to_print = format!(
                                 "---\nQuery Name: {}\nMatch Name: {}\nquery: {} ({}-{})\nalpha: {}\nmatch: {} ({}-{})\n",
                                 query.signature().name,
@@ -439,7 +461,7 @@ impl ProteinSearcher {
                                 region.match_end
                             );
 
-                            let match_region = MatchRegion {
+                            let match_region = MatchedRegion {
                                 match_name: target.signature().name.clone(),
                                 query_name: query.signature().name.clone(),
                                 query_start: region.query_start as u32,
@@ -452,7 +474,7 @@ impl ProteinSearcher {
                                 length: (region.query_end - region.query_start) as u32,
                                 to_print,
                             };
-                            
+
                             match_regions.push(match_region);
                         }
                     }
@@ -473,7 +495,7 @@ impl ProteinSearcher {
     pub fn search_with_kmer_extraction(
         &self,
         queries: &[ProteinSignature],
-    ) -> Result<Vec<MatchRegion>> {
+    ) -> Result<Vec<MatchedRegion>> {
         let mut match_regions = Vec::new();
 
         for query in queries {
@@ -519,13 +541,13 @@ impl ProteinSearcher {
         Ok(match_regions)
     }
 
-    /// Create a detailed search result with stitched k-mers
+    /// Identify which regions of query and target match in the encoded sequence space
     fn create_match_region(
         &self,
         query: &ProteinSignature,
         target: &ProteinSignature,
-        intersection: &HashSet<u64>,
-    ) -> Option<MatchRegion> {
+        intersecting_hashes: &HashSet<u64>,
+    ) -> Option<MatchedRegion> {
         let query_name = query.signature().name.clone();
         let match_name = target.signature().name.clone();
 
@@ -538,7 +560,7 @@ impl ProteinSearcher {
                 &match_name,
                 query_seq,
                 target_seq,
-                intersection,
+                intersecting_hashes,
                 query,
             );
         }
@@ -549,29 +571,29 @@ impl ProteinSearcher {
             &match_name,
             query,
             target,
-            intersection,
+            intersecting_hashes,
         )
     }
 
-    /// Create detailed result from raw sequences (most accurate)
+    /// Create match region from raw sequences (most accurate)
     fn create_match_region_from_sequences(
         &self,
         query_name: &str,
         match_name: &str,
         query_seq: &str,
         target_seq: &str,
-        intersection: &HashSet<u64>,
+        intersecting_hashes: &HashSet<u64>,
         query_signature: &ProteinSignature,
-    ) -> Option<MatchRegion> {
-        // Find the best matching region based on k-mer positions
-        let matching_regions =
-            self.find_matching_regions_with_signatures(query_signature, match_name, intersection)?;
+    ) -> Option<MatchedRegion> {
+        // Find the best matched region based on k-mer positions
+        let matched_regions =
+            self.find_matched_regions_with_signatures(query_signature, match_name, intersecting_hashes)?;
 
-        // Extract the matching regions from the sequences with bounds checking
-        let query_start = matching_regions.query_start.min(query_seq.len());
-        let query_end = matching_regions.query_end.min(query_seq.len());
-        let target_start = matching_regions.match_start.min(target_seq.len());
-        let target_end = matching_regions.match_end.min(target_seq.len());
+        // Extract the matched regions from the sequences with bounds checking
+        let query_start = matched_regions.query_start.min(query_seq.len());
+        let query_end = matched_regions.query_end.min(query_seq.len());
+        let target_start = matched_regions.match_start.min(target_seq.len());
+        let target_end = matched_regions.match_end.min(target_seq.len());
 
         // Ensure start <= end
         let query_start = query_start.min(query_end);
@@ -590,7 +612,7 @@ impl ProteinSearcher {
             encoded_seq, target_region, target_start, target_end
         );
 
-        Some(MatchRegion {
+        Some(MatchedRegion {
             match_name: match_name.to_string(),
             query_name: query_name.to_string(),
             query_start: query_start as u32,
@@ -605,20 +627,20 @@ impl ProteinSearcher {
         })
     }
 
-    /// Create detailed result by stitching k-mers together
+    /// Create match region by stitching k-mers together
     fn create_match_region_from_kmers(
         &self,
         query_name: &str,
         match_name: &str,
         query: &ProteinSignature,
         target: &ProteinSignature,
-        intersection: &HashSet<u64>,
-    ) -> Option<MatchRegion> {
+        intersecting_hashes: &HashSet<u64>,
+    ) -> Option<MatchedRegion> {
         // Get k-mer information for intersecting k-mers
         let mut query_kmers = Vec::new();
         let mut target_kmers = Vec::new();
 
-        for &hashval in intersection {
+        for &hashval in intersecting_hashes {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
                 (query.kmer_infos().get(&hashval), target.kmer_infos().get(&hashval))
             {
@@ -660,7 +682,7 @@ impl ProteinSearcher {
         // Try to get the stored encoded sequence first, otherwise generate it
         let encoded_seq = if let Some(stored_encoded) = self.get_stored_encoded_sequence(query_name)
         {
-            // Use the stored encoded sequence for the matching region
+            // Use the stored encoded sequence for the matched region
             if query_start < stored_encoded.len() as u32 && query_end <= stored_encoded.len() as u32
             {
                 stored_encoded[query_start as usize..query_end as usize].to_string()
@@ -677,7 +699,7 @@ impl ProteinSearcher {
             query_name, match_name, query_stitched, query_start, query_end, encoded_seq, target_stitched, match_start, match_end
         );
 
-        Some(MatchRegion {
+        Some(MatchedRegion {
             match_name: match_name.to_string(),
             query_name: query_name.to_string(),
             query_start,
@@ -720,13 +742,13 @@ impl ProteinSearcher {
         result
     }
 
-    /// Find all consecutive matching regions with signatures for detailed k-mer extraction
+    /// Find all consecutive matched regions with signatures for detailed k-mer extraction
     pub fn find_all_consecutive_regions_with_signatures(
         &self,
         query_signature: &ProteinSignature,
         match_name: &str,
         intersection: &HashSet<u64>,
-    ) -> Vec<MatchingRegion> {
+    ) -> Vec<MatchedRegion> {
         let target_sig = match self.find_signature_by_name(match_name) {
             Some(sig) => sig,
             None => return Vec::new(),
@@ -783,7 +805,7 @@ impl ProteinSearcher {
             // Find corresponding target region
             // For now, use the first target position as reference
             if let Some(&target_start) = target_positions.first() {
-                consecutive_regions.push(MatchingRegion {
+                consecutive_regions.push(MatchedRegion {
                     query_start: start_pos,
                     query_end: end_pos,
                     match_start: target_start,
@@ -804,13 +826,13 @@ impl ProteinSearcher {
         consecutive_regions
     }
 
-    /// Find the best matching region based on k-mer positions with both signatures
-    fn find_matching_regions_with_signatures(
+    /// Find the best matched region based on k-mer positions with both signatures
+    fn find_matched_regions_with_signatures(
         &self,
         query_signature: &ProteinSignature,
         match_name: &str,
         intersection: &HashSet<u64>,
-    ) -> Option<MatchingRegion> {
+    ) -> Option<MatchedRegion> {
         // Find the target signature in the index
         let target_sig = self.find_signature_by_name(match_name)?;
 
@@ -864,7 +886,7 @@ impl ProteinSearcher {
             let query_start = *query_positions.first()?;
             let target_start = *target_positions.first()?;
 
-            return Some(MatchingRegion {
+            return Some(MatchedRegion {
                 query_start,
                 query_end: query_start + ksize,
                 match_start: target_start,
@@ -896,7 +918,7 @@ impl ProteinSearcher {
             // Find corresponding target region
             // For now, use the first target position as reference
             if let Some(&target_start) = target_positions.first() {
-                consecutive_regions.push(MatchingRegion {
+                consecutive_regions.push(MatchedRegion {
                     query_start: start_pos,
                     query_end: end_pos,
                     match_start: target_start,
@@ -923,7 +945,7 @@ impl ProteinSearcher {
             let query_start = *query_positions.first()?;
             let target_start = *target_positions.first()?;
             
-            Some(MatchingRegion {
+            Some(MatchedRegion {
                 query_start,
                 query_end: query_start + ksize,
                 match_start: target_start,
