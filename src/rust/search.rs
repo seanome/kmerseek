@@ -260,8 +260,7 @@ impl ProteinSearcher {
 
     /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
     ///
-    /// This method calculates all similarity metrics in one pass for efficiency, including the new
-    /// TF-IDF and overlap probability metrics that are now part of SearchResult.
+    /// This method calculates all similarity metrics in one pass for efficiency.
     fn query_target_similarity(
         &self,
         query: &ProteinSignature,
