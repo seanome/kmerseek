@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
+use serde;
 use serde::{Deserialize, Serialize};
 use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
@@ -74,12 +75,13 @@ impl SignatureAccess for &SerializableSignature {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct SerializableSignature {
     pub location: String,
     pub name: String,
     pub md5sum: String,
     pub minhash: KmerMinHash,
+    pub moltype: String,
 }
 
 // Custom serialization for SerializableSignature to avoid KmerMinHash serialization issues
@@ -97,6 +99,7 @@ impl Serialize for SerializableSignature {
         state.serialize_field("abunds", &self.minhash.abunds())?;
         state.serialize_field("scaled", &self.minhash.scaled())?;
         state.serialize_field("ksize", &self.minhash.ksize())?;
+        state.serialize_field("moltype", &self.moltype)?;
         state.end()
     }
 }
@@ -129,6 +132,7 @@ impl<'de> Deserialize<'de> for SerializableSignature {
                 let mut abunds = None;
                 let mut scaled = None;
                 let mut ksize = None;
+                let mut moltype = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
@@ -174,6 +178,12 @@ impl<'de> Deserialize<'de> for SerializableSignature {
                             }
                             ksize = Some(map.next_value()?);
                         }
+                        "moltype" => {
+                            if moltype.is_some() {
+                                return Err(de::Error::duplicate_field("moltype"));
+                            }
+                            moltype = Some(map.next_value::<String>()?);
+                        }
                         _ => {
                             let _ = map.next_value::<de::IgnoredAny>()?;
                         }
@@ -188,16 +198,19 @@ impl<'de> Deserialize<'de> for SerializableSignature {
                     abunds.ok_or_else(|| de::Error::missing_field("abunds"))?;
                 let scaled: u32 = scaled.ok_or_else(|| de::Error::missing_field("scaled"))?;
                 let ksize: u32 = ksize.ok_or_else(|| de::Error::missing_field("ksize"))?;
+                let moltype = moltype.ok_or_else(|| de::Error::missing_field("moltype"))?;
 
+                let hash_function =
+                    get_hash_function_from_moltype(&moltype).map_err(de::Error::custom)?;
                 // Reconstruct KmerMinHash from the stored data with correct parameters
                 // We'll use a default hash function since we don't store the specific one
                 let mut minhash = KmerMinHash::new(
                     scaled,
                     ksize,
-                    sourmash::encodings::HashFunctions::Murmur64Protein, // default hash function
-                    42,                                                  // seed
-                    true,                                                // track_abundance
-                    0,                                                   // num
+                    hash_function,
+                    SEED, // seed
+                    true, // track_abundance
+                    0,    // num
                 );
 
                 // Add the stored data
@@ -208,12 +221,12 @@ impl<'de> Deserialize<'de> for SerializableSignature {
                     minhash.add_many(&mins).map_err(de::Error::custom)?;
                 }
 
-                Ok(SerializableSignature { location, name, md5sum, minhash })
+                Ok(SerializableSignature { location, name, md5sum, minhash, moltype })
             }
         }
 
         const FIELDS: &[&str] =
-            &["location", "name", "md5sum", "mins", "abunds", "scaled", "ksize"];
+            &["location", "name", "md5sum", "mins", "abunds", "scaled", "ksize", "moltype"];
         deserializer.deserialize_struct(
             "SerializableSignature",
             FIELDS,
@@ -224,7 +237,13 @@ impl<'de> Deserialize<'de> for SerializableSignature {
 
 impl From<SmallSignature> for SerializableSignature {
     fn from(sig: SmallSignature) -> Self {
-        Self { location: sig.location, name: sig.name, md5sum: sig.md5sum, minhash: sig.minhash }
+        Self {
+            location: sig.location,
+            name: sig.name,
+            md5sum: sig.md5sum,
+            minhash: sig.minhash,
+            moltype: sig.moltype().clone(),
+        }
     }
 }
 
@@ -235,6 +254,7 @@ impl From<SigStore> for SerializableSignature {
             name: sig.name().clone(),
             md5sum: sig.md5sum().to_string(),
             minhash: sig.minhash().unwrap().clone(),
+            moltype: sig.moltype().clone(),
         }
     }
 }
@@ -369,6 +389,7 @@ impl ProteinSignature {
             name: name.to_string(),
             md5sum: String::new(),
             minhash,
+            moltype: moltype.to_string(),
         };
 
         Ok(Self {
