@@ -310,9 +310,13 @@ impl ProteinSearcher {
             significance::weighted_fraction_target_in_query( query_abunds.as_deref(), target_abunds.as_deref());
 
         // Calculate overlap probability between query and target
-        let overlap_probability = self.calculate_overlap_probability(intersection);
+        let overlap_probability = self.calculate_overlap_probability(&intersection);
 
-        let matched_regions = self.find_matched_regions_with_signatures(query, target, &intersection);
+        let matched_regions = self.find_matched_regions(
+            query,
+            target.name(),
+            &intersection
+        );
 
         Some(SearchResult {
             query_name: query_name.to_string(),
@@ -360,7 +364,7 @@ impl ProteinSearcher {
     /// the frequency of those hashes in the whole database
     pub fn calculate_overlap_probability(
         &self,
-        intersection: HashSet<u64>,
+        intersection: &HashSet<u64>,
     ) -> f64 {
         if intersection.is_empty() {
             return 0.0;
@@ -602,14 +606,14 @@ impl ProteinSearcher {
         result
     }
 
-    /// Find all consecutive matched regions with signatures for detailed k-mer extraction
-    pub fn find_all_consecutive_regions_with_signatures(
+    /// Find all consecutive matched regions between a query and
+    pub fn find_matched_regions(
         &self,
         query_signature: &ProteinSignature,
-        match_name: &str,
+        target_name: &str,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
-        let target_sig = match self.find_signature_by_name(match_name) {
+        let target_sig = match self.find_signature_by_name(target_name) {
             Some(sig) => sig,
             None => return Vec::new(),
         };
@@ -686,133 +690,6 @@ impl ProteinSearcher {
         consecutive_regions
     }
 
-    /// Find the best matched region based on k-mer positions with both signatures
-    fn find_matched_regions_with_signatures(
-        &self,
-        query_signature: &ProteinSignature,
-        match_name: &str,
-        intersection: &HashSet<u64>,
-    ) -> Option<MatchedRegion> {
-        // Find the target signature in the index
-        let target_sig = self.find_signature_by_name(match_name)?;
-
-        // Get the k-mer size
-        let ksize = query_signature.protein_ksize() as usize;
-
-        // Collect all positions for intersecting k-mers from both signatures
-        let mut query_positions = Vec::new();
-        let mut target_positions = Vec::new();
-
-        for &hashval in intersection {
-            if let (Some(query_kmer_info), Some(target_kmer_info)) =
-                (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
-            {
-                // Collect all positions from the HashMap
-                for positions in query_kmer_info.original_kmer_to_position.values() {
-                    query_positions.extend(positions);
-                }
-                for positions in target_kmer_info.original_kmer_to_position.values() {
-                    target_positions.extend(positions);
-                }
-            }
-        }
-
-        if query_positions.is_empty() || target_positions.is_empty() {
-            return None;
-        }
-
-        // Sort positions
-        query_positions.sort();
-        target_positions.sort();
-
-        // Check if we have k-mer information for the intersecting k-mers
-        let mut has_kmer_info = false;
-        for &hashval in intersection {
-            if let (Some(query_kmer_info), Some(target_kmer_info)) =
-                (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
-            {
-                if !query_kmer_info.original_kmer_to_position.is_empty()
-                    && !target_kmer_info.original_kmer_to_position.is_empty()
-                {
-                    has_kmer_info = true;
-                    break;
-                }
-            }
-        }
-
-        // If we don't have k-mer information, fall back to the simple approach
-        if !has_kmer_info {
-            // Fallback: use the first k-mer position
-            let query_start = *query_positions.first()?;
-            let target_start = *target_positions.first()?;
-
-            return Some(MatchedRegion {
-                query_start,
-                query_end: query_start + ksize,
-                match_start: target_start,
-                match_end: target_start + ksize,
-            });
-        }
-
-        // Find all consecutive k-mer regions by looking for runs of consecutive positions
-        // Return all consecutive sequences of k-mers
-        
-        let mut consecutive_regions = Vec::new();
-        
-        // Find all consecutive runs of k-mers
-        let mut i = 0;
-        while i < query_positions.len() {
-            let start_pos = query_positions[i];
-            let mut consecutive_count = 1;
-            let mut j = i + 1;
-            
-            // Count consecutive k-mers starting from this position
-            while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
-                consecutive_count += 1;
-                j += 1;
-            }
-            
-            // Add all consecutive regions (even single k-mers)
-            let end_pos = start_pos + consecutive_count + ksize - 1;
-            
-            // Find corresponding target region
-            // For now, use the first target position as reference
-            if let Some(&target_start) = target_positions.first() {
-                consecutive_regions.push(MatchedRegion {
-                    query_start: start_pos,
-                    query_end: end_pos,
-                    match_start: target_start,
-                    match_end: target_start + consecutive_count + ksize - 1,
-                });
-            }
-            
-            i = j;
-        }
-        
-        // Sort regions by length (longest first) and return the longest one
-        // TODO: In the future, we could modify the return type to return all regions
-        consecutive_regions.sort_by(|a, b| {
-            let len_a = a.query_end - a.query_start;
-            let len_b = b.query_end - b.query_start;
-            len_b.cmp(&len_a)
-        });
-        
-        
-        // Return the longest consecutive region we found, or fall back to the first k-mer
-        if let Some(region) = consecutive_regions.first() {
-            Some(region.clone())
-        } else {
-            let query_start = *query_positions.first()?;
-            let target_start = *target_positions.first()?;
-            
-            Some(MatchedRegion {
-                query_start,
-                query_end: query_start + ksize,
-                match_start: target_start,
-                match_end: target_start + ksize,
-            })
-        }
-    }
 
     /// Find a signature by name in the index
     fn find_signature_by_name(&self, name: &str) -> Option<ProteinSignature> {
