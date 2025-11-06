@@ -839,9 +839,9 @@ mod tests {
         target_index.find_matched_regions(query_index)
 
 
-        assert!(matching_region.query_subseq  == "QCPMSYGRLIGLISFGGFV")
-        assert!(matching_region.moltype_seq   == "pphhphhphhhhhphhhhh")
-        assert!(matching_region.target_subseq == "RDGVNWGRIVAFFEFGGVM")
+        assert_eq(matching_region.query_subseq,   "QCPMSYGRLIGLISFGGFV");
+        assert_eq(matching_region.moltype_seq,    "pphhphhphhhhhphhhhh");
+        assert_eq!(matching_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
         Ok(())
 
     }
