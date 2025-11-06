@@ -836,7 +836,7 @@ mod tests {
         )?;
 
         // TODO: do BLC2 vs CED9 here
-        target_index.find_matched_regions(query_index)
+        target_index.find_matched_regions(query_index);
 
 
         assert_eq(matching_region.query_subseq,   "QCPMSYGRLIGLISFGGFV");
