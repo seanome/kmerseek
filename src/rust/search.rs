@@ -80,7 +80,7 @@ pub struct SearchResult {
 pub struct MatchedRegion {
 
     /// Target sequence name
-    pub match_name: String,
+    pub target_name: String,
 
     /// Query sequence name
     pub query_name: String,
@@ -95,16 +95,16 @@ pub struct MatchedRegion {
     pub query_subseq: String,
 
     /// Target sequence start position
-    pub match_start: u32,
+    pub target_start: u32,
 
     /// Target sequence end position
-    pub match_end: u32,
+    pub target_end: u32,
 
     /// Target subsequence (stitched k-mers)
-    pub match_subseq: String,
+    pub target_subseq: String,
 
     /// Encoded sequence (hp/dayhoff/protein encoding)
-    pub encoded: String,
+    pub moltype_seq: String,
 
     /// Length of the match
     pub length: u32,
@@ -118,16 +118,16 @@ Match Name: {}
 query: {} ({}-{})
 alpha: {}
 match: {} ({}-{})
-", 
-            self.query_name,
-            self.match_name,
-            self.query_subseq,
-            self.query_start,
-            self.query_end,
-            self.encoded,
-            self.match_subseq,
-            self.match_start,
-            self.match_end
+",
+               self.query_name,
+               self.target_name,
+               self.query_subseq,
+               self.query_start,
+               self.query_end,
+               self.moltype_seq,
+               self.target_subseq,
+               self.target_start,
+               self.target_end
         )
     }
 }
@@ -313,7 +313,7 @@ impl ProteinSearcher {
 
         let matched_regions = self.find_matched_regions(
             query,
-            target.name(),
+            target,
             &intersection
         );
 
@@ -476,15 +476,15 @@ impl ProteinSearcher {
         );
 
         Some(MatchedRegion {
-            match_name: match_name.to_string(),
+            target_name: match_name.to_string(),
             query_name: query_name.to_string(),
             query_start: query_start as u32,
             query_end: query_end as u32,
             query_subseq: query_region.to_string(),
-            match_start: target_start as u32,
-            match_end: target_end as u32,
-            match_subseq: target_region.to_string(),
-            encoded: encoded_seq,
+            target_start: target_start as u32,
+            target_end: target_end as u32,
+            target_subseq: target_region.to_string(),
+            moltype_seq: encoded_seq,
             length: (query_end - query_start) as u32,
             to_print,
         })
@@ -557,23 +557,17 @@ impl ProteinSearcher {
             self.encode_sequence_hp(&query_stitched)
         };
 
-        let to_print = format!(
-            "---\nQuery Name: {}\nMatch Name: {}\nquery: {} ({}-{})\nalpha: {}\nmatch: {} ({}-{})\n",
-            query_name, match_name, query_stitched, query_start, query_end, encoded_seq, target_stitched, match_start, match_end
-        );
-
         Some(MatchedRegion {
-            match_name: match_name.to_string(),
+            target_name: match_name.to_string(),
             query_name: query_name.to_string(),
             query_start,
             query_end,
             query_subseq: query_stitched,
-            match_start,
-            match_end,
-            match_subseq: target_stitched,
-            encoded: encoded_seq,
+            target_start: match_start,
+            target_end: match_end,
+            target_subseq: target_stitched,
+            moltype_seq: encoded_seq,
             length,
-            to_print,
         })
     }
 
@@ -605,17 +599,14 @@ impl ProteinSearcher {
         result
     }
 
-    /// Find all consecutive matched regions between a query and
+    /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
     pub fn find_matched_regions(
         &self,
         query_signature: &ProteinSignature,
-        target_name: &str,
+        target_signature: &ProteinSignature,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
-        let target_sig = match self.find_signature_by_name(target_name) {
-            Some(sig) => sig,
-            None => return Vec::new(),
-        };
+
         let ksize = query_signature.protein_ksize() as usize;
 
         // Collect original sequence positions from k-mer info
@@ -626,7 +617,7 @@ impl ProteinSearcher {
 
         for &hashval in intersection {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
-                (query_signature.kmer_infos().get(&hashval), target_sig.kmer_infos().get(&hashval))
+                (query_signature.kmer_infos().get(&hashval), target_signature.kmer_infos().get(&hashval))
             {
                 for positions in query_kmer_info.original_kmer_to_position.values() {
                     query_positions.extend(positions);
@@ -671,8 +662,8 @@ impl ProteinSearcher {
                 consecutive_regions.push(MatchedRegion {
                     query_start: start_pos,
                     query_end: end_pos,
-                    match_start: target_start,
-                    match_end: target_start + consecutive_count + ksize - 1,
+                    target_start: target_start,
+                    target_end: target_start + consecutive_count + ksize - 1,
                 });
             }
             
@@ -737,6 +728,7 @@ mod tests {
     use super::*;
     use crate::signature::ProteinSignature;
     use tempfile::TempDir;
+    use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA};
 
     /// Test search functionality similar to the Python tests
     #[test]
@@ -800,6 +792,58 @@ mod tests {
         assert!(first_result.intersect_hashes > 0);
 
         Ok(())
+    }
+
+    /// Tests if the correct k-mer overlap region for a query-target pair is found
+    // # BCL2 & Ced9 `hp` k-mer match via **`pphhphhphhhhhphhhhh`, yay!**
+    //
+    // This is awesome because it’s evidence that the hp k-mer method can work! The k-mer sizes
+    // that this works for are k ≤ 19, since this region is of length 19
+    //
+    // → Need to figure out how we can auto-detect the k-mer size necessary for a query protein.
+    //
+    // ```
+    // Ced9 pr: …RTVGNAQTD**QCPMSYGRLIGLISFGGFV**AAKMMESVE…
+    // Ced9 hp: …pphhphppp**pphhphhphhhhhphhhhh**hhphhpphp…
+    //                    |||||||||||||||||||
+    // BCL2 hp: …hhphhpphh**pphhphhphhhhhphhhhh**phpphppph…
+    // BCL2 pr: …FATVVEELF**RDGVNWGRIVAFFEFGGVM**CVESVNREM…
+    //
+    // - RDG starts at 138-157
+    // ```
+    #[test]
+    fn test_find_matched_regions_scaled1() -> Result<()> {
+        let ksize = 15;
+        let scaled = 1;
+        let moltype = "hp";
+        let store_raw_sequences = true;
+
+
+        let query_index = ProteomeIndex::new_with_auto_filename(
+            &TEST_CED9_FASTA,
+            ksize,
+            scaled,
+            moltype,
+            true,
+        )?;
+
+        let target_index = ProteomeIndex::new_with_auto_filename(
+            &TEST_BLC2_FASTA,
+            ksize,
+            scaled,
+            moltype,
+            true,
+        )?;
+
+        // TODO: do BLC2 vs CED9 here
+        target_index.find_matched_regions(query_index)
+
+
+        assert!(matching_region.query_subseq  == "QCPMSYGRLIGLISFGGFV")
+        assert!(matching_region.moltype_seq   == "pphhphhphhhhhphhhhh")
+        assert!(matching_region.target_subseq == "RDGVNWGRIVAFFEFGGVM")
+        Ok(())
+
     }
 
     /// Test TF-IDF calculation
