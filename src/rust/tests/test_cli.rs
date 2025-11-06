@@ -3,7 +3,7 @@ use predicates::prelude::*;
 use std::process::Command;
 use tempfile::tempdir;
 
-use crate::tests::test_fixtures::{TEST_FASTA, TEST_FASTA_GZ};
+use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
@@ -88,7 +88,7 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
         cmd.args([
             "index",
             "--input",
-            TEST_FASTA,
+            TEST_CED9_FASTA,
             "--output",
             output_path.to_str().unwrap(),
             "--ksize",
