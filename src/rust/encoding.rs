@@ -1,6 +1,11 @@
 use anyhow::Result;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 
+const MURMUR64PROTEIN: /* Type */ = "Murmur64Protein".into();
+const MURMUR64DAYHOFF: /* Type */ = "Murmur64Dayhoff".into();
+const MURMUR64HP: /* Type */ = "Murmur64Hp".into();
+
+
 /// Returns the appropriate `HashFunctions` variant for the given `moltype`.
 ///
 /// # Arguments
@@ -25,6 +30,31 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
         )),
     }
 }
+
+pub fn get_moltype_from_hash_function_string(hash_function: String) -> Result<String, anyhow::Error> {
+    match hash_function {
+        MURMUR64PROTEIN => Ok("protein".to_string()),
+        MURMUR64DAYHOFF => Ok("dayhoff".to_string()),
+        MURMUR64HP => Ok("hp".to_string()),
+        _ => Err(anyhow::anyhow!(
+            "Invalid hash function: {}, only 'Murmur64' with 'protein', 'dayhoff', or 'hp' are supported", hash_function
+        ))
+    }
+
+}
+
+pub fn get_moltype_from_hash_function(hash_function: HashFunctions) -> Result<String, anyhow::Error> {
+    match hash_function {
+        HashFunctions::Murmur64Protein => Ok("protein".to_string()),
+        HashFunctions::Murmur64Dayhoff => Ok("dayhoff".to_string()),
+        HashFunctions::Murmur64Hp => Ok("hp".to_string()),
+        _ => Err(anyhow::anyhow!(
+            "Invalid hash function: {}, only Sourmash HashFunctions::Murmur64 with 'protein', 'dayhoff', or 'hp' are supported", hash_function
+        ))
+    }
+
+}
+
 
 #[allow(clippy::doc_overindented_list_items)]
 /// Return an amino acid encoding function for a given `moltype` string.

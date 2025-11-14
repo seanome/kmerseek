@@ -8,7 +8,7 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::SigStore;
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
-use crate::{encoding::get_hash_function_from_moltype, kmer::KmerInfo};
+use crate::{encoding::{get_hash_function_from_moltype, get_moltype_from_hash_function}, kmer::KmerInfo};
 
 pub const SEED: u64 = 42;
 pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
@@ -82,6 +82,7 @@ pub struct SerializableSignature {
     pub md5sum: String,
     pub minhash: KmerMinHash,
     pub moltype: String,
+    pub ksize: u32,
 }
 
 // Custom serialization for SerializableSignature to avoid KmerMinHash serialization issues
@@ -221,7 +222,7 @@ impl<'de> Deserialize<'de> for SerializableSignature {
                     minhash.add_many(&mins).map_err(de::Error::custom)?;
                 }
 
-                Ok(SerializableSignature { location, name, md5sum, minhash, moltype })
+                Ok(SerializableSignature { location, name, md5sum, minhash, moltype, ksize })
             }
         }
 
@@ -237,24 +238,30 @@ impl<'de> Deserialize<'de> for SerializableSignature {
 
 impl From<SmallSignature> for SerializableSignature {
     fn from(sig: SmallSignature) -> Self {
+        let moltype = get_moltype_from_hash_function(sig.minhash.hash_function()).expect(
+            "Invalid hash function");
+        let ksize = sig.minhash.ksize();
         Self {
             location: sig.location,
             name: sig.name,
             md5sum: sig.md5sum,
             minhash: sig.minhash,
-            moltype: sig.moltype().clone(),
+            moltype: moltype,
+            ksize: ksize as u32,
         }
     }
 }
 
 impl From<SigStore> for SerializableSignature {
     fn from(sig: SigStore) -> Self {
+        let moltype = get_moltype_from_hash_function_string(sig.hash_function());
         Self {
             location: sig.filename().clone(),
             name: sig.name().clone(),
             md5sum: sig.md5sum().to_string(),
             minhash: sig.minhash().unwrap().clone(),
-            moltype: sig.moltype().clone(),
+            moltype: moltype.unwrap(),
+            ksize: sig.minhash().unwrap().ksize() as u32,
         }
     }
 }
@@ -390,6 +397,7 @@ impl ProteinSignature {
             md5sum: String::new(),
             minhash,
             moltype: moltype.to_string(),
+            ksize,
         };
 
         Ok(Self {
@@ -449,6 +457,8 @@ impl ProteinSignature {
             name: data.name.clone(),
             md5sum,
             minhash,
+            moltype: moltype.clone(),
+            ksize: protein_ksize,
         };
 
         Ok(Self {

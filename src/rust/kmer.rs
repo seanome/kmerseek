@@ -4,7 +4,8 @@ use std::collections::HashMap;
 /// Represents information about a k-mer occurrence
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct KmerInfo {
-    pub ksize: usize,
+    // Sourmash branchwater uses u32 for ksize so we will, too
+    pub ksize: u32,
     pub hashval: u64,
     pub encoded_kmer: String,
     pub original_kmer_to_position: HashMap<String, Vec<usize>>,
@@ -12,11 +13,11 @@ pub struct KmerInfo {
 
 impl KmerInfo {
     /// Creates a new KmerInfo with pre-allocated capacity
-    pub fn new(hashval: u64, ksize: usize) -> Self {
+    pub fn new(hashval: u64, ksize: u32) -> Self {
         Self {
             ksize,
             hashval,
-            encoded_kmer: String::with_capacity(ksize),
+            encoded_kmer: String::with_capacity(ksize.try_into().unwrap()),
             original_kmer_to_position: HashMap::new(),
         }
     }

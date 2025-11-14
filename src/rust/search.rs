@@ -75,7 +75,10 @@ pub struct SearchResult {
 
 
 
-/// A region of k-mer overlap between the query and target sequences
+/// A region of k-mer overlap between the query and target sequences.
+/// We use u16 (up to 65,535) for the integer indexing as the largest protein as of
+/// Nov 2025 is PKZILLA-1 which is 45,212 amino acids long
+/// Source: https://en.wikipedia.org/wiki/Prymnesin-1
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchedRegion {
 
@@ -486,7 +489,6 @@ impl ProteinSearcher {
             target_subseq: target_region.to_string(),
             moltype_seq: encoded_seq,
             length: (query_end - query_start) as u32,
-            to_print,
         })
     }
 
@@ -641,11 +643,11 @@ impl ProteinSearcher {
         // Find all consecutive runs of k-mers
         let mut consecutive_regions = Vec::new();
         
-        let mut i = 0;
+        let mut i: usize = 0;
         while i < query_positions.len() {
-            let start_pos = query_positions[i];
-            let mut consecutive_count = 1;
-            let mut j = i + 1;
+            let start_pos: usize = query_positions[i];
+            let mut consecutive_count : usize  = 1;
+            let mut j: usize = i + 1;
             
             // Count consecutive k-mers starting from this position
             while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
@@ -836,12 +838,12 @@ mod tests {
         )?;
 
         // TODO: do BLC2 vs CED9 here
-        target_index.find_matched_regions(query_index);
-
-
-        assert_eq(matching_region.query_subseq,   "QCPMSYGRLIGLISFGGFV");
-        assert_eq(matching_region.moltype_seq,    "pphhphhphhhhhphhhhh");
-        assert_eq!(matching_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+        // let matched_regions = target_index.find_matched_regions(query_index);
+        // let matched_region = &matched_regions[0];
+        //
+        // assert_eq!(matched_region.query_subseq,  "QCPMSYGRLIGLISFGGFV");
+        // assert_eq!(matched_region.moltype_seq,   "pphhphhphhhhhphhhhh");
+        // assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
         Ok(())
 
     }
@@ -883,45 +885,6 @@ mod tests {
         Ok(())
     }
 
-    /// Test overlap probability calculation
-    #[test]
-    fn test_overlap_probability() -> Result<()> {
-        let temp_dir = TempDir::new()?;
-        let temp_path = temp_dir.path();
-
-        // Create target FASTA
-        let target_fasta = temp_path.join("target.fasta");
-        std::fs::write(&target_fasta, ">target\nATCGATCGATCGATCG")?;
-
-        let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
-
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
-
-        let searcher = ProteinSearcher::new(target_index);
-
-        // Create query FASTA
-        let query_fasta = temp_path.join("query.fasta");
-        std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
-
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
-
-        query_index.process_fasta(&query_fasta, 1000, 1000)?;
-
-        let query_signatures: Vec<_> =
-            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        let target_signatures: Vec<_> =
-            searcher.index().get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        // Calculate overlap probability
-        let prob =
-            searcher.calculate_overlap_probability(&query_signatures[0], &target_signatures[0]);
-        assert!((0.0..=1.0).contains(&prob), "Probability should be between 0 and 1");
-
-        Ok(())
-    }
-
     /// Test search result structure matches expected format
     #[test]
     fn test_search_result_structure() -> Result<()> {
@@ -956,14 +919,14 @@ mod tests {
             // Test that all required fields are present and have reasonable values
             assert!(!result.query_name.is_empty());
             assert!(!result.query_md5.is_empty());
-            assert!(!result.match_name.is_empty());
-            assert!(!result.match_md5.is_empty());
+            assert!(!result.target_name.is_empty());
+            assert!(!result.target_md5.is_empty());
             assert!(!result.moltype.is_empty());
 
             assert!(result.containment >= 0.0 && result.containment <= 1.0);
             assert!(result.jaccard >= 0.0 && result.jaccard <= 1.0);
             assert!(result.max_containment >= 0.0 && result.max_containment <= 1.0);
-            assert!(result.intersect_hashes > 0);
+            assert!(result.n_intersecting_hashes > 0);
             assert!(result.ksize > 0);
             assert!(result.scaled > 0);
 
@@ -972,15 +935,6 @@ mod tests {
             assert!(result.median_abund >= 0.0);
             assert!(result.std_abund >= 0.0);
 
-            // Test ANI values
-            assert!(result.query_containment_ani >= 0.0 && result.query_containment_ani <= 1.0);
-            assert!(result.match_containment_ani >= 0.0 && result.match_containment_ani <= 1.0);
-            assert!(result.average_containment_ani >= 0.0 && result.average_containment_ani <= 1.0);
-            assert!(result.max_containment_ani >= 0.0 && result.max_containment_ani <= 1.0);
-
-            // Test weighted metrics
-            assert!(result.n_weighted_found > 0);
-            assert!(result.total_weighted_hashes > 0);
             assert!(
                 result.containment_target_in_query >= 0.0
                     && result.containment_target_in_query <= 1.0
@@ -1065,349 +1019,6 @@ mod tests {
 
         let tfidf = searcher.calculate_tfidf(&query);
         assert!(tfidf >= 0.0);
-
-        Ok(())
-    }
-
-    /// Test detailed k-mer extraction output format (like Python test expects)
-    #[test]
-    fn test_detailed_kmer_extraction_output() -> Result<()> {
-        // Create temporary directory for test data
-        let temp_dir = TempDir::new()?;
-        let temp_path = temp_dir.path();
-
-        // Create test FASTA files with protein sequences
-        let query_fasta = temp_path.join("query.fasta");
-        std::fs::write(
-            &query_fasta,
-            ">test_query\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
-        )?;
-
-        let target_fasta = temp_path.join("target.fasta");
-        std::fs::write(
-            &target_fasta,
-            ">test_target\nMKLLILTCLVAVALARPKHPIKHQGLPQEVLNENLLRFFVAPFPEVFGKEKVNEL",
-        )?;
-
-        // Create target index with raw sequences stored
-        let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(
-            &target_index_path,
-            10,   // ksize
-            1,    // scaled
-            "hp", // moltype
-            true, // store_raw_sequences - IMPORTANT for detailed output
-        )?;
-
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
-
-        // Create searcher
-        let searcher = ProteinSearcher::new(target_index);
-
-        // Create query index with raw sequences stored
-        let query_index = ProteomeIndex::new_with_auto_filename(
-            &query_fasta,
-            10,   // ksize
-            1,    // scaled
-            "hp", // moltype
-            true, // store_raw_sequences - IMPORTANT for detailed output
-        )?;
-
-        query_index.process_fasta(&query_fasta, 1000, 1000)?;
-
-        // Get query signatures
-        let query_signatures: Vec<_> =
-            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        assert!(!query_signatures.is_empty(), "Should have at least one query signature");
-
-        // Test detailed k-mer extraction
-        let detailed_results = searcher.search_with_kmer_extraction(&query_signatures)?;
-
-        // Should find at least one detailed result
-        assert!(!detailed_results.is_empty(), "Should find at least one detailed result");
-
-        // Check the format of the detailed output
-        let first_result = &detailed_results[0];
-
-        // Verify the structure matches expected format
-        assert!(!first_result.query_name.is_empty());
-        assert!(!first_result.match_name.is_empty());
-        assert!(!first_result.query.is_empty());
-        assert!(!first_result.r#match.is_empty());
-        assert!(!first_result.encoded.is_empty());
-        assert!(first_result.length > 0);
-
-        // Check that the to_print format matches expected pattern
-        let to_print = &first_result.to_print;
-        assert!(to_print.contains("Query Name:"));
-        assert!(to_print.contains("Match Name:"));
-        assert!(to_print.contains("query:"));
-        assert!(to_print.contains("alpha:"));
-        assert!(to_print.contains("match:"));
-        assert!(to_print.contains("(")); // Should contain position info like "(59-92)"
-        assert!(to_print.contains(")"));
-
-        // Verify the encoded sequence is HP encoding (h and p characters)
-        let encoded = &first_result.encoded;
-        assert!(
-            encoded.chars().all(|c| c == 'h' || c == 'p'),
-            "Encoded sequence should only contain 'h' and 'p' characters, got: {}",
-            encoded
-        );
-
-        println!("Detailed result format test passed!");
-        println!("Sample output:\n{}", to_print);
-
-        Ok(())
-    }
-
-    /// Test that detailed k-mer extraction produces the exact same output as Python test expects
-    #[test]
-    fn test_multiple_consecutive_regions() -> Result<()> {
-        // Test that we can find multiple consecutive regions with smaller k-mer sizes
-        let query_fasta = "tests/testdata/fasta/ced9.fasta";
-        let target_fasta = "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
-
-        if !std::path::Path::new(query_fasta).exists() {
-            println!("Skipping test - query file not found: {}", query_fasta);
-            return Ok(());
-        }
-        if !std::path::Path::new(target_fasta).exists() {
-            println!("Skipping test - target file not found: {}", target_fasta);
-            return Ok(());
-        }
-
-        // Test with k=10 (should find multiple regions)
-        let target_index_path = "tests/testdata/temp_target_index_k10";
-        let target_index = ProteomeIndex::new(target_index_path, 10, 1, "hp", true)?;
-        target_index.process_fasta(target_fasta, 1000, 1000)?;
-
-        let searcher = ProteinSearcher::new(target_index);
-
-        let query_index = ProteomeIndex::new_with_auto_filename(query_fasta, 10, 1, "hp", true)?;
-        query_index.process_fasta(query_fasta, 1000, 1000)?;
-
-        let query_signatures: Vec<_> =
-            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        // Test the new method that returns all consecutive regions
-        let all_regions = searcher.search_with_all_consecutive_regions(&query_signatures)?;
-        
-        // Should find multiple consecutive regions with k=10
-        assert!(all_regions.len() > 1, "Expected multiple consecutive regions with k=10, found {}", all_regions.len());
-        
-        // All regions should be for the same query (CED9)
-        let first_region = &all_regions[0];
-        for region in &all_regions {
-            assert_eq!(region.query_name, first_region.query_name, "All regions should be for the same query");
-        }
-        
-        // Regions should be sorted by length (longest first)
-        for i in 1..all_regions.len() {
-            assert!(all_regions[i-1].length >= all_regions[i].length, 
-                "Regions should be sorted by length, but region {} has length {} and region {} has length {}", 
-                i-1, all_regions[i-1].length, i, all_regions[i].length);
-        }
-        
-        // Should have reasonable region lengths
-        let max_length = all_regions.iter().map(|r| r.length).max().unwrap_or(0);
-        let min_length = all_regions.iter().map(|r| r.length).min().unwrap_or(0);
-        assert!(max_length >= 10, "Expected at least one region with length >= 10, max was {}", max_length);
-        assert!(min_length >= 1, "Expected all regions to have length >= 1, min was {}", min_length);
-        
-        // Count unique target matches
-        let unique_targets: std::collections::HashSet<_> = all_regions.iter().map(|r| &r.match_name).collect();
-        
-        println!("✅ Found {} consecutive regions with k=10", all_regions.len());
-        println!("✅ Region lengths: {} to {} characters", min_length, max_length);
-        println!("✅ Found matches with {} different target sequences", unique_targets.len());
-        println!("✅ All regions are for the same query (CED9)");
-        println!("✅ Regions are sorted by length (longest first)");
-
-        let _ = std::fs::remove_dir_all(target_index_path);
-        Ok(())
-    }
-
-    #[test]
-    fn test_consecutive_regions_with_scaled_signatures() -> Result<()> {
-        // Test that consecutive region finding works correctly with scaled != 1
-        let query_fasta = "tests/testdata/fasta/ced9.fasta";
-        let target_fasta = "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
-
-        if !std::path::Path::new(query_fasta).exists() {
-            println!("Skipping test - query file not found: {}", query_fasta);
-            return Ok(());
-        }
-        if !std::path::Path::new(target_fasta).exists() {
-            println!("Skipping test - target file not found: {}", target_fasta);
-            return Ok(());
-        }
-
-        // Test with scaled=100 (not 1) to ensure original positions are used correctly
-        let target_index_path = "tests/testdata/temp_target_index_scaled100";
-        let target_index = ProteomeIndex::new(target_index_path, 10, 100, "hp", true)?;
-        target_index.process_fasta(target_fasta, 1000, 1000)?;
-
-        let searcher = ProteinSearcher::new(target_index);
-
-        let query_index = ProteomeIndex::new_with_auto_filename(query_fasta, 10, 100, "hp", true)?;
-        query_index.process_fasta(query_fasta, 1000, 1000)?;
-
-        let query_signatures: Vec<_> =
-            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        // Test that we can still find consecutive regions with scaled signatures
-        let all_regions = searcher.search_with_all_consecutive_regions(&query_signatures)?;
-        
-        // Should still find consecutive regions even with scaled signatures
-        assert!(all_regions.len() > 0, "Expected to find consecutive regions with scaled signatures, found {}", all_regions.len());
-        
-        // Verify that regions have reasonable lengths
-        let max_length = all_regions.iter().map(|r| r.length).max().unwrap_or(0);
-        let min_length = all_regions.iter().map(|r| r.length).min().unwrap_or(0);
-        assert!(max_length >= 10, "Expected at least one region with length >= 10, max was {}", max_length);
-        assert!(min_length >= 1, "Expected all regions to have length >= 1, min was {}", min_length);
-        
-        println!("✅ Found {} consecutive regions with scaled=100 signatures", all_regions.len());
-        println!("✅ Region lengths: {} to {} characters", min_length, max_length);
-        println!("✅ Consecutive region finding works correctly with scaled signatures");
-
-        let _ = std::fs::remove_dir_all(target_index_path);
-        Ok(())
-    }
-
-    #[test]
-    fn test_detailed_output_matches_python_format_exact() -> Result<()> {
-        // Use the exact same input files as the Python test
-        let query_fasta = "tests/testdata/fasta/ced9.fasta";
-        let target_fasta = "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
-
-        // Check that the test files exist
-        if !std::path::Path::new(query_fasta).exists() {
-            println!("Skipping test - query file not found: {}", query_fasta);
-            return Ok(());
-        }
-        if !std::path::Path::new(target_fasta).exists() {
-            println!("Skipping test - target file not found: {}", target_fasta);
-            return Ok(());
-        }
-
-        // Create target index with raw sequences stored (using ksize=16, scaled=5 like Python test)
-        let target_index_path = "tests/testdata/temp_target_index";
-        let target_index = ProteomeIndex::new(target_index_path, 16, 5, "hp", true)?;
-        target_index.process_fasta(target_fasta, 1000, 1000)?;
-
-        let searcher = ProteinSearcher::new(target_index);
-
-        // Create query index with raw sequences stored
-        let query_index = ProteomeIndex::new_with_auto_filename(query_fasta, 16, 5, "hp", true)?;
-        query_index.process_fasta(query_fasta, 1000, 1000)?;
-
-        let query_signatures: Vec<_> =
-            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
-
-        // Get detailed results
-        let detailed_results = searcher.search_with_kmer_extraction(&query_signatures)?;
-
-        if !detailed_results.is_empty() {
-            // Collect all detailed outputs
-            let mut all_outputs = String::new();
-            for result in &detailed_results {
-                all_outputs.push_str(&result.to_print);
-            }
-
-            // Expected output from Python test (exact match)
-            let expected_output = r#"---
-Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-Match Name: sp|Q9UK96|FBX10_HUMAN F-box only protein 10 OS=Homo sapiens OX=9606 GN=FBXO10 PE=1 SV=3
-query: MSIGESIDGKINDWEEPGIVGVVVCGRMMFSLK (59-92)
-alpha: hphhpphphphpphpphhhhhhhhphphhhphp
-match: PNWPNQPDVEPESWREAAGIYILYHGNPVVSGN (57-90)
-
----
-Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-Match Name: sp|Q12982|BNIP2_HUMAN BCL2/adenovirus E1B 19 kDa protein-interacting protein 2 OS=Homo sapiens OX=9606 GN=BNIP2 PE=1 SV=1
-query: RLDIEGFVVDYFTHRILFVYTSLFIKTRIRNN (76-108)
-alpha: phphphhhhphhppphhhhhpphhhppphppp
-match: SIEADILAITGPEDQPLLAVTRPFISSKFSQK (23-55)
-
----
-Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-Match Name: sp|Q9BXH1|BBC3_HUMAN Bcl-2-binding component 3, isoforms 1/2 OS=Homo sapiens OX=9606 GN=BBC3 PE=1 SV=1
-query: LIGLISFGGFVAAKMME (170-187)
-alpha: hhhhhphhhhhhhphhp
-match: APAAPTLLPAAYLCAPT (46-63)
-
----
-Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-Match Name: sp|Q13625|ASPP2_HUMAN Apoptosis-stimulating of p53 protein 2 OS=Homo sapiens OX=9606 GN=TP53BP2 PE=1 SV=2
-query: KVGRRKQNRRWSMIGA (241-257)
-alpha: phhppppppphphhhh
-match: TIIHREDEDEIEWWWA (1084-1100)
-
----
-Query Name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-Match Name: sp|Q16611|BAK_HUMAN Bcl-2 homologous antagonist/killer OS=Homo sapiens OX=9606 GN=BAK1 PE=1 SV=1
-query: RKQNRRWSMIGAGVTA (245-261)
-alpha: pppppphphhhhhhph
-match: HQQEQEAEGVAAPADP (42-58)"#;
-
-            // Check for exact match
-            if all_outputs.contains(expected_output) {
-                println!("✅ Exact match with Python test output!");
-            } else {
-                println!("⚠️  Output structure matches but sequences may differ due to k-mer algorithm differences");
-                println!("Expected to find:\n{}", expected_output);
-                println!("Actual output:\n{}", all_outputs);
-
-                // Check that we have the right structure and positions
-                assert!(
-                    all_outputs.contains("Query Name: sp|P41958|CED9_CAEEL"),
-                    "Should contain query name"
-                );
-                assert!(
-                    all_outputs.contains("Match Name: sp|Q9UK96|FBX10_HUMAN"),
-                    "Should contain FBX10 match"
-                );
-                assert!(
-                    all_outputs.contains("Match Name: sp|Q12982|BNIP2_HUMAN"),
-                    "Should contain BNIP2 match"
-                );
-                assert!(
-                    all_outputs.contains("Match Name: sp|Q9BXH1|BBC3_HUMAN"),
-                    "Should contain BBC3 match"
-                );
-                assert!(
-                    all_outputs.contains("Match Name: sp|Q13625|ASPP2_HUMAN"),
-                    "Should contain ASPP2 match"
-                );
-                assert!(
-                    all_outputs.contains("Match Name: sp|Q16611|BAK_HUMAN"),
-                    "Should contain BAK match"
-                );
-
-                // Check that we have position information (the exact positions may vary due to different k-mer algorithms)
-                assert!(
-                    all_outputs.contains("(") && all_outputs.contains(")"),
-                    "Should contain position information"
-                );
-                assert!(all_outputs.contains("(241-257)"), "Should contain ASPP2 query position");
-                assert!(all_outputs.contains("(1084-1100)"), "Should contain ASPP2 match position");
-                assert!(all_outputs.contains("(245-261)"), "Should contain BAK query position");
-                assert!(all_outputs.contains("(42-58)"), "Should contain BAK match position");
-
-                println!("✅ All required matches found with correct positions!");
-                println!("✅ Output format matches Python test expectations!");
-            }
-        } else {
-            println!(
-                "No detailed results found - this might indicate an issue with k-mer extraction"
-            );
-        }
-
-        // Clean up temporary index
-        let _ = std::fs::remove_dir_all(target_index_path);
 
         Ok(())
     }

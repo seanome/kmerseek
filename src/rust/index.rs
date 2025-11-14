@@ -76,10 +76,11 @@ pub struct ProteomeIndex {
     #[allow(dead_code)]
     stats: ProteomeIndexKmerStats,
 
-    // Add moltype field for serialization
+    // Add moltype field for serialization so don't have to read signatures to find it
     moltype: String,
 
-    // Add ksize field for serialization
+    // Add ksize field for serialization so don't have to read signatures to find it
+    // Sourmash branchwater uses u32 for ksize so we will, too
     ksize: u32,
 
     // Add minhash_ksize field for serialization
@@ -846,7 +847,7 @@ impl ProteomeIndex {
                         .kmer_infos_mut()
                         .entry(hashval)
                         .or_insert_with(|| KmerInfo {
-                            ksize,
+                            ksize: ksize.try_into().unwrap(),
                             hashval,
                             encoded_kmer: encoded_kmer.clone(),
                             original_kmer_to_position: HashMap::new(),
