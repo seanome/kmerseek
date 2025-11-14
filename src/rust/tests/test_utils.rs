@@ -1,4 +1,4 @@
-use crate::signature::ProteinSketch;
+use crate::sketch::ProteinSketch;
 
 /// Utility function to print k-mer infos in a readable format for debugging
 pub fn print_kmer_infos(protein_signature: &ProteinSketch) {

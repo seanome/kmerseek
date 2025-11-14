@@ -8,8 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
-use crate::signature::{ProteinSketch};
 use crate::significance;
+use crate::sketch::ProteinSketch;
 
 /// Search result for a single query-target pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -728,7 +728,7 @@ impl ProteinSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signature::ProteinSketch;
+    use crate::sketch::ProteinSketch;
     use tempfile::TempDir;
     use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA};
 

@@ -19,7 +19,8 @@ use crate::encoding::{
 };
 use crate::errors::{IndexError, IndexResult};
 use crate::kmer::KmerInfo;
-use crate::signature::{ProteinSketch, ProteinSketchStore, SignatureAccess, SEED};
+use crate::signature::{SignatureAccess, SEED};
+use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1102,7 +1103,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::index::ProteomeIndex;
-    use crate::signature::ProteinSketch;
+    use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };

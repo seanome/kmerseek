@@ -1,5 +1,5 @@
 use crate::kmer::KmerInfo;
-use crate::signature::ProteinSketch;
+use crate::sketch::ProteinSketch;
 use crate::types::{HashValue, Position};
 
 /// Iterator over k-mer information in a protein signature

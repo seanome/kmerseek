@@ -226,7 +226,7 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
             let (index, _) = setup_test_index(ksize, moltype);
 
             // Create a test protein signature
-            let mut protein_sig = kmerseek::signature::ProteinSketch::new(
+            let mut protein_sig = kmerseek::sketch::ProteinSketch::new(
                 "test_protein",
                 ksize,
                 1, // scaled

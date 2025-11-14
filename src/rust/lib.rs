@@ -17,6 +17,7 @@ pub mod metrics;
 pub mod search;
 pub mod signature;
 pub mod significance;
+pub mod sketch;
 pub mod types;
 
 #[cfg(test)]
