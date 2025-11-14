@@ -19,7 +19,7 @@ use crate::encoding::{
 };
 use crate::errors::{IndexError, IndexResult};
 use crate::kmer::KmerInfo;
-use crate::signature::{ProteinSignature, ProteinSignatureData, SignatureAccess, SEED};
+use crate::signature::{ProteinSketch, ProteinSketchStore, SignatureAccess, SEED};
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -32,7 +32,7 @@ pub struct ProteomeIndexKmerStats {
 #[derive(Serialize, Deserialize)]
 struct ProteomeIndexState {
     // Store efficient signature data instead of full signatures
-    signature_data: Vec<ProteinSignatureData>,
+    signature_data: Vec<ProteinSketchStore>,
     combined_mins: Vec<u64>,
     combined_abunds: Option<Vec<u64>>,
     moltype: String,
@@ -63,7 +63,7 @@ pub struct ProteomeIndex {
     combined_minhash: Arc<Mutex<KmerMinHash>>,
 
     // Map of signature md5 -> protein signature (thread-safe concurrent map)
-    signatures: DashMap<String, ProteinSignature>,
+    signatures: DashMap<String, ProteinSketch>,
 
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
@@ -197,7 +197,7 @@ impl ProteomeIndex {
     }
 
     /// Get a reference to the signatures map (for testing)
-    pub fn get_signatures(&self) -> &DashMap<String, ProteinSignature> {
+    pub fn get_signatures(&self) -> &DashMap<String, ProteinSketch> {
         &self.signatures
     }
 
@@ -296,7 +296,7 @@ impl ProteomeIndex {
                 let chunk_key = format!("signatures_chunk_{}", chunk_idx);
                 let chunk_data = self.db.get(chunk_key.as_bytes())?;
                 if let Some(data) = chunk_data {
-                    let chunk: Vec<ProteinSignatureData> = bincode::deserialize(&data)?;
+                    let chunk: Vec<ProteinSketchStore> = bincode::deserialize(&data)?;
                     all_signature_data.extend(chunk);
                 }
             }
@@ -304,7 +304,7 @@ impl ProteomeIndex {
             // Reconstruct signatures from efficient data
             let mut signatures_map = HashMap::new();
             for signature_data in all_signature_data {
-                let protein_sig = ProteinSignature::from_efficient_data(
+                let protein_sig = ProteinSketch::from_efficient_data(
                     signature_data,
                     metadata.moltype.clone(),
                     metadata.ksize,
@@ -368,7 +368,7 @@ impl ProteomeIndex {
                 // Reconstruct signatures from efficient data
                 let mut signatures_map = HashMap::new();
                 for signature_data in state.signature_data {
-                    let protein_sig = ProteinSignature::from_efficient_data(
+                    let protein_sig = ProteinSketch::from_efficient_data(
                         signature_data,
                         state.moltype.clone(),
                         state.ksize,
@@ -486,7 +486,7 @@ impl ProteomeIndex {
                 let chunk_key = format!("signatures_chunk_{}", chunk_idx);
                 let chunk_data = db.get(chunk_key.as_bytes())?;
                 if let Some(data) = chunk_data {
-                    let chunk: Vec<ProteinSignatureData> = bincode::deserialize(&data)?;
+                    let chunk: Vec<ProteinSketchStore> = bincode::deserialize(&data)?;
                     all_signature_data.extend(chunk);
                 }
             }
@@ -494,7 +494,7 @@ impl ProteomeIndex {
             // Reconstruct signatures from efficient data
             let mut signatures_map = HashMap::new();
             for signature_data in all_signature_data {
-                let protein_sig = ProteinSignature::from_efficient_data(
+                let protein_sig = ProteinSketch::from_efficient_data(
                     signature_data,
                     metadata.moltype.clone(),
                     metadata.ksize,
@@ -717,7 +717,7 @@ impl ProteomeIndex {
     ///
     /// # Returns
     ///
-    /// Returns the processed `ProteinSignature` on success, or an error if the operation fails.
+    /// Returns the processed `ProteinSketch` on success, or an error if the operation fails.
     /// The error will contain details about any invalid amino acids found in the sequence.
     ///
     /// # Example
@@ -750,12 +750,12 @@ impl ProteomeIndex {
         &self,
         sequence: &str,
         name: &str,
-    ) -> IndexResult<ProteinSignature> {
+    ) -> IndexResult<ProteinSketch> {
         // Validate and resolve ambiguity if needed
         let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence)?;
 
         // Create a new protein signature
-        let mut protein_sig = ProteinSignature::new(name, self.ksize, self.scaled, &self.moltype)?;
+        let mut protein_sig = ProteinSketch::new(name, self.ksize, self.scaled, &self.moltype)?;
 
         // Add the protein sequence to the signature
         protein_sig.add_protein(processed_sequence.as_bytes())?;
@@ -825,7 +825,7 @@ impl ProteomeIndex {
     pub fn process_kmers(
         &self,
         sequence: &str,
-        protein_signature: &mut ProteinSignature,
+        protein_signature: &mut ProteinSketch,
     ) -> IndexResult<()> {
         let ksize = self.ksize as usize;
         let seed = SEED;
@@ -868,12 +868,12 @@ impl ProteomeIndex {
     ///
     /// # Arguments
     ///
-    /// * `signatures` - A vector of `ProteinSignature` objects to store
+    /// * `signatures` - A vector of `ProteinSketch` objects to store
     ///
     /// # Returns
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
-    pub fn store_signatures(&self, protein_signatures: Vec<ProteinSignature>) -> IndexResult<()> {
+    pub fn store_signatures(&self, protein_signatures: Vec<ProteinSketch>) -> IndexResult<()> {
         // Collect the minhash data from new signatures before storing them
         let new_hashes_and_abunds: Vec<(u64, u64)> = protein_signatures
             .iter()
@@ -920,12 +920,12 @@ impl ProteomeIndex {
     ///
     /// # Why this is idiomatic
     ///
-    /// - **Borrowing over ownership**: Takes `&[ProteinSignature]` to avoid unnecessary moves
+    /// - **Borrowing over ownership**: Takes `&[ProteinSketch]` to avoid unnecessary moves
     /// - **Reuses existing logic**: Delegates to `store_signatures` for consistency
     /// - **Memory efficient**: Allows for batch processing without accumulating all signatures
     pub fn store_signatures_batch(
         &self,
-        protein_signatures: &[ProteinSignature],
+        protein_signatures: &[ProteinSketch],
     ) -> IndexResult<()> {
         // Convert slice to owned Vec for the existing method
         // This is a small allocation cost for the benefit of code reuse
@@ -1066,7 +1066,7 @@ impl ProteomeIndex {
         use rayon::prelude::*;
 
         // Process the batch in parallel
-        let signatures: Result<Vec<ProteinSignature>, IndexError> = batch
+        let signatures: Result<Vec<ProteinSketch>, IndexError> = batch
             .par_iter()
             .map(|(seq_bytes, id_bytes)| {
                 let sequence = std::str::from_utf8(seq_bytes)?;
@@ -1102,7 +1102,7 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::index::ProteomeIndex;
-    use crate::signature::ProteinSignature;
+    use crate::signature::ProteinSketch;
     use crate::tests::test_fixtures::{
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };
@@ -1132,7 +1132,7 @@ mod tests {
         let sequence = TEST_PROTEIN;
 
         // Create a protein signature
-        let mut protein_sig = ProteinSignature::new(
+        let mut protein_sig = ProteinSketch::new(
             "test_protein",
             protein_ksize,
             1, // scaled
@@ -1230,7 +1230,7 @@ mod tests {
         let sequence = TEST_PROTEIN;
 
         // Create a protein signature
-        let mut protein_sig = ProteinSignature::new(
+        let mut protein_sig = ProteinSketch::new(
             "test_protein",
             protein_ksize,
             1, // scaled
@@ -1350,7 +1350,7 @@ mod tests {
         let sequence = TEST_PROTEIN;
 
         // Create a protein signature
-        let mut protein_sig = ProteinSignature::new(
+        let mut protein_sig = ProteinSketch::new(
             "test_protein",
             protein_ksize,
             1, // scaled

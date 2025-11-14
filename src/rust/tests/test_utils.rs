@@ -1,7 +1,7 @@
-use crate::signature::ProteinSignature;
+use crate::signature::ProteinSketch;
 
 /// Utility function to print k-mer infos in a readable format for debugging
-pub fn print_kmer_infos(protein_signature: &ProteinSignature) {
+pub fn print_kmer_infos(protein_signature: &ProteinSketch) {
     println!("\n---\nmd5sum:  {}", protein_signature.signature().md5sum);
     println!("Name: {}", protein_signature.signature().name);
     println!("Len of Kmer infos: {}", protein_signature.kmer_infos().len());

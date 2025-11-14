@@ -1,5 +1,5 @@
 use crate::kmer::KmerInfo;
-use crate::signature::ProteinSignature;
+use crate::signature::ProteinSketch;
 use crate::types::{HashValue, Position};
 
 /// Iterator over k-mer information in a protein signature
@@ -48,8 +48,8 @@ impl<'a> ExactSizeIterator for PositionIterator<'a> {
     }
 }
 
-/// Extension trait for ProteinSignature to provide iterator methods
-pub trait ProteinSignatureExt {
+/// Extension trait for ProteinSketch to provide iterator methods
+pub trait ProteinSketchExt {
     /// Get an iterator over k-mer information
     fn kmer_infos_iter(&self) -> KmerInfoIterator<'_>;
 
@@ -66,7 +66,7 @@ pub trait ProteinSignatureExt {
     fn kmers_at_position(&self, position: Position) -> impl Iterator<Item = HashValue> + '_;
 }
 
-impl ProteinSignatureExt for ProteinSignature {
+impl ProteinSketchExt for ProteinSketch {
     fn kmer_infos_iter(&self) -> KmerInfoIterator<'_> {
         KmerInfoIterator { inner: self.kmer_infos().iter() }
     }
@@ -118,7 +118,7 @@ pub mod functional {
     use std::collections::HashMap;
 
     /// Group k-mers by their occurrence count
-    pub fn group_kmers_by_count(signature: &ProteinSignature) -> HashMap<usize, Vec<HashValue>> {
+    pub fn group_kmers_by_count(signature: &ProteinSketch) -> HashMap<usize, Vec<HashValue>> {
         let mut groups: HashMap<usize, Vec<HashValue>> = HashMap::new();
 
         for (hash, count) in signature.kmer_counts() {
@@ -129,12 +129,12 @@ pub mod functional {
     }
 
     /// Find k-mers that appear in multiple positions
-    pub fn find_multi_position_kmers(signature: &ProteinSignature) -> Vec<HashValue> {
+    pub fn find_multi_position_kmers(signature: &ProteinSketch) -> Vec<HashValue> {
         signature.kmer_counts().filter(|(_, count)| *count > 1).map(|(hash, _)| hash).collect()
     }
 
     /// Calculate k-mer density (k-mers per sequence position)
-    pub fn calculate_kmer_density(signature: &ProteinSignature, sequence_length: usize) -> f64 {
+    pub fn calculate_kmer_density(signature: &ProteinSketch, sequence_length: usize) -> f64 {
         if sequence_length == 0 {
             0.0
         } else {
@@ -143,7 +143,7 @@ pub mod functional {
     }
 
     /// Find overlapping k-mers (k-mers that share positions)
-    pub fn find_overlapping_kmers(signature: &ProteinSignature) -> Vec<(HashValue, HashValue)> {
+    pub fn find_overlapping_kmers(signature: &ProteinSketch) -> Vec<(HashValue, HashValue)> {
         let mut overlaps = Vec::new();
         let kmer_infos: Vec<_> = signature.kmer_infos_iter().collect();
 
@@ -175,7 +175,7 @@ mod tests {
 
     #[test]
     fn test_kmer_info_iterator() {
-        // This would need a proper test setup with actual ProteinSignature
+        // This would need a proper test setup with actual ProteinSketch
         // For now, just test that the iterator traits are implemented
         let empty_map: HashMap<u64, KmerInfo> = HashMap::new();
         let iter = KmerInfoIterator { inner: empty_map.iter() };

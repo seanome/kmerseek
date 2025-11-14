@@ -8,7 +8,13 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::SigStore;
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
-use crate::{encoding::{get_hash_function_from_moltype, get_moltype_from_hash_function, get_moltype_from_hash_function_string}, kmer::KmerInfo};
+use crate::{
+    encoding::{
+        get_hash_function_from_moltype, get_moltype_from_hash_function,
+        get_moltype_from_hash_function_string,
+    },
+    kmer::KmerInfo,
+};
 
 pub const SEED: u64 = 42;
 pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
@@ -39,7 +45,7 @@ impl SignatureAccess for SmallSignature {
     }
 }
 
-impl SignatureAccess for SerializableSignature {
+impl SignatureAccess for StableSignature {
     fn get_minhash(&self) -> &KmerMinHash {
         &self.minhash
     }
@@ -57,7 +63,7 @@ impl SignatureAccess for SerializableSignature {
     }
 }
 
-impl SignatureAccess for &SerializableSignature {
+impl SignatureAccess for &StableSignature {
     fn get_minhash(&self) -> &KmerMinHash {
         &self.minhash
     }
@@ -76,7 +82,7 @@ impl SignatureAccess for &SerializableSignature {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct SerializableSignature {
+pub struct StableSignature {
     pub location: String,
     pub name: String,
     pub md5sum: String,
@@ -85,14 +91,14 @@ pub struct SerializableSignature {
     pub ksize: u32,
 }
 
-// Custom serialization for SerializableSignature to avoid KmerMinHash serialization issues
-impl Serialize for SerializableSignature {
+// Custom serialization for StableSignature to avoid KmerMinHash serialization issues
+impl Serialize for StableSignature {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("SerializableSignature", 7)?;
+        let mut state = serializer.serialize_struct("StableSignature", 7)?;
         state.serialize_field("location", &self.location)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("md5sum", &self.md5sum)?;
@@ -105,7 +111,7 @@ impl Serialize for SerializableSignature {
     }
 }
 
-impl<'de> Deserialize<'de> for SerializableSignature {
+impl<'de> Deserialize<'de> for StableSignature {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -113,16 +119,16 @@ impl<'de> Deserialize<'de> for SerializableSignature {
         use serde::de::{self, MapAccess, Visitor};
         use std::fmt;
 
-        struct SerializableSignatureVisitor;
+        struct StableSignatureVisitor;
 
-        impl<'de> Visitor<'de> for SerializableSignatureVisitor {
-            type Value = SerializableSignature;
+        impl<'de> Visitor<'de> for StableSignatureVisitor {
+            type Value = StableSignature;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct SerializableSignature")
+                formatter.write_str("struct StableSignature")
             }
 
-            fn visit_map<V>(self, mut map: V) -> Result<SerializableSignature, V::Error>
+            fn visit_map<V>(self, mut map: V) -> Result<StableSignature, V::Error>
             where
                 V: MapAccess<'de>,
             {
@@ -222,24 +228,20 @@ impl<'de> Deserialize<'de> for SerializableSignature {
                     minhash.add_many(&mins).map_err(de::Error::custom)?;
                 }
 
-                Ok(SerializableSignature { location, name, md5sum, minhash, moltype, ksize })
+                Ok(StableSignature { location, name, md5sum, minhash, moltype, ksize })
             }
         }
 
         const FIELDS: &[&str] =
             &["location", "name", "md5sum", "mins", "abunds", "scaled", "ksize", "moltype"];
-        deserializer.deserialize_struct(
-            "SerializableSignature",
-            FIELDS,
-            SerializableSignatureVisitor,
-        )
+        deserializer.deserialize_struct("StableSignature", FIELDS, StableSignatureVisitor)
     }
 }
 
-impl From<SmallSignature> for SerializableSignature {
+impl From<SmallSignature> for StableSignature {
     fn from(sig: SmallSignature) -> Self {
-        let moltype = get_moltype_from_hash_function(sig.minhash.hash_function()).expect(
-            "Invalid hash function");
+        let moltype = get_moltype_from_hash_function(sig.minhash.hash_function())
+            .expect("Invalid hash function");
         let ksize = sig.minhash.ksize();
         Self {
             location: sig.location,
@@ -252,7 +254,7 @@ impl From<SmallSignature> for SerializableSignature {
     }
 }
 
-impl From<SigStore> for SerializableSignature {
+impl From<SigStore> for StableSignature {
     fn from(sig: SigStore) -> Self {
         let moltype = get_moltype_from_hash_function_string(sig.hash_function());
         Self {
@@ -266,26 +268,26 @@ impl From<SigStore> for SerializableSignature {
     }
 }
 
-/// A wrapper around SmallSignature that handles protein k-mer size conversions
+/// A wrapper around `StableSignature` that handles protein k-mer size conversions
 #[derive(Debug, Clone)]
-pub struct ProteinSignature {
-    signature: SerializableSignature,
+pub struct ProteinSketch {
+    signature: StableSignature,
     moltype: String,
     protein_ksize: u32,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
     kmer_infos: HashMap<u64, KmerInfo>,
     // Efficient storage data (optional, for performance)
-    efficient_data: Option<ProteinSignatureData>,
+    efficient_data: Option<ProteinSketchStore>,
 }
 
-// Custom serialization for ProteinSignature
-impl Serialize for ProteinSignature {
+// Custom serialization for ProteinSketch
+impl Serialize for ProteinSketch {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ProteinSignature", 4)?;
+        let mut state = serializer.serialize_struct("ProteinSketch", 4)?;
         state.serialize_field("signature", &self.signature)?;
         state.serialize_field("moltype", &self.moltype)?;
         state.serialize_field("protein_ksize", &self.protein_ksize)?;
@@ -295,7 +297,7 @@ impl Serialize for ProteinSignature {
     }
 }
 
-impl<'de> Deserialize<'de> for ProteinSignature {
+impl<'de> Deserialize<'de> for ProteinSketch {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
@@ -303,16 +305,16 @@ impl<'de> Deserialize<'de> for ProteinSignature {
         use serde::de::{self, MapAccess, Visitor};
         use std::fmt;
 
-        struct ProteinSignatureVisitor;
+        struct ProteinSketchVisitor;
 
-        impl<'de> Visitor<'de> for ProteinSignatureVisitor {
-            type Value = ProteinSignature;
+        impl<'de> Visitor<'de> for ProteinSketchVisitor {
+            type Value = ProteinSketch;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct ProteinSignature")
+                formatter.write_str("struct ProteinSketch")
             }
 
-            fn visit_map<V>(self, mut map: V) -> Result<ProteinSignature, V::Error>
+            fn visit_map<V>(self, mut map: V) -> Result<ProteinSketch, V::Error>
             where
                 V: MapAccess<'de>,
             {
@@ -360,7 +362,7 @@ impl<'de> Deserialize<'de> for ProteinSignature {
                 let kmer_infos =
                     kmer_infos.ok_or_else(|| de::Error::missing_field("kmer_infos"))?;
 
-                Ok(ProteinSignature {
+                Ok(ProteinSketch {
                     signature,
                     moltype,
                     protein_ksize,
@@ -371,13 +373,13 @@ impl<'de> Deserialize<'de> for ProteinSignature {
         }
 
         const FIELDS: &[&str] = &["signature", "moltype", "protein_ksize", "kmer_infos"];
-        deserializer.deserialize_struct("ProteinSignature", FIELDS, ProteinSignatureVisitor)
+        deserializer.deserialize_struct("ProteinSketch", FIELDS, ProteinSketchVisitor)
     }
 }
 
 // Represents a single protein's k-mer signature and hashval -> kmer info mapping
-impl ProteinSignature {
-    /// Create a new ProteinSignature with the given protein k-mer size
+impl ProteinSketch {
+    /// Create a new ProteinSketch with the given protein k-mer size
     pub fn new(name: &str, protein_ksize: u32, scaled: u32, moltype: &str) -> Result<Self> {
         let hash_function = get_hash_function_from_moltype(moltype)?;
         let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO; // Convert protein ksize to minhash ksize
@@ -391,13 +393,13 @@ impl ProteinSignature {
             0,    // num (use scaled instead)
         );
 
-        let signature = SerializableSignature {
+        let signature = StableSignature {
             location: String::new(),
             name: name.to_string(),
             md5sum: String::new(),
             minhash,
             moltype: moltype.to_string(),
-            ksize,
+            ksize: protein_ksize,
         };
 
         Ok(Self {
@@ -409,10 +411,10 @@ impl ProteinSignature {
         })
     }
 
-    /// Create a ProteinSignature from existing signature data
+    /// Create a ProteinSketch from existing signature data
     /// This is useful for reconstructing signatures during load operations
     pub fn from_existing_data(
-        signature: SerializableSignature,
+        signature: StableSignature,
         moltype: String,
         protein_ksize: u32,
         kmer_infos: HashMap<u64, KmerInfo>,
@@ -420,9 +422,9 @@ impl ProteinSignature {
         Self { signature, moltype, protein_ksize, kmer_infos, efficient_data: None }
     }
 
-    /// Create a ProteinSignature from efficient storage data
+    /// Create a ProteinSketch from efficient storage data
     pub fn from_efficient_data(
-        data: ProteinSignatureData,
+        data: ProteinSketchStore,
         moltype: String,
         protein_ksize: u32,
         scaled: u32,
@@ -452,7 +454,7 @@ impl ProteinSignature {
         let md5sum = data.mins.iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         let md5sum = format!("{:x}", md5sum);
 
-        let signature = SerializableSignature {
+        let signature = StableSignature {
             location: String::new(),
             name: data.name.clone(),
             md5sum,
@@ -471,7 +473,7 @@ impl ProteinSignature {
     }
 
     /// Convert to efficient storage format
-    pub fn to_efficient_data(&self, include_raw_sequence: bool) -> ProteinSignatureData {
+    pub fn to_efficient_data(&self, include_raw_sequence: bool) -> ProteinSketchStore {
         let minhash = &self.signature.minhash;
         let mins = minhash.mins().to_vec();
         let abunds = minhash.abunds().map(|abunds| abunds.to_vec());
@@ -494,7 +496,7 @@ impl ProteinSignature {
             None
         };
 
-        ProteinSignatureData::new(
+        ProteinSketchStore::new(
             self.signature.name.clone(),
             mins,
             abunds,
@@ -505,15 +507,12 @@ impl ProteinSignature {
     }
 
     /// Convert to efficient storage format with pre-allocated sequence capacity
-    pub fn to_efficient_data_with_capacity(
-        &self,
-        sequence_capacity: usize,
-    ) -> ProteinSignatureData {
+    pub fn to_efficient_data_with_capacity(&self, sequence_capacity: usize) -> ProteinSketchStore {
         let minhash = &self.signature.minhash;
         let mins = minhash.mins().to_vec();
         let abunds = minhash.abunds().map(|abunds| abunds.to_vec());
 
-        ProteinSignatureData::with_sequence_capacity(
+        ProteinSketchStore::with_sequence_capacity(
             self.signature.name.clone(),
             mins,
             abunds,
@@ -523,12 +522,12 @@ impl ProteinSignature {
     }
 
     /// Set the efficient data (useful for performance optimization)
-    pub fn set_efficient_data(&mut self, data: ProteinSignatureData) {
+    pub fn set_efficient_data(&mut self, data: ProteinSketchStore) {
         self.efficient_data = Some(data);
     }
 
     /// Get the efficient data if available
-    pub fn get_efficient_data(&self) -> Option<&ProteinSignatureData> {
+    pub fn get_efficient_data(&self) -> Option<&ProteinSketchStore> {
         self.efficient_data.as_ref()
     }
 
@@ -574,13 +573,13 @@ impl ProteinSignature {
         self.protein_ksize * PROTEIN_TO_MINHASH_RATIO
     }
 
-    /// Get the underlying SmallSignature
-    pub fn into_signature(self) -> SerializableSignature {
+    /// Get the underlying `StableSignature`
+    pub fn into_signature(self) -> StableSignature {
         self.signature
     }
 
-    /// Get a reference to the underlying SmallSignature
-    pub fn signature(&self) -> &SerializableSignature {
+    /// Get a reference to the underlying `StableSignature`
+    pub fn signature(&self) -> &StableSignature {
         &self.signature
     }
 
@@ -595,11 +594,11 @@ impl ProteinSignature {
     }
 }
 
-/// Efficient storage structure for protein signatures
+/// Efficient storage structure for protein sketches
 /// Stores raw values to avoid serialization overhead and optionally includes raw sequences
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(crate = "serde")]
-pub struct ProteinSignatureData {
+pub struct ProteinSketchStore {
     /// Protein name/identifier
     pub name: String,
     /// MinHash minimum values (hashvals)
@@ -614,7 +613,7 @@ pub struct ProteinSignatureData {
     pub encoded_sequence: Option<String>,
 }
 
-impl ProteinSignatureData {
+impl ProteinSketchStore {
     /// Create new signature data with optional raw sequence storage
     pub fn new(
         name: String,

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
-use crate::signature::{ProteinSignature};
+use crate::signature::{ProteinSketch};
 use crate::significance;
 
 /// Search result for a single query-target pair
@@ -207,7 +207,7 @@ impl ProteinSearcher {
     ///
     /// # Returns
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
-    pub fn search(&self, queries: &[ProteinSignature]) -> Result<Vec<SearchResult>> {
+    pub fn search(&self, queries: &[ProteinSketch]) -> Result<Vec<SearchResult>> {
         // Calculate TF-IDF for each query signature once (used in all results for that query)
         let query_tfidf: HashMap<String, f64> = queries
             .iter()
@@ -266,8 +266,8 @@ impl ProteinSearcher {
     /// This method calculates all similarity metrics in one pass for efficiency.
     fn query_target_similarity(
         &self,
-        query: &ProteinSignature,
-        target: &ProteinSignature,
+        query: &ProteinSketch,
+        target: &ProteinSketch,
         query_mins: &HashSet<u64>,
         query_abunds: Option<&[u64]>,
         query_name: &str,
@@ -345,7 +345,7 @@ impl ProteinSearcher {
 
 
     /// Calculate TF-IDF score for a query signature
-    pub fn calculate_tfidf(&self, query: &ProteinSignature) -> f64 {
+    pub fn calculate_tfidf(&self, query: &ProteinSketch) -> f64 {
         let query_mins = query.signature().minhash.mins();
         let mut tfidf_sum = 0.0;
 
@@ -410,8 +410,8 @@ impl ProteinSearcher {
     /// Identify which regions of query and target match in the encoded sequence space
     fn create_match_region(
         &self,
-        query: &ProteinSignature,
-        target: &ProteinSignature,
+        query: &ProteinSketch,
+        target: &ProteinSketch,
         intersecting_hashes: &HashSet<u64>,
     ) -> Option<MatchedRegion> {
         let query_name = query.signature().name.clone();
@@ -449,7 +449,7 @@ impl ProteinSearcher {
         query_seq: &str,
         target_seq: &str,
         intersecting_hashes: &HashSet<u64>,
-        query_signature: &ProteinSignature,
+        query_signature: &ProteinSketch,
     ) -> Option<MatchedRegion> {
         // Find the best matched region based on k-mer positions
         let matched_regions =
@@ -497,8 +497,8 @@ impl ProteinSearcher {
         &self,
         query_name: &str,
         match_name: &str,
-        query: &ProteinSignature,
-        target: &ProteinSignature,
+        query: &ProteinSketch,
+        target: &ProteinSketch,
         intersecting_hashes: &HashSet<u64>,
     ) -> Option<MatchedRegion> {
         // Get k-mer information for intersecting k-mers
@@ -604,8 +604,8 @@ impl ProteinSearcher {
     /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
     pub fn find_matched_regions(
         &self,
-        query_signature: &ProteinSignature,
-        target_signature: &ProteinSignature,
+        query_signature: &ProteinSketch,
+        target_signature: &ProteinSketch,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
 
@@ -684,7 +684,7 @@ impl ProteinSearcher {
 
 
     /// Find a signature by name in the index
-    fn find_signature_by_name(&self, name: &str) -> Option<ProteinSignature> {
+    fn find_signature_by_name(&self, name: &str) -> Option<ProteinSketch> {
         for entry in self.index.get_signatures().iter() {
             let signature = entry.value();
             if signature.signature().name == name {
@@ -728,7 +728,7 @@ impl ProteinSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::signature::ProteinSignature;
+    use crate::signature::ProteinSketch;
     use tempfile::TempDir;
     use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA};
 
@@ -1008,7 +1008,7 @@ mod tests {
         // Create a proper index with a database path
         let index = ProteomeIndex::new(&temp_path, 10, 5, "hp", false)?;
 
-        let query = ProteinSignature::new("test", 10, 5, "hp").unwrap();
+        let query = ProteinSketch::new("test", 10, 5, "hp").unwrap();
         let stats = SearchStats {
             total_signatures: 100,
             idf: HashMap::new(),
