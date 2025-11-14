@@ -8,7 +8,7 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::SigStore;
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
-use crate::{encoding::{get_hash_function_from_moltype, get_moltype_from_hash_function}, kmer::KmerInfo};
+use crate::{encoding::{get_hash_function_from_moltype, get_moltype_from_hash_function, get_moltype_from_hash_function_string}, kmer::KmerInfo};
 
 pub const SEED: u64 = 42;
 pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
