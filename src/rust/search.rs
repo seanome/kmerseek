@@ -10,6 +10,7 @@ use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::significance;
 use crate::sketch::ProteinSketch;
+use crate::types::MolType;
 
 /// Search result for a single query-target pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -78,9 +79,6 @@ pub struct SearchResult {
 /// Source: https://en.wikipedia.org/wiki/Prymnesin-1
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchedRegion {
-    /// Target sequence name
-    pub target_name: String,
-
     /// Query sequence name
     pub query_name: String,
 
@@ -93,6 +91,9 @@ pub struct MatchedRegion {
     /// Query subsequence (stitched k-mers)
     pub query_subseq: String,
 
+    /// Target sequence name
+    pub target_name: String,
+
     /// Target sequence start position
     pub target_start: u32,
 
@@ -104,6 +105,9 @@ pub struct MatchedRegion {
 
     /// Encoded sequence (hp/dayhoff/protein encoding)
     pub moltype_seq: String,
+
+    // One of "hp"
+    pub moltype: MolType,
 
     /// Length of the match
     pub length: u32,
@@ -594,23 +598,31 @@ impl ProteinSearcher {
     /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
     pub fn find_matched_regions(
         &self,
-        query_signature: &ProteinSketch,
-        target_signature: &ProteinSketch,
+        query_sketch: &ProteinSketch,
+        target_sketch: &ProteinSketch,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
-        let ksize = query_signature.protein_ksize() as usize;
+
+        // Ensure that query and target protein sketches are the same ksize
+        assert_eq!(query_sketch.protein_ksize(), target_sketch.protein_ksize());
+        let ksize = query_sketch.protein_ksize() as usize;
+        let query_name = query_sketch.signature().name;
+        let target_name = target_sketch.signature().name;
+
+        // Ensure that both query and target have the same moltypes
+        assert_eq!(query_sketch.moltype(), target_sketch.moltype());
+        let moltype = query_sketch.moltype();
 
         // Collect original sequence positions from k-mer info
         // This works correctly even when scaled != 1 because we use original positions
         // stored in KmerInfo, not the downsampled signature positions
-        let mut query_positions = Vec::new();
-        let mut target_positions = Vec::new();
+        let mut query_positions: Vec<usize> = Vec::new();
+        let mut target_positions: Vec<usize> = Vec::new();
 
         for &hashval in intersection {
-            if let (Some(query_kmer_info), Some(target_kmer_info)) = (
-                query_signature.kmer_infos().get(&hashval),
-                target_signature.kmer_infos().get(&hashval),
-            ) {
+            if let (Some(query_kmer_info), Some(target_kmer_info)) =
+                (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
+            {
                 for positions in query_kmer_info.original_kmer_to_position.values() {
                     query_positions.extend(positions);
                 }
@@ -648,21 +660,37 @@ impl ProteinSearcher {
             // Add all consecutive regions (even single k-mers)
             let end_pos = start_pos + consecutive_count + ksize - 1;
 
+            let query_subseq = &query_sketch.get_raw_sequence().expect(format!(
+                "No raw sequence found for query signature {}",
+                &query_name
+            ))[start_pos..end_pos];
+            let target_subseq = target_sketch.get_raw_sequence().expect(format!(
+                "No raw sequence found for query signature {}",
+                &target_name
+            ))[start_pos..end_pos];
+
             // Find corresponding target region
             // For now, use the first target position as reference
             if let Some(&target_start) = target_positions.first() {
                 consecutive_regions.push(MatchedRegion {
+                    &query_name,
                     query_start: start_pos as u32,
                     query_end: end_pos as u32,
-                    target_start: target_start,
-                    target_end: target_start + consecutive_count as u32 + ksize as u32 - 1,
+                    query_subseq.to_string(),
+                    target_name,
+                    target_start: target_start as u32,
+                    target_end: target_start as u32 + consecutive_count as u32 + ksize as u32 - 1,
+                    target_subseq.to_string(),
+                    MolType::new(moltype),
+                    moltype_seq,
+                    length,
                 });
             }
 
             i = j;
         }
 
-        // Sort regions by length (longest first)
+        // Sort regions by position (earliest first)
         consecutive_regions.sort_by(|a, b| {
             let len_a = a.query_end - a.query_start;
             let len_b = b.query_end - b.query_start;
