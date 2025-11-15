@@ -831,7 +831,7 @@ mod tests {
     // - RDG starts at 138-157
     // ```
     #[test]
-    fn test_find_matched_regions_scaled1() -> Result<()> {
+    fn test_find_matched_regions_single() -> Result<()> {
         let ksize = 15;
         let scaled = 1;
         let moltype = "hp";
@@ -850,6 +850,28 @@ mod tests {
         // assert_eq!(matched_region.query_subseq,  "QCPMSYGRLIGLISFGGFV");
         // assert_eq!(matched_region.moltype_seq,   "pphhphhphhhhhphhhhh");
         // assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+        assert!(false, "Should find at least one match");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_find_matched_regions_multiple() -> Result<()> {
+        let ksize = 5;
+        let scaled = 1;
+        let moltype = "hp";
+        let store_raw_sequences = true;
+
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&TEST_CED9_FASTA, ksize, scaled, moltype, true)?;
+
+        let target_index =
+            ProteomeIndex::new_with_auto_filename(&TEST_BLC2_FASTA, ksize, scaled, moltype, true)?;
+
+        // TODO: do BLC2 vs CED9 here
+        // let matched_regions = target_index.find_matched_regions(query_index);
+        // Then iterate over matched regions, it should be several
+        assert!(false, "Should find at least one match");
         Ok(())
     }
 
