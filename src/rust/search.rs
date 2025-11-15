@@ -439,12 +439,11 @@ impl ProteinSearcher {
         query_signature: &ProteinSketch,
     ) -> Option<MatchedRegion> {
         // Find the best matched region based on k-mer positions
-        let target_sig = self.find_signature_by_name(match_name).expect("Did not find signature matching name {match_name}")
-        let matched_regions = self.find_matched_regions(
-            query_signature,
-            target_sig,
-            intersecting_hashes,
-        )?;
+        let target_sig = self
+            .find_signature_by_name(match_name)
+            .expect(&format!("Did not find signature matching name {match_name}"));
+        let matched_regions =
+            self.find_matched_regions(query_signature, &target_sig, intersecting_hashes);
 
         // Extract the matched regions from the sequences with bounds checking
         let query_start = matched_regions.query_start.min(query_seq.len());
