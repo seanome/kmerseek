@@ -1,15 +1,15 @@
-use std::collections::HashMap;
-use serde::{Deserialize, Serialize};
-use sourmash::sketch::minhash::KmerMinHash;
-use sourmash::signature::SigsTrait;
 use crate::encoding::get_hash_function_from_moltype;
 use crate::kmer::KmerInfo;
-use crate::SEED;
 use crate::signature::StableSignature;
+use crate::SEED;
+use serde::{Deserialize, Serialize};
+use sourmash::signature::SigsTrait;
+use sourmash::sketch::minhash::KmerMinHash;
+use std::collections::HashMap;
 
 pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
 
-/// A wrapper around `StableSignature` that handles protein k-mer size conversions
+/// ProteinSketches contain Signatures and additional information around K-mer positions and their sequence data
 #[derive(Debug, Clone)]
 pub struct ProteinSketch {
     signature: StableSignature,
@@ -23,12 +23,11 @@ pub struct ProteinSketch {
 
 // Custom serialization for ProteinSketch
 impl Serialize for ProteinSketch {
-    fn serialize<S>(&self, serializer: S) -> anyhow::Result<S::Ok, S::Error>
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        use serde::Serializer;
         let mut state = serializer.serialize_struct("ProteinSketch", 4)?;
         state.serialize_field("signature", &self.signature)?;
         state.serialize_field("moltype", &self.moltype)?;
@@ -40,13 +39,12 @@ impl Serialize for ProteinSketch {
 }
 
 impl<'de> Deserialize<'de> for ProteinSketch {
-    fn deserialize<D>(deserializer: D) -> anyhow::Result<Self, D::Error>
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: serde::Deserializer<'de>,
     {
-        use serde::de::{self, Error, MapAccess, Visitor};
+        use serde::de::{self, MapAccess, Visitor};
         use std::fmt;
-        use serde::Deserializer;
 
         struct ProteinSketchVisitor;
 
@@ -57,7 +55,7 @@ impl<'de> Deserialize<'de> for ProteinSketch {
                 formatter.write_str("struct ProteinSketch")
             }
 
-            fn visit_map<V>(self, mut map: V) -> anyhow::Result<ProteinSketch, V::Error>
+            fn visit_map<V>(self, mut map: V) -> Result<ProteinSketch, V::Error>
             where
                 V: MapAccess<'de>,
             {
@@ -93,7 +91,7 @@ impl<'de> Deserialize<'de> for ProteinSketch {
                             kmer_infos = Some(map.next_value()?);
                         }
                         _ => {
-                            let _ = map.next_value::<de::IgnoredAny>()?;
+                            map.next_value::<de::IgnoredAny>()?;
                         }
                     }
                 }

@@ -1,6 +1,6 @@
 use std::collections::{HashMap, HashSet};
-use std::path::Path;
 use std::fmt::{Display, Formatter};
+use std::path::Path;
 
 use anyhow::Result;
 use rayon::prelude::*;
@@ -14,19 +14,18 @@ use crate::sketch::ProteinSketch;
 /// Search result for a single query-target pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
-
     /// Query sequence name
     pub query_name: String,
 
     /// Query sequence MD5 hash
     pub query_md5: String,
-    
+
     /// Target sequence name
     pub target_name: String,
 
     /// Target sequence MD5 hash
     pub target_md5: String,
-    
+
     /// Containment score (intersection / query_size)
     pub containment: f64,
 
@@ -73,15 +72,12 @@ pub struct SearchResult {
     pub matched_regions: Vec<MatchedRegion>,
 }
 
-
-
 /// A region of k-mer overlap between the query and target sequences.
 /// We use u16 (up to 65,535) for the integer indexing as the largest protein as of
 /// Nov 2025 is PKZILLA-1 which is 45,212 amino acids long
 /// Source: https://en.wikipedia.org/wiki/Prymnesin-1
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MatchedRegion {
-
     /// Target sequence name
     pub target_name: String,
 
@@ -115,22 +111,24 @@ pub struct MatchedRegion {
 
 impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "
+        write!(
+            f,
+            "
         Query Name: {}
 Match Name: {}
 query: {} ({}-{})
 alpha: {}
 match: {} ({}-{})
 ",
-               self.query_name,
-               self.target_name,
-               self.query_subseq,
-               self.query_start,
-               self.query_end,
-               self.moltype_seq,
-               self.target_subseq,
-               self.target_start,
-               self.target_end
+            self.query_name,
+            self.target_name,
+            self.query_subseq,
+            self.query_start,
+            self.query_end,
+            self.moltype_seq,
+            self.target_subseq,
+            self.target_start,
+            self.target_end
         )
     }
 }
@@ -145,7 +143,6 @@ pub struct SearchStats {
     /// Frequency of each k-mer hash across all signatures
     pub kmer_frequencies: HashMap<u64, usize>,
 }
-
 
 impl SearchStats {
     /// Calculate search statistics from a proteome index
@@ -222,7 +219,6 @@ impl ProteinSearcher {
         let all_results: Vec<SearchResult> = queries
             .par_iter()
             .flat_map(|query| {
-
                 // Olga: Why is this cloned?? Can we avoid copying data here?
                 let query_mins: HashSet<u64> =
                     query.signature().minhash.mins().iter().cloned().collect();
@@ -247,7 +243,8 @@ impl ProteinSearcher {
                             query_tfidf,
                         )
                     })
-                    .collect::<Vec<_>>()            })
+                    .collect::<Vec<_>>()
+            })
             .collect();
 
         // Sort by containment score (descending) - this is the primary ranking metric
@@ -256,10 +253,8 @@ impl ProteinSearcher {
             b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
         });
 
-
         Ok(sorted_results)
     }
-
 
     /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
     ///
@@ -274,7 +269,6 @@ impl ProteinSearcher {
         query_md5: &str,
         query_tfidf: f64,
     ) -> Option<SearchResult> {
-
         let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
         let target_abunds = target.signature().minhash.abunds();
 
@@ -308,17 +302,15 @@ impl ProteinSearcher {
             };
 
         // Calculate weighted metrics
-        let f_weighted_target_in_query =
-            significance::weighted_fraction_target_in_query( query_abunds.as_deref(), target_abunds.as_deref());
+        let f_weighted_target_in_query = significance::weighted_fraction_target_in_query(
+            query_abunds.as_deref(),
+            target_abunds.as_deref(),
+        );
 
         // Calculate overlap probability between query and target
         let overlap_probability = self.calculate_overlap_probability(&intersection);
 
-        let matched_regions = self.find_matched_regions(
-            query,
-            target,
-            &intersection
-        );
+        let matched_regions = self.find_matched_regions(query, target, &intersection);
 
         Some(SearchResult {
             query_name: query_name.to_string(),
@@ -343,7 +335,6 @@ impl ProteinSearcher {
         })
     }
 
-
     /// Calculate TF-IDF score for a query signature
     pub fn calculate_tfidf(&self, query: &ProteinSketch) -> f64 {
         let query_mins = query.signature().minhash.mins();
@@ -364,10 +355,7 @@ impl ProteinSearcher {
     ///
     /// This calculates the probability of the intersecting hashes of query and target against
     /// the frequency of those hashes in the whole database
-    pub fn calculate_overlap_probability(
-        &self,
-        intersection: &HashSet<u64>,
-    ) -> f64 {
+    pub fn calculate_overlap_probability(&self, intersection: &HashSet<u64>) -> f64 {
         if intersection.is_empty() {
             return 0.0;
         }
@@ -405,7 +393,6 @@ impl ProteinSearcher {
     pub fn stats(&self) -> &SearchStats {
         &self.stats
     }
-
 
     /// Identify which regions of query and target match in the encoded sequence space
     fn create_match_region(
@@ -452,8 +439,12 @@ impl ProteinSearcher {
         query_signature: &ProteinSketch,
     ) -> Option<MatchedRegion> {
         // Find the best matched region based on k-mer positions
-        let matched_regions =
-            self.find_matched_regions_with_signatures(query_signature, match_name, intersecting_hashes)?;
+        let target_sig = self.find_signature_by_name(match_name).expect("Did not find signature matching name {match_name}")
+        let matched_regions = self.find_matched_regions(
+            query_signature,
+            target_sig,
+            intersecting_hashes,
+        )?;
 
         // Extract the matched regions from the sequences with bounds checking
         let query_start = matched_regions.query_start.min(query_seq.len());
@@ -608,7 +599,6 @@ impl ProteinSearcher {
         target_signature: &ProteinSketch,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
-
         let ksize = query_signature.protein_ksize() as usize;
 
         // Collect original sequence positions from k-mer info
@@ -618,9 +608,10 @@ impl ProteinSearcher {
         let mut target_positions = Vec::new();
 
         for &hashval in intersection {
-            if let (Some(query_kmer_info), Some(target_kmer_info)) =
-                (query_signature.kmer_infos().get(&hashval), target_signature.kmer_infos().get(&hashval))
-            {
+            if let (Some(query_kmer_info), Some(target_kmer_info)) = (
+                query_signature.kmer_infos().get(&hashval),
+                target_signature.kmer_infos().get(&hashval),
+            ) {
                 for positions in query_kmer_info.original_kmer_to_position.values() {
                     query_positions.extend(positions);
                 }
@@ -642,46 +633,45 @@ impl ProteinSearcher {
 
         // Find all consecutive runs of k-mers
         let mut consecutive_regions = Vec::new();
-        
+
         let mut i: usize = 0;
         while i < query_positions.len() {
             let start_pos: usize = query_positions[i];
-            let mut consecutive_count : usize  = 1;
+            let mut consecutive_count: usize = 1;
             let mut j: usize = i + 1;
-            
+
             // Count consecutive k-mers starting from this position
             while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
                 consecutive_count += 1;
                 j += 1;
             }
-            
+
             // Add all consecutive regions (even single k-mers)
             let end_pos = start_pos + consecutive_count + ksize - 1;
-            
+
             // Find corresponding target region
             // For now, use the first target position as reference
             if let Some(&target_start) = target_positions.first() {
                 consecutive_regions.push(MatchedRegion {
-                    query_start: start_pos,
-                    query_end: end_pos,
+                    query_start: start_pos as u32,
+                    query_end: end_pos as u32,
                     target_start: target_start,
-                    target_end: target_start + consecutive_count + ksize - 1,
+                    target_end: target_start + consecutive_count as u32 + ksize as u32 - 1,
                 });
             }
-            
+
             i = j;
         }
-        
+
         // Sort regions by length (longest first)
         consecutive_regions.sort_by(|a, b| {
             let len_a = a.query_end - a.query_start;
             let len_b = b.query_end - b.query_start;
             len_b.cmp(&len_a)
         });
-        
+
         consecutive_regions
     }
-
 
     /// Find a signature by name in the index
     fn find_signature_by_name(&self, name: &str) -> Option<ProteinSketch> {
@@ -729,8 +719,8 @@ impl ProteinSearcher {
 mod tests {
     use super::*;
     use crate::sketch::ProteinSketch;
-    use tempfile::TempDir;
     use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA};
+    use tempfile::TempDir;
 
     /// Test search functionality similar to the Python tests
     #[test]
@@ -820,22 +810,11 @@ mod tests {
         let moltype = "hp";
         let store_raw_sequences = true;
 
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&TEST_CED9_FASTA, ksize, scaled, moltype, true)?;
 
-        let query_index = ProteomeIndex::new_with_auto_filename(
-            &TEST_CED9_FASTA,
-            ksize,
-            scaled,
-            moltype,
-            true,
-        )?;
-
-        let target_index = ProteomeIndex::new_with_auto_filename(
-            &TEST_BLC2_FASTA,
-            ksize,
-            scaled,
-            moltype,
-            true,
-        )?;
+        let target_index =
+            ProteomeIndex::new_with_auto_filename(&TEST_BLC2_FASTA, ksize, scaled, moltype, true)?;
 
         // TODO: do BLC2 vs CED9 here
         // let matched_regions = target_index.find_matched_regions(query_index);
@@ -845,7 +824,6 @@ mod tests {
         // assert_eq!(matched_region.moltype_seq,   "pphhphhphhhhhphhhhh");
         // assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
         Ok(())
-
     }
 
     /// Test TF-IDF calculation
