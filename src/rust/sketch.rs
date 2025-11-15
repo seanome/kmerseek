@@ -12,9 +12,11 @@ pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
 /// ProteinSketches contain Signatures and additional information around K-mer positions and their sequence data
 #[derive(Debug, Clone)]
 pub struct ProteinSketch {
+    name: String,
     signature: StableSignature,
     moltype: String,
     protein_ksize: u32,
+    scaled: u32,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
     kmer_infos: HashMap<u64, KmerInfo>,
     // Efficient storage data (optional, for performance)
@@ -29,9 +31,11 @@ impl Serialize for ProteinSketch {
     {
         use serde::ser::SerializeStruct;
         let mut state = serializer.serialize_struct("ProteinSketch", 4)?;
+        state.serialize_field("name", &self.name)?;
         state.serialize_field("signature", &self.signature)?;
         state.serialize_field("moltype", &self.moltype)?;
         state.serialize_field("protein_ksize", &self.protein_ksize)?;
+        state.serialize_field("scaled", &self.scaled)?;
         state.serialize_field("kmer_infos", &self.kmer_infos)?;
         // Skip efficient_data as it's marked with #[serde(skip)]
         state.end()
@@ -59,13 +63,21 @@ impl<'de> Deserialize<'de> for ProteinSketch {
             where
                 V: MapAccess<'de>,
             {
+                let mut name = None;
                 let mut signature = None;
                 let mut moltype = None;
                 let mut protein_ksize = None;
                 let mut kmer_infos = None;
+                let mut scaled = None;
 
                 while let Some(key) = map.next_key()? {
                     match key {
+                        "name" => {
+                            if name.is_some() {
+                                return Err(de::Error::duplicate_field("name"));
+                            }
+                            name = Some(map.next_value()?);
+                        }
                         "signature" => {
                             if signature.is_some() {
                                 return Err(de::Error::duplicate_field("signature"));
@@ -84,6 +96,12 @@ impl<'de> Deserialize<'de> for ProteinSketch {
                             }
                             protein_ksize = Some(map.next_value()?);
                         }
+                        "scaled" => {
+                            if scaled.is_some() {
+                                return Err(de::Error::duplicate_field("scaled"));
+                            }
+                            scaled = Some(map.next_value()?);
+                        }
                         "kmer_infos" => {
                             if kmer_infos.is_some() {
                                 return Err(de::Error::duplicate_field("kmer_infos"));
@@ -96,17 +114,21 @@ impl<'de> Deserialize<'de> for ProteinSketch {
                     }
                 }
 
+                let name = name.ok_or_else(|| de::Error::missing_field("name"))?;
                 let signature = signature.ok_or_else(|| de::Error::missing_field("signature"))?;
                 let moltype = moltype.ok_or_else(|| de::Error::missing_field("moltype"))?;
                 let protein_ksize =
                     protein_ksize.ok_or_else(|| de::Error::missing_field("protein_ksize"))?;
+                let scaled = scaled.ok_or_else(|| de::Error::missing_field("scaled"))?;
                 let kmer_infos =
                     kmer_infos.ok_or_else(|| de::Error::missing_field("kmer_infos"))?;
 
                 Ok(ProteinSketch {
+                    name,
                     signature,
                     moltype,
                     protein_ksize,
+                    scaled,
                     kmer_infos,
                     efficient_data: None, // Always None when deserializing
                 })
@@ -144,9 +166,11 @@ impl ProteinSketch {
         };
 
         Ok(Self {
+            name: name.to_string(),
             signature,
             moltype: moltype.to_string(),
             protein_ksize,
+            scaled,
             kmer_infos: HashMap::new(),
             efficient_data: None,
         })
@@ -155,12 +179,22 @@ impl ProteinSketch {
     /// Create a ProteinSketch from existing signature data
     /// This is useful for reconstructing signatures during load operations
     pub fn from_existing_data(
+        name: &str,
         signature: StableSignature,
         moltype: String,
         protein_ksize: u32,
+        scaled: u32,
         kmer_infos: HashMap<u64, KmerInfo>,
     ) -> Self {
-        Self { signature, moltype, protein_ksize, kmer_infos, efficient_data: None }
+        Self {
+            name: name.to_string(),
+            signature,
+            moltype,
+            protein_ksize,
+            scaled,
+            kmer_infos,
+            efficient_data: None,
+        }
     }
 
     /// Create a ProteinSketch from efficient storage data
@@ -194,10 +228,11 @@ impl ProteinSketch {
         // Generate md5sum from mins
         let md5sum = data.mins.iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         let md5sum = format!("{:x}", md5sum);
+        let name = data.name.clone();
 
         let signature = StableSignature {
             location: String::new(),
-            name: data.name.clone(),
+            name: name.clone(),
             md5sum,
             minhash,
             moltype: moltype.clone(),
@@ -205,9 +240,11 @@ impl ProteinSketch {
         };
 
         Ok(Self {
+            name,
             signature,
             moltype,
             protein_ksize,
+            scaled,
             kmer_infos: data.kmer_infos.clone(),
             efficient_data: Some(data),
         })
@@ -314,6 +351,11 @@ impl ProteinSketch {
         self.protein_ksize * PROTEIN_TO_MINHASH_RATIO
     }
 
+    /// Get the minhash k-mer size
+    pub fn scaled(&self) -> u32 {
+        self.scaled
+    }
+
     /// Get the underlying `StableSignature`
     pub fn into_signature(self) -> StableSignature {
         self.signature
@@ -332,6 +374,14 @@ impl ProteinSketch {
     /// Get a mutable reference to the kmer infos HashMap (hashval -> kmer info)
     pub fn kmer_infos_mut(&mut self) -> &mut HashMap<u64, KmerInfo> {
         &mut self.kmer_infos
+    }
+
+    // Check compatibility between another sketch
+    pub fn is_compatible(&self, other: &ProteinSketch) -> bool {
+        let same_moltype = self.moltype() == other.moltype();
+        let same_scaled = self.scaled() == other.scaled();
+        let same_ksize = self.protein_ksize() == other.protein_ksize();
+        same_moltype && same_scaled && same_ksize
     }
 }
 
