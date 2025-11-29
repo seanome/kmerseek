@@ -106,7 +106,7 @@ pub struct MatchedRegion {
     /// Encoded sequence (hp/dayhoff/protein encoding)
     pub moltype_seq: String,
 
-    // One of "hp"
+    // One of "protein", "dayhoff", or "hp"
     pub moltype: MolType,
 
     /// Length of the match
@@ -499,6 +499,8 @@ impl ProteinSearcher {
         let mut query_kmers = Vec::new();
         let mut target_kmers = Vec::new();
 
+        let moltype = MolType::new(query.moltype());
+
         for &hashval in intersecting_hashes {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
                 (query.kmer_infos().get(&hashval), target.kmer_infos().get(&hashval))
@@ -562,8 +564,9 @@ impl ProteinSearcher {
             target_start: match_start,
             target_end: match_end,
             target_subseq: target_stitched,
-            moltype_seq: encoded_seq,
-            length,
+            moltype: MolType::new(moltype).unwrap(),
+            moltype_seq: encoded_seq.to_string(),
+            length: (query_end - query_start) as u32,
         })
     }
 
@@ -602,16 +605,15 @@ impl ProteinSearcher {
         target_sketch: &ProteinSketch,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
-
         // Ensure that query and target protein sketches are the same ksize
         assert_eq!(query_sketch.protein_ksize(), target_sketch.protein_ksize());
         let ksize = query_sketch.protein_ksize() as usize;
-        let query_name = query_sketch.signature().name;
-        let target_name = target_sketch.signature().name;
+        let query_name = query_sketch.signature().name.clone();
+        let target_name = target_sketch.signature().name.clone();
 
         // Ensure that both query and target have the same moltypes
         assert_eq!(query_sketch.moltype(), target_sketch.moltype());
-        let moltype = query_sketch.moltype();
+        let moltype = query_sketch.moltype().clone();
 
         // Collect original sequence positions from k-mer info
         // This works correctly even when scaled != 1 because we use original positions
@@ -660,30 +662,52 @@ impl ProteinSearcher {
             // Add all consecutive regions (even single k-mers)
             let end_pos = start_pos + consecutive_count + ksize - 1;
 
-            let query_subseq = &query_sketch.get_raw_sequence().expect(format!(
-                "No raw sequence found for query signature {}",
-                &query_name
-            ))[start_pos..end_pos];
-            let target_subseq = target_sketch.get_raw_sequence().expect(format!(
-                "No raw sequence found for query signature {}",
-                &target_name
-            ))[start_pos..end_pos];
+            let query_raw_sequence = query_sketch.get_raw_sequence().unwrap_or_else(|| {
+                panic!("No raw sequence found for query signature {query_name}")
+            });
+            let target_raw_sequence = target_sketch.get_raw_sequence().unwrap_or_else(|| {
+                panic!("No raw sequence found for target signature {target_name}")
+            });
+
+            let query_subseq = &query_raw_sequence[start_pos..end_pos];
+            let target_subseq = &target_raw_sequence[start_pos..end_pos];
+
+            // Make sure that target and query moltype sequences are identical, otherwise we have a problem
+            // and these start/end positions are incorrect
+            let target_moltype_sequence =
+                target_sketch.get_moltype_sequence().unwrap_or_else(|| {
+                    panic!("No moltype encoded sequence found for target signature {target_name}")
+                });
+            let query_moltype_sequence = query_sketch.get_moltype_sequence().unwrap_or_else(|| {
+                panic!("No moltype encoded sequence found for query signature {query_name}")
+            });
+
+            let target_moltype_seq = &target_moltype_sequence[start_pos..end_pos];
+            let query_moltype_seq = &query_moltype_sequence[start_pos..end_pos];
+            if target_moltype_seq != query_moltype_seq {
+                panic!(
+                    "Target '{target_name}' and query '{query_name}' moltype sequences at \
+                positions {start_pos}..{end_pos} do not match:\
+                \nTarget moltype subsequence: {target_moltype_seq}\
+                \nQuery  moltype subsequence: {query_moltype_seq}"
+                )
+            }
 
             // Find corresponding target region
             // For now, use the first target position as reference
             if let Some(&target_start) = target_positions.first() {
                 consecutive_regions.push(MatchedRegion {
-                    &query_name,
+                    query_name: query_name.clone(),
                     query_start: start_pos as u32,
                     query_end: end_pos as u32,
-                    query_subseq.to_string(),
-                    target_name,
+                    query_subseq: query_subseq.to_string(),
+                    target_name: target_name.clone(),
                     target_start: target_start as u32,
                     target_end: target_start as u32 + consecutive_count as u32 + ksize as u32 - 1,
-                    target_subseq.to_string(),
-                    MolType::new(moltype),
-                    moltype_seq,
-                    length,
+                    target_subseq: target_subseq.to_string(),
+                    moltype: MolType::new(moltype).unwrap(),
+                    moltype_seq: target_moltype_seq.to_string(),
+                    length: (end_pos - start_pos) as u32,
                 });
             }
 
@@ -717,7 +741,7 @@ impl ProteinSearcher {
         for entry in self.index.get_signatures().iter() {
             let signature = entry.value();
             if signature.signature().name == signature_name {
-                return signature.get_encoded_sequence().map(|s| s.to_string());
+                return signature.get_moltype_sequence().map(|s| s.to_string());
             }
         }
         None
