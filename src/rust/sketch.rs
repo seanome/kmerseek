@@ -177,6 +177,55 @@ impl ProteinSketch {
         })
     }
 
+    /// Create a ProteinSketch from a protein sequence
+    ///
+    /// This is a convenience method that creates a new `ProteinSketch` and immediately
+    /// adds the provided protein sequence to it. This avoids the need to call `new()`
+    /// followed by `add_protein()` separately.
+    ///
+    /// # Arguments
+    /// * `name` - Name/identifier for the protein
+    /// * `sequence` - Protein sequence as bytes (typically amino acid sequence)
+    /// * `protein_ksize` - Protein k-mer size
+    /// * `scaled` - Scaled parameter for the MinHash sketch
+    /// * `moltype` - Molecule type (e.g., "protein", "dayhoff", "hp")
+    ///
+    /// # Returns
+    /// A `Result` containing the `ProteinSketch` with the sequence already added,
+    /// or an error if sequence processing fails.
+    ///
+    /// # Errors
+    /// Returns an error if the moltype is invalid or if adding the protein sequence fails.
+    ///
+    /// # Example
+    /// ```
+    /// use kmerseek::sketch::ProteinSketch;
+    ///
+    /// let sequence = b"MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWYVMQS";
+    /// let sketch = ProteinSketch::from_protein_sequence(
+    ///     "protein1",
+    ///     sequence,
+    ///     10,  // protein ksize
+    ///     100, // scaled
+    ///     "protein"
+    /// )?;
+    /// ```
+    pub fn from_protein_sequence(
+        name: &str,
+        sequence: &[u8],
+        protein_ksize: u32,
+        scaled: u32,
+        moltype: &str,
+    ) -> anyhow::Result<Self> {
+        // Create a new sketch and add the sequence in one step
+        // WHY: Reusing existing methods (new + add_protein) follows DRY principle
+        // and ensures consistency. This avoids code duplication and maintains
+        // a single source of truth for sketch creation and sequence addition logic.
+        let mut sketch = Self::new(name, protein_ksize, scaled, moltype)?;
+        sketch.add_protein(sequence)?;
+        Ok(sketch)
+    }
+
     /// Create a ProteinSketch from existing signature data
     /// This is useful for reconstructing signatures during load operations
     pub fn from_existing_data(
