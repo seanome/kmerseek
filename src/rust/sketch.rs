@@ -320,7 +320,7 @@ impl ProteinSketch {
     }
 
     /// Get the encoded sequence if available
-    pub fn get_encoded_sequence(&self) -> Option<&str> {
+    pub fn get_moltype_sequence(&self) -> Option<&str> {
         self.efficient_data.as_ref()?.get_encoded_sequence()
     }
 
