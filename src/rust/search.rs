@@ -398,7 +398,6 @@ impl ProteinSearcher {
         &self.stats
     }
 
-
     /// Stitch overlapping k-mers together
     fn stitch_kmers(&self, kmer_positions: &[(usize, String)]) -> String {
         if kmer_positions.is_empty() {
@@ -658,10 +657,10 @@ mod tests {
         // Check that the first result has reasonable values
         let first_result = &results[0];
         assert_eq!(first_result.query_name, "test_query");
-        assert_eq!(first_result.match_name, "test_target");
+        assert_eq!(first_result.target_name, "test_target");
         assert!(first_result.containment > 0.0);
         assert!(first_result.jaccard > 0.0);
-        assert!(first_result.intersect_hashes > 0);
+        assert!(first_result.n_intersecting_hashes > 0);
 
         Ok(())
     }
