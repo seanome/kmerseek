@@ -1,6 +1,7 @@
 use crate::encoding::get_hash_function_from_moltype;
 use crate::kmer::KmerInfo;
 use crate::signature::StableSignature;
+use crate::types::MolType;
 use crate::SEED;
 use serde::{Deserialize, Serialize};
 use sourmash::signature::SigsTrait;
@@ -14,7 +15,7 @@ pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
 pub struct ProteinSketch {
     name: String,
     signature: StableSignature,
-    moltype: String,
+    moltype: MolType,
     protein_ksize: u32,
     scaled: u32,
     // Hashval -> KmerInfo (encoded -> original k-mer -> positions)
@@ -168,7 +169,7 @@ impl ProteinSketch {
         Ok(Self {
             name: name.to_string(),
             signature,
-            moltype: moltype.to_string(),
+            moltype: MolType::new(moltype).unwrap(),
             protein_ksize,
             scaled,
             kmer_infos: HashMap::new(),
@@ -189,7 +190,7 @@ impl ProteinSketch {
         Self {
             name: name.to_string(),
             signature,
-            moltype,
+            moltype: MolType::new(&moltype).unwrap(),
             protein_ksize,
             scaled,
             kmer_infos,
@@ -242,7 +243,7 @@ impl ProteinSketch {
         Ok(Self {
             name,
             signature,
-            moltype,
+            moltype: MolType::new(&moltype).unwrap(),
             protein_ksize,
             scaled,
             kmer_infos: data.kmer_infos.clone(),
@@ -342,7 +343,7 @@ impl ProteinSketch {
     }
 
     /// Get the moltype
-    pub fn moltype(&self) -> &str {
+    pub fn moltype(&self) -> &MolType {
         &self.moltype
     }
 

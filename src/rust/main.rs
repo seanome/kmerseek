@@ -240,14 +240,6 @@ fn main() -> IndexResult<()> {
 
             println!("Found {} matches above threshold {}", filtered_results.len(), threshold);
 
-            // Output detailed k-mer information to stderr if verbose
-            if verbose {
-                let detailed_results = searcher.search_with_kmer_extraction(&query_signatures)?;
-                for result in &detailed_results {
-                    eprintln!("{}", result.to_print);
-                }
-            }
-
             // Output CSV to stdout or file
             if let Some(output_path) = output {
                 println!("Writing results to: {}", output_path.display());
