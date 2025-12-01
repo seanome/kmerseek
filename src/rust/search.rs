@@ -668,7 +668,7 @@ mod tests {
     /// Tests if the correct k-mer overlap region for a query-target pair is found
     // # BCL2 & Ced9 `hp` k-mer match via **`pphhphhphhhhhphhhhh`, yay!**
     //
-    // This is awesome because it’s evidence that the hp k-mer method can work! The k-mer sizes
+    // This is awesome because it's evidence that the hp k-mer method can work! The k-mer sizes
     // that this works for are k ≤ 19, since this region is of length 19
     //
     // → Need to figure out how we can auto-detect the k-mer size necessary for a query protein.
@@ -684,46 +684,98 @@ mod tests {
     // ```
     #[test]
     fn test_find_matched_regions_single() -> Result<()> {
+        use needletail::parse_fastx_file;
+
         let ksize = 15;
         let scaled = 1;
         let moltype = "hp";
-        let store_raw_sequences = true;
 
-        let query_index =
-            ProteomeIndex::new_with_auto_filename(&TEST_CED9_FASTA, ksize, scaled, moltype, true)?;
+        // Read CED9 sequence from FASTA file
+        let mut ced9_reader = parse_fastx_file(TEST_CED9_FASTA)
+            .map_err(|e| anyhow::anyhow!("Failed to parse CED9 FASTA: {}", e))?;
+        let ced9_record = match ced9_reader.next() {
+            Some(Ok(record)) => record,
+            Some(Err(e)) => return Err(anyhow::anyhow!("Failed to read CED9 record: {}", e)),
+            None => return Err(anyhow::anyhow!("No sequence found in CED9 FASTA")),
+        };
+        let ced9_sequence = String::from_utf8(ced9_record.seq().to_vec())
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in CED9 sequence: {}", e))?;
+        let ced9_name = String::from_utf8(ced9_record.id().to_vec())
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in CED9 name: {}", e))?;
 
-        let target_index =
-            ProteomeIndex::new_with_auto_filename(&TEST_BLC2_FASTA, ksize, scaled, moltype, true)?;
+        // Read BCL2 sequence from FASTA file
+        let mut bcl2_reader = parse_fastx_file(TEST_BLC2_FASTA)
+            .map_err(|e| anyhow::anyhow!("Failed to parse BCL2 FASTA: {}", e))?;
+        let bcl2_record = match bcl2_reader.next() {
+            Some(Ok(record)) => record,
+            Some(Err(e)) => return Err(anyhow::anyhow!("Failed to read BCL2 record: {}", e)),
+            None => return Err(anyhow::anyhow!("No sequence found in BCL2 FASTA")),
+        };
+        let bcl2_sequence = String::from_utf8(bcl2_record.seq().to_vec())
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in BCL2 sequence: {}", e))?;
+        let bcl2_name = String::from_utf8(bcl2_record.id().to_vec())
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in BCL2 name: {}", e))?;
 
-        // TODO: do BLC2 vs CED9 here
-        // let matched_regions = target_index.find_matched_regions(query_index);
-        // let matched_region = &matched_regions[0];
-        //
-        // assert_eq!(matched_region.query_subseq,  "QCPMSYGRLIGLISFGGFV");
-        // assert_eq!(matched_region.moltype_seq,   "pphhphhphhhhhphhhhh");
-        // assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
-        assert!(false, "Should find at least one match");
+        // Create sketches using from_protein_sequence - this now handles everything:
+        // minhash, kmer_infos, raw sequence, and encoded sequence storage
+        // WHY: The enhanced from_protein_sequence method does all the heavy lifting,
+        // making tests simple and avoiding boilerplate. This is idiomatic Rust - make
+        // the common case easy by having the method do what users almost always need.
+        let query_sketch = ProteinSketch::from_protein_sequence(
+            &ced9_name,
+            &ced9_sequence,
+            ksize,
+            scaled,
+            moltype,
+        )?;
+
+        let target_sketch = ProteinSketch::from_protein_sequence(
+            &bcl2_name,
+            &bcl2_sequence,
+            ksize,
+            scaled,
+            moltype,
+        )?;
+
+        // Create a temporary searcher (we only need it for the method, not the index)
+        let temp_dir = TempDir::new()?;
+        let temp_index = ProteomeIndex::new(temp_dir.path(), ksize, scaled, moltype, false)?;
+        let searcher = ProteinSearcher::new(temp_index);
+
+        // Calculate intersection for find_matched_regions
+        let query_mins: HashSet<u64> =
+            query_sketch.signature().minhash.mins().iter().cloned().collect();
+        let target_mins: HashSet<u64> =
+            target_sketch.signature().minhash.mins().iter().cloned().collect();
+        let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+
+        // Find matched regions
+        let matched_regions =
+            searcher.find_matched_regions(&query_sketch, &target_sketch, &intersection);
+
+        // Verify we found at least one match
+        assert!(!matched_regions.is_empty(), "Should find at least one match");
+
+        // Verify the expected match region
+        // The expected match is around positions 138-157 in both sequences
+        // Query subsequence: "QCPMSYGRLIGLISFGGFV"
+        // Target subsequence: "RDGVNWGRIVAFFEFGGVM"
+        // Moltype sequence: "pphhphhphhhhhphhhhh"
+        let matched_region = &matched_regions[0];
+        assert_eq!(matched_region.query_subseq, "QCPMSYGRLIGLISFGGFV");
+        assert_eq!(matched_region.moltype_seq, "pphhphhphhhhhphhhhh");
+        assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
 
         Ok(())
     }
 
     #[test]
     fn test_find_matched_regions_multiple() -> Result<()> {
-        let ksize = 5;
-        let scaled = 1;
-        let moltype = "hp";
-        let store_raw_sequences = true;
-
-        let query_index =
-            ProteomeIndex::new_with_auto_filename(&TEST_CED9_FASTA, ksize, scaled, moltype, true)?;
-
-        let target_index =
-            ProteomeIndex::new_with_auto_filename(&TEST_BLC2_FASTA, ksize, scaled, moltype, true)?;
-
-        // TODO: do BLC2 vs CED9 here
-        // let matched_regions = target_index.find_matched_regions(query_index);
-        // Then iterate over matched regions, it should be several
-        assert!(false, "Should find at least one match");
+        // TODO: Implement this test similar to test_find_matched_regions_single
+        // but with a smaller ksize (5) to find multiple matched regions
+        // This test should verify that multiple consecutive regions are found
+        // when using smaller k-mer sizes
+        assert!(false, "Test not yet implemented");
         Ok(())
     }
 

@@ -759,23 +759,9 @@ impl ProteomeIndex {
         let mut protein_sig = ProteinSketch::new(name, self.ksize, self.scaled, &self.moltype)?;
 
         // Add the protein sequence to the signature
-        protein_sig.add_protein(processed_sequence.as_bytes())?;
-
-        // Process the k-mers to get detailed k-mer information
-        self.process_kmers(&processed_sequence, &mut protein_sig)?;
-
-        // Always create efficient data with the sequence
-        let efficient_data = protein_sig.to_efficient_data_with_capacity(processed_sequence.len());
-        let mut efficient_data_with_sequence = efficient_data;
-        efficient_data_with_sequence.set_raw_sequence(processed_sequence.to_string());
-
-        // Generate and store encoded sequence (unless it's protein encoding)
-        if self.moltype != "protein" {
-            let encoded_sequence = self.encode_sequence(&processed_sequence);
-            efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
-        }
-
-        protein_sig.set_efficient_data(efficient_data_with_sequence);
+        // WHY: add_protein now handles all processing: minhash, kmer_infos, and sequence storage.
+        // This eliminates the need for separate process_kmers and sequence storage calls.
+        protein_sig.add_protein(&processed_sequence)?;
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)
@@ -833,28 +819,34 @@ impl ProteomeIndex {
         let hashvals = &protein_signature.signature().get_minhash().to_vec();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            let kmer = &sequence[i..i + ksize];
+            let kmer = crate::kmer::Kmer::from_sequence(sequence, i, ksize);
 
             // Process the k-mer to get encoded version
             if let Ok((encoded_kmer, original_kmer)) =
-                encode_kmer_with_encoding_fn(kmer, self.encoding_fn)
+                encode_kmer_with_encoding_fn(kmer.as_ref(), self.encoding_fn)
             {
                 // Get the hash from the minhash implementation
                 let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
                 // If this hashval is in the minhash, then save its k-mer positions
                 if hashvals.contains(&hashval) {
-                    let kmer_info = protein_signature
-                        .kmer_infos_mut()
-                        .entry(hashval)
-                        .or_insert_with(|| KmerInfo {
-                            ksize: ksize.try_into().unwrap(),
-                            hashval,
-                            encoded_kmer: encoded_kmer.clone(),
-                            original_kmer_to_position: HashMap::new(),
+                    let ksize_u32 = ksize.try_into().unwrap();
+                    let kmer_info =
+                        protein_signature.kmer_infos_mut().entry(hashval).or_insert_with(|| {
+                            // WHY: Pre-allocate encoded_kmer with exact k-mer size since k-mer
+                            // length is fixed and will never change. This avoids unnecessary
+                            // reallocations.
+                            let mut encoded = String::with_capacity(ksize);
+                            encoded.push_str(&encoded_kmer);
+                            KmerInfo {
+                                ksize: ksize_u32,
+                                hashval,
+                                encoded_kmer: encoded,
+                                original_kmer_to_position: HashMap::new(),
+                            }
                         });
 
-                    kmer_info.add_position(&original_kmer, i);
+                    kmer_info.add_position(kmer.as_ref(), i);
                 }
             }
         }
@@ -924,10 +916,7 @@ impl ProteomeIndex {
     /// - **Borrowing over ownership**: Takes `&[ProteinSketch]` to avoid unnecessary moves
     /// - **Reuses existing logic**: Delegates to `store_signatures` for consistency
     /// - **Memory efficient**: Allows for batch processing without accumulating all signatures
-    pub fn store_signatures_batch(
-        &self,
-        protein_signatures: &[ProteinSketch],
-    ) -> IndexResult<()> {
+    pub fn store_signatures_batch(&self, protein_signatures: &[ProteinSketch]) -> IndexResult<()> {
         // Convert slice to owned Vec for the existing method
         // This is a small allocation cost for the benefit of code reuse
         self.store_signatures(protein_signatures.to_vec())
@@ -1140,12 +1129,9 @@ mod tests {
             moltype,
         )?;
 
-        // Add the sequence
-        protein_sig.add_protein(sequence.as_bytes())?;
+        // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
+        protein_sig.add_protein(sequence)?;
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
-
-        // Process kmers
-        index.process_kmers(sequence, &mut protein_sig)?;
 
         println!("{}", protein_sig.signature().name);
         println!("{:?}", protein_sig.kmer_infos().keys());
@@ -1238,12 +1224,9 @@ mod tests {
             "dayhoff",
         )?;
 
-        // Add the sequence
-        protein_sig.add_protein(sequence.as_bytes())?;
+        // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
+        protein_sig.add_protein(sequence)?;
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
-
-        // Process kmers
-        index.process_kmers(sequence, &mut protein_sig)?;
 
         println!("{}", protein_sig.signature().name);
         let hashvals = protein_sig.kmer_infos().keys().collect::<Vec<_>>();
@@ -1358,12 +1341,9 @@ mod tests {
             moltype,
         )?;
 
-        // Add the sequence
-        protein_sig.add_protein(sequence.as_bytes())?;
+        // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
+        protein_sig.add_protein(sequence)?;
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
-
-        // Process kmers
-        index.process_kmers(sequence, &mut protein_sig)?;
 
         println!("{}", protein_sig.signature().name);
         let hashvals = protein_sig.kmer_infos().keys().collect::<Vec<_>>();

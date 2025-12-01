@@ -1,5 +1,5 @@
 use crate::encoding::get_hash_function_from_moltype;
-use crate::kmer::KmerInfo;
+use crate::kmer::{Kmer, KmerInfo};
 use crate::signature::StableSignature;
 use crate::types::MolType;
 use crate::SEED;
@@ -179,20 +179,19 @@ impl ProteinSketch {
 
     /// Create a ProteinSketch from a protein sequence
     ///
-    /// This is a convenience method that creates a new `ProteinSketch` and immediately
-    /// adds the provided protein sequence to it. This avoids the need to call `new()`
-    /// followed by `add_protein()` separately.
+    /// This is a convenience constructor that creates a new `ProteinSketch` and adds
+    /// the sequence to it. All processing (kmer_infos, sequence storage) happens
+    /// automatically via `add_protein`.
     ///
     /// # Arguments
     /// * `name` - Name/identifier for the protein
-    /// * `sequence` - Protein sequence as bytes (typically amino acid sequence)
+    /// * `sequence` - Protein sequence as a string (amino acid sequence)
     /// * `protein_ksize` - Protein k-mer size
     /// * `scaled` - Scaled parameter for the MinHash sketch
     /// * `moltype` - Molecule type (e.g., "protein", "dayhoff", "hp")
     ///
     /// # Returns
-    /// A `Result` containing the `ProteinSketch` with the sequence already added,
-    /// or an error if sequence processing fails.
+    /// A `Result` containing the fully processed `ProteinSketch` ready for use.
     ///
     /// # Errors
     /// Returns an error if the moltype is invalid or if adding the protein sequence fails.
@@ -201,26 +200,26 @@ impl ProteinSketch {
     /// ```
     /// use kmerseek::sketch::ProteinSketch;
     ///
-    /// let sequence = b"MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWYVMQS";
+    /// let sequence = "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKRQTLGQHDFSAGEGLYTHMKALRPDEDRLSPLHSVYVDQWDWYVMQS";
     /// let sketch = ProteinSketch::from_protein_sequence(
     ///     "protein1",
     ///     sequence,
     ///     10,  // protein ksize
     ///     100, // scaled
-    ///     "protein"
+    ///     "hp"  // moltype
     /// )?;
+    /// // sketch now has kmer_infos populated and sequences stored
     /// ```
     pub fn from_protein_sequence(
         name: &str,
-        sequence: &[u8],
+        sequence: &str,
         protein_ksize: u32,
         scaled: u32,
         moltype: &str,
     ) -> anyhow::Result<Self> {
-        // Create a new sketch and add the sequence in one step
-        // WHY: Reusing existing methods (new + add_protein) follows DRY principle
-        // and ensures consistency. This avoids code duplication and maintains
-        // a single source of truth for sketch creation and sequence addition logic.
+        // WHY: This is just a convenience constructor. All the real work happens in
+        // add_protein, which ensures consistent behavior whether you use this constructor
+        // or call new() + add_protein() directly.
         let mut sketch = Self::new(name, protein_ksize, scaled, moltype)?;
         sketch.add_protein(sequence)?;
         Ok(sketch)
@@ -374,14 +373,97 @@ impl ProteinSketch {
         self.efficient_data.as_ref()?.get_encoded_sequence()
     }
 
-    /// Add a protein sequence to the signature
-    pub fn add_protein(&mut self, sequence: &[u8]) -> anyhow::Result<()> {
-        self.signature.minhash.add_protein(sequence)?;
+    /// Add a protein sequence to the signature with full processing
+    ///
+    /// This method adds the sequence to the minhash, populates kmer_infos with position
+    /// information, and stores both raw and encoded sequences. This ensures that whenever
+    /// a protein is added, all necessary data is populated for search operations.
+    ///
+    /// # Arguments
+    /// * `sequence` - Protein sequence as a string (amino acid sequence)
+    ///
+    /// # Returns
+    /// `Ok(())` on success, or an error if sequence processing fails.
+    ///
+    /// # Errors
+    /// Returns an error if adding the protein sequence to the minhash fails, or if
+    /// k-mer processing fails.
+    pub fn add_protein(&mut self, sequence: &str) -> anyhow::Result<()> {
+        use crate::encoding::{encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
+        use sourmash::_hash_murmur;
+
+        // Add sequence to minhash
+        // WHY: This is the core operation - adding k-mers to the MinHash sketch.
+        // We do this first so we know which hashvals are in the sketch for kmer_infos.
+        self.signature.minhash.add_protein(sequence.as_bytes())?;
 
         // Generate a simple hash-based identifier from the minhash data
         let md5sum =
             self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         self.signature.md5sum = format!("{:x}", md5sum);
+
+        // Populate kmer_infos by processing all k-mers in the sequence
+        // WHY: kmer_infos are essential for position tracking and region finding.
+        // We populate them automatically whenever a protein is added so callers don't
+        // need to manually process k-mers.
+        let encoding_fn = get_encoding_fn_from_moltype(&self.moltype.to_string())?;
+        let ksize = self.protein_ksize as usize;
+        let seed = SEED;
+        let hashvals: Vec<u64> = self.signature().minhash.mins().to_vec();
+
+        for i in 0..sequence.len().saturating_sub(ksize - 1) {
+            let kmer = Kmer::from_sequence(sequence, i, ksize);
+
+            // Process the k-mer to get encoded version
+            if let Ok((encoded_kmer, original_kmer)) =
+                encode_kmer_with_encoding_fn(kmer.as_ref(), encoding_fn)
+            {
+                // Get the hash from the minhash implementation
+                let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
+
+                // If this hashval is in the minhash, then save its k-mer positions
+                if hashvals.contains(&hashval) {
+                    // Capture protein_ksize before mutable borrow
+                    let protein_ksize = self.protein_ksize;
+                    let kmer_info = self.kmer_infos_mut().entry(hashval).or_insert_with(|| {
+                        // WHY: Pre-allocate encoded_kmer with exact k-mer size since k-mer
+                        // length is fixed and will never change. This avoids unnecessary
+                        // reallocations.
+                        let mut encoded = String::with_capacity(protein_ksize as usize);
+                        encoded.push_str(&encoded_kmer);
+                        KmerInfo {
+                            ksize: protein_ksize,
+                            hashval,
+                            encoded_kmer: encoded,
+                            original_kmer_to_position: HashMap::new(),
+                        }
+                    });
+
+                    kmer_info.add_position(kmer.as_ref(), i);
+                }
+            }
+        }
+
+        // Store raw and encoded sequences in efficient_data
+        // WHY: Storing sequences enables subsequence extraction and region finding
+        // without requiring external sequence storage. We do this automatically so
+        // the sketch is self-contained and ready for search operations.
+        let efficient_data = self.to_efficient_data_with_capacity(sequence.len());
+        let mut efficient_data_with_sequence = efficient_data;
+        efficient_data_with_sequence.set_raw_sequence(sequence.to_string());
+
+        // Generate and store encoded sequence (unless it's protein encoding)
+        // WHY: Encoded sequences are needed for moltype-based matching and verification.
+        // We store them automatically so callers don't need to manually encode and store.
+        // We use the encoding module to ensure consistency with k-mer encoding.
+        let moltype_str = self.moltype.to_string();
+        if moltype_str != "protein" {
+            use crate::encoding::encode_sequence;
+            let encoded_sequence = encode_sequence(sequence, &moltype_str)?;
+            efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
+        }
+
+        self.set_efficient_data(efficient_data_with_sequence);
 
         Ok(())
     }
