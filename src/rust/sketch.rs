@@ -389,7 +389,7 @@ impl ProteinSketch {
     /// Returns an error if adding the protein sequence to the minhash fails, or if
     /// k-mer processing fails.
     pub fn add_protein(&mut self, sequence: &str) -> anyhow::Result<()> {
-        use crate::encoding::{encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
+        use crate::encoding::{encode_with_fn, get_encoding_fn_from_moltype};
         use sourmash::_hash_murmur;
 
         // Add sequence to minhash
@@ -415,9 +415,7 @@ impl ProteinSketch {
             let kmer = Kmer::from_sequence(sequence, i, ksize);
 
             // Process the k-mer to get encoded version
-            if let Ok((encoded_kmer, original_kmer)) =
-                encode_kmer_with_encoding_fn(kmer.as_ref(), encoding_fn)
-            {
+            if let Ok(encoded_kmer) = encode_with_fn(kmer.as_ref(), encoding_fn) {
                 // Get the hash from the minhash implementation
                 let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
@@ -458,8 +456,8 @@ impl ProteinSketch {
         // We use the encoding module to ensure consistency with k-mer encoding.
         let moltype_str = self.moltype.to_string();
         if moltype_str != "protein" {
-            use crate::encoding::encode_sequence;
-            let encoded_sequence = encode_sequence(sequence, &moltype_str)?;
+            use crate::encoding::encode_by_moltype;
+            let encoded_sequence = encode_by_moltype(sequence, &moltype_str)?;
             efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
         }
 

@@ -15,7 +15,7 @@ use sourmash::storage::{FSStorage, InnerStorage};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{
-    encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
+    encode_with_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::errors::{IndexError, IndexResult};
 use crate::kmer::KmerInfo;
@@ -822,9 +822,7 @@ impl ProteomeIndex {
             let kmer = crate::kmer::Kmer::from_sequence(sequence, i, ksize);
 
             // Process the k-mer to get encoded version
-            if let Ok((encoded_kmer, original_kmer)) =
-                encode_kmer_with_encoding_fn(kmer.as_ref(), self.encoding_fn)
-            {
+            if let Ok(encoded_kmer) = encode_with_fn(kmer.as_ref(), self.encoding_fn) {
                 // Get the hash from the minhash implementation
                 let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
 
