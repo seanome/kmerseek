@@ -767,48 +767,6 @@ impl ProteomeIndex {
         Ok(protein_sig)
     }
 
-    /// Encode a protein sequence using the current moltype
-    fn encode_sequence(&self, sequence: &str) -> String {
-        match self.moltype.as_str() {
-            "hp" => self.encode_sequence_hp(sequence),
-            "dayhoff" => self.encode_sequence_dayhoff(sequence),
-            "protein" => sequence.to_string(), // No encoding needed
-            _ => sequence.to_string(),         // Default to no encoding
-        }
-    }
-
-    /// Encode a protein sequence using HP encoding (hydrophobic/polar)
-    fn encode_sequence_hp(&self, sequence: &str) -> String {
-        use sourmash::encodings::aa_to_hp;
-
-        let mut encoded = String::with_capacity(sequence.len());
-
-        for byte in sequence.bytes() {
-            let hp_char = aa_to_hp(byte);
-            encoded.push(match hp_char {
-                b'h' => 'h',
-                b'p' => 'p',
-                _ => 'h', // Default to hydrophobic for unknown characters
-            });
-        }
-
-        encoded
-    }
-
-    /// Encode a protein sequence using Dayhoff encoding
-    fn encode_sequence_dayhoff(&self, sequence: &str) -> String {
-        use sourmash::encodings::aa_to_dayhoff;
-
-        let mut encoded = String::with_capacity(sequence.len());
-
-        for byte in sequence.bytes() {
-            let dayhoff_char = aa_to_dayhoff(byte);
-            encoded.push(dayhoff_char as char);
-        }
-
-        encoded
-    }
-
     pub fn process_kmers(
         &self,
         sequence: &str,
