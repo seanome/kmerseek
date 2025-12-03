@@ -574,24 +574,6 @@ impl ProteinSearcher {
         }
         None
     }
-
-    /// Encode a protein sequence using HP encoding (hydrophobic/polar)
-    fn encode_sequence_hp(&self, sequence: &str) -> String {
-        use sourmash::encodings::aa_to_hp;
-
-        let mut encoded = String::with_capacity(sequence.len());
-
-        for byte in sequence.bytes() {
-            let hp_char = aa_to_hp(byte);
-            encoded.push(match hp_char {
-                b'h' => 'h',
-                b'p' => 'p',
-                _ => 'h', // Default to hydrophobic for unknown characters
-            });
-        }
-
-        encoded
-    }
 }
 
 #[cfg(test)]
