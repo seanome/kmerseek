@@ -82,56 +82,67 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
     }
 }
 
-/// Process a k-mer to get its encoded version based on the specified moltype.
+/// Encode a sequence using the specified moltype.
+///
+/// This function applies the encoding function to each amino acid in the sequence,
+/// producing an encoded sequence string. The encoded sequence is pre-allocated
+/// with the exact capacity needed.
 ///
 /// # Arguments
-/// * `kmer` - A string slice containing the k-mer to encode
-/// * `moltype` - A string slice that specifies the molecule type. Supported values:
-///   - `"protein"` or `"raw"` for standard protein encoding
-///   - `"hp"` for hydrophobic/polar encoding
-///   - `"dayhoff"` for Dayhoff encoding
+/// * `sequence` - The sequence to encode (can be a k-mer or full sequence)
+/// * `moltype` - The molecule type encoding to use ("protein", "hp", or "dayhoff")
 ///
 /// # Returns
-/// * `Ok((String, String))` - A tuple containing (encoded_kmer, original_kmer)
-/// * `Err(...)` - An error if the `moltype` is unrecognized
-pub fn encode_kmer(kmer: &str, moltype: &str) -> Result<(String, String)> {
+/// * `Ok(String)` - The encoded sequence
+/// * `Err(...)` - An error if the moltype is invalid
+///
+/// # Example
+/// ```
+/// use kmerseek::encoding::encode_by_moltype;
+///
+/// let sequence = "MKTAYIAKQR";
+/// let encoded = encode_by_moltype(sequence, "hp")?;
+/// // encoded will be the HP-encoded version
+/// ```
+pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
     let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
-
-    let mut encoded = String::with_capacity(kmer.len());
-    let mut original = String::with_capacity(kmer.len());
-
-    for &b in kmer.as_bytes() {
-        encoded.push(encoding_fn(b) as char);
-    }
-    original.push_str(kmer);
-
-    Ok((encoded, original))
+    encode_with_fn(sequence, encoding_fn)
 }
 
-#[allow(clippy::doc_overindented_list_items)]
-/// Process a k-mer to get its encoded version based on the specified moltype and hash function.
+/// Encode a sequence using the provided encoding function.
+///
+/// This function applies the encoding function to each amino acid in the sequence,
+/// producing an encoded sequence string. The encoded sequence is pre-allocated
+/// with the exact capacity needed.
 ///
 /// # Arguments
-/// * `kmer` - A string slice containing the k-mer to encode
+/// * `sequence` - The sequence to encode (can be a k-mer or full sequence)
 /// * `encoding_fn` - A function that encodes an amino acid byte according to
-///    the specified `moltype`.
+///    the specified moltype
 ///
 /// # Returns
-/// * `Ok((String, String))` - A tuple containing (encoded_kmer, original_kmer)
-/// * `Err(...)` - An error if the `moltype` is unrecognized
-pub fn encode_kmer_with_encoding_fn(
-    kmer: &str,
-    encoding_fn: fn(u8) -> u8,
-) -> Result<(String, String)> {
-    let mut encoded = String::with_capacity(kmer.len());
-    let mut original = String::with_capacity(kmer.len());
+/// * `Ok(String)` - The encoded sequence
+///
+/// # Example
+/// ```
+/// use kmerseek::encoding::encode_with_fn;
+/// use sourmash::encodings::aa_to_hp;
+///
+/// let sequence = "MKTAYIAKQR";
+/// let encoded = encode_with_fn(sequence, aa_to_hp)?;
+/// // encoded will be the HP-encoded version
+/// ```
+pub fn encode_with_fn(sequence: &str, encoding_fn: fn(u8) -> u8) -> Result<String> {
+    // WHY: Pre-allocate with exact capacity since the encoded sequence length
+    // will always equal the input sequence length. This avoids unnecessary
+    // reallocations during encoding.
+    let mut encoded = String::with_capacity(sequence.len());
 
-    for &b in kmer.as_bytes() {
+    for &b in sequence.as_bytes() {
         encoded.push(encoding_fn(b) as char);
     }
-    original.push_str(kmer);
 
-    Ok((encoded, original))
+    Ok(encoded)
 }
 
 #[cfg(test)]
@@ -200,86 +211,72 @@ mod tests {
     }
 
     #[test]
-    fn test_kmer_encoding_protein() -> Result<()> {
-        // Test k-mer encoding
-        let (encoded_kmer, original_kmer) = encode_kmer(TEST_KMER, "protein")?;
-
-        // The original k-mer should be exactly what we put in
-        assert_eq!(original_kmer, TEST_KMER);
-
-        // The encoded k-mer should be the same as the original k-mer
-        assert_eq!(encoded_kmer, TEST_KMER);
-
+    fn test_encode_by_moltype_protein() -> Result<()> {
+        let encoded = encode_by_moltype(TEST_KMER, "protein")?;
+        assert_eq!(encoded, TEST_KMER);
         Ok(())
     }
 
     #[test]
-    fn test_kmer_encoding_dayhoff() -> Result<()> {
-        // Test k-mer encoding
-        let (encoded_kmer, original_kmer) = encode_kmer(TEST_KMER, "dayhoff")?;
-
-        // The original k-mer should be exactly what we put in
-        assert_eq!(original_kmer, TEST_KMER);
-
-        // The encoded k-mer should be dayhoff-encoded k-mer
-        assert_eq!(encoded_kmer, "eeeecbbeeec");
-
+    fn test_encode_by_moltype_dayhoff() -> Result<()> {
+        let encoded = encode_by_moltype(TEST_KMER, "dayhoff")?;
+        assert_eq!(encoded, "eeeecbbeeec");
         Ok(())
     }
 
     #[test]
-    fn test_kmer_encoding_hp() -> Result<()> {
-        // Test k-mer encoding
-        let (encoded_kmer, original_kmer) = encode_kmer(TEST_KMER, "hp")?;
-
-        // The original k-mer should be exactly what we put in
-        assert_eq!(original_kmer, TEST_KMER);
-
-        // The encoded k-mer should be hp-encoded k-mer
-        assert_eq!(encoded_kmer, "hhhhphhhhhp");
-
+    fn test_encode_by_moltype_hp() -> Result<()> {
+        let encoded = encode_by_moltype(TEST_KMER, "hp")?;
+        assert_eq!(encoded, "hhhhphhhhhp");
         Ok(())
     }
 
     #[test]
-    fn test_kmer_encoding_protein_with_encoding_fn() -> Result<()> {
-        // Test k-mer encoding
-        let (encoded_kmer, original_kmer) = encode_kmer_with_encoding_fn(TEST_KMER, |b| b)?;
-
-        // The original k-mer should be exactly what we put in
-        assert_eq!(original_kmer, TEST_KMER);
-
-        // The encoded k-mer should be the same as the original k-mer
-        assert_eq!(encoded_kmer, TEST_KMER);
-
+    fn test_encode_with_fn_protein() -> Result<()> {
+        let encoded = encode_with_fn(TEST_KMER, |b| b)?;
+        assert_eq!(encoded, TEST_KMER);
         Ok(())
     }
 
     #[test]
-    fn test_kmer_encoding_dayhoff_with_encoding_fn() -> Result<()> {
-        // Test k-mer encoding
-        let (encoded_kmer, original_kmer) = encode_kmer_with_encoding_fn(TEST_KMER, aa_to_dayhoff)?;
-
-        // The original k-mer should be exactly what we put in
-        assert_eq!(original_kmer, TEST_KMER);
-
-        // The encoded k-mer should be dayhoff-encoded k-mer
-        assert_eq!(encoded_kmer, "eeeecbbeeec");
-
+    fn test_encode_with_fn_dayhoff() -> Result<()> {
+        let encoded = encode_with_fn(TEST_KMER, aa_to_dayhoff)?;
+        assert_eq!(encoded, "eeeecbbeeec");
         Ok(())
     }
 
     #[test]
-    fn test_kmer_encoding_hp_with_encoding_fn() -> Result<()> {
-        // Test k-mer encoding
-        let (encoded_kmer, original_kmer) = encode_kmer_with_encoding_fn(TEST_KMER, aa_to_hp)?;
+    fn test_encode_with_fn_hp() -> Result<()> {
+        let encoded = encode_with_fn(TEST_KMER, aa_to_hp)?;
+        assert_eq!(encoded, "hhhhphhhhhp");
+        Ok(())
+    }
 
-        // The original k-mer should be exactly what we put in
-        assert_eq!(original_kmer, TEST_KMER);
+    #[test]
+    fn test_encode_by_moltype_sequence() -> Result<()> {
+        let sequence = "MKTAYIAKQR";
+        let encoded = encode_by_moltype(sequence, "protein")?;
+        assert_eq!(encoded, sequence);
+        Ok(())
+    }
 
-        // The encoded k-mer should be hp-encoded k-mer
-        assert_eq!(encoded_kmer, "hhhhphhhhhp");
+    #[test]
+    fn test_encode_by_moltype_sequence_hp() -> Result<()> {
+        let sequence = "MKTAYIAKQR";
+        let encoded = encode_by_moltype(sequence, "hp")?;
+        // Verify the encoding produces the correct length and uses only 'h' and 'p'
+        assert_eq!(encoded.len(), sequence.len());
+        assert!(encoded.chars().all(|c| c == 'h' || c == 'p'));
+        Ok(())
+    }
 
+    #[test]
+    fn test_encode_by_moltype_sequence_dayhoff() -> Result<()> {
+        let sequence = "MKTAYIAKQR";
+        let encoded = encode_by_moltype(sequence, "dayhoff")?;
+        // Dayhoff encoding should produce a different string
+        assert_ne!(encoded, sequence);
+        assert_eq!(encoded.len(), sequence.len());
         Ok(())
     }
 }
