@@ -581,7 +581,32 @@ mod tests {
     use super::*;
     use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA};
+    use needletail::parse_fastx_file;
+    use std::path::Path;
     use tempfile::TempDir;
+
+    /// Read the first record from a FASTA file and return name and sequence.
+    ///
+    /// WHY: This helper function eliminates code duplication in tests. It provides a simple
+    /// way to read FASTA records for testing purposes without the complexity of the full
+    /// fasta module API.
+    fn read_first_fasta_record<P: AsRef<Path>>(path: P) -> Result<(String, String)> {
+        let mut reader = parse_fastx_file(path)
+            .map_err(|e| anyhow::anyhow!("Failed to parse FASTA file: {}", e))?;
+
+        let record = match reader.next() {
+            Some(Ok(record)) => record,
+            Some(Err(e)) => return Err(anyhow::anyhow!("Failed to read FASTA record: {}", e)),
+            None => return Err(anyhow::anyhow!("No sequence found in FASTA file")),
+        };
+
+        let sequence = String::from_utf8(record.seq().to_vec())
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in sequence: {}", e))?;
+        let name = String::from_utf8(record.id().to_vec())
+            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
+
+        Ok((name, sequence))
+    }
 
     /// Test search functionality similar to the Python tests
     #[test]
@@ -666,37 +691,15 @@ mod tests {
     // ```
     #[test]
     fn test_find_matched_regions_single() -> Result<()> {
-        use needletail::parse_fastx_file;
-
         let ksize = 15;
         let scaled = 1;
         let moltype = "hp";
 
         // Read CED9 sequence from FASTA file
-        let mut ced9_reader = parse_fastx_file(TEST_CED9_FASTA)
-            .map_err(|e| anyhow::anyhow!("Failed to parse CED9 FASTA: {}", e))?;
-        let ced9_record = match ced9_reader.next() {
-            Some(Ok(record)) => record,
-            Some(Err(e)) => return Err(anyhow::anyhow!("Failed to read CED9 record: {}", e)),
-            None => return Err(anyhow::anyhow!("No sequence found in CED9 FASTA")),
-        };
-        let ced9_sequence = String::from_utf8(ced9_record.seq().to_vec())
-            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in CED9 sequence: {}", e))?;
-        let ced9_name = String::from_utf8(ced9_record.id().to_vec())
-            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in CED9 name: {}", e))?;
+        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
 
         // Read BCL2 sequence from FASTA file
-        let mut bcl2_reader = parse_fastx_file(TEST_BLC2_FASTA)
-            .map_err(|e| anyhow::anyhow!("Failed to parse BCL2 FASTA: {}", e))?;
-        let bcl2_record = match bcl2_reader.next() {
-            Some(Ok(record)) => record,
-            Some(Err(e)) => return Err(anyhow::anyhow!("Failed to read BCL2 record: {}", e)),
-            None => return Err(anyhow::anyhow!("No sequence found in BCL2 FASTA")),
-        };
-        let bcl2_sequence = String::from_utf8(bcl2_record.seq().to_vec())
-            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in BCL2 sequence: {}", e))?;
-        let bcl2_name = String::from_utf8(bcl2_record.id().to_vec())
-            .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in BCL2 name: {}", e))?;
+        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
 
         // Create sketches using from_protein_sequence - this now handles everything:
         // minhash, kmer_infos, raw sequence, and encoded sequence storage
