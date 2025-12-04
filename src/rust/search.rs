@@ -427,6 +427,11 @@ impl ProteinSearcher {
     }
 
     /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
+    ///
+    /// WHY: This function maintains correspondence between query and target positions by tracking
+    /// which hashvals contribute to each consecutive region. This is essential because the same
+    /// k-mer hash can appear at different positions in query vs target sequences. We use the
+    /// hashval-to-position mapping to find corresponding regions in both sequences.
     pub fn find_matched_regions(
         &self,
         query_sketch: &ProteinSketch,
@@ -443,41 +448,62 @@ impl ProteinSearcher {
         assert_eq!(query_sketch.moltype(), target_sketch.moltype());
         let moltype = query_sketch.moltype().clone();
 
-        // Collect original sequence positions from k-mer info
-        // This works correctly even when scaled != 1 because we use original positions
-        // stored in KmerInfo, not the downsampled signature positions
-        let mut query_positions: Vec<usize> = Vec::new();
-        let mut target_positions: Vec<usize> = Vec::new();
+        // Build mapping from hashval to positions for both query and target
+        // WHY: We need to maintain correspondence between query and target positions for each
+        // k-mer hash. This allows us to find the correct target region for each query region.
+        let mut hashval_to_query_positions: HashMap<u64, Vec<usize>> = HashMap::new();
+        let mut hashval_to_target_positions: HashMap<u64, Vec<usize>> = HashMap::new();
 
         for &hashval in intersection {
             if let (Some(query_kmer_info), Some(target_kmer_info)) =
                 (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
             {
+                // Collect all query positions for this hashval
+                let mut query_poss = Vec::new();
                 for positions in query_kmer_info.original_kmer_to_position.values() {
-                    query_positions.extend(positions);
+                    query_poss.extend(positions.iter().cloned());
                 }
+                query_poss.sort();
+                query_poss.dedup();
+                hashval_to_query_positions.insert(hashval, query_poss);
+
+                // Collect all target positions for this hashval
+                let mut target_poss = Vec::new();
                 for positions in target_kmer_info.original_kmer_to_position.values() {
-                    target_positions.extend(positions);
+                    target_poss.extend(positions.iter().cloned());
                 }
+                target_poss.sort();
+                target_poss.dedup();
+                hashval_to_target_positions.insert(hashval, target_poss);
             }
         }
 
-        if query_positions.is_empty() || target_positions.is_empty() {
+        // Build reverse mapping: position to hashvals for query
+        // WHY: This allows us to find which hashvals contribute to a consecutive query region,
+        // which we then use to find the corresponding target positions.
+        let mut query_position_to_hashvals: HashMap<usize, Vec<u64>> = HashMap::new();
+        for (&hashval, positions) in &hashval_to_query_positions {
+            for &pos in positions {
+                query_position_to_hashvals.entry(pos).or_insert_with(Vec::new).push(hashval);
+            }
+        }
+
+        // Collect all query positions and sort
+        let mut query_positions: Vec<usize> =
+            hashval_to_query_positions.values().flatten().cloned().collect();
+        query_positions.sort();
+        query_positions.dedup();
+
+        if query_positions.is_empty() {
             return Vec::new();
         }
 
-        // Remove duplicates and sort - important for scaled != 1 cases
-        query_positions.sort();
-        query_positions.dedup();
-        target_positions.sort();
-        target_positions.dedup();
-
-        // Find all consecutive runs of k-mers
+        // Find all consecutive runs of k-mers in query
         let mut consecutive_regions = Vec::new();
 
         let mut i: usize = 0;
         while i < query_positions.len() {
-            let start_pos: usize = query_positions[i];
+            let query_start_pos: usize = query_positions[i];
             let mut consecutive_count: usize = 1;
             let mut j: usize = i + 1;
 
@@ -487,9 +513,53 @@ impl ProteinSearcher {
                 j += 1;
             }
 
-            // Add all consecutive regions (even single k-mers)
-            let end_pos = start_pos + consecutive_count + ksize - 1;
+            // Calculate query end position
+            let query_end_pos = query_start_pos + consecutive_count + ksize - 1;
 
+            // Find hashvals that contribute to this query region
+            // WHY: We need to know which k-mers are in this region to find corresponding target positions
+            let mut region_hashvals = HashSet::new();
+            for pos in query_start_pos..query_start_pos + consecutive_count {
+                if let Some(hashvals) = query_position_to_hashvals.get(&pos) {
+                    region_hashvals.extend(hashvals.iter().cloned());
+                }
+            }
+
+            // Collect corresponding target positions for these hashvals
+            let mut target_positions_for_region: Vec<usize> = Vec::new();
+            for hashval in &region_hashvals {
+                if let Some(target_poss) = hashval_to_target_positions.get(hashval) {
+                    target_positions_for_region.extend(target_poss.iter().cloned());
+                }
+            }
+
+            if target_positions_for_region.is_empty() {
+                i = j;
+                continue;
+            }
+
+            // Sort and deduplicate target positions
+            target_positions_for_region.sort();
+            target_positions_for_region.dedup();
+
+            // Find consecutive region in target positions
+            // WHY: We need to find the corresponding consecutive region in the target sequence
+            // that matches the query region. We look for the longest consecutive run in the
+            // target positions that corresponds to this query region.
+            let target_start_pos = target_positions_for_region[0];
+            let mut target_consecutive_count = 1;
+            let mut target_k = 1;
+            while target_k < target_positions_for_region.len()
+                && target_positions_for_region[target_k]
+                    == target_positions_for_region[target_k - 1] + 1
+            {
+                target_consecutive_count += 1;
+                target_k += 1;
+            }
+
+            let target_end_pos = target_start_pos + target_consecutive_count + ksize - 1;
+
+            // Get sequences for extraction
             let query_raw_sequence = query_sketch.get_raw_sequence().unwrap_or_else(|| {
                 panic!("No raw sequence found for query signature {query_name}")
             });
@@ -497,11 +567,13 @@ impl ProteinSearcher {
                 panic!("No raw sequence found for target signature {target_name}")
             });
 
-            let query_subseq = &query_raw_sequence[start_pos..end_pos];
-            let target_subseq = &target_raw_sequence[start_pos..end_pos];
+            // Extract subsequences using correct positions
+            // WHY: Query subsequence uses query positions, target subsequence uses target positions.
+            // This is the fix for the bug where both were using query positions.
+            let query_subseq = &query_raw_sequence[query_start_pos..query_end_pos];
+            let target_subseq = &target_raw_sequence[target_start_pos..target_end_pos];
 
-            // Make sure that target and query moltype sequences are identical, otherwise we have a problem
-            // and these start/end positions are incorrect
+            // Get moltype sequences for validation
             let target_moltype_sequence =
                 target_sketch.get_moltype_sequence().unwrap_or_else(|| {
                     panic!("No moltype encoded sequence found for target signature {target_name}")
@@ -510,39 +582,41 @@ impl ProteinSearcher {
                 panic!("No moltype encoded sequence found for query signature {query_name}")
             });
 
-            let target_moltype_seq = &target_moltype_sequence[start_pos..end_pos];
-            let query_moltype_seq = &query_moltype_sequence[start_pos..end_pos];
-            if target_moltype_seq != query_moltype_seq {
+            // Extract moltype subsequences using correct positions
+            let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
+            let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
+
+            // Validate that moltype sequences match (they should since they share the same k-mers)
+            if query_moltype_seq != target_moltype_seq {
                 panic!(
-                    "Target '{target_name}' and query '{query_name}' moltype sequences at \
-                positions {start_pos}..{end_pos} do not match:\
+                    "Target: '{target_name}'\nand\nQuery: '{query_name}'\nmoltype sequences do not match:\
+                \nQuery positions: {query_start_pos}..{query_end_pos}\
+                \nTarget positions: {target_start_pos}..{target_end_pos}\
+                \nTarget protein subsequence: {target_subseq}\
                 \nTarget moltype subsequence: {target_moltype_seq}\
-                \nQuery  moltype subsequence: {query_moltype_seq}"
+                \nQuery  moltype subsequence: {query_moltype_seq}\
+                \nQuery  protein subsequence: {query_subseq}"
                 )
             }
 
-            // Find corresponding target region
-            // For now, use the first target position as reference
-            if let Some(&target_start) = target_positions.first() {
-                consecutive_regions.push(MatchedRegion {
-                    query_name: query_name.clone(),
-                    query_start: start_pos as u32,
-                    query_end: end_pos as u32,
-                    query_subseq: query_subseq.to_string(),
-                    target_name: target_name.clone(),
-                    target_start: target_start as u32,
-                    target_end: target_start as u32 + consecutive_count as u32 + ksize as u32 - 1,
-                    target_subseq: target_subseq.to_string(),
-                    moltype: moltype.clone(),
-                    moltype_seq: target_moltype_seq.to_string(),
-                    length: (end_pos - start_pos) as u32,
-                });
-            }
+            consecutive_regions.push(MatchedRegion {
+                query_name: query_name.clone(),
+                query_start: query_start_pos as u32,
+                query_end: query_end_pos as u32,
+                query_subseq: query_subseq.to_string(),
+                target_name: target_name.clone(),
+                target_start: target_start_pos as u32,
+                target_end: target_end_pos as u32,
+                target_subseq: target_subseq.to_string(),
+                moltype: moltype.clone(),
+                moltype_seq: target_moltype_seq.to_string(),
+                length: (query_end_pos - query_start_pos) as u32,
+            });
 
             i = j;
         }
 
-        // Sort regions by position (earliest first)
+        // Sort regions by length (longest first)
         consecutive_regions.sort_by(|a, b| {
             let len_a = a.query_end - a.query_start;
             let len_b = b.query_end - b.query_start;
