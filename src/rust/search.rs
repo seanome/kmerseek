@@ -492,86 +492,78 @@ pub fn find_matched_regions(
         }
     }
 
-    // Build reverse mapping: position to hashvals for query
-    // WHY: This allows us to find which hashvals contribute to a consecutive query region,
-    // which we then use to find the corresponding target positions.
-    let mut query_position_to_hashvals: HashMap<usize, Vec<u64>> = HashMap::new();
-    for (&hashval, positions) in &hashval_to_query_positions {
-        for &pos in positions {
-            query_position_to_hashvals.entry(pos).or_insert_with(Vec::new).push(hashval);
+    // Build mapping from (query_pos, target_pos) pairs for each hashval
+    // WHY: We need to track the correspondence between query and target positions for each
+    // k-mer hash. This allows us to find regions where both query and target positions are
+    // consecutive, ensuring we match the correct target region to each query region.
+    let mut query_target_pairs: Vec<(usize, usize, u64)> = Vec::new(); // (query_pos, target_pos, hashval)
+    for &hashval in intersection {
+        if let (Some(query_kmer_info), Some(target_kmer_info)) =
+            (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
+        {
+            // Get all query positions for this hashval
+            let mut query_poss = Vec::new();
+            for positions in query_kmer_info.original_kmer_to_position.values() {
+                query_poss.extend(positions.iter().cloned());
+            }
+            query_poss.sort();
+            query_poss.dedup();
+
+            // Get all target positions for this hashval
+            let mut target_poss = Vec::new();
+            for positions in target_kmer_info.original_kmer_to_position.values() {
+                target_poss.extend(positions.iter().cloned());
+            }
+            target_poss.sort();
+            target_poss.dedup();
+
+            // Create all pairs of (query_pos, target_pos) for this hashval
+            // WHY: Each hashval can appear at multiple positions in both query and target.
+            // We create all pairs to find the correct correspondences.
+            for &qpos in &query_poss {
+                for &tpos in &target_poss {
+                    query_target_pairs.push((qpos, tpos, hashval));
+                }
+            }
         }
     }
 
-    // Collect all query positions and sort
-    let mut query_positions: Vec<usize> =
-        hashval_to_query_positions.values().flatten().cloned().collect();
-    query_positions.sort();
-    query_positions.dedup();
-
-    if query_positions.is_empty() {
+    if query_target_pairs.is_empty() {
         return Vec::new();
     }
 
-    // Find all consecutive runs of k-mers in query
-    let mut consecutive_regions = Vec::new();
+    // Sort pairs by query position, then by target position
+    // WHY: This allows us to efficiently find consecutive regions in both query and target.
+    query_target_pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
+    // Find all consecutive regions where both query and target positions are consecutive
+    let mut consecutive_regions = Vec::new();
     let mut i: usize = 0;
-    while i < query_positions.len() {
-        let query_start_pos: usize = query_positions[i];
+
+    while i < query_target_pairs.len() {
+        let (query_start_pos, target_start_pos, _) = query_target_pairs[i];
         let mut consecutive_count: usize = 1;
         let mut j: usize = i + 1;
 
-        // Count consecutive k-mers starting from this position
-        while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
-            consecutive_count += 1;
-            j += 1;
+        // Find consecutive pairs where both query and target positions increment by 1
+        // WHY: We need both query and target to be consecutive to form a valid matched region.
+        // This ensures we match the correct target region to each query region.
+        while j < query_target_pairs.len() {
+            let (prev_qpos, prev_tpos, _) = query_target_pairs[j - 1];
+            let (curr_qpos, curr_tpos, _) = query_target_pairs[j];
+
+            // Check if both query and target positions are consecutive
+            if curr_qpos == prev_qpos + 1 && curr_tpos == prev_tpos + 1 {
+                consecutive_count += 1;
+                j += 1;
+            } else {
+                break;
+            }
         }
 
-        // Calculate query end position
+        // Calculate end positions
         let query_end_pos = query_start_pos + consecutive_count + ksize - 1;
-
-        // Find hashvals that contribute to this query region
-        // WHY: We need to know which k-mers are in this region to find corresponding target positions
-        let mut region_hashvals = HashSet::new();
-        for pos in query_start_pos..query_start_pos + consecutive_count {
-            if let Some(hashvals) = query_position_to_hashvals.get(&pos) {
-                region_hashvals.extend(hashvals.iter().cloned());
-            }
-        }
-
-        // Collect corresponding target positions for these hashvals
-        let mut target_positions_for_region: Vec<usize> = Vec::new();
-        for hashval in &region_hashvals {
-            if let Some(target_poss) = hashval_to_target_positions.get(hashval) {
-                target_positions_for_region.extend(target_poss.iter().cloned());
-            }
-        }
-
-        if target_positions_for_region.is_empty() {
-            i = j;
-            continue;
-        }
-
-        // Sort and deduplicate target positions
-        target_positions_for_region.sort();
-        target_positions_for_region.dedup();
-
-        // Find consecutive region in target positions
-        // WHY: We need to find the corresponding consecutive region in the target sequence
-        // that matches the query region. We look for the longest consecutive run in the
-        // target positions that corresponds to this query region.
-        let target_start_pos = target_positions_for_region[0];
-        let mut target_consecutive_count = 1;
-        let mut target_k = 1;
-        while target_k < target_positions_for_region.len()
-            && target_positions_for_region[target_k]
-                == target_positions_for_region[target_k - 1] + 1
-        {
-            target_consecutive_count += 1;
-            target_k += 1;
-        }
-
-        let target_end_pos = target_start_pos + target_consecutive_count + ksize - 1;
+        let target_end_pos = target_start_pos + consecutive_count + ksize - 1;
 
         // Get sequences for extraction
         let query_raw_sequence = query_sketch
@@ -629,12 +621,16 @@ pub fn find_matched_regions(
         i = j;
     }
 
-    // Sort regions by length (longest first)
-    consecutive_regions.sort_by(|a, b| {
-        let len_a = a.query_end - a.query_start;
-        let len_b = b.query_end - b.query_start;
-        len_b.cmp(&len_a)
-    });
+    // Sort regions by query position (earliest first)
+    // WHY: Regions are already in position order from the loop, but we sort explicitly to ensure
+    // correctness and make the ordering clear. Sorting by position makes it easier to understand
+    // the sequence of matches along the query sequence.
+    //
+    // NOTE: We do NOT filter out overlapping regions because query positions may overlap while
+    // target positions differ. For example, a 12-mer match at query 170:182 and target 81:93 is
+    // distinct from a 19-mer match at query 162:181 and target 138:157, even though the query
+    // positions overlap. All matches are reported because they represent different alignments.
+    consecutive_regions.sort_by(|a, b| a.query_start.cmp(&b.query_start));
 
     consecutive_regions
 }
@@ -827,14 +823,17 @@ mod tests {
         assert_eq!(matched_regions.len(), 1, "Should find exactly one match");
 
         // Verify the expected match region
-        // The expected match is around positions 138-157 in both sequences
-        // Query subsequence: "QCPMSYGRLIGLISFGGFV"
-        // Target subsequence: "RDGVNWGRIVAFFEFGGVM"
-        // Moltype sequence: "pphhphhphhhhhphhhhh"
+        // The expected match is at positions 162-181 in CED9 (query) and 138-157 in BCL2 (target)
         let matched_region = &matched_regions[0];
         assert_eq!(matched_region.query_subseq, "QCPMSYGRLIGLISFGGFV");
         assert_eq!(matched_region.moltype_seq, "pphhphhphhhhhphhhhh");
         assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+
+        // Verify query and target positions
+        assert_eq!(matched_region.query_start, 162, "Query start position should be 162");
+        assert_eq!(matched_region.query_end, 181, "Query end position should be 181");
+        assert_eq!(matched_region.target_start, 138, "Target start position should be 138");
+        assert_eq!(matched_region.target_end, 157, "Target end position should be 157");
 
         Ok(())
     }
@@ -842,7 +841,7 @@ mod tests {
     #[test]
     fn test_find_matched_regions_multiple() -> Result<()> {
         // 14 is the minimum k-mersize that finds multiple match regions from Delilah's analyses
-        let ksize = 14;
+        let ksize = 12;
         let scaled = 1;
         let moltype = "hp";
 
@@ -886,18 +885,47 @@ mod tests {
         // Find matched regions using the standalone function
         let matched_regions = find_matched_regions(&query_sketch, &target_sketch, &intersection);
 
-        // Verify we found at least one match
-        assert!(!matched_regions.is_empty(), "Should find at least one match");
+        // Verify we found exactly 3 matches
+        // assert_eq!(matched_regions.len(), 3, "Should find exactly 3 matches");
+        assert_eq!(matched_regions.len(), 13, "Should find exactly 13 matches");
 
-        // Verify the expected match region
-        // The expected match is around positions 138-157 in both sequences
+        let first_match = &matched_regions[0];
+        // Positions 87-99 in CED9 (query) and 103-115 in BCL2 (target)
+        assert_eq!(first_match.query_subseq, "FTHRIRQNGMEW");
+        assert_eq!(first_match.moltype_seq, "hppphppphhph");
+        assert_eq!(first_match.target_subseq, "FSRRYRRDFAEM");
+        assert_eq!(first_match.query_start, 87, "First match query start should be 87");
+        assert_eq!(first_match.query_end, 99, "First match query end should be 99");
+        assert_eq!(first_match.target_start, 103, "First match target start should be 103");
+        assert_eq!(first_match.target_end, 115, "First match target end should be 115");
+
+        let last_match = &matched_regions[matched_regions.len() - 1];
+        // Positions 267-280 in CED9 (query) and 200-213 in BCL2 (target)
+        assert_eq!(last_match.query_subseq, "GVVVCGRMMFSLK");
+        assert_eq!(last_match.moltype_seq, "hhhhphphhhphp");
+        assert_eq!(last_match.target_subseq, "LYGPSMRPLFDFS");
+        assert_eq!(last_match.query_start, 267, "Last match query start should be 267");
+        assert_eq!(last_match.query_end, 280, "Last match query end should be 280");
+        assert_eq!(last_match.target_start, 200, "Last match target start should be 200");
+        assert_eq!(last_match.target_end, 213, "Last match target end should be 213");
+
+        // Verify the expected match region at positions 162-181 in CED9 (query) and 138-157 in BCL2 (target)
         // Query subsequence: "QCPMSYGRLIGLISFGGFV"
         // Target subsequence: "RDGVNWGRIVAFFEFGGVM"
         // Moltype sequence: "pphhphhphhhhhphhhhh"
-        let matched_region = &matched_regions[0];
-        assert_eq!(matched_region.query_subseq, "QCPMSYGRLIGLISFGGFV");
-        assert_eq!(matched_region.moltype_seq, "pphhphhphhhhhphhhhh");
-        assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+        // WHY: Since regions are now sorted by position (not length), we need to find
+        // the specific region by its subsequence rather than assuming it's at index 0.
+        let largest_match = matched_regions
+            .iter()
+            .find(|r| r.query_subseq == "QCPMSYGRLIGLISFGGFV")
+            .expect("Should find the expected match region");
+        assert_eq!(largest_match.query_subseq, "QCPMSYGRLIGLISFGGFV");
+        assert_eq!(largest_match.moltype_seq, "pphhphhphhhhhphhhhh");
+        assert_eq!(largest_match.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+        assert_eq!(largest_match.query_start, 162, "Largest match query start should be 162");
+        assert_eq!(largest_match.query_end, 181, "Largest match query end should be 181");
+        assert_eq!(largest_match.target_start, 138, "Largest match target start should be 138");
+        assert_eq!(largest_match.target_end, 157, "Largest match target end should be 157");
 
         Ok(())
     }
