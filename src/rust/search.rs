@@ -425,21 +425,6 @@ impl ProteinSearcher {
 
         result
     }
-
-    /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
-    ///
-    /// WHY: This function maintains correspondence between query and target positions by tracking
-    /// which hashvals contribute to each consecutive region. This is essential because the same
-    /// k-mer hash can appear at different positions in query vs target sequences. We use the
-    /// hashval-to-position mapping to find corresponding regions in both sequences.
-    pub fn find_matched_regions(
-        &self,
-        query_sketch: &ProteinSketch,
-        target_sketch: &ProteinSketch,
-        intersection: &HashSet<u64>,
-    ) -> Vec<MatchedRegion> {
-        find_matched_regions(query_sketch, target_sketch, intersection)
-    }
 }
 
 /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
