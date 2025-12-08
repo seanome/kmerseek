@@ -314,7 +314,7 @@ impl ProteinSearcher {
         // Calculate overlap probability between query and target
         let overlap_probability = self.calculate_overlap_probability(&intersection);
 
-        let matched_regions = self.find_matched_regions(query, target, &intersection);
+        let matched_regions = find_matched_regions(query, target, &intersection);
 
         Some(SearchResult {
             query_name: query_name.to_string(),
@@ -438,194 +438,208 @@ impl ProteinSearcher {
         target_sketch: &ProteinSketch,
         intersection: &HashSet<u64>,
     ) -> Vec<MatchedRegion> {
-        // Ensure that query and target protein sketches are the same ksize
-        assert_eq!(query_sketch.protein_ksize(), target_sketch.protein_ksize());
-        let ksize = query_sketch.protein_ksize() as usize;
-        let query_name = query_sketch.signature().name.clone();
-        let target_name = target_sketch.signature().name.clone();
+        find_matched_regions(query_sketch, target_sketch, intersection)
+    }
+}
 
-        // Ensure that both query and target have the same moltypes
-        assert_eq!(query_sketch.moltype(), target_sketch.moltype());
-        let moltype = query_sketch.moltype().clone();
+/// Find all consecutive matched regions of k-mer overlap between a query and target sequences
+///
+/// WHY: This is a standalone function because it doesn't require any state from ProteinSearcher.
+/// It only operates on the sketches and intersection provided. This makes it easier to test and
+/// more reusable. This is idiomatic Rust - functions that don't need state should be standalone.
+pub fn find_matched_regions(
+    query_sketch: &ProteinSketch,
+    target_sketch: &ProteinSketch,
+    intersection: &HashSet<u64>,
+) -> Vec<MatchedRegion> {
+    // Ensure that query and target protein sketches are the same ksize
+    assert_eq!(query_sketch.protein_ksize(), target_sketch.protein_ksize());
+    let ksize = query_sketch.protein_ksize() as usize;
+    let query_name = query_sketch.signature().name.clone();
+    let target_name = target_sketch.signature().name.clone();
 
-        // Build mapping from hashval to positions for both query and target
-        // WHY: We need to maintain correspondence between query and target positions for each
-        // k-mer hash. This allows us to find the correct target region for each query region.
-        let mut hashval_to_query_positions: HashMap<u64, Vec<usize>> = HashMap::new();
-        let mut hashval_to_target_positions: HashMap<u64, Vec<usize>> = HashMap::new();
+    // Ensure that both query and target have the same moltypes
+    assert_eq!(query_sketch.moltype(), target_sketch.moltype());
+    let moltype = query_sketch.moltype().clone();
 
-        for &hashval in intersection {
-            if let (Some(query_kmer_info), Some(target_kmer_info)) =
-                (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
-            {
-                // Collect all query positions for this hashval
-                let mut query_poss = Vec::new();
-                for positions in query_kmer_info.original_kmer_to_position.values() {
-                    query_poss.extend(positions.iter().cloned());
-                }
-                query_poss.sort();
-                query_poss.dedup();
-                hashval_to_query_positions.insert(hashval, query_poss);
+    // Build mapping from hashval to positions for both query and target
+    // WHY: We need to maintain correspondence between query and target positions for each
+    // k-mer hash. This allows us to find the correct target region for each query region.
+    let mut hashval_to_query_positions: HashMap<u64, Vec<usize>> = HashMap::new();
+    let mut hashval_to_target_positions: HashMap<u64, Vec<usize>> = HashMap::new();
 
-                // Collect all target positions for this hashval
-                let mut target_poss = Vec::new();
-                for positions in target_kmer_info.original_kmer_to_position.values() {
-                    target_poss.extend(positions.iter().cloned());
-                }
-                target_poss.sort();
-                target_poss.dedup();
-                hashval_to_target_positions.insert(hashval, target_poss);
+    for &hashval in intersection {
+        if let (Some(query_kmer_info), Some(target_kmer_info)) =
+            (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
+        {
+            // Collect all query positions for this hashval
+            let mut query_poss = Vec::new();
+            for positions in query_kmer_info.original_kmer_to_position.values() {
+                query_poss.extend(positions.iter().cloned());
             }
+            query_poss.sort();
+            query_poss.dedup();
+            hashval_to_query_positions.insert(hashval, query_poss);
+
+            // Collect all target positions for this hashval
+            let mut target_poss = Vec::new();
+            for positions in target_kmer_info.original_kmer_to_position.values() {
+                target_poss.extend(positions.iter().cloned());
+            }
+            target_poss.sort();
+            target_poss.dedup();
+            hashval_to_target_positions.insert(hashval, target_poss);
         }
-
-        // Build reverse mapping: position to hashvals for query
-        // WHY: This allows us to find which hashvals contribute to a consecutive query region,
-        // which we then use to find the corresponding target positions.
-        let mut query_position_to_hashvals: HashMap<usize, Vec<u64>> = HashMap::new();
-        for (&hashval, positions) in &hashval_to_query_positions {
-            for &pos in positions {
-                query_position_to_hashvals.entry(pos).or_insert_with(Vec::new).push(hashval);
-            }
-        }
-
-        // Collect all query positions and sort
-        let mut query_positions: Vec<usize> =
-            hashval_to_query_positions.values().flatten().cloned().collect();
-        query_positions.sort();
-        query_positions.dedup();
-
-        if query_positions.is_empty() {
-            return Vec::new();
-        }
-
-        // Find all consecutive runs of k-mers in query
-        let mut consecutive_regions = Vec::new();
-
-        let mut i: usize = 0;
-        while i < query_positions.len() {
-            let query_start_pos: usize = query_positions[i];
-            let mut consecutive_count: usize = 1;
-            let mut j: usize = i + 1;
-
-            // Count consecutive k-mers starting from this position
-            while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
-                consecutive_count += 1;
-                j += 1;
-            }
-
-            // Calculate query end position
-            let query_end_pos = query_start_pos + consecutive_count + ksize - 1;
-
-            // Find hashvals that contribute to this query region
-            // WHY: We need to know which k-mers are in this region to find corresponding target positions
-            let mut region_hashvals = HashSet::new();
-            for pos in query_start_pos..query_start_pos + consecutive_count {
-                if let Some(hashvals) = query_position_to_hashvals.get(&pos) {
-                    region_hashvals.extend(hashvals.iter().cloned());
-                }
-            }
-
-            // Collect corresponding target positions for these hashvals
-            let mut target_positions_for_region: Vec<usize> = Vec::new();
-            for hashval in &region_hashvals {
-                if let Some(target_poss) = hashval_to_target_positions.get(hashval) {
-                    target_positions_for_region.extend(target_poss.iter().cloned());
-                }
-            }
-
-            if target_positions_for_region.is_empty() {
-                i = j;
-                continue;
-            }
-
-            // Sort and deduplicate target positions
-            target_positions_for_region.sort();
-            target_positions_for_region.dedup();
-
-            // Find consecutive region in target positions
-            // WHY: We need to find the corresponding consecutive region in the target sequence
-            // that matches the query region. We look for the longest consecutive run in the
-            // target positions that corresponds to this query region.
-            let target_start_pos = target_positions_for_region[0];
-            let mut target_consecutive_count = 1;
-            let mut target_k = 1;
-            while target_k < target_positions_for_region.len()
-                && target_positions_for_region[target_k]
-                    == target_positions_for_region[target_k - 1] + 1
-            {
-                target_consecutive_count += 1;
-                target_k += 1;
-            }
-
-            let target_end_pos = target_start_pos + target_consecutive_count + ksize - 1;
-
-            // Get sequences for extraction
-            let query_raw_sequence = query_sketch.get_raw_sequence().unwrap_or_else(|| {
-                panic!("No raw sequence found for query signature {query_name}")
-            });
-            let target_raw_sequence = target_sketch.get_raw_sequence().unwrap_or_else(|| {
-                panic!("No raw sequence found for target signature {target_name}")
-            });
-
-            // Extract subsequences using correct positions
-            // WHY: Query subsequence uses query positions, target subsequence uses target positions.
-            // This is the fix for the bug where both were using query positions.
-            let query_subseq = &query_raw_sequence[query_start_pos..query_end_pos];
-            let target_subseq = &target_raw_sequence[target_start_pos..target_end_pos];
-
-            // Get moltype sequences for validation
-            let target_moltype_sequence =
-                target_sketch.get_moltype_sequence().unwrap_or_else(|| {
-                    panic!("No moltype encoded sequence found for target signature {target_name}")
-                });
-            let query_moltype_sequence = query_sketch.get_moltype_sequence().unwrap_or_else(|| {
-                panic!("No moltype encoded sequence found for query signature {query_name}")
-            });
-
-            // Extract moltype subsequences using correct positions
-            let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
-            let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
-
-            // Validate that moltype sequences match (they should since they share the same k-mers)
-            if query_moltype_seq != target_moltype_seq {
-                panic!(
-                    "Target: '{target_name}'\nand\nQuery: '{query_name}'\nmoltype sequences do not match:\
-                \nQuery positions: {query_start_pos}..{query_end_pos}\
-                \nTarget positions: {target_start_pos}..{target_end_pos}\
-                \nTarget protein subsequence: {target_subseq}\
-                \nTarget moltype subsequence: {target_moltype_seq}\
-                \nQuery  moltype subsequence: {query_moltype_seq}\
-                \nQuery  protein subsequence: {query_subseq}"
-                )
-            }
-
-            consecutive_regions.push(MatchedRegion {
-                query_name: query_name.clone(),
-                query_start: query_start_pos as u32,
-                query_end: query_end_pos as u32,
-                query_subseq: query_subseq.to_string(),
-                target_name: target_name.clone(),
-                target_start: target_start_pos as u32,
-                target_end: target_end_pos as u32,
-                target_subseq: target_subseq.to_string(),
-                moltype: moltype.clone(),
-                moltype_seq: target_moltype_seq.to_string(),
-                length: (query_end_pos - query_start_pos) as u32,
-            });
-
-            i = j;
-        }
-
-        // Sort regions by length (longest first)
-        consecutive_regions.sort_by(|a, b| {
-            let len_a = a.query_end - a.query_start;
-            let len_b = b.query_end - b.query_start;
-            len_b.cmp(&len_a)
-        });
-
-        consecutive_regions
     }
 
+    // Build reverse mapping: position to hashvals for query
+    // WHY: This allows us to find which hashvals contribute to a consecutive query region,
+    // which we then use to find the corresponding target positions.
+    let mut query_position_to_hashvals: HashMap<usize, Vec<u64>> = HashMap::new();
+    for (&hashval, positions) in &hashval_to_query_positions {
+        for &pos in positions {
+            query_position_to_hashvals.entry(pos).or_insert_with(Vec::new).push(hashval);
+        }
+    }
+
+    // Collect all query positions and sort
+    let mut query_positions: Vec<usize> =
+        hashval_to_query_positions.values().flatten().cloned().collect();
+    query_positions.sort();
+    query_positions.dedup();
+
+    if query_positions.is_empty() {
+        return Vec::new();
+    }
+
+    // Find all consecutive runs of k-mers in query
+    let mut consecutive_regions = Vec::new();
+
+    let mut i: usize = 0;
+    while i < query_positions.len() {
+        let query_start_pos: usize = query_positions[i];
+        let mut consecutive_count: usize = 1;
+        let mut j: usize = i + 1;
+
+        // Count consecutive k-mers starting from this position
+        while j < query_positions.len() && query_positions[j] == query_positions[j - 1] + 1 {
+            consecutive_count += 1;
+            j += 1;
+        }
+
+        // Calculate query end position
+        let query_end_pos = query_start_pos + consecutive_count + ksize - 1;
+
+        // Find hashvals that contribute to this query region
+        // WHY: We need to know which k-mers are in this region to find corresponding target positions
+        let mut region_hashvals = HashSet::new();
+        for pos in query_start_pos..query_start_pos + consecutive_count {
+            if let Some(hashvals) = query_position_to_hashvals.get(&pos) {
+                region_hashvals.extend(hashvals.iter().cloned());
+            }
+        }
+
+        // Collect corresponding target positions for these hashvals
+        let mut target_positions_for_region: Vec<usize> = Vec::new();
+        for hashval in &region_hashvals {
+            if let Some(target_poss) = hashval_to_target_positions.get(hashval) {
+                target_positions_for_region.extend(target_poss.iter().cloned());
+            }
+        }
+
+        if target_positions_for_region.is_empty() {
+            i = j;
+            continue;
+        }
+
+        // Sort and deduplicate target positions
+        target_positions_for_region.sort();
+        target_positions_for_region.dedup();
+
+        // Find consecutive region in target positions
+        // WHY: We need to find the corresponding consecutive region in the target sequence
+        // that matches the query region. We look for the longest consecutive run in the
+        // target positions that corresponds to this query region.
+        let target_start_pos = target_positions_for_region[0];
+        let mut target_consecutive_count = 1;
+        let mut target_k = 1;
+        while target_k < target_positions_for_region.len()
+            && target_positions_for_region[target_k]
+                == target_positions_for_region[target_k - 1] + 1
+        {
+            target_consecutive_count += 1;
+            target_k += 1;
+        }
+
+        let target_end_pos = target_start_pos + target_consecutive_count + ksize - 1;
+
+        // Get sequences for extraction
+        let query_raw_sequence = query_sketch
+            .get_raw_sequence()
+            .unwrap_or_else(|| panic!("No raw sequence found for query signature {query_name}"));
+        let target_raw_sequence = target_sketch
+            .get_raw_sequence()
+            .unwrap_or_else(|| panic!("No raw sequence found for target signature {target_name}"));
+
+        // Extract subsequences using correct positions
+        // WHY: Query subsequence uses query positions, target subsequence uses target positions.
+        // This is the fix for the bug where both were using query positions.
+        let query_subseq = &query_raw_sequence[query_start_pos..query_end_pos];
+        let target_subseq = &target_raw_sequence[target_start_pos..target_end_pos];
+
+        // Get moltype sequences for validation
+        let target_moltype_sequence = target_sketch.get_moltype_sequence().unwrap_or_else(|| {
+            panic!("No moltype encoded sequence found for target signature {target_name}")
+        });
+        let query_moltype_sequence = query_sketch.get_moltype_sequence().unwrap_or_else(|| {
+            panic!("No moltype encoded sequence found for query signature {query_name}")
+        });
+
+        // Extract moltype subsequences using correct positions
+        let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
+        let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
+
+        // Validate that moltype sequences match (they should since they share the same k-mers)
+        if query_moltype_seq != target_moltype_seq {
+            panic!(
+                "Target: '{target_name}'\nand\nQuery: '{query_name}'\nmoltype sequences do not match:\
+            \nQuery positions: {query_start_pos}..{query_end_pos}\
+            \nTarget positions: {target_start_pos}..{target_end_pos}\
+            \nTarget protein subsequence: {target_subseq}\
+            \nTarget moltype subsequence: {target_moltype_seq}\
+            \nQuery  moltype subsequence: {query_moltype_seq}\
+            \nQuery  protein subsequence: {query_subseq}"
+            )
+        }
+
+        consecutive_regions.push(MatchedRegion {
+            query_name: query_name.clone(),
+            query_start: query_start_pos as u32,
+            query_end: query_end_pos as u32,
+            query_subseq: query_subseq.to_string(),
+            target_name: target_name.clone(),
+            target_start: target_start_pos as u32,
+            target_end: target_end_pos as u32,
+            target_subseq: target_subseq.to_string(),
+            moltype: moltype.clone(),
+            moltype_seq: target_moltype_seq.to_string(),
+            length: (query_end_pos - query_start_pos) as u32,
+        });
+
+        i = j;
+    }
+
+    // Sort regions by length (longest first)
+    consecutive_regions.sort_by(|a, b| {
+        let len_a = a.query_end - a.query_start;
+        let len_b = b.query_end - b.query_start;
+        len_b.cmp(&len_a)
+    });
+
+    consecutive_regions
+}
+
+impl ProteinSearcher {
     /// Find a signature by name in the index
     fn find_signature_by_name(&self, name: &str) -> Option<ProteinSketch> {
         for entry in self.index.get_signatures().iter() {
@@ -796,24 +810,21 @@ mod tests {
             moltype,
         )?;
 
-        // Create a temporary searcher (we only need it for the method, not the index)
-        let temp_dir = TempDir::new()?;
-        let temp_index = ProteomeIndex::new(temp_dir.path(), ksize, scaled, moltype, false)?;
-        let searcher = ProteinSearcher::new(temp_index);
-
         // Calculate intersection for find_matched_regions
+        // WHY: We use a standalone function that doesn't require a searcher/index, making tests
+        // simpler and more focused. This is idiomatic Rust - functions that don't need state
+        // should be standalone.
         let query_mins: HashSet<u64> =
             query_sketch.signature().minhash.mins().iter().cloned().collect();
         let target_mins: HashSet<u64> =
             target_sketch.signature().minhash.mins().iter().cloned().collect();
         let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
 
-        // Find matched regions
-        let matched_regions =
-            searcher.find_matched_regions(&query_sketch, &target_sketch, &intersection);
+        // Find matched regions using the standalone function
+        let matched_regions = find_matched_regions(&query_sketch, &target_sketch, &intersection);
 
         // Verify we found at least one match
-        assert!(!matched_regions.is_empty(), "Should find at least one match");
+        assert_eq!(matched_regions.len(), 1, "Should find exactly one match");
 
         // Verify the expected match region
         // The expected match is around positions 138-157 in both sequences
@@ -830,11 +841,64 @@ mod tests {
 
     #[test]
     fn test_find_matched_regions_multiple() -> Result<()> {
-        // TODO: Implement this test similar to test_find_matched_regions_single
-        // but with a smaller ksize (5) to find multiple matched regions
-        // This test should verify that multiple consecutive regions are found
-        // when using smaller k-mer sizes
-        assert!(false, "Test not yet implemented");
+        // 14 is the minimum k-mersize that finds multiple match regions from Delilah's analyses
+        let ksize = 14;
+        let scaled = 1;
+        let moltype = "hp";
+
+        // Read CED9 sequence from FASTA file
+        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
+
+        // Read BCL2 sequence from FASTA file
+        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+
+        // Create sketches using from_protein_sequence - this now handles everything:
+        // minhash, kmer_infos, raw sequence, and encoded sequence storage
+        // WHY: The enhanced from_protein_sequence method does all the heavy lifting,
+        // making tests simple and avoiding boilerplate. This is idiomatic Rust - make
+        // the common case easy by having the method do what users almost always need.
+        let query_sketch = ProteinSketch::from_protein_sequence(
+            &ced9_name,
+            &ced9_sequence,
+            ksize,
+            scaled,
+            moltype,
+        )?;
+
+        let target_sketch = ProteinSketch::from_protein_sequence(
+            &bcl2_name,
+            &bcl2_sequence,
+            ksize,
+            scaled,
+            moltype,
+        )?;
+
+        // Calculate intersection for find_matched_regions
+        // WHY: We use a standalone function that doesn't require a searcher/index, making tests
+        // simpler and more focused. This is idiomatic Rust - functions that don't need state
+        // should be standalone.
+        let query_mins: HashSet<u64> =
+            query_sketch.signature().minhash.mins().iter().cloned().collect();
+        let target_mins: HashSet<u64> =
+            target_sketch.signature().minhash.mins().iter().cloned().collect();
+        let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+
+        // Find matched regions using the standalone function
+        let matched_regions = find_matched_regions(&query_sketch, &target_sketch, &intersection);
+
+        // Verify we found at least one match
+        assert!(!matched_regions.is_empty(), "Should find at least one match");
+
+        // Verify the expected match region
+        // The expected match is around positions 138-157 in both sequences
+        // Query subsequence: "QCPMSYGRLIGLISFGGFV"
+        // Target subsequence: "RDGVNWGRIVAFFEFGGVM"
+        // Moltype sequence: "pphhphhphhhhhphhhhh"
+        let matched_region = &matched_regions[0];
+        assert_eq!(matched_region.query_subseq, "QCPMSYGRLIGLISFGGFV");
+        assert_eq!(matched_region.moltype_seq, "pphhphhphhhhhphhhhh");
+        assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+
         Ok(())
     }
 
