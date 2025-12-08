@@ -263,6 +263,40 @@ impl ProteinSearcher {
     /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
     ///
     /// This method calculates all similarity metrics in one pass for efficiency.
+    ///
+    /// # Why Manual Calculation Instead of Sourmash's Built-in Methods?
+    ///
+    /// We calculate containment, jaccard, and other metrics manually rather than using
+    /// Sourmash's `KmerMinHash::similarity()` or `KmerMinHash::containment()` methods for
+    /// several performance and functionality reasons:
+    ///
+    /// 1. **Pre-extracted HashSet Reuse**: The `query_mins` HashSet is extracted once per query
+    ///    and reused across all target comparisons (see `search()` method). Sourmash's methods
+    ///    would need to extract/convert data structures on every call, causing redundant allocations.
+    ///
+    /// 2. **Intersection Reuse**: We need the intersection HashSet for multiple downstream
+    ///    calculations (abundance statistics, overlap probability, matched regions). Computing
+    ///    it once and reusing it is more efficient than having each Sourmash method compute
+    ///    it independently.
+    ///
+    /// 3. **Redundant Compatibility Checks**: Sourmash's methods perform compatibility checks
+    ///    (ksize, scaled, moltype, seed) on every call. Since we already know signatures are
+    ///    compatible (checked via `is_compatible()` or guaranteed by index construction), these
+    ///    checks are unnecessary overhead in this hot path.
+    ///
+    /// 4. **Custom Metrics**: We calculate metrics not provided by Sourmash:
+    ///    - `containment_target_in_query` (reverse containment)
+    ///    - `max_containment` (max of both containment directions)
+    ///    - Abundance statistics (median, std dev) on intersecting k-mers
+    ///    - Custom weighted metrics and overlap probability
+    ///
+    /// 5. **Zero-Cost Abstraction**: By controlling the data flow, we avoid function call overhead
+    ///    and intermediate allocations. The manual approach provides better performance for batch
+    ///    comparisons where the same query is compared against many targets.
+    ///
+    /// This follows Rust's zero-cost abstraction principle: when you control the data, avoid
+    /// unnecessary overhead from general-purpose library methods that must handle edge cases
+    /// we've already excluded.
     fn query_target_similarity(
         &self,
         query: &ProteinSketch,
