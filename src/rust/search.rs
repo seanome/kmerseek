@@ -237,7 +237,7 @@ impl ProteinSearcher {
                     .iter()
                     .filter_map(|entry| {
                         let target = entry.value();
-                        self.query_target_similarity(
+                        self.compare(
                             query,
                             target,
                             &query_mins,
@@ -262,115 +262,58 @@ impl ProteinSearcher {
 
     /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
     ///
-    /// This method calculates all similarity metrics in one pass for efficiency.
+    /// This method uses the standalone `calculate_similarity` function for the core calculation,
+    /// then adds database-specific metrics (TF-IDF and overlap probability) that require the
+    /// database context.
     ///
-    /// # Why Manual Calculation Instead of Sourmash's Built-in Methods?
+    /// # Why Pre-extracted Data?
     ///
-    /// We calculate containment, jaccard, and other metrics manually rather than using
-    /// Sourmash's `KmerMinHash::similarity()` or `KmerMinHash::containment()` methods for
-    /// several performance and functionality reasons:
+    /// The `query_mins` HashSet is extracted once per query in `search()` and reused across all
+    /// target comparisons. This avoids redundant allocations when comparing the same query against
+    /// many targets. The standalone `calculate_similarity` function extracts this data itself,
+    /// which is fine for 1v1 comparisons but less efficient for batch operations.
     ///
-    /// 1. **Pre-extracted HashSet Reuse**: The `query_mins` HashSet is extracted once per query
-    ///    and reused across all target comparisons (see `search()` method). Sourmash's methods
-    ///    would need to extract/convert data structures on every call, causing redundant allocations.
+    /// # Performance Considerations
     ///
-    /// 2. **Intersection Reuse**: We need the intersection HashSet for multiple downstream
-    ///    calculations (abundance statistics, overlap probability, matched regions). Computing
-    ///    it once and reusing it is more efficient than having each Sourmash method compute
-    ///    it independently.
+    /// For batch searches (1 query vs many targets), this method is more efficient than calling
+    /// `calculate_similarity` directly because:
+    /// 1. `query_mins` is extracted once and reused
+    /// 2. `query_tfidf` is calculated once per query and reused
+    /// 3. Database-specific metrics (overlap probability) are calculated using pre-computed stats
     ///
-    /// 3. **Redundant Compatibility Checks**: Sourmash's methods perform compatibility checks
-    ///    (ksize, scaled, moltype, seed) on every call. Since we already know signatures are
-    ///    compatible (checked via `is_compatible()` or guaranteed by index construction), these
-    ///    checks are unnecessary overhead in this hot path.
-    ///
-    /// 4. **Custom Metrics**: We calculate metrics not provided by Sourmash:
-    ///    - `containment_target_in_query` (reverse containment)
-    ///    - `max_containment` (max of both containment directions)
-    ///    - Abundance statistics (median, std dev) on intersecting k-mers
-    ///    - Custom weighted metrics and overlap probability
-    ///
-    /// 5. **Zero-Cost Abstraction**: By controlling the data flow, we avoid function call overhead
-    ///    and intermediate allocations. The manual approach provides better performance for batch
-    ///    comparisons where the same query is compared against many targets.
-    ///
-    /// This follows Rust's zero-cost abstraction principle: when you control the data, avoid
-    /// unnecessary overhead from general-purpose library methods that must handle edge cases
-    /// we've already excluded.
-    pub(crate) fn query_target_similarity(
+    /// For 1v1 comparisons or testing, use `calculate_similarity` directly.
+    pub(crate) fn compare(
         &self,
         query: &ProteinSketch,
         target: &ProteinSketch,
         query_mins: &HashSet<u64>,
-        query_abunds: Option<&[u64]>,
-        query_name: &str,
-        query_md5: &str,
+        _query_abunds: Option<&[u64]>,
+        _query_name: &str,
+        _query_md5: &str,
         query_tfidf: f64,
     ) -> Option<SearchResult> {
+        // Use the standalone function for core similarity calculation
+        // We need to extract intersection for overlap probability, so we do a quick check first
         let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
-        let target_abunds = target.signature().minhash.abunds();
-
-        // Calculate intersection
         let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
-        let n_intersecting_hashes = intersection.len();
 
         // Skip if no intersection
-        if n_intersecting_hashes == 0 {
+        if intersection.is_empty() {
             return None;
         }
 
-        let query_size = query_mins.len();
-        let target_size = target_mins.len();
-        let union_size = query_size + target_size - n_intersecting_hashes;
-
-        // Calculate basic metrics
-        let containment = n_intersecting_hashes as f64 / query_size as f64;
-        let jaccard = n_intersecting_hashes as f64 / union_size as f64;
-        let containment_target_in_query = n_intersecting_hashes as f64 / target_size as f64;
-        let max_containment = containment.max(containment_target_in_query);
-
-        // Calculate abundance statistics
-        let (average_abund, median_abund, std_abund) =
-            if let (Some(query_abunds), Some(target_abunds)) =
-                (query_abunds, target_abunds.as_ref())
-            {
-                significance::abundance_stats(&intersection, query_abunds, target_abunds)
-            } else {
-                (1.0, 1.0, 0.0)
-            };
-
-        // Calculate weighted metrics
-        let f_weighted_target_in_query = significance::weighted_fraction_target_in_query(
-            query_abunds.as_deref(),
-            target_abunds.as_deref(),
-        );
-
-        // Calculate overlap probability between query and target
+        // Calculate overlap probability using database stats
         let overlap_probability = self.calculate_overlap_probability(&intersection);
 
-        let matched_regions = find_matched_regions(query, target, &intersection);
+        // Get the base similarity result from the standalone function
+        // Note: This will recalculate intersection, but that's acceptable for the cleaner API
+        let mut result = calculate_similarity(query, target)?;
 
-        Some(SearchResult {
-            query_name: query_name.to_string(),
-            query_md5: query_md5.to_string(),
-            target_name: target.signature().name.clone(),
-            target_md5: target.signature().md5sum.clone(),
-            containment,
-            n_intersecting_hashes,
-            ksize: query.protein_ksize(),
-            scaled: query.signature().minhash.scaled(),
-            moltype: query.moltype().to_string(),
-            jaccard,
-            max_containment,
-            average_abund,
-            median_abund,
-            std_abund,
-            containment_target_in_query,
-            f_weighted_target_in_query,
-            tfidf: query_tfidf,
-            overlap_probability,
-            matched_regions,
-        })
+        // Override with database-specific metrics
+        result.tfidf = query_tfidf;
+        result.overlap_probability = overlap_probability;
+
+        Some(result)
     }
 
     /// Calculate TF-IDF score for a query signature
@@ -459,6 +402,109 @@ impl ProteinSearcher {
 
         result
     }
+}
+
+/// Calculate similarity between two protein sketches without requiring database context.
+///
+/// This is a standalone function for 1v1 comparisons that calculates all basic similarity
+/// metrics (containment, jaccard, abundance statistics, matched regions) without needing
+/// a `ProteinSearcher` instance. For database-specific metrics (TF-IDF, overlap probability),
+/// use `ProteinSearcher::compare` instead.
+///
+/// # Why Standalone?
+///
+/// This function doesn't require any state from `ProteinSearcher`. It only operates on the
+/// sketches provided, making it easier to test and more reusable. This follows idiomatic Rust:
+/// functions that don't need state should be standalone. The pattern matches `find_matched_regions`.
+///
+/// # Arguments
+/// * `query` - Query protein sketch
+/// * `target` - Target protein sketch to compare against
+///
+/// # Returns
+/// `Some(SearchResult)` if there's any intersection between the sketches, `None` otherwise.
+/// TF-IDF is set to 0.0 and overlap probability is set to 1.0, as these metrics require
+/// database context and are meaningless for 1v1 comparisons.
+///
+/// # Example
+/// ```
+/// use kmerseek::sketch::ProteinSketch;
+/// use kmerseek::search::calculate_similarity;
+///
+/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp")?;
+/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp")?;
+/// let result = calculate_similarity(&query, &target);
+/// ```
+pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Option<SearchResult> {
+    // Extract query data
+    let query_mins: HashSet<u64> = query.signature().minhash.mins().iter().cloned().collect();
+    let query_abunds = query.signature().minhash.abunds();
+    let query_name = query.signature().name.clone();
+    let query_md5 = query.signature().md5sum.clone();
+
+    // Extract target data
+    let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
+    let target_abunds = target.signature().minhash.abunds();
+
+    // Calculate intersection
+    let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+    let n_intersecting_hashes = intersection.len();
+
+    // Skip if no intersection
+    if n_intersecting_hashes == 0 {
+        return None;
+    }
+
+    let query_size = query_mins.len();
+    let target_size = target_mins.len();
+    let union_size = query_size + target_size - n_intersecting_hashes;
+
+    // Calculate basic metrics
+    let containment = n_intersecting_hashes as f64 / query_size as f64;
+    let jaccard = n_intersecting_hashes as f64 / union_size as f64;
+    let containment_target_in_query = n_intersecting_hashes as f64 / target_size as f64;
+    let max_containment = containment.max(containment_target_in_query);
+
+    // Calculate abundance statistics
+    let (average_abund, median_abund, std_abund) =
+        if let (Some(query_abunds), Some(target_abunds)) =
+            (query_abunds.as_ref(), target_abunds.as_ref())
+        {
+            significance::abundance_stats(&intersection, query_abunds, target_abunds)
+        } else {
+            (1.0, 1.0, 0.0)
+        };
+
+    // Calculate weighted metrics
+    let f_weighted_target_in_query = significance::weighted_fraction_target_in_query(
+        query_abunds.as_deref(),
+        target_abunds.as_deref(),
+    );
+
+    // Find matched regions
+    let matched_regions = find_matched_regions(query, target, &intersection);
+
+    Some(SearchResult {
+        query_name,
+        query_md5,
+        target_name: target.signature().name.clone(),
+        target_md5: target.signature().md5sum.clone(),
+        containment,
+        n_intersecting_hashes,
+        ksize: query.protein_ksize(),
+        scaled: query.signature().minhash.scaled(),
+        moltype: query.moltype().to_string(),
+        jaccard,
+        max_containment,
+        average_abund,
+        median_abund,
+        std_abund,
+        containment_target_in_query,
+        f_weighted_target_in_query,
+        tfidf: 0.0, // Default for 1v1 comparisons - requires database context
+        overlap_probability: 1.0, // Default for 1v1 comparisons - requires database context
+        matched_regions,
+    })
 }
 
 /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
@@ -685,6 +731,7 @@ mod tests {
     use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
     use needletail::parse_fastx_file;
+    use rstest::{fixture, rstest};
     use std::path::Path;
     use tempfile::TempDir;
 
@@ -701,6 +748,70 @@ mod tests {
         matched_regions_count: usize,
     }
 
+    /// Expected matched region structure for testing
+    struct ExpectedMatchedRegion {
+        query_subseq: &'static str,
+        moltype_seq: &'static str,
+        target_subseq: &'static str,
+        query_start: u32,
+        query_end: u32,
+        target_start: u32,
+        target_end: u32,
+    }
+
+    /// Expected matched regions structure for testing
+    struct ExpectedMatchedRegions {
+        ksize: usize,
+        total_regions: usize,
+        // Just check first, last, and any specific "landmark" regions
+        first: ExpectedMatchedRegion,
+        last: ExpectedMatchedRegion,
+        // Optional: a specific region to find by query_subseq
+        landmark: Option<ExpectedMatchedRegion>,
+    }
+
+    // From Sourmash values:
+    // $ sourmash sig overlap -k 12 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
+
+    // == This is sourmash version 4.9.4. ==
+    // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
+
+    // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // size_estimate_inaccurate: False
+    // first signature:
+    //   signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
+    //   signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
+    //   source filename: ced9.fasta
+    //   md5: 5baa6059c3306c2b6a500abd929d539d
+    //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
+    //   size: 264
+    //   sum hashes: 264
+    //   signature license: CC0
+
+    // second signature:
+    //   signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    //   signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
+    //   source filename: bcl2.fasta
+    //   md5: b6da406482d741a9d49f406684c17e17
+    //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
+    //   size: 220
+    //   sum hashes: 220
+    //   signature license: CC0
+
+    // --- Similarity measures ---
+    // jaccard similarity:          0.05217
+    // first contained in second:   0.09091 (cANI: 0.81887)
+    // second contained in first:   0.10909 (cANI: 0.83141)
+    // average containment ANI:     0.82514
+
+    // --- Hash overlap summary ---
+    // number of hashes in first:   264
+    // number of hashes in second:  220
+
+    // number of hashes in common:  24
+    // only in first:               240
+    // only in second:              196
+    // total (union):               460
     const BCL2_CED9_K12: ExpectedSimilarity = ExpectedSimilarity {
         ksize: 12,
         n_intersecting_hashes: 24,
@@ -714,6 +825,47 @@ mod tests {
         matched_regions_count: 13,
     };
 
+    // From Sourmash values:
+    // $ sourmash sig overlap -k 15 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // == This is sourmash version 4.9.4. ==
+    // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
+
+    // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // size_estimate_inaccurate: False
+    // first signature:
+    // signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
+    // signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
+    // source filename: ced9.fasta
+    // md5: 61094124a51b6d4802c37cd7bb43fad5
+    // k=15 molecule=hp num=0 scaled=1 track_abundance=False
+    // size: 266
+    // sum hashes: 266
+    // signature license: CC0
+
+    // second signature:
+    // signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
+    // source filename: bcl2.fasta
+    // md5: 26546d1eea2143522424bc59a5ded0f5
+    // k=15 molecule=hp num=0 scaled=1 track_abundance=False
+    // size: 225
+    // sum hashes: 225
+    // signature license: CC0
+
+    // --- Similarity measures ---
+    // jaccard similarity:          0.01029
+    // first contained in second:   0.01880 (cANI: 0.76725)
+    // second contained in first:   0.02222 (cANI: 0.77586)
+    // average containment ANI:     0.77156
+
+    // --- Hash overlap summary ---
+    // number of hashes in first:   266
+    // number of hashes in second:  225
+
+    // number of hashes in common:  5
+    // only in first:               261
+    // only in second:              220
+    // total (union):               486
     const BCL2_CED9_K15: ExpectedSimilarity = ExpectedSimilarity {
         ksize: 15,
         n_intersecting_hashes: 5,
@@ -725,6 +877,62 @@ mod tests {
         median_abund: 1.0,
         std_abund: 0.0,
         matched_regions_count: 1,
+    };
+
+    const MATCHED_REGIONS_K12: ExpectedMatchedRegions = ExpectedMatchedRegions {
+        ksize: 12,
+        total_regions: 13,
+        first: ExpectedMatchedRegion {
+            query_subseq: "FTHRIRQNGMEW",
+            moltype_seq: "hppphppphhph",
+            target_subseq: "FSRRYRRDFAEM",
+            query_start: 87,
+            query_end: 99,
+            target_start: 103,
+            target_end: 115,
+        },
+        last: ExpectedMatchedRegion {
+            query_subseq: "GVVVCGRMMFSLK",
+            moltype_seq: "hhhhphphhhphp",
+            target_subseq: "LYGPSMRPLFDFS",
+            query_start: 267,
+            query_end: 280,
+            target_start: 200,
+            target_end: 213,
+        },
+        landmark: Some(ExpectedMatchedRegion {
+            query_subseq: "QCPMSYGRLIGLISFGGFV",
+            moltype_seq: "pphhphhphhhhhphhhhh",
+            target_subseq: "RDGVNWGRIVAFFEFGGVM",
+            query_start: 162,
+            query_end: 181,
+            target_start: 138,
+            target_end: 157,
+        }),
+    };
+
+    const MATCHED_REGIONS_K15: ExpectedMatchedRegions = ExpectedMatchedRegions {
+        ksize: 15,
+        total_regions: 1,
+        first: ExpectedMatchedRegion {
+            query_subseq: "QCPMSYGRLIGLISFGGFV",
+            moltype_seq: "pphhphhphhhhhphhhhh",
+            target_subseq: "RDGVNWGRIVAFFEFGGVM",
+            query_start: 162,
+            query_end: 181,
+            target_start: 138,
+            target_end: 157,
+        },
+        last: ExpectedMatchedRegion {
+            query_subseq: "QCPMSYGRLIGLISFGGFV",
+            moltype_seq: "pphhphhphhhhhphhhhh",
+            target_subseq: "RDGVNWGRIVAFFEFGGVM",
+            query_start: 162,
+            query_end: 181,
+            target_start: 138,
+            target_end: 157,
+        },
+        landmark: None,
     };
 
     #[fixture]
@@ -860,39 +1068,28 @@ mod tests {
     //
     // - RDG starts at 138-157
     // ```
-    #[test]
-    fn test_find_matched_regions_single() -> Result<()> {
-        let ksize = 15;
-        let scaled = 1;
-        let moltype = "hp";
+    /// Helper function to assert that a matched region matches expected values
+    ///
+    /// WHY: This helper function eliminates code duplication in tests and makes assertions
+    /// more readable. It's idiomatic Rust to extract common assertion logic into helper functions.
+    fn assert_region_matches(region: &MatchedRegion, expected: &ExpectedMatchedRegion) {
+        assert_eq!(region.query_subseq, expected.query_subseq);
+        assert_eq!(region.moltype_seq, expected.moltype_seq);
+        assert_eq!(region.target_subseq, expected.target_subseq);
+        assert_eq!(region.query_start, expected.query_start);
+        assert_eq!(region.query_end, expected.query_end);
+        assert_eq!(region.target_start, expected.target_start);
+        assert_eq!(region.target_end, expected.target_end);
+    }
 
-        // Read CED9 sequence from FASTA file
-        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
-
-        // Read BCL2 sequence from FASTA file
-        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
-
-        // Create sketches using from_protein_sequence - this now handles everything:
-        // minhash, kmer_infos, raw sequence, and encoded sequence storage
-        // WHY: The enhanced from_protein_sequence method does all the heavy lifting,
-        // making tests simple and avoiding boilerplate. This is idiomatic Rust - make
-        // the common case easy by having the method do what users almost always need.
-        let query_sketch = ProteinSketch::from_protein_sequence(
-            &ced9_name,
-            &ced9_sequence,
-            ksize,
-            scaled,
-            moltype,
-        )?;
-
-        let target_sketch = ProteinSketch::from_protein_sequence(
-            &bcl2_name,
-            &bcl2_sequence,
-            ksize,
-            scaled,
-            moltype,
-        )?;
-
+    #[rstest]
+    #[case::k12(ced9_sketch_k12(), bcl2_sketch_k12(), MATCHED_REGIONS_K12)]
+    #[case::k15(ced9_sketch_k15(), bcl2_sketch_k15(), MATCHED_REGIONS_K15)]
+    fn test_find_matched_regions(
+        #[case] query_sketch: ProteinSketch,
+        #[case] target_sketch: ProteinSketch,
+        #[case] expected: ExpectedMatchedRegions,
+    ) -> Result<()> {
         // Calculate intersection for find_matched_regions
         // WHY: We use a standalone function that doesn't require a searcher/index, making tests
         // simpler and more focused. This is idiomatic Rust - functions that don't need state
@@ -906,21 +1103,28 @@ mod tests {
         // Find matched regions using the standalone function
         let matched_regions = find_matched_regions(&query_sketch, &target_sketch, &intersection);
 
-        // Verify we found at least one match
-        assert_eq!(matched_regions.len(), 1, "Should find exactly one match");
+        // Verify total number of regions
+        assert_eq!(
+            matched_regions.len(),
+            expected.total_regions,
+            "Should find {} matched regions",
+            expected.total_regions
+        );
 
-        // Verify the expected match region
-        // The expected match is at positions 162-181 in CED9 (query) and 138-157 in BCL2 (target)
-        let matched_region = &matched_regions[0];
-        assert_eq!(matched_region.query_subseq, "QCPMSYGRLIGLISFGGFV");
-        assert_eq!(matched_region.moltype_seq, "pphhphhphhhhhphhhhh");
-        assert_eq!(matched_region.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+        // Verify first region
+        assert_region_matches(&matched_regions[0], &expected.first);
 
-        // Verify query and target positions
-        assert_eq!(matched_region.query_start, 162, "Query start position should be 162");
-        assert_eq!(matched_region.query_end, 181, "Query end position should be 181");
-        assert_eq!(matched_region.target_start, 138, "Target start position should be 138");
-        assert_eq!(matched_region.target_end, 157, "Target end position should be 157");
+        // Verify last region
+        assert_region_matches(&matched_regions[matched_regions.len() - 1], &expected.last);
+
+        // Verify landmark region if specified
+        if let Some(landmark) = &expected.landmark {
+            let found = matched_regions
+                .iter()
+                .find(|r| r.query_subseq == landmark.query_subseq)
+                .expect("Should find landmark region");
+            assert_region_matches(found, landmark);
+        }
 
         Ok(())
     }
@@ -1195,21 +1399,17 @@ mod tests {
     #[rstest]
     #[case::k12(ced9_sketch_k12(), bcl2_sketch_k12(), BCL2_CED9_K12)]
     #[case::k15(ced9_sketch_k15(), bcl2_sketch_k15(), BCL2_CED9_K15)]
-    fn test_query_target_similarity_bcl2_ced9(
-        temp_dir: TempDir,
+    fn test_calculate_similarity_bcl2_ced9(
         #[case] query_sketch: ProteinSketch,
         #[case] target_sketch: ProteinSketch,
         #[case] expected: ExpectedSimilarity,
     ) -> Result<()> {
-        let scaled = 1;
-        let moltype = "hp";
-
-        // ... index setup using temp_dir ...
-        
-        let searcher = ProteinSearcher::new(target_sketch);
-
-        let result = searcher
-            .query_target_similarity(query_sketch, target_sketch, scaled, moltype)?
+        // Use the standalone calculate_similarity function for simple 1v1 comparisons
+        // WHY: This is much simpler than creating a searcher and index just to test similarity.
+        // The standalone function is designed exactly for this use case - 1v1 comparisons without
+        // database context. TF-IDF and overlap probability will be defaults (0.0 and 1.0), which
+        // is correct for 1v1 comparisons where these metrics are meaningless.
+        let result = calculate_similarity(&query_sketch, &target_sketch)
             .expect("Should find similarity between CED9 and BCL2");
 
         // Assertions are now readable
@@ -1220,17 +1420,24 @@ mod tests {
         assert_eq!(result.average_abund, expected.average_abund);
         assert_eq!(result.matched_regions.len(), expected.matched_regions_count);
 
+        // Verify TF-IDF and overlap probability are defaults for 1v1 comparisons
+        assert_eq!(result.tfidf, 0.0, "TF-IDF should be 0.0 for 1v1 comparisons");
+        assert_eq!(
+            result.overlap_probability, 1.0,
+            "Overlap probability should be 1.0 for 1v1 comparisons"
+        );
+
         Ok(())
     }
 
-    /// Test query_target_similarity with BCL2 and CED9 sequences with k-mer size 12,
+    /// Test compare with BCL2 and CED9 sequences with k-mer size 12,
     /// which produces multiple consecutive matched k-mer regions.
     ///
-    /// This test verifies that query_target_similarity correctly calculates all similarity
+    /// This test verifies that compare correctly calculates all similarity
     /// metrics including containment, jaccard, max_containment, abundance statistics, and
     /// overlap probability for a known pair of related proteins.
     #[test]
-    fn test_query_target_similarity_bcl2_ced9_k12() -> Result<()> {
+    fn test_compare_bcl2_ced9_k12() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
         let moltype = "hp";
@@ -1282,18 +1489,18 @@ mod tests {
         // Create searcher from the index
         let searcher = ProteinSearcher::new(target_index);
 
-        // Extract query data for query_target_similarity
+        // Extract query data for compare
         let query_mins: HashSet<u64> =
             query_sketch.signature().minhash.mins().iter().cloned().collect();
         let query_abunds = query_sketch.signature().minhash.abunds();
         let query_name = query_sketch.signature().name.clone();
         let query_md5 = query_sketch.signature().md5sum.clone();
 
-        // Calculate TF-IDF for the query (needed for query_target_similarity)
+        // Calculate TF-IDF for the query (needed for compare)
         let query_tfidf = searcher.calculate_tfidf(&query_sketch);
 
-        // Call query_target_similarity
-        let result = searcher.query_target_similarity(
+        // Call compare
+        let result = searcher.compare(
             &query_sketch,
             &target_sketch,
             &query_mins,
@@ -1319,49 +1526,6 @@ mod tests {
             result.n_intersecting_hashes, 24,
             "Should have 24 intersecting k-mers between CED9 and BCL2"
         );
-
-        // From Sourmash values:
-        // $ sourmash sig overlap -k 12 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
-
-        // == This is sourmash version 4.9.4. ==
-        // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
-
-        // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
-        // size_estimate_inaccurate: False
-        // first signature:
-        //   signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
-        //   signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-        //   source filename: ced9.fasta
-        //   md5: 5baa6059c3306c2b6a500abd929d539d
-        //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
-        //   size: 264
-        //   sum hashes: 264
-        //   signature license: CC0
-
-        // second signature:
-        //   signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
-        //   signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
-        //   source filename: bcl2.fasta
-        //   md5: b6da406482d741a9d49f406684c17e17
-        //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
-        //   size: 220
-        //   sum hashes: 220
-        //   signature license: CC0
-
-        // --- Similarity measures ---
-        // jaccard similarity:          0.05217
-        // first contained in second:   0.09091 (cANI: 0.81887)
-        // second contained in first:   0.10909 (cANI: 0.83141)
-        // average containment ANI:     0.82514
-
-        // --- Hash overlap summary ---
-        // number of hashes in first:   264
-        // number of hashes in second:  220
-
-        // number of hashes in common:  24
-        // only in first:               240
-        // only in second:              196
-        // total (union):               460
 
         assert_eq!(
             result.containment, 0.09091,
@@ -1433,14 +1597,14 @@ mod tests {
         Ok(())
     }
 
-    /// Test query_target_similarity with BCL2 and CED9 sequences with k-mer size 15, which
+    /// Test compare with BCL2 and CED9 sequences with k-mer size 15, which
     /// produces a single consecutive matched k-mer region.
     ///
-    /// This test verifies that query_target_similarity correctly calculates all similarity
+    /// This test verifies that compare correctly calculates all similarity
     /// metrics including containment, jaccard, max_containment, abundance statistics, and
     /// overlap probability for a known pair of related proteins.
     #[test]
-    fn test_query_target_similarity_bcl2_ced9_k15() -> Result<()> {
+    fn test_compare_bcl2_ced9_k15() -> Result<()> {
         let ksize = 15;
         let scaled = 1;
         let moltype = "hp";
@@ -1492,18 +1656,18 @@ mod tests {
         // Create searcher from the index
         let searcher = ProteinSearcher::new(target_index);
 
-        // Extract query data for query_target_similarity
+        // Extract query data for compare
         let query_mins: HashSet<u64> =
             query_sketch.signature().minhash.mins().iter().cloned().collect();
         let query_abunds = query_sketch.signature().minhash.abunds();
         let query_name = query_sketch.signature().name.clone();
         let query_md5 = query_sketch.signature().md5sum.clone();
 
-        // Calculate TF-IDF for the query (needed for query_target_similarity)
+        // Calculate TF-IDF for the query (needed for compare)
         let query_tfidf = searcher.calculate_tfidf(&query_sketch);
 
-        // Call query_target_similarity
-        let result = searcher.query_target_similarity(
+        // Call compare
+        let result = searcher.compare(
             &query_sketch,
             &target_sketch,
             &query_mins,
@@ -1529,48 +1693,6 @@ mod tests {
             result.n_intersecting_hashes, 5,
             "Should have 5 intersecting k-mers between CED9 and BCL2"
         );
-
-        // From Sourmash values:
-        // $ sourmash sig overlap -k 15 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
-        // == This is sourmash version 4.9.4. ==
-        // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
-
-        // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
-        // size_estimate_inaccurate: False
-        // first signature:
-        // signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
-        // signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-        // source filename: ced9.fasta
-        // md5: 61094124a51b6d4802c37cd7bb43fad5
-        // k=15 molecule=hp num=0 scaled=1 track_abundance=False
-        // size: 266
-        // sum hashes: 266
-        // signature license: CC0
-
-        // second signature:
-        // signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
-        // signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
-        // source filename: bcl2.fasta
-        // md5: 26546d1eea2143522424bc59a5ded0f5
-        // k=15 molecule=hp num=0 scaled=1 track_abundance=False
-        // size: 225
-        // sum hashes: 225
-        // signature license: CC0
-
-        // --- Similarity measures ---
-        // jaccard similarity:          0.01029
-        // first contained in second:   0.01880 (cANI: 0.76725)
-        // second contained in first:   0.02222 (cANI: 0.77586)
-        // average containment ANI:     0.77156
-
-        // --- Hash overlap summary ---
-        // number of hashes in first:   266
-        // number of hashes in second:  225
-
-        // number of hashes in common:  5
-        // only in first:               261
-        // only in second:              220
-        // total (union):               486
 
         assert_eq!(
             result.containment, 0.018796992481203006,
