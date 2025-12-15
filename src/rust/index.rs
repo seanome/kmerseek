@@ -761,7 +761,10 @@ impl ProteomeIndex {
         // Add the protein sequence to the signature
         // WHY: add_protein now handles all processing: minhash, kmer_infos, and sequence storage.
         // This eliminates the need for separate process_kmers and sequence storage calls.
-        protein_sig.add_protein(&processed_sequence)?;
+        // We pass the index's store_raw_sequences flag to ensure consistency - sequences are
+        // only stored in memory if they will be saved to disk, preventing memory waste and
+        // ensuring search operations work correctly.
+        protein_sig.add_protein(&processed_sequence, self.store_raw_sequences)?;
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)
@@ -1086,7 +1089,9 @@ mod tests {
         )?;
 
         // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
-        protein_sig.add_protein(sequence)?;
+        // WHY: We default to storing sequences (true) in tests since they often need sequences
+        // for verification and testing search operations.
+        protein_sig.add_protein(sequence, true)?;
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
         println!("{}", protein_sig.signature().name);
@@ -1181,7 +1186,9 @@ mod tests {
         )?;
 
         // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
-        protein_sig.add_protein(sequence)?;
+        // WHY: We default to storing sequences (true) in tests since they often need sequences
+        // for verification and testing search operations.
+        protein_sig.add_protein(sequence, true)?;
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
         println!("{}", protein_sig.signature().name);
@@ -1298,7 +1305,9 @@ mod tests {
         )?;
 
         // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
-        protein_sig.add_protein(sequence)?;
+        // WHY: We default to storing sequences (true) in tests since they often need sequences
+        // for verification and testing search operations.
+        protein_sig.add_protein(sequence, true)?;
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
         println!("{}", protein_sig.signature().name);

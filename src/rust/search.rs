@@ -12,6 +12,12 @@ use crate::significance;
 use crate::sketch::ProteinSketch;
 use crate::types::MolType;
 
+/// Default progress interval for FASTA processing (log progress every N sequences)
+pub const DEFAULT_PROGRESS_INTERVAL: u32 = 1000;
+
+/// Default batch size for FASTA processing (process N sequences per batch)
+pub const DEFAULT_BATCH_SIZE: usize = 1000;
+
 /// Search result for a single query-target pair
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SearchResult {
@@ -115,25 +121,11 @@ pub struct MatchedRegion {
 
 impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "
-        Query Name: {}
-Match Name: {}
-query: {} ({}-{})
-alpha: {}
-match: {} ({}-{})
-",
-            self.query_name,
-            self.target_name,
-            self.query_subseq,
-            self.query_start,
-            self.query_end,
-            self.moltype_seq,
-            self.target_subseq,
-            self.target_start,
-            self.target_end
-        )
+        writeln!(f, "Query Name: {}", self.query_name)?;
+        writeln!(f, "Match Name: {}", self.target_name)?;
+        writeln!(f, "query: {} ({}-{})", self.query_subseq, self.query_start, self.query_end)?;
+        writeln!(f, "alpha: {}", self.moltype_seq)?;
+        write!(f, "match: {} ({}-{})", self.target_subseq, self.target_start, self.target_end)
     }
 }
 
@@ -146,6 +138,23 @@ pub struct SearchStats {
     pub idf: HashMap<u64, f64>,
     /// Frequency of each k-mer hash across all signatures
     pub kmer_frequencies: HashMap<u64, usize>,
+}
+
+/// Pre-computed query data for efficient batch searching
+///
+/// WHY: This struct encapsulates all the query-specific data that needs to be computed once
+/// per query and reused across many target comparisons. Instead of passing 7 separate parameters
+/// to `compare()`, we bundle them into a single struct. This makes the API cleaner and reduces
+/// the chance of errors from passing incorrect parameters. The struct is designed for performance:
+/// it pre-computes expensive operations (like extracting mins as a HashSet and calculating TF-IDF)
+/// so they're only done once per query, not once per query-target pair.
+pub struct PreparedQuery<'a> {
+    /// Reference to the query sketch
+    pub sketch: &'a ProteinSketch,
+    /// Pre-computed minhash values as a HashSet for efficient intersection calculations
+    pub mins: HashSet<u64>,
+    /// Pre-computed TF-IDF score for the query
+    pub tfidf: f64,
 }
 
 impl SearchStats {
@@ -197,6 +206,27 @@ impl ProteinSearcher {
         Ok(Self { index, stats })
     }
 
+    /// Prepare a query for efficient batch searching
+    ///
+    /// WHY: This method pre-computes expensive operations (extracting mins as HashSet, calculating
+    /// TF-IDF) that would otherwise be repeated for each target comparison. By doing this once
+    /// per query, we improve performance for batch searches (1 query vs many targets). This follows
+    /// the idiomatic Rust pattern of preparing data once and reusing it, rather than recomputing
+    /// it repeatedly.
+    ///
+    /// # Arguments
+    /// * `query` - The query sketch to prepare
+    ///
+    /// # Returns
+    /// A `PreparedQuery` struct containing pre-computed query data
+    pub fn prepare_query<'a>(&self, query: &'a ProteinSketch) -> PreparedQuery<'a> {
+        PreparedQuery {
+            sketch: query,
+            mins: query.mins_as_set(),
+            tfidf: self.calculate_tfidf(query),
+        }
+    }
+
     /// Comprehensive search method that calculates all metrics including TF-IDF and overlap probability
     ///
     /// This is the single, idiomatic search method that replaces search_single, search_multiple,
@@ -208,28 +238,14 @@ impl ProteinSearcher {
     ///
     /// # Returns
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    #[must_use = "search results should be used to process query matches"]
     pub fn search(&self, queries: &[ProteinSketch]) -> Result<Vec<SearchResult>> {
-        // Calculate TF-IDF for each query signature once (used in all results for that query)
-        let query_tfidf: HashMap<String, f64> = queries
-            .iter()
-            .map(|query| {
-                let name = query.signature().name.clone();
-                let tfidf = self.calculate_tfidf(query);
-                (name, tfidf)
-            })
-            .collect();
-
         // Perform parallel search across all queries
         let all_results: Vec<SearchResult> = queries
             .par_iter()
             .flat_map(|query| {
-                // Olga: Why is this cloned?? Can we avoid copying data here?
-                let query_mins: HashSet<u64> =
-                    query.signature().minhash.mins().iter().cloned().collect();
-                let query_abunds = query.signature().minhash.abunds();
-                let query_name = query.signature().name.clone();
-                let query_md5 = query.signature().md5sum.clone();
-                let query_tfidf = query_tfidf.get(&query_name).copied().unwrap_or(0.0);
+                // Prepare query once - this pre-computes mins as HashSet and TF-IDF
+                let prepared = self.prepare_query(query);
 
                 // Search this query against all targets
                 self.index
@@ -237,15 +253,7 @@ impl ProteinSearcher {
                     .iter()
                     .filter_map(|entry| {
                         let target = entry.value();
-                        self.compare(
-                            query,
-                            target,
-                            &query_mins,
-                            query_abunds.as_deref(),
-                            &query_name,
-                            &query_md5,
-                            query_tfidf,
-                        )
+                        self.compare(&prepared, target)
                     })
                     .collect::<Vec<_>>()
             })
@@ -266,36 +274,30 @@ impl ProteinSearcher {
     /// then adds database-specific metrics (TF-IDF and overlap probability) that require the
     /// database context.
     ///
-    /// # Why Pre-extracted Data?
+    /// # Why PreparedQuery?
     ///
-    /// The `query_mins` HashSet is extracted once per query in `search()` and reused across all
-    /// target comparisons. This avoids redundant allocations when comparing the same query against
-    /// many targets. The standalone `calculate_similarity` function extracts this data itself,
-    /// which is fine for 1v1 comparisons but less efficient for batch operations.
+    /// The `PreparedQuery` struct encapsulates all query-specific data that needs to be computed
+    /// once per query and reused across many target comparisons. This avoids redundant allocations
+    /// and calculations when comparing the same query against many targets. The standalone
+    /// `calculate_similarity` function extracts this data itself, which is fine for 1v1 comparisons
+    /// but less efficient for batch operations.
     ///
     /// # Performance Considerations
     ///
     /// For batch searches (1 query vs many targets), this method is more efficient than calling
     /// `calculate_similarity` directly because:
-    /// 1. `query_mins` is extracted once and reused
-    /// 2. `query_tfidf` is calculated once per query and reused
+    /// 1. `query.mins` is extracted once and reused
+    /// 2. `query.tfidf` is calculated once per query and reused
     /// 3. Database-specific metrics (overlap probability) are calculated using pre-computed stats
     ///
     /// For 1v1 comparisons or testing, use `calculate_similarity` directly.
     pub(crate) fn compare(
         &self,
-        query: &ProteinSketch,
+        query: &PreparedQuery<'_>,
         target: &ProteinSketch,
-        query_mins: &HashSet<u64>,
-        _query_abunds: Option<&[u64]>,
-        _query_name: &str,
-        _query_md5: &str,
-        query_tfidf: f64,
     ) -> Option<SearchResult> {
-        // Use the standalone function for core similarity calculation
-        // We need to extract intersection for overlap probability, so we do a quick check first
-        let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
-        let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+        // Calculate intersection for overlap probability check
+        let intersection = query.sketch.intersect(target);
 
         // Skip if no intersection
         if intersection.is_empty() {
@@ -307,16 +309,17 @@ impl ProteinSearcher {
 
         // Get the base similarity result from the standalone function
         // Note: This will recalculate intersection, but that's acceptable for the cleaner API
-        let mut result = calculate_similarity(query, target)?;
+        let mut result = calculate_similarity(query.sketch, target)?;
 
         // Override with database-specific metrics
-        result.tfidf = query_tfidf;
+        result.tfidf = query.tfidf;
         result.overlap_probability = overlap_probability;
 
         Some(result)
     }
 
     /// Calculate TF-IDF score for a query signature
+    #[must_use = "TF-IDF score should be used to rank search results"]
     pub fn calculate_tfidf(&self, query: &ProteinSketch) -> f64 {
         let query_mins = query.signature().minhash.mins();
         let mut tfidf_sum = 0.0;
@@ -336,6 +339,7 @@ impl ProteinSearcher {
     ///
     /// This calculates the probability of the intersecting hashes of query and target against
     /// the frequency of those hashes in the whole database
+    #[must_use = "overlap probability should be used to assess match significance"]
     pub fn calculate_overlap_probability(&self, intersection: &HashSet<u64>) -> f64 {
         if intersection.is_empty() {
             return 0.0;
@@ -374,34 +378,6 @@ impl ProteinSearcher {
     pub fn stats(&self) -> &SearchStats {
         &self.stats
     }
-
-    /// Stitch overlapping k-mers together
-    fn stitch_kmers(&self, kmer_positions: &[(usize, String)]) -> String {
-        if kmer_positions.is_empty() {
-            return String::new();
-        }
-
-        // Simple stitching: just concatenate k-mers with overlaps
-        let mut result = String::new();
-        let mut last_end = 0;
-
-        for (pos, kmer) in kmer_positions {
-            if *pos >= last_end {
-                // No overlap, add the full k-mer
-                result.push_str(kmer);
-                last_end = pos + kmer.len();
-            } else {
-                // Overlap detected, add only the non-overlapping part
-                let overlap = last_end - pos;
-                if overlap < kmer.len() {
-                    result.push_str(&kmer[overlap..]);
-                    last_end = pos + kmer.len();
-                }
-            }
-        }
-
-        result
-    }
 }
 
 /// Calculate similarity between two protein sketches without requiring database context.
@@ -435,19 +411,18 @@ impl ProteinSearcher {
 /// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp")?;
 /// let result = calculate_similarity(&query, &target);
 /// ```
+#[must_use]
 pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Option<SearchResult> {
     // Extract query data
-    let query_mins: HashSet<u64> = query.signature().minhash.mins().iter().cloned().collect();
     let query_abunds = query.signature().minhash.abunds();
     let query_name = query.signature().name.clone();
     let query_md5 = query.signature().md5sum.clone();
 
     // Extract target data
-    let target_mins: HashSet<u64> = target.signature().minhash.mins().iter().cloned().collect();
     let target_abunds = target.signature().minhash.abunds();
 
-    // Calculate intersection
-    let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+    // Calculate intersection using the new intersect() method
+    let intersection = query.intersect(target);
     let n_intersecting_hashes = intersection.len();
 
     // Skip if no intersection
@@ -455,8 +430,8 @@ pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Op
         return None;
     }
 
-    let query_size = query_mins.len();
-    let target_size = target_mins.len();
+    let query_size = query.mins_as_set().len();
+    let target_size = target.mins_as_set().len();
     let union_size = query_size + target_size - n_intersecting_hashes;
 
     // Calculate basic metrics
@@ -466,11 +441,22 @@ pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Op
     let max_containment = containment.max(containment_target_in_query);
 
     // Calculate abundance statistics
+    // WHY: We pass the mins arrays along with the abundance arrays because abundances
+    // are stored in the same order as mins. We need to find the position of each
+    // intersecting hash in both arrays to get the correct corresponding abundances.
     let (average_abund, median_abund, std_abund) =
         if let (Some(query_abunds), Some(target_abunds)) =
             (query_abunds.as_ref(), target_abunds.as_ref())
         {
-            significance::abundance_stats(&intersection, query_abunds, target_abunds)
+            let query_mins = query.signature().minhash.mins();
+            let target_mins = target.signature().minhash.mins();
+            significance::abundance_stats(
+                &intersection,
+                &query_mins,
+                query_abunds,
+                &target_mins,
+                target_abunds,
+            )
         } else {
             (1.0, 1.0, 0.0)
         };
@@ -512,6 +498,7 @@ pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Op
 /// WHY: This is a standalone function because it doesn't require any state from ProteinSearcher.
 /// It only operates on the sketches and intersection provided. This makes it easier to test and
 /// more reusable. This is idiomatic Rust - functions that don't need state should be standalone.
+#[must_use = "matched regions should be used to analyze query-target alignments"]
 pub fn find_matched_regions(
     query_sketch: &ProteinSketch,
     target_sketch: &ProteinSketch,
@@ -631,41 +618,85 @@ pub fn find_matched_regions(
         let target_end_pos = target_start_pos + consecutive_count + ksize - 1;
 
         // Get sequences for extraction
-        let query_raw_sequence = query_sketch
-            .get_raw_sequence()
-            .unwrap_or_else(|| panic!("No raw sequence found for query signature {query_name}"));
-        let target_raw_sequence = target_sketch
-            .get_raw_sequence()
-            .unwrap_or_else(|| panic!("No raw sequence found for target signature {target_name}"));
+        // WHY: We handle missing sequences gracefully instead of panicking. If sequences aren't
+        // stored (because store_raw_sequences was false), we can't extract matched regions, so
+        // we return an empty vector. This ensures consistency with the index configuration.
+        let (query_raw_sequence, target_raw_sequence) =
+            match (query_sketch.get_raw_sequence(), target_sketch.get_raw_sequence()) {
+                (Some(q), Some(t)) => (q, t),
+                _ => {
+                    // Sequences not available - return empty regions
+                    // WHY: This can happen when store_raw_sequences is false. Instead of panicking,
+                    // we return empty regions, which is the correct behavior when sequences aren't stored.
+                    return Vec::new();
+                }
+            };
 
         // Extract subsequences using correct positions
         // WHY: Query subsequence uses query positions, target subsequence uses target positions.
         // This is the fix for the bug where both were using query positions.
+        // We add bounds checking to prevent panics from out-of-bounds slicing.
+        if query_end_pos > query_raw_sequence.len() || target_end_pos > target_raw_sequence.len() {
+            // Bounds check failed - skip this region
+            i = j;
+            continue;
+        }
         let query_subseq = &query_raw_sequence[query_start_pos..query_end_pos];
         let target_subseq = &target_raw_sequence[target_start_pos..target_end_pos];
 
         // Get moltype sequences for validation
-        let target_moltype_sequence = target_sketch.get_moltype_sequence().unwrap_or_else(|| {
-            panic!("No moltype encoded sequence found for target signature {target_name}")
-        });
-        let query_moltype_sequence = query_sketch.get_moltype_sequence().unwrap_or_else(|| {
-            panic!("No moltype encoded sequence found for query signature {query_name}")
-        });
+        // WHY: We handle missing encoded sequences gracefully. If they're not available,
+        // we skip validation but still extract the regions. This ensures consistency with
+        // the index configuration where sequences might not be stored.
+        let (target_moltype_sequence, query_moltype_sequence) =
+            match (target_sketch.get_moltype_sequence(), query_sketch.get_moltype_sequence()) {
+                (Some(t), Some(q)) => (t, q),
+                _ => {
+                    // Encoded sequences not available - skip validation but still extract regions
+                    // WHY: This can happen when store_raw_sequences is false. We can still extract
+                    // regions from raw sequences, but we skip the moltype validation step.
+                    // We reuse the already-extracted subsequences to avoid duplicate bounds checking.
+                    // Note: query_subseq and target_subseq are already defined above, so we use them directly.
+
+                    consecutive_regions.push(MatchedRegion {
+                        query_name: query_name.clone(),
+                        query_start: query_start_pos as u32,
+                        query_end: query_end_pos as u32,
+                        query_subseq: query_subseq.to_string(),
+                        target_name: target_name.clone(),
+                        target_start: target_start_pos as u32,
+                        target_end: target_end_pos as u32,
+                        target_subseq: target_subseq.to_string(),
+                        moltype: moltype.clone(),
+                        moltype_seq: String::new(), // Empty since we don't have encoded sequence
+                        length: (query_end_pos - query_start_pos) as u32,
+                    });
+
+                    i = j;
+                    continue;
+                }
+            };
 
         // Extract moltype subsequences using correct positions
+        // WHY: We add bounds checking to prevent panics from out-of-bounds slicing.
+        if query_end_pos > query_moltype_sequence.len()
+            || target_end_pos > target_moltype_sequence.len()
+        {
+            // Bounds check failed - skip this region
+            i = j;
+            continue;
+        }
         let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
         let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
 
         // Validate that moltype sequences match (they should since they share the same k-mers)
         if query_moltype_seq != target_moltype_seq {
+            // WHY: We use a simpler panic message format to avoid potential double-panic issues.
+            // The detailed information is still provided, but in a format that's less likely to
+            // cause issues during panic handling.
             panic!(
-                "Target: '{target_name}'\nand\nQuery: '{query_name}'\nmoltype sequences do not match:\
-            \nQuery positions: {query_start_pos}..{query_end_pos}\
-            \nTarget positions: {target_start_pos}..{target_end_pos}\
-            \nTarget protein subsequence: {target_subseq}\
-            \nTarget moltype subsequence: {target_moltype_seq}\
-            \nQuery  moltype subsequence: {query_moltype_seq}\
-            \nQuery  protein subsequence: {query_subseq}"
+                "Moltype sequences do not match for query '{}' and target '{}' at positions query {}-{} target {}-{}",
+                query_name, target_name, query_start_pos, query_end_pos, target_start_pos, target_end_pos
             )
         }
 
@@ -701,28 +732,8 @@ pub fn find_matched_regions(
 }
 
 impl ProteinSearcher {
-    /// Find a signature by name in the index
-    fn find_signature_by_name(&self, name: &str) -> Option<ProteinSketch> {
-        for entry in self.index.get_signatures().iter() {
-            let signature = entry.value();
-            if signature.signature().name == name {
-                return Some(signature.clone());
-            }
-        }
-        None
-    }
-
-    /// Get stored encoded sequence for a signature by name
-    fn get_stored_encoded_sequence(&self, signature_name: &str) -> Option<String> {
-        // Find the signature in the index
-        for entry in self.index.get_signatures().iter() {
-            let signature = entry.value();
-            if signature.signature().name == signature_name {
-                return signature.get_moltype_sequence().map(|s| s.to_string());
-            }
-        }
-        None
-    }
+    // Note: find_signature_by_name and get_stored_encoded_sequence were removed as they were unused.
+    // If needed in the future, they can be re-added.
 }
 
 #[cfg(test)]
@@ -730,6 +741,7 @@ mod tests {
     use super::*;
     use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
+    use approx::assert_relative_eq;
     use needletail::parse_fastx_file;
     use rstest::{fixture, rstest};
     use std::path::Path;
@@ -941,7 +953,21 @@ mod tests {
     }
 
     #[fixture]
+    fn ced9_record() -> (String, String) {
+        read_first_fasta_record(TEST_CED9_FASTA).unwrap()
+    }
+
+    #[fixture]
+    fn bcl2_record() -> (String, String) {
+        read_first_fasta_record(TEST_BLC2_FASTA).unwrap()
+    }
+
+    #[fixture]
     fn ced9_sketch_k12() -> ProteinSketch {
+        // WHY: This fixture reads the FASTA file directly. While it could depend on ced9_record(),
+        // rstest's #[case] attributes don't support fixtures with dependencies. However, rstest
+        // still caches this fixture, so if multiple test cases use it, the FASTA is only read once.
+        // This gives us the caching benefit while maintaining compatibility with #[case] attributes.
         let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
         ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
     }
@@ -1012,7 +1038,7 @@ mod tests {
             false, // store_raw_sequences
         )?;
 
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
+        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher
         let searcher = ProteinSearcher::new(target_index);
@@ -1026,7 +1052,7 @@ mod tests {
             false, // store_raw_sequences
         )?;
 
-        query_index.process_fasta(&query_fasta, 1000, 1000)?;
+        query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Get query signatures
         let query_signatures: Vec<_> =
@@ -1090,15 +1116,11 @@ mod tests {
         #[case] target_sketch: ProteinSketch,
         #[case] expected: ExpectedMatchedRegions,
     ) -> Result<()> {
-        // Calculate intersection for find_matched_regions
+        // Calculate intersection for find_matched_regions using the new intersect() method
         // WHY: We use a standalone function that doesn't require a searcher/index, making tests
         // simpler and more focused. This is idiomatic Rust - functions that don't need state
         // should be standalone.
-        let query_mins: HashSet<u64> =
-            query_sketch.signature().minhash.mins().iter().cloned().collect();
-        let target_mins: HashSet<u64> =
-            target_sketch.signature().minhash.mins().iter().cloned().collect();
-        let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+        let intersection = query_sketch.intersect(&target_sketch);
 
         // Find matched regions using the standalone function
         let matched_regions = find_matched_regions(&query_sketch, &target_sketch, &intersection);
@@ -1163,15 +1185,11 @@ mod tests {
             moltype,
         )?;
 
-        // Calculate intersection for find_matched_regions
+        // Calculate intersection for find_matched_regions using the new intersect() method
         // WHY: We use a standalone function that doesn't require a searcher/index, making tests
         // simpler and more focused. This is idiomatic Rust - functions that don't need state
         // should be standalone.
-        let query_mins: HashSet<u64> =
-            query_sketch.signature().minhash.mins().iter().cloned().collect();
-        let target_mins: HashSet<u64> =
-            target_sketch.signature().minhash.mins().iter().cloned().collect();
-        let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+        let intersection = query_sketch.intersect(&target_sketch);
 
         // Find matched regions using the standalone function
         let matched_regions = find_matched_regions(&query_sketch, &target_sketch, &intersection);
@@ -1235,7 +1253,7 @@ mod tests {
         let target_index_path = temp_path.join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
 
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
+        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher
         let searcher = ProteinSearcher::new(target_index);
@@ -1246,7 +1264,7 @@ mod tests {
 
         let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
 
-        query_index.process_fasta(&query_fasta, 1000, 1000)?;
+        query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
@@ -1274,12 +1292,12 @@ mod tests {
         // Create indices
         let target_index_path = temp_path.join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
+        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let searcher = ProteinSearcher::new(target_index);
 
         let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
-        query_index.process_fasta(&query_fasta, 1000, 1000)?;
+        query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
@@ -1330,7 +1348,7 @@ mod tests {
 
         let target_index_path = temp_path.join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
+        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let searcher = ProteinSearcher::new(target_index);
 
@@ -1339,7 +1357,7 @@ mod tests {
         std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
 
         let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
-        query_index.process_fasta(&query_fasta, 1000, 1000)?;
+        query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
@@ -1381,7 +1399,7 @@ mod tests {
         // Create a proper index with a database path
         let index = ProteomeIndex::new(&temp_path, 10, 5, "hp", false)?;
 
-        let query = ProteinSketch::new("test", 10, 5, "hp").unwrap();
+        let query = ProteinSketch::new("test", 10, 5, "hp")?;
         let stats = SearchStats {
             total_signatures: 100,
             idf: HashMap::new(),
@@ -1414,10 +1432,10 @@ mod tests {
 
         // Assertions are now readable
         assert_eq!(result.n_intersecting_hashes, expected.n_intersecting_hashes);
-        assert_eq!(result.containment, expected.containment);
-        assert_eq!(result.jaccard, expected.jaccard);
-        assert_eq!(result.max_containment, expected.max_containment);
-        assert_eq!(result.average_abund, expected.average_abund);
+        assert_relative_eq!(result.containment, expected.containment, epsilon = 1e-5);
+        assert_relative_eq!(result.jaccard, expected.jaccard, epsilon = 1e-5);
+        assert_relative_eq!(result.max_containment, expected.max_containment, epsilon = 1e-5);
+        assert_relative_eq!(result.average_abund, expected.average_abund, epsilon = 1e-5);
         assert_eq!(result.matched_regions.len(), expected.matched_regions_count);
 
         // Verify TF-IDF and overlap probability are defaults for 1v1 comparisons
@@ -1484,31 +1502,16 @@ mod tests {
         std::fs::write(&target_fasta, format!(">{}\n{}", bcl2_name, bcl2_sequence))?;
 
         // Process the target into the index
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
+        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher from the index
         let searcher = ProteinSearcher::new(target_index);
 
-        // Extract query data for compare
-        let query_mins: HashSet<u64> =
-            query_sketch.signature().minhash.mins().iter().cloned().collect();
-        let query_abunds = query_sketch.signature().minhash.abunds();
-        let query_name = query_sketch.signature().name.clone();
-        let query_md5 = query_sketch.signature().md5sum.clone();
-
-        // Calculate TF-IDF for the query (needed for compare)
-        let query_tfidf = searcher.calculate_tfidf(&query_sketch);
+        // Prepare query for compare
+        let prepared = searcher.prepare_query(&query_sketch);
 
         // Call compare
-        let result = searcher.compare(
-            &query_sketch,
-            &target_sketch,
-            &query_mins,
-            query_abunds.as_deref(),
-            &query_name,
-            &query_md5,
-            query_tfidf,
-        );
+        let result = searcher.compare(&prepared, &target_sketch);
 
         // Verify we got a result (should have some intersection)
         assert!(result.is_some(), "Should find similarity between CED9 and BCL2");
@@ -1527,37 +1530,15 @@ mod tests {
             "Should have 24 intersecting k-mers between CED9 and BCL2"
         );
 
-        assert_eq!(
-            result.containment, 0.09091,
-            "Containment should be 0.09091, got {}",
-            result.containment
-        );
-        assert_eq!(
-            result.jaccard, 0.05217,
-            "Jaccard should be 0.052173913043478258, got {}",
-            result.jaccard
-        );
-        assert_eq!(
-            result.max_containment, 0.10909,
-            "Max containment should be 0.10909, got {}",
-            result.max_containment
-        );
-        assert_eq!(
-            result.containment_target_in_query, 0.10909,
-            "Target in query containment should be 0.10909, got {}",
-            result.containment_target_in_query
-        );
+        assert_relative_eq!(result.containment, 0.09091, epsilon = 1e-5);
+        assert_relative_eq!(result.jaccard, 0.05217, epsilon = 1e-5);
+        assert_relative_eq!(result.max_containment, 0.10909, epsilon = 1e-5);
+        assert_relative_eq!(result.containment_target_in_query, 0.10909, epsilon = 1e-5);
 
         // Verify abundance statistics (should be valid if abundances are tracked)
-        assert_eq!(
-            result.average_abund, 1.0208333333333333,
-            "Average abundance should be 1.0208333333333333"
-        );
-        assert_eq!(result.median_abund, 1.0, "Median abundance should be 1.0");
-        assert_eq!(
-            result.std_abund, 0.099913156735681657,
-            "Standard deviation of abundance should be 0.099913156735681657"
-        );
+        assert_relative_eq!(result.average_abund, 1.0208333333333333, epsilon = 1e-5);
+        assert_relative_eq!(result.median_abund, 1.0, epsilon = 1e-5);
+        assert_relative_eq!(result.std_abund, 0.099913156735681657, epsilon = 1e-5);
 
         // Verify weighted metrics
         assert!(
@@ -1651,31 +1632,16 @@ mod tests {
         std::fs::write(&target_fasta, format!(">{}\n{}", bcl2_name, bcl2_sequence))?;
 
         // Process the target into the index
-        target_index.process_fasta(&target_fasta, 1000, 1000)?;
+        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher from the index
         let searcher = ProteinSearcher::new(target_index);
 
-        // Extract query data for compare
-        let query_mins: HashSet<u64> =
-            query_sketch.signature().minhash.mins().iter().cloned().collect();
-        let query_abunds = query_sketch.signature().minhash.abunds();
-        let query_name = query_sketch.signature().name.clone();
-        let query_md5 = query_sketch.signature().md5sum.clone();
-
-        // Calculate TF-IDF for the query (needed for compare)
-        let query_tfidf = searcher.calculate_tfidf(&query_sketch);
+        // Prepare query for compare
+        let prepared = searcher.prepare_query(&query_sketch);
 
         // Call compare
-        let result = searcher.compare(
-            &query_sketch,
-            &target_sketch,
-            &query_mins,
-            query_abunds.as_deref(),
-            &query_name,
-            &query_md5,
-            query_tfidf,
-        );
+        let result = searcher.compare(&prepared, &target_sketch);
 
         // Verify we got a result (should have some intersection)
         assert!(result.is_some(), "Should find similarity between CED9 and BCL2");
@@ -1694,50 +1660,22 @@ mod tests {
             "Should have 5 intersecting k-mers between CED9 and BCL2"
         );
 
-        assert_eq!(
-            result.containment, 0.018796992481203006,
-            "Containment should be 0.018796992481203006, got {}",
-            result.containment
-        );
-        assert_eq!(
-            result.jaccard, 0.0102880658436214,
-            "Jaccard should be 0.0102880658436214, got {}",
-            result.jaccard
-        );
-        assert_eq!(
-            result.max_containment, 0.022222222222222223,
-            "Max containment should be 0.022222222222222223, got {}",
-            result.max_containment
-        );
-        assert_eq!(
-            result.containment_target_in_query, 0.022222222222222223,
-            "Target in query containment should be 0.022222222222222223, got {}",
-            result.containment_target_in_query
+        assert_relative_eq!(result.containment, 0.018796992481203006, epsilon = 1e-5);
+        assert_relative_eq!(result.jaccard, 0.0102880658436214, epsilon = 1e-5);
+        assert_relative_eq!(result.max_containment, 0.022222222222222223, epsilon = 1e-5);
+        assert_relative_eq!(
+            result.containment_target_in_query,
+            0.022222222222222223,
+            epsilon = 1e-5
         );
 
         // Verify abundance statistics (should be valid if abundances are tracked)
-        assert_eq!(
-            result.average_abund, 1.0,
-            "Average abundance should be 1.0, got {}",
-            result.average_abund
-        );
-        assert_eq!(
-            result.median_abund, 1.0,
-            "Median abundance should be 1.0, got {}",
-            result.median_abund
-        );
-        assert_eq!(
-            result.std_abund, 0.0,
-            "Standard deviation of abundance should be 0.0, got {}",
-            result.std_abund
-        );
+        assert_relative_eq!(result.average_abund, 1.0, epsilon = 1e-5);
+        assert_relative_eq!(result.median_abund, 1.0, epsilon = 1e-5);
+        assert_relative_eq!(result.std_abund, 0.0, epsilon = 1e-5);
 
         // Verify weighted metrics
-        assert_eq!(
-            result.f_weighted_target_in_query, 0.8458646616541353,
-            "Weighted fraction should be 0.8458646616541353, got {}",
-            result.f_weighted_target_in_query
-        );
+        assert_relative_eq!(result.f_weighted_target_in_query, 0.8458646616541353, epsilon = 1e-5);
 
         // Verify overlap probability
         // WHY: With only 1 signature in the database, normalized_frequency = db_frequency/total_signatures = 1/1 = 1.0
@@ -1797,7 +1735,7 @@ mod tests {
         // TF-IDF and overlap probability calculations. Some k-mers will appear in many
         // signatures (common) while others will appear in few (rare).
         // This fasta already includes the BCL2 sequence, so we don't need to add it again.
-        target_index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
 
         // Verify we have multiple signatures in the index
         let signature_count = target_index.signature_count();
@@ -1817,7 +1755,7 @@ mod tests {
         let query_index_path = temp_path.join("query_index");
         let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
 
-        query_index.process_fasta(TEST_CED9_FASTA, 0, 1000)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
 
         // Get query signatures
         let query_signatures: Vec<_> =

@@ -220,8 +220,10 @@ impl ProteinSketch {
         // WHY: This is just a convenience constructor. All the real work happens in
         // add_protein, which ensures consistent behavior whether you use this constructor
         // or call new() + add_protein() directly.
+        // We default to storing sequences (true) since this is a convenience constructor
+        // often used in tests and examples where sequences are needed for search operations.
         let mut sketch = Self::new(name, protein_ksize, scaled, moltype)?;
-        sketch.add_protein(sequence)?;
+        sketch.add_protein(sequence, true)?;
         Ok(sketch)
     }
 
@@ -375,12 +377,19 @@ impl ProteinSketch {
 
     /// Add a protein sequence to the signature with full processing
     ///
-    /// This method adds the sequence to the minhash, populates kmer_infos with position
-    /// information, and stores both raw and encoded sequences. This ensures that whenever
-    /// a protein is added, all necessary data is populated for search operations.
+    /// This method processes the protein sequence, adds k-mers to the minhash, populates
+    /// kmer_infos with position information, and optionally stores the raw and encoded sequences.
+    /// It's a convenience method that handles all the necessary processing in one call.
+    ///
+    /// WHY: This method encapsulates all the processing needed when adding a protein sequence.
+    /// Instead of requiring callers to manually call add_protein on the minhash, process k-mers,
+    /// and store sequences separately, this method does everything automatically. When a protein
+    /// is added, all necessary data is populated for search operations.
     ///
     /// # Arguments
     /// * `sequence` - Protein sequence as a string (amino acid sequence)
+    /// * `store_sequences` - Whether to store raw and encoded sequences. If false, sequences
+    ///   are not stored, which saves memory but prevents region finding in search operations.
     ///
     /// # Returns
     /// `Ok(())` on success, or an error if sequence processing fails.
@@ -388,7 +397,11 @@ impl ProteinSketch {
     /// # Errors
     /// Returns an error if adding the protein sequence to the minhash fails, or if
     /// k-mer processing fails.
-    pub fn add_protein(&mut self, sequence: &str) -> anyhow::Result<()> {
+    ///
+    /// # Note
+    /// If `store_sequences` is false, search operations that require sequences (like finding
+    /// matched regions) will return empty results instead of panicking.
+    pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
         use crate::encoding::{encode_with_fn, get_encoding_fn_from_moltype};
         use sourmash::_hash_murmur;
 
@@ -442,26 +455,35 @@ impl ProteinSketch {
             }
         }
 
-        // Store raw and encoded sequences in efficient_data
+        // Store raw and encoded sequences in efficient_data if requested
         // WHY: Storing sequences enables subsequence extraction and region finding
-        // without requiring external sequence storage. We do this automatically so
-        // the sketch is self-contained and ready for search operations.
-        let efficient_data = self.to_efficient_data_with_capacity(sequence.len());
-        let mut efficient_data_with_sequence = efficient_data;
-        efficient_data_with_sequence.set_raw_sequence(sequence.to_string());
+        // without requiring external sequence storage. However, sequence storage consumes
+        // memory, so we allow callers to control this via the store_sequences parameter.
+        // This ensures consistency with the index's store_raw_sequences configuration.
+        if store_sequences {
+            let efficient_data = self.to_efficient_data_with_capacity(sequence.len());
+            let mut efficient_data_with_sequence = efficient_data;
+            efficient_data_with_sequence.set_raw_sequence(sequence.to_string());
 
-        // Generate and store encoded sequence (unless it's protein encoding)
-        // WHY: Encoded sequences are needed for moltype-based matching and verification.
-        // We store them automatically so callers don't need to manually encode and store.
-        // We use the encoding module to ensure consistency with k-mer encoding.
-        let moltype_str = self.moltype.to_string();
-        if moltype_str != "protein" {
-            use crate::encoding::encode_by_moltype;
-            let encoded_sequence = encode_by_moltype(sequence, &moltype_str)?;
-            efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
+            // Generate and store encoded sequence (unless it's protein encoding)
+            // WHY: Encoded sequences are needed for moltype-based matching and verification.
+            // We store them automatically so callers don't need to manually encode and store.
+            // We use the encoding module to ensure consistency with k-mer encoding.
+            let moltype_str = self.moltype.to_string();
+            if moltype_str != "protein" {
+                use crate::encoding::encode_by_moltype;
+                let encoded_sequence = encode_by_moltype(sequence, &moltype_str)?;
+                efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
+            }
+
+            self.set_efficient_data(efficient_data_with_sequence);
+        } else {
+            // Create efficient_data without sequences to maintain consistency
+            // WHY: Even if we don't store sequences, we still need efficient_data for
+            // other operations. We create it without sequence capacity to save memory.
+            let efficient_data = self.to_efficient_data_with_capacity(0);
+            self.set_efficient_data(efficient_data);
         }
-
-        self.set_efficient_data(efficient_data_with_sequence);
 
         Ok(())
     }
@@ -512,6 +534,29 @@ impl ProteinSketch {
         let same_scaled = self.scaled() == other.scaled();
         let same_ksize = self.protein_ksize() == other.protein_ksize();
         same_moltype && same_scaled && same_ksize
+    }
+
+    /// Get the minhash minimum values as a HashSet
+    ///
+    /// WHY: This method eliminates code duplication by providing a reusable way to extract
+    /// minhash values as a HashSet. The pattern of converting minhash.mins() to a HashSet
+    /// is repeated throughout the codebase for intersection calculations. This method encapsulates
+    /// that pattern, making the code more maintainable and reducing the chance of errors.
+    pub fn mins_as_set(&self) -> std::collections::HashSet<u64> {
+        self.signature().minhash.mins().iter().cloned().collect()
+    }
+
+    /// Calculate the intersection of minhash values between this sketch and another
+    ///
+    /// WHY: This method encapsulates the common pattern of calculating k-mer intersections
+    /// between two sketches. Instead of manually extracting mins_as_set() for both sketches
+    /// and computing the intersection in multiple places, this method provides a clean,
+    /// reusable API. This follows the DRY (Don't Repeat Yourself) principle and makes
+    /// the code more maintainable.
+    pub fn intersect(&self, other: &ProteinSketch) -> std::collections::HashSet<u64> {
+        let self_mins = self.mins_as_set();
+        let other_mins = other.mins_as_set();
+        self_mins.intersection(&other_mins).cloned().collect()
     }
 }
 

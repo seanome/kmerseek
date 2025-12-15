@@ -53,6 +53,7 @@ assert_cmd = "2.0"
 predicates = "3.0"
 cargo-tarpaulin = "0.28"
 rstest = "0.26.1"
+approx = "0.5"
 
 [profile.release]
 debug = "line-tables-only"
