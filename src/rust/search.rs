@@ -688,6 +688,74 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    struct ExpectedSimilarity {
+        ksize: usize,
+        n_intersecting_hashes: usize,
+        containment: f64,
+        jaccard: f64,
+        max_containment: f64,
+        containment_target_in_query: f64,
+        average_abund: f64,
+        median_abund: f64,
+        std_abund: f64,
+        matched_regions_count: usize,
+    }
+
+    const BCL2_CED9_K12: ExpectedSimilarity = ExpectedSimilarity {
+        ksize: 12,
+        n_intersecting_hashes: 24,
+        containment: 0.09091,
+        jaccard: 0.05217,
+        max_containment: 0.10909,
+        containment_target_in_query: 0.10909,
+        average_abund: 1.0208333333333333,
+        median_abund: 1.0,
+        std_abund: 0.099913156735681657,
+        matched_regions_count: 13,
+    };
+
+    const BCL2_CED9_K15: ExpectedSimilarity = ExpectedSimilarity {
+        ksize: 15,
+        n_intersecting_hashes: 5,
+        containment: 0.018796992481203006,
+        jaccard: 0.0102880658436214,
+        max_containment: 0.022222222222222223,
+        containment_target_in_query: 0.022222222222222223,
+        average_abund: 1.0,
+        median_abund: 1.0,
+        std_abund: 0.0,
+        matched_regions_count: 1,
+    };
+
+    #[fixture]
+    fn temp_dir() -> TempDir {
+        TempDir::new().unwrap()
+    }
+
+    #[fixture]
+    fn ced9_sketch_k12() -> ProteinSketch {
+        let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
+        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
+    }
+
+    #[fixture]
+    fn ced9_sketch_k15() -> ProteinSketch {
+        let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
+        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp").unwrap()
+    }
+
+    #[fixture]
+    fn bcl2_sketch_k12() -> ProteinSketch {
+        let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
+        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
+    }
+
+    #[fixture]
+    fn bcl2_sketch_k15() -> ProteinSketch {
+        let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
+        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp").unwrap()
+    }
+
     /// Read the first record from a FASTA file and return name and sequence.
     ///
     /// WHY: This helper function eliminates code duplication in tests. It provides a simple
@@ -1120,6 +1188,37 @@ mod tests {
 
         let tfidf = searcher.calculate_tfidf(&query);
         assert!(tfidf >= 0.0);
+
+        Ok(())
+    }
+
+    #[rstest]
+    #[case::k12(ced9_sketch_k12(), bcl2_sketch_k12(), BCL2_CED9_K12)]
+    #[case::k15(ced9_sketch_k15(), bcl2_sketch_k15(), BCL2_CED9_K15)]
+    fn test_query_target_similarity_bcl2_ced9(
+        temp_dir: TempDir,
+        #[case] query_sketch: ProteinSketch,
+        #[case] target_sketch: ProteinSketch,
+        #[case] expected: ExpectedSimilarity,
+    ) -> Result<()> {
+        let scaled = 1;
+        let moltype = "hp";
+
+        // ... index setup using temp_dir ...
+        
+        let searcher = ProteinSearcher::new(target_sketch);
+
+        let result = searcher
+            .query_target_similarity(query_sketch, target_sketch, scaled, moltype)?
+            .expect("Should find similarity between CED9 and BCL2");
+
+        // Assertions are now readable
+        assert_eq!(result.n_intersecting_hashes, expected.n_intersecting_hashes);
+        assert_eq!(result.containment, expected.containment);
+        assert_eq!(result.jaccard, expected.jaccard);
+        assert_eq!(result.max_containment, expected.max_containment);
+        assert_eq!(result.average_abund, expected.average_abund);
+        assert_eq!(result.matched_regions.len(), expected.matched_regions_count);
 
         Ok(())
     }
