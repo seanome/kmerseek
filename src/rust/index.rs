@@ -1069,15 +1069,6 @@ mod tests {
         let protein_ksize = 5;
         let moltype = "protein";
 
-        // Create index with minimal parameters
-        let index = ProteomeIndex::new(
-            dir.path().join("dayhoff_test.db"),
-            protein_ksize, // protein ksize
-            1,             // scaled=1 to capture all kmers
-            moltype,
-            false,
-        )?;
-
         let sequence = TEST_PROTEIN;
 
         // Create a protein signature
@@ -1165,15 +1156,6 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-
-        // Create index with minimal parameters
-        let index = ProteomeIndex::new(
-            dir.path().join("dayhoff_test.db"),
-            protein_ksize, // protein ksize
-            1,             // scaled=1 to capture all kmers
-            "dayhoff",
-            false,
-        )?;
 
         let sequence = TEST_PROTEIN;
 
@@ -1284,15 +1266,6 @@ mod tests {
 
         let protein_ksize = 5;
         let moltype = "hp";
-
-        // Create index with minimal parameters
-        let index = ProteomeIndex::new(
-            dir.path().join("dayhoff_test.db"),
-            protein_ksize, // protein ksize
-            1,             // scaled=1 to capture all kmers
-            moltype,
-            false,
-        )?;
 
         let sequence = TEST_PROTEIN;
 
