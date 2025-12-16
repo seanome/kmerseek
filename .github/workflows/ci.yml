@@ -46,8 +46,19 @@ jobs:
       - name: Run CLI tests
         run: cargo test tests::test_cli --verbose --no-default-features
 
+      - name: Clean before release build
+        run: |
+          # Clean debug artifacts to free up space before release build
+          rm -rf target/debug
+          # Clean incremental compilation artifacts
+          rm -rf target/.rustc_info.json target/.cargo-lock
+          # Show disk space
+          df -h
+
       - name: Build release
-        run: cargo build --release --verbose --no-default-features
+        run: |
+          # Limit parallelism to reduce memory/disk usage during release build
+          CARGO_BUILD_JOBS=2 cargo build --release --verbose --no-default-features
 
       - name: Test CLI binary
         run: |
@@ -70,8 +81,17 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Clean before release build
+        run: |
+          # Clean debug artifacts to free up space before release build
+          rm -rf target/debug
+          # Show disk space
+          df -h
+
       - name: Build
-        run: cargo build --release --no-default-features
+        run: |
+          # Limit parallelism to reduce memory/disk usage
+          CARGO_BUILD_JOBS=2 cargo build --release --no-default-features
 
       - name: Test CLI with real data
         run: |
