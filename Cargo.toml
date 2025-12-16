@@ -62,9 +62,6 @@ debug = "line-tables-only"
 name = "test_bcl2_processing"
 path = "examples/test_bcl2_processing.rs"
 
-[[example]]
-name = "search_demo"
-path = "examples/search_demo.rs"
 
 [[bench]]
 name = "benchmark"
