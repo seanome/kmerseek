@@ -15,4 +15,3 @@ pub const TEST_PROTEIN_INVALID: &str = "PLANTANDANIMALGEN1MES";
 // Mixed case sequences for testing uppercasing functionality
 pub const TEST_FASTA_MIXED_CASE_CONTENT: &str =
     ">test_protein_mixed1\nmAaGgCcTt\n>test_protein_mixed2\nmAaGgCcTtNnRrSsVvWwYyHhKkDdEeFfPpQqIiLl";
-

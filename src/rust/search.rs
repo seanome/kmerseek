@@ -493,7 +493,9 @@ impl ProteinSearcher {
             .sum();
 
         // Clamp to [0,1] range
-        prob_overlap.min(1.0).max(0.0)
+        // WHY: clamp() is more idiomatic than chaining min().max() and provides better
+        // performance. It also handles edge cases (NaN, min > max) more predictably.
+        prob_overlap.clamp(0.0, 1.0)
     }
 
     /// Get the underlying index
@@ -874,6 +876,7 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    #[allow(dead_code)] // Test data structure - fields may be used for comparison
     struct ExpectedSimilarity {
         ksize: usize,
         n_intersecting_hashes: usize,
@@ -899,6 +902,7 @@ mod tests {
     }
 
     /// Expected matched regions structure for testing
+    #[allow(dead_code)] // Test data structure - fields may be used for comparison
     struct ExpectedMatchedRegions {
         ksize: usize,
         total_regions: usize,
@@ -1483,7 +1487,7 @@ mod tests {
         containment_target_in_query: 0.10909,
         average_abund: 1.0625,
         median_abund: 1.0,
-        std_abund: 0.099913156735681657,
+        std_abund: 0.099_913_156_735_681_66,
         matched_regions_count: 13,
     };
 

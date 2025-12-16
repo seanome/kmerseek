@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kmerseek::encoding::{encode_kmer, encode_kmer_with_encoding_fn, get_encoding_fn_from_moltype};
+use kmerseek::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
 use std::fs;
 use std::fs::File;
@@ -176,7 +176,8 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
                     let start_time = Instant::now();
 
                     // Encode kmer
-                    let encoded = encode_kmer(&TEST_PROTEIN[..ksize as usize], moltype);
+                    let encoded =
+                        encode_by_moltype(&TEST_PROTEIN[..ksize as usize], moltype).unwrap();
 
                     // Record end time
                     let end_time = Instant::now();
@@ -202,10 +203,8 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
                         let start_time = Instant::now();
 
                         // Encode kmer
-                        let encoded = encode_kmer_with_encoding_fn(
-                            &TEST_PROTEIN[..ksize as usize],
-                            encoding_fn,
-                        );
+                        let encoded =
+                            encode_with_fn(&TEST_PROTEIN[..ksize as usize], encoding_fn).unwrap();
 
                         // Record end time
                         let end_time = Instant::now();
@@ -235,7 +234,7 @@ fn benchmark_process_protein_kmers(c: &mut Criterion) {
             .unwrap();
 
             // Add the protein sequence
-            protein_sig.add_protein(TEST_PROTEIN.as_bytes()).unwrap();
+            protein_sig.add_protein(TEST_PROTEIN, true).unwrap();
 
             c.bench_function(&format!("process_protein_kmers_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {

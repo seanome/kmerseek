@@ -118,7 +118,7 @@ pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
 /// # Arguments
 /// * `sequence` - The sequence to encode (can be a k-mer or full sequence)
 /// * `encoding_fn` - A function that encodes an amino acid byte according to
-///    the specified moltype
+///   the specified moltype
 ///
 /// # Returns
 /// * `Ok(String)` - The encoded sequence

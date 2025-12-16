@@ -941,9 +941,24 @@ impl ProteomeIndex {
             println!("Reading FASTA file with automatic compression detection and parallel processing...");
         }
 
+        // Validate that the file exists before attempting to parse
+        // WHY: Providing a clear error message when the file doesn't exist is better than
+        // letting needletail fail with a generic I/O error. This helps users understand
+        // if they're using the wrong path or running from the wrong directory.
+        let fasta_path = fasta_path.as_ref();
+        if !fasta_path.exists() {
+            return Err(IndexError::ParseError(format!(
+                "FASTA file not found: {}. Current working directory: {}",
+                fasta_path.display(),
+                std::env::current_dir()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string())
+            )));
+        }
+
         // Open and parse the FASTA file using needletail with auto-detection
         let mut reader =
-            parse_fastx_file(&fasta_path).map_err(|e| IndexError::ParseError(e.to_string()))?;
+            parse_fastx_file(fasta_path).map_err(|e| IndexError::ParseError(e.to_string()))?;
 
         // Stream records and process in parallel batches
         let mut record_count = 0;
@@ -1064,7 +1079,7 @@ mod tests {
 
     #[test]
     fn test_process_kmers_moltype_protein() -> Result<()> {
-        let dir = tempdir()?;
+        let _dir = tempdir()?;
 
         let protein_ksize = 5;
         let moltype = "protein";
@@ -1153,7 +1168,7 @@ mod tests {
 
     #[test]
     fn test_process_kmers_moltype_dayhoff() -> Result<()> {
-        let dir = tempdir()?;
+        let _dir = tempdir()?;
 
         let protein_ksize = 5;
 
@@ -1262,7 +1277,7 @@ mod tests {
 
     #[test]
     fn test_process_kmers_moltype_hp() -> Result<()> {
-        let dir = tempdir()?;
+        let _dir = tempdir()?;
 
         let protein_ksize = 5;
         let moltype = "hp";

@@ -245,7 +245,7 @@ impl From<SmallSignature> for StableSignature {
             name: sig.name,
             md5sum: sig.md5sum,
             minhash: sig.minhash,
-            moltype: moltype,
+            moltype,
             ksize: ksize as u32,
         }
     }
