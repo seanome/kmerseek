@@ -123,7 +123,11 @@ fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
         "5",
     ]);
 
-    cmd.assert().failure().stderr(predicate::str::contains("No such file or directory"));
+    // WHY: The index command now validates file existence and returns a clear, custom
+    // error message instead of the lower-level OS error. We assert on the stable,
+    // human-friendly prefix ("FASTA file not found") rather than the exact OS string
+    // ("No such file or directory"), which can vary across platforms.
+    cmd.assert().failure().stderr(predicate::str::contains("FASTA file not found"));
 
     Ok(())
 }
