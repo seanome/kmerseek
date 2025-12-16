@@ -101,7 +101,7 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
 /// use kmerseek::encoding::encode_by_moltype;
 ///
 /// let sequence = "MKTAYIAKQR";
-/// let encoded = encode_by_moltype(sequence, "hp")?;
+/// let encoded = encode_by_moltype(sequence, "hp").unwrap();
 /// // encoded will be the HP-encoded version
 /// ```
 pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
@@ -109,7 +109,7 @@ pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
     encode_with_fn(sequence, encoding_fn)
 }
 
-/// Encode a sequence using the provided encoding function.
+/// Encode a sequence into a molecular type using the provided encoding function.
 ///
 /// This function applies the encoding function to each amino acid in the sequence,
 /// producing an encoded sequence string. The encoded sequence is pre-allocated
@@ -129,7 +129,7 @@ pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
 /// use sourmash::encodings::aa_to_hp;
 ///
 /// let sequence = "MKTAYIAKQR";
-/// let encoded = encode_with_fn(sequence, aa_to_hp)?;
+/// let encoded = encode_with_fn(sequence, aa_to_hp).unwrap();
 /// // encoded will be the HP-encoded version
 /// ```
 pub fn encode_with_fn(sequence: &str, encoding_fn: fn(u8) -> u8) -> Result<String> {
