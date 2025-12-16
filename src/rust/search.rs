@@ -407,8 +407,8 @@ impl ProteinSearcher {
 /// use kmerseek::sketch::ProteinSketch;
 /// use kmerseek::search::calculate_similarity;
 ///
-/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp")?;
-/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp")?;
+/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp").unwrap();
+/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp").unwrap();
 /// let result = calculate_similarity(&query, &target);
 /// ```
 #[must_use]
@@ -781,115 +781,6 @@ mod tests {
         // Optional: a specific region to find by query_subseq
         landmark: Option<ExpectedMatchedRegion>,
     }
-
-    // From Sourmash values:
-    // $ sourmash sig overlap -k 12 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
-
-    // == This is sourmash version 4.9.4. ==
-    // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
-
-    // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
-    // size_estimate_inaccurate: False
-    // first signature:
-    //   signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
-    //   signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-    //   source filename: ced9.fasta
-    //   md5: 5baa6059c3306c2b6a500abd929d539d
-    //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
-    //   size: 264
-    //   sum hashes: 264
-    //   signature license: CC0
-
-    // second signature:
-    //   signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
-    //   signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
-    //   source filename: bcl2.fasta
-    //   md5: b6da406482d741a9d49f406684c17e17
-    //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
-    //   size: 220
-    //   sum hashes: 220
-    //   signature license: CC0
-
-    // --- Similarity measures ---
-    // jaccard similarity:          0.05217
-    // first contained in second:   0.09091 (cANI: 0.81887)
-    // second contained in first:   0.10909 (cANI: 0.83141)
-    // average containment ANI:     0.82514
-
-    // --- Hash overlap summary ---
-    // number of hashes in first:   264
-    // number of hashes in second:  220
-
-    // number of hashes in common:  24
-    // only in first:               240
-    // only in second:              196
-    // total (union):               460
-    const BCL2_CED9_K12: ExpectedSimilarity = ExpectedSimilarity {
-        ksize: 12,
-        n_intersecting_hashes: 24,
-        containment: 0.09091,
-        jaccard: 0.05217,
-        max_containment: 0.10909,
-        containment_target_in_query: 0.10909,
-        average_abund: 1.0208333333333333,
-        median_abund: 1.0,
-        std_abund: 0.099913156735681657,
-        matched_regions_count: 13,
-    };
-
-    // From Sourmash values:
-    // $ sourmash sig overlap -k 15 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
-    // == This is sourmash version 4.9.4. ==
-    // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
-
-    // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
-    // size_estimate_inaccurate: False
-    // first signature:
-    // signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
-    // signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
-    // source filename: ced9.fasta
-    // md5: 61094124a51b6d4802c37cd7bb43fad5
-    // k=15 molecule=hp num=0 scaled=1 track_abundance=False
-    // size: 266
-    // sum hashes: 266
-    // signature license: CC0
-
-    // second signature:
-    // signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
-    // signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
-    // source filename: bcl2.fasta
-    // md5: 26546d1eea2143522424bc59a5ded0f5
-    // k=15 molecule=hp num=0 scaled=1 track_abundance=False
-    // size: 225
-    // sum hashes: 225
-    // signature license: CC0
-
-    // --- Similarity measures ---
-    // jaccard similarity:          0.01029
-    // first contained in second:   0.01880 (cANI: 0.76725)
-    // second contained in first:   0.02222 (cANI: 0.77586)
-    // average containment ANI:     0.77156
-
-    // --- Hash overlap summary ---
-    // number of hashes in first:   266
-    // number of hashes in second:  225
-
-    // number of hashes in common:  5
-    // only in first:               261
-    // only in second:              220
-    // total (union):               486
-    const BCL2_CED9_K15: ExpectedSimilarity = ExpectedSimilarity {
-        ksize: 15,
-        n_intersecting_hashes: 5,
-        containment: 0.018796992481203006,
-        jaccard: 0.0102880658436214,
-        max_containment: 0.022222222222222223,
-        containment_target_in_query: 0.022222222222222223,
-        average_abund: 1.0,
-        median_abund: 1.0,
-        std_abund: 0.0,
-        matched_regions_count: 1,
-    };
 
     const MATCHED_REGIONS_K12: ExpectedMatchedRegions = ExpectedMatchedRegions {
         ksize: 12,
@@ -1414,6 +1305,115 @@ mod tests {
         Ok(())
     }
 
+    // From Sourmash values:
+    // $ sourmash sig overlap -k 12 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
+
+    // == This is sourmash version 4.9.4. ==
+    // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
+
+    // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // size_estimate_inaccurate: False
+    // first signature:
+    //   signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
+    //   signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
+    //   source filename: ced9.fasta
+    //   md5: 5baa6059c3306c2b6a500abd929d539d
+    //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
+    //   size: 264
+    //   sum hashes: 264
+    //   signature license: CC0
+
+    // second signature:
+    //   signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    //   signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
+    //   source filename: bcl2.fasta
+    //   md5: b6da406482d741a9d49f406684c17e17
+    //   k=12 molecule=hp num=0 scaled=1 track_abundance=False
+    //   size: 220
+    //   sum hashes: 220
+    //   signature license: CC0
+
+    // --- Similarity measures ---
+    // jaccard similarity:          0.05217
+    // first contained in second:   0.09091 (cANI: 0.81887)
+    // second contained in first:   0.10909 (cANI: 0.83141)
+    // average containment ANI:     0.82514
+
+    // --- Hash overlap summary ---
+    // number of hashes in first:   264
+    // number of hashes in second:  220
+
+    // number of hashes in common:  24
+    // only in first:               240
+    // only in second:              196
+    // total (union):               460
+    const BCL2_CED9_K12: ExpectedSimilarity = ExpectedSimilarity {
+        ksize: 12,
+        n_intersecting_hashes: 24,
+        containment: 0.09091,
+        jaccard: 0.05217,
+        max_containment: 0.10909,
+        containment_target_in_query: 0.10909,
+        average_abund: 1.0625,
+        median_abund: 1.0,
+        std_abund: 0.099913156735681657,
+        matched_regions_count: 13,
+    };
+
+    // From Sourmash values:
+    // $ sourmash sig overlap -k 15 ced9.fasta.hp.k12-15.scaled1.sig.zip bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // == This is sourmash version 4.9.4. ==
+    // == Please cite Irber et. al (2024), doi:10.21105/joss.06830. ==
+
+    // loaded one signature each from ced9.fasta.hp.k12-15.scaled1.sig.zip and bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // size_estimate_inaccurate: False
+    // first signature:
+    // signature filename: ced9.fasta.hp.k12-15.scaled1.sig.zip
+    // signature name: sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1
+    // source filename: ced9.fasta
+    // md5: 61094124a51b6d4802c37cd7bb43fad5
+    // k=15 molecule=hp num=0 scaled=1 track_abundance=False
+    // size: 266
+    // sum hashes: 266
+    // signature license: CC0
+
+    // second signature:
+    // signature filename: bcl2.fasta.hp.k12-15.scaled1.sig.zip
+    // signature name: sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2
+    // source filename: bcl2.fasta
+    // md5: 26546d1eea2143522424bc59a5ded0f5
+    // k=15 molecule=hp num=0 scaled=1 track_abundance=False
+    // size: 225
+    // sum hashes: 225
+    // signature license: CC0
+
+    // --- Similarity measures ---
+    // jaccard similarity:          0.01029
+    // first contained in second:   0.01880 (cANI: 0.76725)
+    // second contained in first:   0.02222 (cANI: 0.77586)
+    // average containment ANI:     0.77156
+
+    // --- Hash overlap summary ---
+    // number of hashes in first:   266
+    // number of hashes in second:  225
+
+    // number of hashes in common:  5
+    // only in first:               261
+    // only in second:              220
+    // total (union):               486
+    const BCL2_CED9_K15: ExpectedSimilarity = ExpectedSimilarity {
+        ksize: 15,
+        n_intersecting_hashes: 5,
+        containment: 0.018796992481203006,
+        jaccard: 0.0102880658436214,
+        max_containment: 0.022222222222222223,
+        containment_target_in_query: 0.022222222222222223,
+        average_abund: 1.0,
+        median_abund: 1.0,
+        std_abund: 0.0,
+        matched_regions_count: 1,
+    };
+
     #[rstest]
     #[case::k12(ced9_sketch_k12(), bcl2_sketch_k12(), BCL2_CED9_K12)]
     #[case::k15(ced9_sketch_k15(), bcl2_sketch_k15(), BCL2_CED9_K15)]
@@ -1443,266 +1443,6 @@ mod tests {
         assert_eq!(
             result.overlap_probability, 1.0,
             "Overlap probability should be 1.0 for 1v1 comparisons"
-        );
-
-        Ok(())
-    }
-
-    /// Test compare with BCL2 and CED9 sequences with k-mer size 12,
-    /// which produces multiple consecutive matched k-mer regions.
-    ///
-    /// This test verifies that compare correctly calculates all similarity
-    /// metrics including containment, jaccard, max_containment, abundance statistics, and
-    /// overlap probability for a known pair of related proteins.
-    #[test]
-    fn test_compare_bcl2_ced9_k12() -> Result<()> {
-        let ksize = 12;
-        let scaled = 1;
-        let moltype = "hp";
-
-        // Read CED9 sequence from FASTA file
-        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
-
-        // Read BCL2 sequence from FASTA file
-        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
-
-        // Create query sketch (CED9)
-        let query_sketch = ProteinSketch::from_protein_sequence(
-            &ced9_name,
-            &ced9_sequence,
-            ksize,
-            scaled,
-            moltype,
-        )?;
-
-        // Create target sketch (BCL2)
-        let target_sketch = ProteinSketch::from_protein_sequence(
-            &bcl2_name,
-            &bcl2_sequence,
-            ksize,
-            scaled,
-            moltype,
-        )?;
-
-        // Create a temporary index with the target for the searcher
-        // WHY: ProteinSearcher requires an index and calculates stats from it. We need
-        // this for overlap probability and TF-IDF calculations. Creating a minimal index
-        // allows us to test the core similarity calculation logic.
-        //
-        // NOTE: With only 1 signature in the index, TF-IDF will be 0 and overlap probability
-        // will be 1.0. These metrics are designed for database searches (1vMany), not 1v1
-        // comparisons. To properly test these metrics, you would need an index with multiple
-        // signatures where some k-mers are common and others are rare.
-        let temp_dir = TempDir::new()?;
-        let temp_path = temp_dir.path().join("test_index");
-        let target_index = ProteomeIndex::new(&temp_path, ksize, scaled, moltype, true)?;
-
-        // Create a temporary FASTA file with BCL2 sequence
-        let target_fasta = temp_dir.path().join("target.fasta");
-        std::fs::write(&target_fasta, format!(">{}\n{}", bcl2_name, bcl2_sequence))?;
-
-        // Process the target into the index
-        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
-
-        // Create searcher from the index
-        let searcher = ProteinSearcher::new(target_index);
-
-        // Prepare query for compare
-        let prepared = searcher.prepare_query(&query_sketch);
-
-        // Call compare
-        let result = searcher.compare(&prepared, &target_sketch);
-
-        // Verify we got a result (should have some intersection)
-        assert!(result.is_some(), "Should find similarity between CED9 and BCL2");
-        let result = result.unwrap();
-
-        // Verify basic metadata
-        assert_eq!(result.query_name, ced9_name);
-        assert_eq!(result.target_name, bcl2_name);
-        assert_eq!(result.ksize, ksize);
-        assert_eq!(result.scaled, scaled);
-        assert_eq!(result.moltype, moltype);
-
-        // Verify we have intersecting k-mers
-        assert_eq!(
-            result.n_intersecting_hashes, 24,
-            "Should have 24 intersecting k-mers between CED9 and BCL2"
-        );
-
-        assert_relative_eq!(result.containment, 0.09091, epsilon = 1e-5);
-        assert_relative_eq!(result.jaccard, 0.05217, epsilon = 1e-5);
-        assert_relative_eq!(result.max_containment, 0.10909, epsilon = 1e-5);
-        assert_relative_eq!(result.containment_target_in_query, 0.10909, epsilon = 1e-5);
-
-        // Verify abundance statistics (should be valid if abundances are tracked)
-        assert_relative_eq!(result.average_abund, 1.0208333333333333, epsilon = 1e-5);
-        assert_relative_eq!(result.median_abund, 1.0, epsilon = 1e-5);
-        assert_relative_eq!(result.std_abund, 0.099913156735681657, epsilon = 1e-5);
-
-        // Verify weighted metrics
-        assert!(
-            result.f_weighted_target_in_query >= 0.0 && result.f_weighted_target_in_query <= 1.0,
-            "Weighted fraction should be in [0, 1], got {}",
-            result.f_weighted_target_in_query
-        );
-
-        // Verify overlap probability
-        // WHY: With only 1 signature in the database, normalized_frequency = db_frequency/total_signatures = 1/1 = 1.0
-        // This metric is designed for database searches (1vMany), not 1v1 comparisons.
-        // In a real database search, overlap probability would indicate how common the intersecting
-        // k-mers are across the database (higher = more common/less significant).
-        assert!(
-            result.overlap_probability == 1.0,
-            "Overlap probability should be 1.0 with 1 signature in database, got {}",
-            result.overlap_probability
-        );
-
-        // Verify TF-IDF
-        // WHY: IDF = ln(total_signatures / freq). With only 1 signature, IDF = ln(1/1) = 0 for all k-mers.
-        // This metric is designed for database searches (1vMany), not 1v1 comparisons.
-        // In a real database search, TF-IDF would weight k-mers by their rarity (higher IDF = more rare/significant).
-        assert_eq!(
-            result.tfidf, 0.0,
-            "TF-IDF should be 0.0 with 1 signature in database, got {}",
-            result.tfidf
-        );
-
-        // Verify matched regions are present (BCL2 and CED9 should have overlapping regions)
-        assert_eq!(
-            result.matched_regions.len(),
-            13,
-            "Should find 13 matched regions between CED9 and BCL2"
-        );
-
-        Ok(())
-    }
-
-    /// Test compare with BCL2 and CED9 sequences with k-mer size 15, which
-    /// produces a single consecutive matched k-mer region.
-    ///
-    /// This test verifies that compare correctly calculates all similarity
-    /// metrics including containment, jaccard, max_containment, abundance statistics, and
-    /// overlap probability for a known pair of related proteins.
-    #[test]
-    fn test_compare_bcl2_ced9_k15() -> Result<()> {
-        let ksize = 15;
-        let scaled = 1;
-        let moltype = "hp";
-
-        // Read CED9 sequence from FASTA file
-        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
-
-        // Read BCL2 sequence from FASTA file
-        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
-
-        // Create query sketch (CED9)
-        let query_sketch = ProteinSketch::from_protein_sequence(
-            &ced9_name,
-            &ced9_sequence,
-            ksize,
-            scaled,
-            moltype,
-        )?;
-
-        // Create target sketch (BCL2)
-        let target_sketch = ProteinSketch::from_protein_sequence(
-            &bcl2_name,
-            &bcl2_sequence,
-            ksize,
-            scaled,
-            moltype,
-        )?;
-
-        // Create a temporary index with the target for the searcher
-        // WHY: ProteinSearcher requires an index and calculates stats from it. We need
-        // this for overlap probability and TF-IDF calculations. Creating a minimal index
-        // allows us to test the core similarity calculation logic.
-        //
-        // NOTE: With only 1 signature in the index, TF-IDF will be 0 and overlap probability
-        // will be 1.0. These metrics are designed for database searches (1vMany), not 1v1
-        // comparisons. To properly test these metrics, you would need an index with multiple
-        // signatures where some k-mers are common and others are rare.
-        let temp_dir = TempDir::new()?;
-        let temp_path = temp_dir.path().join("test_index");
-        let target_index = ProteomeIndex::new(&temp_path, ksize, scaled, moltype, true)?;
-
-        // Create a temporary FASTA file with BCL2 sequence
-        let target_fasta = temp_dir.path().join("target.fasta");
-        std::fs::write(&target_fasta, format!(">{}\n{}", bcl2_name, bcl2_sequence))?;
-
-        // Process the target into the index
-        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
-
-        // Create searcher from the index
-        let searcher = ProteinSearcher::new(target_index);
-
-        // Prepare query for compare
-        let prepared = searcher.prepare_query(&query_sketch);
-
-        // Call compare
-        let result = searcher.compare(&prepared, &target_sketch);
-
-        // Verify we got a result (should have some intersection)
-        assert!(result.is_some(), "Should find similarity between CED9 and BCL2");
-        let result = result.unwrap();
-
-        // Verify basic metadata
-        assert_eq!(result.query_name, ced9_name);
-        assert_eq!(result.target_name, bcl2_name);
-        assert_eq!(result.ksize, ksize);
-        assert_eq!(result.scaled, scaled);
-        assert_eq!(result.moltype, moltype);
-
-        // Verify we have intersecting k-mers
-        assert_eq!(
-            result.n_intersecting_hashes, 5,
-            "Should have 5 intersecting k-mers between CED9 and BCL2"
-        );
-
-        assert_relative_eq!(result.containment, 0.018796992481203006, epsilon = 1e-5);
-        assert_relative_eq!(result.jaccard, 0.0102880658436214, epsilon = 1e-5);
-        assert_relative_eq!(result.max_containment, 0.022222222222222223, epsilon = 1e-5);
-        assert_relative_eq!(
-            result.containment_target_in_query,
-            0.022222222222222223,
-            epsilon = 1e-5
-        );
-
-        // Verify abundance statistics (should be valid if abundances are tracked)
-        assert_relative_eq!(result.average_abund, 1.0, epsilon = 1e-5);
-        assert_relative_eq!(result.median_abund, 1.0, epsilon = 1e-5);
-        assert_relative_eq!(result.std_abund, 0.0, epsilon = 1e-5);
-
-        // Verify weighted metrics
-        assert_relative_eq!(result.f_weighted_target_in_query, 0.8458646616541353, epsilon = 1e-5);
-
-        // Verify overlap probability
-        // WHY: With only 1 signature in the database, normalized_frequency = db_frequency/total_signatures = 1/1 = 1.0
-        // This metric is designed for database searches (1vMany), not 1v1 comparisons.
-        // In a real database search, overlap probability would indicate how common the intersecting
-        // k-mers are across the database (higher = more common/less significant).
-        assert_eq!(
-            result.overlap_probability, 1.0,
-            "Overlap probability should be 1.0 with 1 signature in database, got {}",
-            result.overlap_probability
-        );
-
-        // Verify TF-IDF
-        // WHY: IDF = ln(total_signatures / freq). With only 1 signature, IDF = ln(1/1) = 0 for all k-mers.
-        // This metric is designed for database searches (1vMany), not 1v1 comparisons.
-        // In a real database search, TF-IDF would weight k-mers by their rarity (higher IDF = more rare/significant).
-        assert_eq!(
-            result.tfidf, 0.0,
-            "TF-IDF should be 0.0 with 1 signature in database, got {}",
-            result.tfidf
-        );
-
-        // Verify matched regions are present (BCL2 and CED9 should have overlapping regions)
-        assert_eq!(
-            result.matched_regions.len(),
-            1,
-            "Should find 1 matched region between CED9 and BCL2"
         );
 
         Ok(())
