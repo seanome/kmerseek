@@ -149,7 +149,7 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
                     let start_time = Instant::now();
 
                     // Encode kmer
-                    let encoded = kmerseek::encoding::encode_kmer_with_encoding_fn(
+                    let encoded = kmerseek::encoding::encode_with_fn(
                         &TEST_PROTEIN[..ksize as usize],
                         encoding_fn,
                     )
