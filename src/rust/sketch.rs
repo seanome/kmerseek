@@ -31,7 +31,10 @@ impl Serialize for ProteinSketch {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("ProteinSketch", 4)?;
+        // WHY: We serialize 6 fields: name, signature, moltype, protein_ksize, scaled, kmer_infos.
+        // The field count must match the actual number of fields serialized, otherwise serde
+        // will fail during serialization. This matches the FIELDS constant used in deserialization.
+        let mut state = serializer.serialize_struct("ProteinSketch", 6)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("signature", &self.signature)?;
         state.serialize_field("moltype", &self.moltype)?;
@@ -136,7 +139,11 @@ impl<'de> Deserialize<'de> for ProteinSketch {
             }
         }
 
-        const FIELDS: &[&str] = &["signature", "moltype", "protein_ksize", "kmer_infos"];
+        // WHY: The FIELDS array must list all fields that are serialized/deserialized.
+        // This must match the fields in serialize_struct and the visitor's match arms.
+        // Missing fields here will cause deserialization to fail when those fields are present.
+        const FIELDS: &[&str] =
+            &["name", "signature", "moltype", "protein_ksize", "scaled", "kmer_infos"];
         deserializer.deserialize_struct("ProteinSketch", FIELDS, ProteinSketchVisitor)
     }
 }

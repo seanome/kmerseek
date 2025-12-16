@@ -92,7 +92,10 @@ impl Serialize for StableSignature {
         S: serde::Serializer,
     {
         use serde::ser::SerializeStruct;
-        let mut state = serializer.serialize_struct("StableSignature", 7)?;
+        // WHY: We serialize 8 fields: location, name, md5sum, mins, abunds, scaled, ksize, moltype.
+        // The field count must match the actual number of fields serialized, otherwise serde
+        // will fail during serialization. This matches the FIELDS constant used in deserialization.
+        let mut state = serializer.serialize_struct("StableSignature", 8)?;
         state.serialize_field("location", &self.location)?;
         state.serialize_field("name", &self.name)?;
         state.serialize_field("md5sum", &self.md5sum)?;
@@ -261,4 +264,3 @@ impl From<SigStore> for StableSignature {
         }
     }
 }
-

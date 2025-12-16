@@ -209,12 +209,16 @@ fn main() -> IndexResult<()> {
             } else {
                 // Process query sequences and create signatures using detected parameters
                 println!("Processing query sequences with detected parameters...");
+                // WHY: We must store raw sequences for query signatures so that matched regions
+                // can be found. The find_matched_regions function requires raw sequences to extract
+                // subsequences. Without stored sequences, matched_regions will be empty and those
+                // SearchResults won't be included in the CSV output.
                 let query_index = ProteomeIndex::new_with_auto_filename(
                     &query,
                     final_ksize,
                     final_scaled,
                     final_encoding.into(),
-                    false, // Don't store raw sequences for query
+                    true, // Store raw sequences so matched regions can be found
                 )?;
 
                 query_index.process_fasta(&query, 1000, 1000)?;
@@ -241,12 +245,26 @@ fn main() -> IndexResult<()> {
             println!("Found {} matches above threshold {}", filtered_results.len(), threshold);
 
             // Output CSV to stdout or file
+            // WHY: We expand each SearchResult into multiple rows - one per matched region.
+            // Each row contains all the SearchResult similarity metrics plus the matched region
+            // information. We only output SearchResults that have matched regions - if there are
+            // no matched regions, the SearchResult is skipped. This ensures every CSV row has
+            // complete matched region information.
+            use kmerseek::search::SearchResultWithRegionCsv;
             if let Some(output_path) = output {
                 println!("Writing results to: {}", output_path.display());
                 let mut writer = csv::Writer::from_path(output_path)?;
 
                 for result in &filtered_results {
-                    writer.serialize(result)?;
+                    // Output one row per matched region
+                    // WHY: Every CSV row must have matched region data. Each SearchResult produces
+                    // multiple CSV rows (one per matched region), with all similarity metrics
+                    // repeated for each region.
+                    for region in &result.matched_regions {
+                        let csv_row =
+                            SearchResultWithRegionCsv::from_result_and_region(result, region);
+                        writer.serialize(&csv_row)?;
+                    }
                 }
 
                 writer.flush()?;
@@ -255,7 +273,15 @@ fn main() -> IndexResult<()> {
                 let mut writer = csv::Writer::from_writer(std::io::stdout());
 
                 for result in &filtered_results {
-                    writer.serialize(result)?;
+                    // Output one row per matched region
+                    // WHY: Every CSV row must have matched region data. Each SearchResult produces
+                    // multiple CSV rows (one per matched region), with all similarity metrics
+                    // repeated for each region.
+                    for region in &result.matched_regions {
+                        let csv_row =
+                            SearchResultWithRegionCsv::from_result_and_region(result, region);
+                        writer.serialize(&csv_row)?;
+                    }
                 }
 
                 writer.flush()?;
