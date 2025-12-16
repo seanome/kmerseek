@@ -207,7 +207,7 @@ impl ProteinSketch {
     ///     10,  // protein ksize
     ///     100, // scaled
     ///     "hp"  // moltype
-    /// )?;
+    /// ).unwrap();
     /// // sketch now has kmer_infos populated and sequences stored
     /// ```
     pub fn from_protein_sequence(
