@@ -104,6 +104,50 @@ impl Drop for ProteomeIndex {
 }
 
 impl ProteomeIndex {
+    /// Create RocksDB options optimized for large datasets
+    ///
+    /// WHY: This helper function centralizes RocksDB configuration to ensure consistent
+    /// settings across all database operations. Setting max_open_files to a reasonable limit
+    /// (10000) prevents "Too many open files" errors on large databases like UniProt while
+    /// still allowing RocksDB to efficiently access SST files. The -1 value (unlimited)
+    /// can exceed system file descriptor limits, causing failures on large databases.
+    ///
+    /// # Arguments
+    /// * `create_if_missing` - Whether to create the database if it doesn't exist
+    ///
+    /// # Returns
+    /// Configured RocksDB Options
+    fn create_rocksdb_options(create_if_missing: bool) -> Options {
+        let mut opts = Options::default();
+        opts.create_if_missing(create_if_missing);
+
+        // Set reasonable max_open_files limit to prevent "Too many open files" errors
+        // WHY: Large databases like UniProt can have thousands of SST files. Setting a limit
+        // of 10000 prevents exceeding system file descriptor limits while still allowing
+        // efficient access. The -1 (unlimited) setting can cause failures on large databases.
+        opts.set_max_open_files(10000);
+
+        // Optimize for read performance
+        opts.set_use_fsync(false);
+        opts.set_allow_mmap_reads(true);
+        opts.set_allow_mmap_writes(true);
+
+        // Optimize for large datasets
+        opts.set_max_bytes_for_level_base(256 * 1024 * 1024); // 256MB
+        opts.set_target_file_size_base(64 * 1024 * 1024); // 64MB
+        opts.set_write_buffer_size(128 * 1024 * 1024); // 128MB write buffer
+
+        // Optimize for bulk loading (only when creating new databases)
+        if create_if_missing {
+            opts.set_disable_auto_compactions(true);
+            opts.set_level_zero_file_num_compaction_trigger(8);
+            opts.set_level_zero_slowdown_writes_trigger(17);
+            opts.set_level_zero_stop_writes_trigger(24);
+        }
+
+        opts
+    }
+
     /// Create a new ProteomeIndex using the builder pattern
     ///
     /// This method returns a builder for configuring index parameters.
@@ -137,24 +181,7 @@ impl ProteomeIndex {
         store_raw_sequences: bool,
     ) -> IndexResult<Self> {
         // Create RocksDB options optimized for large datasets
-        let mut opts = Options::default();
-        opts.create_if_missing(true);
-        // Allow multiple connections to the same database
-        opts.set_max_open_files(-1);
-        opts.set_use_fsync(false);
-        opts.set_allow_mmap_reads(true);
-        opts.set_allow_mmap_writes(true);
-
-        // Optimize for large datasets
-        opts.set_max_bytes_for_level_base(256 * 1024 * 1024); // 256MB
-        opts.set_target_file_size_base(64 * 1024 * 1024); // 64MB
-        opts.set_write_buffer_size(128 * 1024 * 1024); // 128MB write buffer
-
-        // Optimize for bulk loading
-        opts.set_disable_auto_compactions(true);
-        opts.set_level_zero_file_num_compaction_trigger(8);
-        opts.set_level_zero_slowdown_writes_trigger(17);
-        opts.set_level_zero_stop_writes_trigger(24);
+        let opts = Self::create_rocksdb_options(true);
 
         // Open the database
         let db = DB::open(&opts, path)?;
@@ -434,9 +461,8 @@ impl ProteomeIndex {
     /// Note: This method has known issues with serialization and may not work reliably.
     /// For now, it's recommended to use save_state() and load_state() on existing indices.
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
-        // Create RocksDB options
-        let mut opts = Options::default();
-        opts.create_if_missing(false); // Don't create if missing
+        // Create RocksDB options optimized for read operations
+        let opts = Self::create_rocksdb_options(false);
 
         // Open the database
         let db = DB::open(&opts, path)?;
@@ -536,9 +562,8 @@ impl ProteomeIndex {
     /// This method reads the stored metadata to extract the parameters used when
     /// the index was created, enabling autodetection of correct search parameters.
     pub fn get_index_parameters<P: AsRef<Path>>(path: P) -> IndexResult<(u32, u32, String)> {
-        // Create RocksDB options
-        let mut opts = Options::default();
-        opts.create_if_missing(false); // Don't create if missing
+        // Create RocksDB options optimized for read operations
+        let opts = Self::create_rocksdb_options(false);
 
         // Open the database
         let db = DB::open(&opts, path)?;
