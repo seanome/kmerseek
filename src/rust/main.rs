@@ -196,45 +196,71 @@ fn main() -> IndexResult<()> {
             println!("  Verbose output: {}", verbose);
             println!("  Query is pre-indexed: {}\n---", query_is_index);
 
+            // Check if query and target are the same database (all-vs-all search)
+            // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
+            // When doing an all-vs-all search (query == target), we need to reuse the same database
+            // instance instead of opening it twice. This prevents "No locks available" errors.
+            let is_all_vs_all = if query_is_index {
+                // Compare paths using canonicalize to handle symlinks and relative paths
+                let query_path = query.canonicalize().ok().unwrap_or_else(|| query.clone());
+                let target_path = target.canonicalize().ok().unwrap_or_else(|| target.clone());
+                query_path == target_path
+            } else {
+                false
+            };
+
             // Load the target database
             println!("Loading target database...");
             let searcher = ProteinSearcher::load(&target)?;
 
-            // Get query signatures using the detected parameters
-            let query_signatures: Vec<_> = if query_is_index {
-                // Load pre-indexed query database
-                println!("Loading pre-indexed query database...");
-                let query_index = ProteomeIndex::load(&query)?;
-                query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
+            // Perform search - use optimized all-vs-all method if query == target
+            let search_results = if is_all_vs_all {
+                // Use optimized all-vs-all search that avoids cloning signatures
+                // WHY: When query == target, we can use a specialized method that works directly
+                // with references from the index, avoiding expensive clones. This is much more
+                // memory-efficient for large databases and automatically skips self-matches.
+                println!(
+                    "Detected all-vs-all search (query == target), using optimized search method..."
+                );
+                println!("Skipping self-matches (comparing MD5 sums)...");
+                searcher.search_all_vs_all()?
             } else {
-                // Process query sequences and create signatures using detected parameters
-                println!("Processing query sequences with detected parameters...");
-                // WHY: We must store raw sequences for query signatures so that matched regions
-                // can be found. The find_matched_regions function requires raw sequences to extract
-                // subsequences. Without stored sequences, matched_regions will be empty and those
-                // SearchResults won't be included in the CSV output.
-                let query_index = ProteomeIndex::new_with_auto_filename(
-                    &query,
-                    final_ksize,
-                    final_scaled,
-                    final_encoding.into(),
-                    true, // Store raw sequences so matched regions can be found
-                )?;
+                // Get query signatures using the detected parameters
+                let query_signatures: Vec<_> = if query_is_index {
+                    // Load pre-indexed query database
+                    println!("Loading pre-indexed query database...");
+                    let query_index = ProteomeIndex::load(&query)?;
+                    query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
+                } else {
+                    // Process query sequences and create signatures using detected parameters
+                    println!("Processing query sequences with detected parameters...");
+                    // WHY: We must store raw sequences for query signatures so that matched regions
+                    // can be found. The find_matched_regions function requires raw sequences to extract
+                    // subsequences. Without stored sequences, matched_regions will be empty and those
+                    // SearchResults won't be included in the CSV output.
+                    let query_index = ProteomeIndex::new_with_auto_filename(
+                        &query,
+                        final_ksize,
+                        final_scaled,
+                        final_encoding.into(),
+                        true, // Store raw sequences so matched regions can be found
+                    )?;
 
-                query_index.process_fasta(&query, 1000, 1000)?;
-                query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
+                    query_index.process_fasta(&query, 1000, 1000)?;
+                    query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
+                };
+
+                if query_signatures.is_empty() {
+                    eprintln!("No query signatures found!");
+                    return Ok(());
+                }
+
+                println!("Found {} query signatures", query_signatures.len());
+
+                // Perform comprehensive search (includes TF-IDF and overlap probability calculations)
+                println!("Performing comprehensive search...");
+                searcher.search(&query_signatures)?
             };
-
-            if query_signatures.is_empty() {
-                eprintln!("No query signatures found!");
-                return Ok(());
-            }
-
-            println!("Found {} query signatures", query_signatures.len());
-
-            // Perform comprehensive search (includes TF-IDF and overlap probability calculations)
-            println!("Performing comprehensive search...");
-            let search_results = searcher.search(&query_signatures)?;
 
             // Filter results by threshold
             let filtered_results: Vec<_> = search_results

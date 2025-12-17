@@ -395,6 +395,65 @@ impl ProteinSearcher {
         Ok(sorted_results)
     }
 
+    /// Perform all-vs-all search without cloning signatures
+    ///
+    /// WHY: This method is optimized for all-vs-all searches where query and target are the same
+    /// database. Instead of cloning all signatures (which is expensive for large databases), this
+    /// method works directly with references from the index. We collect only the MD5 keys (cheap
+    /// String clones) and parallelize over those, looking up the actual signatures in the DashMap.
+    /// This avoids cloning the large ProteinSketch objects while still enabling parallel processing.
+    /// The method also automatically skips self-matches by comparing MD5 sums in compare().
+    ///
+    /// # Returns
+    /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    #[must_use = "search results should be used to process query matches"]
+    pub fn search_all_vs_all(&self) -> Result<Vec<SearchResult>> {
+        let signatures = self.index.get_signatures();
+
+        // Collect MD5 keys for parallel iteration (cheap String clones, not ProteinSketch clones)
+        // WHY: DashMap doesn't implement ParallelIterator directly. By collecting keys first,
+        // we can parallelize over them and look up the actual signatures in the DashMap. This
+        // avoids cloning the large ProteinSketch objects while still enabling parallel processing.
+        let md5_keys: Vec<String> = signatures.iter().map(|entry| entry.key().clone()).collect();
+
+        // Perform parallel search across all signatures
+        // WHY: We iterate over MD5 keys in parallel, then look up the actual signatures in the
+        // DashMap. Each signature is used as both query and target, but we skip self-matches
+        // in the compare() method by comparing MD5 sums.
+        let all_results: Vec<SearchResult> = md5_keys
+            .par_iter()
+            .flat_map(|query_md5| {
+                // Look up query signature by MD5
+                // WHY: We use filter_map to handle the Option from get() gracefully. If the
+                // signature doesn't exist (shouldn't happen, but safe to handle), we skip it.
+                signatures.get(query_md5).map(|query_entry| {
+                    let query = query_entry.value();
+
+                    // Prepare query once - this pre-computes mins as HashSet and TF-IDF
+                    let prepared = self.prepare_query(query);
+
+                    // Search this query against all targets (including itself, but compare() will skip self-matches)
+                    signatures
+                        .iter()
+                        .filter_map(|target_entry| {
+                            let target = target_entry.value();
+                            self.compare(&prepared, target)
+                        })
+                        .collect::<Vec<_>>()
+                })
+            })
+            .flatten()
+            .collect();
+
+        // Sort by containment score (descending) - this is the primary ranking metric
+        let mut sorted_results = all_results;
+        sorted_results.sort_by(|a, b| {
+            b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
+        });
+
+        Ok(sorted_results)
+    }
+
     /// Calculate comprehensive similarity between query and target signatures including TF-IDF and overlap probability
     ///
     /// This method uses the standalone `calculate_similarity` function for the core calculation,
@@ -423,6 +482,15 @@ impl ProteinSearcher {
         query: &PreparedQuery<'_>,
         target: &ProteinSketch,
     ) -> Option<SearchResult> {
+        // Skip self-matches by comparing MD5 sums
+        // WHY: In all-vs-all searches, we don't want to compare a signature against itself.
+        // MD5 sum is a unique identifier for each signature, so comparing MD5 sums is the
+        // most reliable way to detect self-matches. This is idiomatic Rust - we use early
+        // returns to avoid unnecessary computation when we know the result will be invalid.
+        if query.sketch.signature().md5sum == target.signature().md5sum {
+            return None;
+        }
+
         // Calculate intersection for overlap probability check
         let intersection = query.sketch.intersect(target);
 
