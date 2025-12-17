@@ -105,11 +105,11 @@ fn main() -> IndexResult<()> {
 
     match cli.command {
         Commands::Index { input, output, ksize, scaled, encoding, progress_interval } => {
-            println!("Indexing FASTA file: {}", input.display());
+            eprintln!("Indexing FASTA file: {}", input.display());
 
             // Determine output path
             let output_path = if let Some(output) = output {
-                println!("Output database: {}", output.display());
+                eprintln!("Output database: {}", output.display());
                 output
             } else {
                 // Auto-generate filename based on input file
@@ -131,15 +131,15 @@ fn main() -> IndexResult<()> {
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .join(generated_filename);
 
-                println!("Auto-generated output database: {}", output_path.display());
+                eprintln!("Auto-generated output database: {}", output_path.display());
                 output_path
             };
 
-            println!("\n-------\nK-mer size: {}", ksize);
-            println!("Scaled: {}", scaled);
-            println!("Encoding: {:?}", encoding);
-            println!("Progress interval: {}", progress_interval);
-            println!("-------\n");
+            eprintln!("\n-------\nK-mer size: {}", ksize);
+            eprintln!("Scaled: {}", scaled);
+            eprintln!("Encoding: {:?}", encoding);
+            eprintln!("Progress interval: {}", progress_interval);
+            eprintln!("-------\n");
 
             // Create the index
             let index = ProteomeIndex::new(
@@ -151,18 +151,18 @@ fn main() -> IndexResult<()> {
             )?;
 
             // Process the FASTA file
-            println!("Processing FASTA file...");
+            eprintln!("Processing FASTA file...");
             index.process_fasta(&input, progress_interval, 1000)?;
 
             // Enable compactions for better read performance
-            println!("Optimizing database for read operations...");
+            eprintln!("Optimizing database for read operations...");
             index.enable_compactions()?;
 
             // Save the index state for loading
             index.save_state()?;
 
-            println!("Indexing completed successfully!");
-            println!("Database saved to: {}", output_path.display());
+            eprintln!("Indexing completed successfully!");
+            eprintln!("Database saved to: {}", output_path.display());
         }
         Commands::Search {
             query,
@@ -175,12 +175,12 @@ fn main() -> IndexResult<()> {
             verbose,
             query_is_index,
         } => {
-            println!("Searching query sequences against target database");
-            println!("Query: {}", query.display());
-            println!("Target: {}", target.display());
+            eprintln!("Searching query sequences against target database");
+            eprintln!("Query: {}", query.display());
+            eprintln!("Target: {}", target.display());
 
             // Autodetect parameters from the target database
-            println!("Autodetecting parameters from target database...");
+            eprintln!("Autodetecting parameters from target database...");
             let (detected_ksize, detected_scaled, detected_moltype) =
                 ProteomeIndex::get_index_parameters(&target)?;
 
@@ -188,13 +188,13 @@ fn main() -> IndexResult<()> {
             let final_scaled = assign_with_warning(scaled, detected_scaled, "scaled");
             let final_encoding = assign_encoding(encoding, &detected_moltype);
 
-            println!("\n---\nUsing parameters:");
-            println!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
-            println!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
-            println!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
-            println!("  Threshold: {}", threshold);
-            println!("  Verbose output: {}", verbose);
-            println!("  Query is pre-indexed: {}\n---", query_is_index);
+            eprintln!("\n---\nUsing parameters:");
+            eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
+            eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
+            eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            eprintln!("  Threshold: {}", threshold);
+            eprintln!("  Verbose output: {}", verbose);
+            eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -210,7 +210,7 @@ fn main() -> IndexResult<()> {
             };
 
             // Load the target database
-            println!("Loading target database...");
+            eprintln!("Loading target database...");
             let searcher = ProteinSearcher::load(&target)?;
 
             // Perform search - use optimized all-vs-all method if query == target
@@ -219,21 +219,21 @@ fn main() -> IndexResult<()> {
                 // WHY: When query == target, we can use a specialized method that works directly
                 // with references from the index, avoiding expensive clones. This is much more
                 // memory-efficient for large databases and automatically skips self-matches.
-                println!(
+                eprintln!(
                     "Detected all-vs-all search (query == target), using optimized search method..."
                 );
-                println!("Skipping self-matches (comparing MD5 sums)...");
+                eprintln!("Skipping self-matches (comparing MD5 sums)...");
                 searcher.search_all_vs_all()?
             } else {
                 // Get query signatures using the detected parameters
                 let query_signatures: Vec<_> = if query_is_index {
                     // Load pre-indexed query database
-                    println!("Loading pre-indexed query database...");
+                    eprintln!("Loading pre-indexed query database...");
                     let query_index = ProteomeIndex::load(&query)?;
                     query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
                 } else {
                     // Process query sequences and create signatures using detected parameters
-                    println!("Processing query sequences with detected parameters...");
+                    eprintln!("Processing query sequences with detected parameters...");
                     // WHY: We must store raw sequences for query signatures so that matched regions
                     // can be found. The find_matched_regions function requires raw sequences to extract
                     // subsequences. Without stored sequences, matched_regions will be empty and those
@@ -255,10 +255,10 @@ fn main() -> IndexResult<()> {
                     return Ok(());
                 }
 
-                println!("Found {} query signatures", query_signatures.len());
+                eprintln!("Found {} query signatures", query_signatures.len());
 
                 // Perform comprehensive search (includes TF-IDF and overlap probability calculations)
-                println!("Performing comprehensive search...");
+                eprintln!("Performing comprehensive search...");
                 searcher.search(&query_signatures)?
             };
 
@@ -268,7 +268,7 @@ fn main() -> IndexResult<()> {
                 .filter(|result| result.containment >= threshold)
                 .collect();
 
-            println!("Found {} matches above threshold {}", filtered_results.len(), threshold);
+            eprintln!("Found {} matches above threshold {}", filtered_results.len(), threshold);
 
             // Output CSV to stdout or file
             // WHY: We expand each SearchResult into multiple rows - one per matched region.
@@ -278,7 +278,7 @@ fn main() -> IndexResult<()> {
             // complete matched region information.
             use kmerseek::search::SearchResultWithRegionCsv;
             if let Some(output_path) = output {
-                println!("Writing results to: {}", output_path.display());
+                eprintln!("Writing results to: {}", output_path.display());
                 let mut writer = csv::Writer::from_path(output_path)?;
 
                 for result in &filtered_results {
@@ -314,8 +314,10 @@ fn main() -> IndexResult<()> {
             }
 
             // Display summary statistics (TF-IDF and overlap probabilities are now included in results)
-            println!("\n=== Search Summary ===");
-            println!("Total matches found: {}", filtered_results.len());
+            // WHY: Summary statistics go to stderr so they don't interfere with CSV output to stdout.
+            // This allows users to pipe CSV data to other tools while still seeing progress and summary info.
+            eprintln!("\n=== Search Summary ===");
+            eprintln!("Total matches found: {}", filtered_results.len());
             if !filtered_results.is_empty() {
                 let avg_containment: f64 =
                     filtered_results.iter().map(|r| r.containment).sum::<f64>()
@@ -326,9 +328,9 @@ fn main() -> IndexResult<()> {
                     filtered_results.iter().map(|r| r.overlap_probability).sum::<f64>()
                         / filtered_results.len() as f64;
 
-                println!("Average containment: {:.6}", avg_containment);
-                println!("Average TF-IDF: {:.6}", avg_tfidf);
-                println!("Average overlap probability: {:.6}", avg_overlap_prob);
+                eprintln!("Average containment: {:.6}", avg_containment);
+                eprintln!("Average TF-IDF: {:.6}", avg_tfidf);
+                eprintln!("Average overlap probability: {:.6}", avg_overlap_prob);
             }
         }
     }
@@ -362,7 +364,8 @@ fn assign_with_warning(value: u32, detected_value: u32, value_name: &str) -> u32
     // Use detected parameters, but allow user overrides
     let final_value = if value != detected_value {
         // If user specified non-default ksize
-        println!(
+        // WHY: Warnings go to stderr so they don't interfere with CSV output to stdout.
+        eprintln!(
             "Warning: Overriding detected {value_name} {detected_value} with user-specified {value}",
         );
         value
