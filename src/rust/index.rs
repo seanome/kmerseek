@@ -906,15 +906,94 @@ impl ProteomeIndex {
         self.store_signatures(protein_signatures.to_vec())
     }
 
+    /// Validate that a FASTA file exists and is readable
+    ///
+    /// WHY: This function centralizes file validation logic, making `process_fasta` easier to read.
+    /// It provides clear, actionable error messages for common file access issues (permissions,
+    /// Google Drive sync, etc.). This is idiomatic Rust - we extract validation logic into
+    /// well-named functions and provide helpful error messages.
+    ///
+    /// # Arguments
+    /// * `fasta_path` - Path to the FASTA file to validate
+    ///
+    /// # Returns
+    /// `Ok(())` if the file is valid and readable, `ParseError` with helpful message otherwise
+    fn validate_fasta_file_access<P: AsRef<Path>>(fasta_path: P) -> IndexResult<()> {
+        let fasta_path = fasta_path.as_ref();
+
+        // Check if file exists
+        if !fasta_path.exists() {
+            return Err(IndexError::ParseError(format!(
+                "FASTA file not found: {}\nCurrent working directory: {}",
+                fasta_path.display(),
+                std::env::current_dir()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|_| "unknown".to_string())
+            )));
+        }
+
+        // Check if file is readable
+        // WHY: On macOS, Google Drive files can exist but not be readable if they're placeholders
+        // or haven't fully synced. Checking readability before attempting to open provides a
+        // clearer error message than the generic "Operation not permitted" error.
+        if let Ok(metadata) = std::fs::metadata(fasta_path) {
+            // Check if it's actually a file (not a directory)
+            if metadata.is_dir() {
+                return Err(IndexError::ParseError(format!(
+                    "Path is a directory, not a file: {}",
+                    fasta_path.display()
+                )));
+            }
+
+            // Check permissions - try to open the file to see if we can read it
+            // WHY: On macOS, Google Drive files can appear to exist but fail to open if they're
+            // placeholders or require special permissions. Attempting to open the file gives us
+            // a better error message than just checking metadata.
+            match std::fs::File::open(fasta_path) {
+                Ok(_) => {
+                    // File can be opened, proceed
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+                    return Err(IndexError::ParseError(format!(
+                        "Permission denied reading file: {}\nThis may happen if:\n- The file is in Google Drive and hasn't fully synced (check Google Drive sync status)\n- The file requires special permissions (check file permissions with 'ls -l')\n- The file is locked by another process\nError details: {}",
+                        fasta_path.display(),
+                        e
+                    )));
+                }
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                    // File disappeared between exists() check and open() - rare but possible
+                    return Err(IndexError::ParseError(format!(
+                        "File disappeared: {}\nThe file existed when we checked, but couldn't be opened.\nThis may happen if the file is in Google Drive and is a placeholder.\nTry: Wait for Google Drive to finish syncing, or copy the file to a local directory.",
+                        fasta_path.display()
+                    )));
+                }
+                Err(e) => {
+                    // Other I/O errors - provide context
+                    return Err(IndexError::ParseError(format!(
+                        "Cannot open file: {}\nError: {}\nIf this is a Google Drive file, ensure it has fully synced.\nYou can check sync status in Google Drive settings.",
+                        fasta_path.display(),
+                        e
+                    )));
+                }
+            }
+        }
+
+        Ok(())
+    }
     /// Process a protein FASTA file with automatic compression detection and parallel processing.
     ///
     /// This method reads a FASTA file with automatic compression detection (gzip, bzip2, xz, zstd,
-    /// uncompressed), validates each protein sequence for amino acid ambiguity, creates protein
-    /// signatures for each sequence, and stores them in the index using parallel batch processing.
+    /// uncompressed), validates file access, validates each protein sequence for amino acid ambiguity,
+    /// creates protein signatures for each sequence, and stores them in the index using parallel batch processing.
     ///
+    /// File validation is separated into `validate_fasta_file_access` for clarity and testability.
     /// Each sequence is validated using the same amino acid validation as `create_protein_signature`.
     /// If any sequence contains invalid amino acids, the entire operation will fail with an error
     /// describing the first invalid amino acid encountered.
+    ///
+    /// WHY: This method centralizes FASTA processing logic, handling file validation, parsing,
+    /// and batch processing. This is idiomatic Rust - we separate concerns and make each function
+    /// focused on a single responsibility.
     ///
     /// # Arguments
     ///
@@ -926,6 +1005,14 @@ impl ProteomeIndex {
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
     /// The error will contain details about any invalid amino acids found in the sequences.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ParseError` if:
+    /// - The file doesn't exist or cannot be accessed
+    /// - The file is not readable (permissions, Google Drive sync issues, etc.)
+    /// - The file format is invalid or cannot be parsed
+    /// - Any sequence contains invalid amino acids
     ///
     /// # Examples
     ///
@@ -963,27 +1050,41 @@ impl ProteomeIndex {
         use needletail::parse_fastx_file;
 
         if progress_interval > 0 {
-            println!("Reading FASTA file with automatic compression detection and parallel processing...");
+            eprintln!("Reading FASTA file with automatic compression detection and parallel processing...");
         }
 
-        // Validate that the file exists before attempting to parse
-        // WHY: Providing a clear error message when the file doesn't exist is better than
-        // letting needletail fail with a generic I/O error. This helps users understand
-        // if they're using the wrong path or running from the wrong directory.
+        // Validate file access before attempting to parse
+        // WHY: We validate file access separately to keep process_fasta focused on processing.
+        // This makes the code easier to read and the validation logic easier to test.
+        Self::validate_fasta_file_access(&fasta_path)?;
+
         let fasta_path = fasta_path.as_ref();
-        if !fasta_path.exists() {
-            return Err(IndexError::ParseError(format!(
-                "FASTA file not found: {}. Current working directory: {}",
-                fasta_path.display(),
-                std::env::current_dir()
-                    .map(|p| p.display().to_string())
-                    .unwrap_or_else(|_| "unknown".to_string())
-            )));
-        }
 
         // Open and parse the FASTA file using needletail with auto-detection
-        let mut reader =
-            parse_fastx_file(fasta_path).map_err(|e| IndexError::ParseError(e.to_string()))?;
+        // WHY: We've already validated the file exists and is readable, so if needletail fails
+        // here, it's likely a format/compression issue rather than a permissions issue.
+        let mut reader = parse_fastx_file(fasta_path).map_err(|e| {
+            // Provide context about what we were trying to do
+            let error_msg = e.to_string();
+            let mut diagnostic = format!(
+                "Failed to parse FASTA file: {}\nError: {}",
+                fasta_path.display(),
+                error_msg
+            );
+
+            // Add specific help for common error patterns
+            if error_msg.contains("Operation not permitted") || error_msg.contains("os error 1") {
+                diagnostic.push_str(
+                    "\n\nThis error often occurs with Google Drive files on macOS.\nSolutions:\n1. Ensure the file has fully synced in Google Drive\n2. Copy the file to a local directory (not in Google Drive)\n3. Check file permissions: ls -l '",
+                );
+                diagnostic.push_str(&fasta_path.display().to_string());
+                diagnostic.push_str(
+                    "'\n4. Try opening the file in another program to verify it's accessible",
+                );
+            }
+
+            IndexError::ParseError(diagnostic)
+        })?;
 
         // Stream records and process in parallel batches
         let mut record_count = 0;
