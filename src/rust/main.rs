@@ -54,13 +54,13 @@ enum Commands {
         #[arg(short, long)]
         output: Option<PathBuf>,
 
-        /// K-mer size (must match the database)
-        #[arg(short, long, default_value = "10")]
-        ksize: u32,
+        /// K-mer size (must match the database; if not provided, will use database value)
+        #[arg(short, long)]
+        ksize: Option<u32>,
 
-        /// Scaled factor (must match the database)
-        #[arg(short, long, default_value = "1")]
-        scaled: u32,
+        /// Scaled factor (must match the database; if not provided, will use database value)
+        #[arg(short, long)]
+        scaled: Option<u32>,
 
         /// Protein encoding method (must match the database)
         #[arg(short, long, default_value = "protein")]
@@ -184,9 +184,19 @@ fn main() -> IndexResult<()> {
             let (detected_ksize, detected_scaled, detected_moltype) =
                 ProteomeIndex::get_index_parameters(&target)?;
 
-            let final_ksize = assign_with_warning(ksize, detected_ksize, "ksize");
-            let final_scaled = assign_with_warning(scaled, detected_scaled, "scaled");
-            let final_encoding = assign_encoding(encoding, &detected_moltype);
+            // Validate and assign all parameters
+            // WHY: This method centralizes parameter validation logic, making the main search
+            // command handler much easier to read. It validates that user-provided parameters
+            // match the database, or uses detected values if not provided. This is idiomatic
+            // Rust - we extract complex logic into well-named methods for clarity.
+            let (final_ksize, final_scaled, final_encoding) = validate_and_assign_parameters(
+                ksize,
+                scaled,
+                encoding,
+                detected_ksize,
+                detected_scaled,
+                &detected_moltype,
+            )?;
 
             eprintln!("\n---\nUsing parameters:");
             eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
@@ -338,39 +348,132 @@ fn main() -> IndexResult<()> {
     Ok(())
 }
 
-fn assign_encoding(encoding: ProteinEncoding, detected_moltype: &str) -> ProteinEncoding {
-    let final_encoding = if encoding != ProteinEncoding::Protein {
-        // If user specified non-default encoding
-        eprintln!(
-            "Warning: Overriding detected encoding {detected_moltype} with user-specified {encoding:?}",
-        );
-        encoding
-    } else {
-        // Convert detected moltype string to enum
-        match detected_moltype {
-            "protein" => ProteinEncoding::Protein,
-            "dayhoff" => ProteinEncoding::Dayhoff,
-            "hp" => ProteinEncoding::Hp,
-            _ => {
-                eprintln!("Warning: Unknown detected encoding {detected_moltype}, using protein",);
-                ProteinEncoding::Protein
-            }
+fn assign_encoding(
+    encoding: ProteinEncoding,
+    detected_moltype: &str,
+) -> kmerseek::errors::IndexResult<ProteinEncoding> {
+    // Convert detected moltype string to enum
+    // WHY: We need to compare the user-provided encoding with the detected encoding.
+    // The detected encoding comes from the database as a string, so we convert it to
+    // the enum type for comparison.
+    let detected_encoding = match detected_moltype {
+        "protein" => ProteinEncoding::Protein,
+        "dayhoff" => ProteinEncoding::Dayhoff,
+        "hp" => ProteinEncoding::Hp,
+        _ => {
+            return Err(kmerseek::errors::IndexError::ValidationError {
+                message: format!(
+                    "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp",
+                    detected_moltype
+                ),
+            });
         }
     };
-    final_encoding
+
+    // Validate encoding: if user provided encoding doesn't match database, error
+    // WHY: The database encoding is authoritative. If the user explicitly provides
+    // an encoding that doesn't match, that's an error. This prevents silent failures
+    // where searches would produce incorrect results. However, since encoding has
+    // a default value, we can't distinguish "user specified" from "using default",
+    // so we only error if it's clearly wrong (not the default and doesn't match).
+    // In practice, users should not specify --encoding and let it autodetect.
+    if encoding != detected_encoding && encoding != ProteinEncoding::Protein {
+        // User explicitly provided a non-default encoding that doesn't match
+        return Err(kmerseek::errors::IndexError::ValidationError {
+            message: format!(
+                "Encoding mismatch: database has encoding={}, but you specified --encoding={:?}.\n\
+                The encoding must match the database. Remove --encoding to use the database value ({:?}).",
+                detected_moltype, encoding, detected_encoding
+            ),
+        });
+    }
+
+    Ok(detected_encoding)
 }
 
-fn assign_with_warning(value: u32, detected_value: u32, value_name: &str) -> u32 {
-    // Use detected parameters, but allow user overrides
-    let final_value = if value != detected_value {
-        // If user specified non-default ksize
-        // WHY: Warnings go to stderr so they don't interfere with CSV output to stdout.
-        eprintln!(
-            "Warning: Overriding detected {value_name} {detected_value} with user-specified {value}",
-        );
-        value
-    } else {
-        detected_value
+/// Validate and assign search parameters from user input and database detection
+///
+/// WHY: This function centralizes the parameter validation logic, making the main search
+/// command handler easier to read. It validates that user-provided parameters match the
+/// database (which is authoritative), or uses detected values if not provided. This follows
+/// idiomatic Rust patterns: extract complex logic into well-named functions, validate
+/// preconditions, and provide clear error messages.
+///
+/// # Arguments
+/// * `user_ksize` - User-provided ksize (None if not specified)
+/// * `user_scaled` - User-provided scaled (None if not specified)
+/// * `user_encoding` - User-provided encoding (may be default value)
+/// * `detected_ksize` - Ksize detected from database
+/// * `detected_scaled` - Scaled detected from database
+/// * `detected_moltype` - Moltype detected from database (as string)
+///
+/// # Returns
+/// Tuple of (final_ksize, final_scaled, final_encoding) or ValidationError if mismatch
+fn validate_and_assign_parameters(
+    user_ksize: Option<u32>,
+    user_scaled: Option<u32>,
+    user_encoding: ProteinEncoding,
+    detected_ksize: u32,
+    detected_scaled: u32,
+    detected_moltype: &str,
+) -> IndexResult<(u32, u32, ProteinEncoding)> {
+    // Validate and assign ksize: use detected if not provided, error if mismatch
+    // WHY: The database parameters are authoritative. If the user explicitly provides
+    // a ksize that doesn't match, that's an error (they're trying to search with wrong
+    // parameters). If they don't provide ksize, we use the detected value. This is
+    // idiomatic Rust - we validate preconditions and fail fast with clear error messages.
+    let final_ksize = match user_ksize {
+        Some(ksize) if ksize != detected_ksize => {
+            return Err(kmerseek::errors::IndexError::ValidationError {
+                message: format!(
+                    "K-mer size mismatch: database has ksize={}, but you specified --ksize={}.\n\
+                    The ksize must match the database. Remove --ksize to use the database value ({}).",
+                    detected_ksize, ksize, detected_ksize
+                ),
+            });
+        }
+        Some(ksize) => {
+            // User provided ksize and it matches - use it (though it's the same as detected)
+            ksize
+        }
+        None => {
+            // User didn't provide ksize - use detected value
+            eprintln!(
+                "Using detected ksize: {} (not specified, using database value)",
+                detected_ksize
+            );
+            detected_ksize
+        }
     };
-    final_value
+
+    // Validate and assign scaled: use detected if not provided, error if mismatch
+    // WHY: Same logic as ksize - database parameters are authoritative.
+    let final_scaled = match user_scaled {
+        Some(scaled) if scaled != detected_scaled => {
+            return Err(kmerseek::errors::IndexError::ValidationError {
+                message: format!(
+                    "Scaled factor mismatch: database has scaled={}, but you specified --scaled={}.\n\
+                    The scaled factor must match the database. Remove --scaled to use the database value ({}).",
+                    detected_scaled, scaled, detected_scaled
+                ),
+            });
+        }
+        Some(scaled) => {
+            // User provided scaled and it matches - use it
+            scaled
+        }
+        None => {
+            // User didn't provide scaled - use detected value
+            eprintln!(
+                "Using detected scaled: {} (not specified, using database value)",
+                detected_scaled
+            );
+            detected_scaled
+        }
+    };
+
+    // Validate and assign encoding
+    let final_encoding = assign_encoding(user_encoding, detected_moltype)?;
+
+    Ok((final_ksize, final_scaled, final_encoding))
 }
