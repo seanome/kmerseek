@@ -1754,20 +1754,18 @@ mod tests {
         // higher IDF values, making TF-IDF > 0. In a real database search, TF-IDF helps
         // identify matches based on rare, significant k-mers.
         assert!(
-            bcl2_result.tfidf >= 0.0,
-            "TF-IDF should be non-negative, got {}",
+            bcl2_result.tfidf == 565.119680433367,
+            "TF-IDF should be 565.119680433367, got {}",
             bcl2_result.tfidf
         );
-        // Note: TF-IDF might still be 0 if all query k-mers appear in all database signatures,
-        // but with a diverse database like bcl2_first25, we expect some variation
 
         // Verify overlap probability is meaningful (should not be 1.0 with multiple signatures)
         // WHY: With multiple signatures, k-mers will have varying frequencies. Overlap probability
         // indicates how common the intersecting k-mers are across the database. Values < 1.0
         // indicate that the k-mers are not universal across all signatures.
         assert!(
-            bcl2_result.overlap_probability >= 0.0 && bcl2_result.overlap_probability <= 1.0,
-            "Overlap probability should be in [0, 1], got {}",
+            bcl2_result.overlap_probability == 1.0,
+            "Overlap probability should be 1.0, got {}",
             bcl2_result.overlap_probability
         );
         // Note: Overlap probability might still be 1.0 if all intersecting k-mers appear in

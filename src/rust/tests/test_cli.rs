@@ -3,6 +3,8 @@ use predicates::prelude::*;
 use std::process::Command;
 use tempfile::tempdir;
 
+use approx::assert_relative_eq;
+
 use crate::search::SearchResultWithRegionCsv;
 use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 
@@ -200,7 +202,11 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Verify CSV file is not empty
     let csv_content = std::fs::read_to_string(&output_csv)?;
     assert!(!csv_content.is_empty(), "CSV file should not be empty");
-    assert!(csv_content.lines().count() > 1, "CSV should have at least a header and one data row");
+    assert!(
+        csv_content.lines().count() == 364,
+        "CSV should have 364 rows, found {} rows",
+        csv_content.lines().count()
+    );
 
     // Read and verify CSV contents
     // WHY: We deserialize into SearchResultWithRegionCsv which is the same struct used for CSV output.
@@ -241,26 +247,22 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(record.moltype, "hp", "Moltype should be hp");
 
             // Verify we have intersecting k-mers
-            assert!(
-                record.n_intersecting_hashes > 0,
-                "Should have intersecting k-mers between CED9 and BCL2, got {}",
+            // WHY: These values come from the compare test in search.rs (BCL2_CED9_K12 constant),
+            // which uses sourmash sig overlap to get ground truth values for k=12, scaled=1, hp encoding.
+            assert_eq!(
+                record.n_intersecting_hashes, 24,
+                "Should have 24 intersecting k-mers between CED9 and BCL2, got {}",
                 record.n_intersecting_hashes
             );
 
-            // Verify similarity metrics are valid
-            assert!(
-                record.containment > 0.0 && record.containment <= 1.0,
-                "Containment should be in [0, 1], got {}",
-                record.containment
-            );
-            assert!(
-                record.jaccard > 0.0 && record.jaccard <= 1.0,
-                "Jaccard should be in [0, 1], got {}",
-                record.jaccard
-            );
+            // Verify similarity metrics match expected values from compare test
+            assert_relative_eq!(record.containment, 0.09091, epsilon = 1e-5);
+            assert_relative_eq!(record.jaccard, 0.05217, epsilon = 1e-5);
+            assert_relative_eq!(record.max_containment, 0.10909, epsilon = 1e-5);
+            assert_relative_eq!(record.containment_target_in_query, 0.10909, epsilon = 1e-5);
 
             // Verify TF-IDF is meaningful (should not be 0 with multiple signatures)
-            assert!(record.tfidf >= 0.0, "TF-IDF should be non-negative, got {}", record.tfidf);
+            assert_relative_eq!(record.tfidf, 565.119680433367, epsilon = 1e-5);
         }
     }
 
