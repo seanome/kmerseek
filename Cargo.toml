@@ -55,6 +55,16 @@ cargo-tarpaulin = "0.28"
 rstest = "0.26.1"
 approx = "0.5"
 
+[profile.dev]
+# Reduce debuginfo to save disk space in CI
+# 1 = line tables only (minimal, saves significant space)
+debug = 1
+incremental = true
+
+[profile.test]
+# Reduce debuginfo for tests to save disk space
+debug = 1
+
 [profile.release]
 debug = "line-tables-only"
 
