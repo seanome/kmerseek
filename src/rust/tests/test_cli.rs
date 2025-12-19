@@ -46,7 +46,7 @@ fn test_cli_index_basic() -> Result<(), Box<dyn std::error::Error>> {
         "protein",
     ]);
 
-    cmd.assert().success().stdout(predicate::str::contains("Indexing completed successfully!"));
+    cmd.assert().success().stderr(predicate::str::contains("Indexing completed successfully!"));
 
     // Check that the output database was created
     assert!(output_path.exists());
@@ -72,7 +72,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
         "hp",
     ]);
 
-    cmd.assert().success().stdout(predicate::str::contains("Indexing completed successfully!"));
+    cmd.assert().success().stderr(predicate::str::contains("Indexing completed successfully!"));
 
     // Check that the output database was created
     assert!(output_path.exists());
@@ -100,7 +100,7 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
             encoding,
         ]);
 
-        cmd.assert().success().stdout(predicate::str::contains("Indexing completed successfully!"));
+        cmd.assert().success().stderr(predicate::str::contains("Indexing completed successfully!"));
 
         // Check that the output database was created
         assert!(output_path.exists());

@@ -1108,7 +1108,7 @@ impl ProteomeIndex {
 
             // Print progress if interval is set and we've reached the interval
             if progress_interval > 0 && record_count % progress_interval as usize == 0 {
-                println!("Read {} sequences...", record_count);
+                eprintln!("Read {} sequences...", record_count);
             }
         }
 
@@ -1121,7 +1121,7 @@ impl ProteomeIndex {
         self.save_state()?;
 
         if progress_interval > 0 {
-            println!("Successfully processed and stored {} sequences.", record_count);
+            eprintln!("Successfully processed and stored {} sequences.", record_count);
         }
         Ok(())
     }
@@ -1175,7 +1175,7 @@ impl ProteomeIndex {
 
         // Print progress if needed
         if progress_interval > 0 && total_processed % progress_interval as usize == 0 {
-            println!("Processed {} sequences...", total_processed);
+            eprintln!("Processed {} sequences...", total_processed);
         }
 
         Ok(())

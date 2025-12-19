@@ -1110,13 +1110,10 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let temp_path = temp_dir.path();
 
-        // Create a simple test FASTA file for query
-        let query_fasta = temp_path.join("query.fasta");
-        std::fs::write(&query_fasta, ">test_query\nATCGATCGATCGATCG")?;
-
-        // Create a simple test FASTA file for target
-        let target_fasta = temp_path.join("target.fasta");
-        std::fs::write(&target_fasta, ">test_target\nATCGATCGATCGATCG")?;
+        // Use the same test FASTA file for both query and target to ensure a match
+        // WHY: Using a known working test file (CED9) ensures the test will work correctly.
+        // This is simpler and more reliable than creating synthetic sequences.
+        let test_fasta = TEST_CED9_FASTA;
 
         // Create target index
         let target_index_path = temp_path.join("target_index");
@@ -1128,21 +1125,20 @@ mod tests {
             false, // store_raw_sequences
         )?;
 
-        target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        target_index.process_fasta(test_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher
         let searcher = ProteinSearcher::new(target_index);
 
         // Create query index
         let query_index = ProteomeIndex::new_with_auto_filename(
-            &query_fasta,
-            10,    // ksize
+            test_fasta, 10,    // ksize
             1,     // scaled
             "hp",  // moltype
             false, // store_raw_sequences
         )?;
 
-        query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        query_index.process_fasta(test_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Get query signatures
         let query_signatures: Vec<_> =
@@ -1154,15 +1150,15 @@ mod tests {
         let results = searcher.search(&query_signatures)?;
 
         // Should find at least one match (exact match)
-        assert!(!results.is_empty(), "Should find at least one match");
+        assert!(results.len() == 1, "Should find exactly one match");
 
         // Check that the first result has reasonable values
         let first_result = &results[0];
-        assert_eq!(first_result.query_name, "test_query");
-        assert_eq!(first_result.target_name, "test_target");
-        assert!(first_result.containment > 0.0);
-        assert!(first_result.jaccard > 0.0);
-        assert!(first_result.n_intersecting_hashes > 0);
+        assert!(first_result.query_name.contains("CED9_CAEEL"));
+        assert!(first_result.target_name.contains("CED9_CAEEL"));
+        assert!(first_result.containment == 1.0);
+        assert!(first_result.jaccard == 1.0);
+        assert!(first_result.n_intersecting_hashes == 10);
 
         Ok(())
     }
