@@ -43,33 +43,75 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils
 
+      - name: Check disk space
+        run: |
+          df -h
+          du -sh ~/.cargo ~/.rustup target /tmp 2>/dev/null || true
+
+      - name: Clean build artifacts and temp files
+        run: |
+          # Clean up any existing build artifacts
+          cargo clean --release 2>/dev/null || true
+          # Remove old incremental compilation artifacts if they exist
+          find target -name "*.o" -delete 2>/dev/null || true
+          # Clean up /tmp which rustc uses for temporary files
+          find /tmp -name "rustc*" -type f -mmin +10 -delete 2>/dev/null || true
+          df -h
+        run: |
+          # Clean up any existing build artifacts
+          cargo clean --release 2>/dev/null || true
+          # Remove old incremental compilation artifacts if they exist
+          find target -name "*.o" -delete 2>/dev/null || true
+          df -h
+
       - name: Build
         run: |
           # Use system linker (bfd) instead of rust-lld to avoid crashes
           # This helps avoid linker crashes with large dependency trees like sourmash_plugin_branchwater
+          # Reduce parallelism to save disk space
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          cargo build --verbose --no-default-features
+          CARGO_BUILD_JOBS=1 cargo build --verbose --no-default-features
+          # Clean up incremental artifacts immediately after build
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          # Clean up /tmp rustc files
+          find /tmp -name "rustc*" -type f -mmin +5 -delete 2>/dev/null || true
+          df -h
 
       - name: Run tests
         run: |
           # Use system linker and limit parallelism to reduce memory pressure
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo test --verbose --no-default-features
+          CARGO_BUILD_JOBS=1 cargo test --verbose --no-default-features --lib
+          # Clean up test artifacts immediately
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          # Clean up /tmp rustc files
+          find /tmp -name "rustc*" -type f -mmin +5 -delete 2>/dev/null || true
+          df -h
 
       - name: Run CLI tests
         run: |
           # Use system linker and limit parallelism to reduce memory pressure
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo test tests::test_cli --verbose --no-default-features
+          CARGO_BUILD_JOBS=1 cargo test tests::test_cli --verbose --no-default-features
+          # Clean up test artifacts immediately
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          # Clean up /tmp rustc files
+          find /tmp -name "rustc*" -type f -mmin +5 -delete 2>/dev/null || true
+          df -h
 
       - name: Clean before release build
         run: |
-          # Clean debug artifacts to free up space before release build
+          # Aggressively clean debug artifacts to free up space before release build
           rm -rf target/debug
-          # Clean incremental compilation artifacts
           rm -rf target/.rustc_info.json target/.cargo-lock
+          # Clean up any remaining incremental artifacts
+          find target -name "*.o" -delete 2>/dev/null || true
+          find target -name "*.rmeta" -delete 2>/dev/null || true
+          # Clean up any remaining build artifacts
+          find target -name "*.o" -delete 2>/dev/null || true
           # Show disk space
           df -h
+          du -sh target 2>/dev/null || true
 
       - name: Build release
         run: |
@@ -104,6 +146,27 @@ jobs:
           # Install binutils to ensure BFD linker is available
           sudo apt-get update
           sudo apt-get install -y binutils
+
+      - name: Check disk space
+        run: |
+          df -h
+          du -sh ~/.cargo ~/.rustup target /tmp 2>/dev/null || true
+
+      - name: Clean build artifacts and temp files
+        run: |
+          # Clean up any existing build artifacts
+          cargo clean --release 2>/dev/null || true
+          # Remove old incremental compilation artifacts if they exist
+          find target -name "*.o" -delete 2>/dev/null || true
+          # Clean up /tmp which rustc uses for temporary files
+          find /tmp -name "rustc*" -type f -mmin +10 -delete 2>/dev/null || true
+          df -h
+        run: |
+          # Clean up any existing build artifacts
+          cargo clean --release 2>/dev/null || true
+          # Remove old incremental compilation artifacts if they exist
+          find target -name "*.o" -delete 2>/dev/null || true
+          df -h
 
       - name: Clean before release build
         run: |
@@ -171,6 +234,27 @@ jobs:
           # Install binutils to ensure BFD linker is available
           sudo apt-get update
           sudo apt-get install -y binutils
+
+      - name: Check disk space
+        run: |
+          df -h
+          du -sh ~/.cargo ~/.rustup target /tmp 2>/dev/null || true
+
+      - name: Clean build artifacts and temp files
+        run: |
+          # Clean up any existing build artifacts
+          cargo clean --release 2>/dev/null || true
+          # Remove old incremental compilation artifacts if they exist
+          find target -name "*.o" -delete 2>/dev/null || true
+          # Clean up /tmp which rustc uses for temporary files
+          find /tmp -name "rustc*" -type f -mmin +10 -delete 2>/dev/null || true
+          df -h
+        run: |
+          # Clean up any existing build artifacts
+          cargo clean --release 2>/dev/null || true
+          # Remove old incremental compilation artifacts if they exist
+          find target -name "*.o" -delete 2>/dev/null || true
+          df -h
 
       - name: Run benchmarks
         run: |
