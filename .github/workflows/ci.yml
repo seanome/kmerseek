@@ -43,6 +43,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils
 
+      - name: Setup TMPDIR
+        run: |
+          # Set TMPDIR to workspace to avoid /tmp filling up
+          export TMPDIR=$HOME/tmp
+          mkdir -p $TMPDIR
+          echo "TMPDIR=$TMPDIR" >> $GITHUB_ENV
+
       - name: Check disk space
         run: |
           df -h
@@ -55,13 +62,10 @@ jobs:
           # Remove old incremental compilation artifacts if they exist
           find target -name "*.o" -delete 2>/dev/null || true
           # Clean up /tmp which rustc uses for temporary files
-          find /tmp -name "rustc*" -type f -mmin +10 -delete 2>/dev/null || true
-          df -h
-        run: |
-          # Clean up any existing build artifacts
-          cargo clean --release 2>/dev/null || true
-          # Remove old incremental compilation artifacts if they exist
-          find target -name "*.o" -delete 2>/dev/null || true
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -delete 2>/dev/null || true
           df -h
 
       - name: Build
@@ -69,6 +73,7 @@ jobs:
           # Use system linker (bfd) instead of rust-lld to avoid crashes
           # This helps avoid linker crashes with large dependency trees like sourmash_plugin_branchwater
           # Reduce parallelism to save disk space
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo build --verbose --no-default-features
           # Clean up incremental artifacts immediately after build
@@ -80,6 +85,7 @@ jobs:
       - name: Run tests
         run: |
           # Use system linker and limit parallelism to reduce memory pressure
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo test --verbose --no-default-features --lib
           # Clean up test artifacts immediately
@@ -91,6 +97,7 @@ jobs:
       - name: Run CLI tests
         run: |
           # Use system linker and limit parallelism to reduce memory pressure
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo test tests::test_cli --verbose --no-default-features
           # Clean up test artifacts immediately
@@ -117,8 +124,13 @@ jobs:
         run: |
           # Use system linker (bfd) instead of rust-lld to avoid crashes
           # Limit parallelism to reduce memory/disk usage during release build
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo build --release --verbose --no-default-features
+          CARGO_BUILD_JOBS=1 cargo build --release --verbose --no-default-features
+          # Clean up after release build
+          find target/release/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
+          df -h
 
       - name: Test CLI binary
         run: |
@@ -147,6 +159,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils
 
+      - name: Setup TMPDIR
+        run: |
+          # Set TMPDIR to workspace to avoid /tmp filling up
+          export TMPDIR=$HOME/tmp
+          mkdir -p $TMPDIR
+          echo "TMPDIR=$TMPDIR" >> $GITHUB_ENV
+
       - name: Check disk space
         run: |
           df -h
@@ -159,13 +178,10 @@ jobs:
           # Remove old incremental compilation artifacts if they exist
           find target -name "*.o" -delete 2>/dev/null || true
           # Clean up /tmp which rustc uses for temporary files
-          find /tmp -name "rustc*" -type f -mmin +10 -delete 2>/dev/null || true
-          df -h
-        run: |
-          # Clean up any existing build artifacts
-          cargo clean --release 2>/dev/null || true
-          # Remove old incremental compilation artifacts if they exist
-          find target -name "*.o" -delete 2>/dev/null || true
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -delete 2>/dev/null || true
           df -h
 
       - name: Clean before release build
@@ -179,8 +195,13 @@ jobs:
         run: |
           # Use system linker (bfd) instead of rust-lld to avoid crashes
           # Limit parallelism to reduce memory/disk usage
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo build --release --no-default-features
+          CARGO_BUILD_JOBS=1 cargo build --release --no-default-features
+          # Clean up after build
+          find target/release/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
+          df -h
 
       - name: Test CLI with real data
         run: |
@@ -235,6 +256,13 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y binutils
 
+      - name: Setup TMPDIR
+        run: |
+          # Set TMPDIR to workspace to avoid /tmp filling up
+          export TMPDIR=$HOME/tmp
+          mkdir -p $TMPDIR
+          echo "TMPDIR=$TMPDIR" >> $GITHUB_ENV
+
       - name: Check disk space
         run: |
           df -h
@@ -247,20 +275,22 @@ jobs:
           # Remove old incremental compilation artifacts if they exist
           find target -name "*.o" -delete 2>/dev/null || true
           # Clean up /tmp which rustc uses for temporary files
-          find /tmp -name "rustc*" -type f -mmin +10 -delete 2>/dev/null || true
-          df -h
-        run: |
-          # Clean up any existing build artifacts
-          cargo clean --release 2>/dev/null || true
-          # Remove old incremental compilation artifacts if they exist
-          find target -name "*.o" -delete 2>/dev/null || true
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -delete 2>/dev/null || true
           df -h
 
       - name: Run benchmarks
         run: |
           # Use system linker (bfd) instead of rust-lld to avoid crashes
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo bench --verbose --no-default-features -- --output-format json > benchmark_results.json
+          CARGO_BUILD_JOBS=1 cargo bench --verbose --no-default-features -- --output-format json > benchmark_results.json
+          # Clean up after benchmarks
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
+          df -h
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
