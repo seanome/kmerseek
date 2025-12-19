@@ -37,6 +37,12 @@ jobs:
         with:
           key: ${{ matrix.cache-key }}
 
+      - name: Install build dependencies
+        run: |
+          # Install binutils to ensure BFD linker is available
+          sudo apt-get update
+          sudo apt-get install -y binutils
+
       - name: Build
         run: |
           # Use system linker (bfd) instead of rust-lld to avoid crashes
@@ -92,6 +98,12 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
+
+      - name: Install build dependencies
+        run: |
+          # Install binutils to ensure BFD linker is available
+          sudo apt-get update
+          sudo apt-get install -y binutils
 
       - name: Clean before release build
         run: |
@@ -154,8 +166,17 @@ jobs:
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
 
+      - name: Install build dependencies
+        run: |
+          # Install binutils to ensure BFD linker is available
+          sudo apt-get update
+          sudo apt-get install -y binutils
+
       - name: Run benchmarks
-        run: cargo bench --verbose --no-default-features -- --output-format json > benchmark_results.json
+        run: |
+          # Use system linker (bfd) instead of rust-lld to avoid crashes
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
+          CARGO_BUILD_JOBS=2 cargo bench --verbose --no-default-features -- --output-format json > benchmark_results.json
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
