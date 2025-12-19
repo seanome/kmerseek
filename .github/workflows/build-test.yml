@@ -57,6 +57,10 @@ jobs:
 
       - name: setup environment for rust builds
         run: |
+          # Set TMPDIR to workspace to avoid /tmp filling up
+          export TMPDIR=$HOME/tmp
+          mkdir -p $TMPDIR
+          echo "TMPDIR=$TMPDIR" >> $GITHUB_ENV
           # Ensure we use system compiler and OpenSSL instead of conda ones
           export CC=gcc
           export CXX=g++
@@ -82,22 +86,55 @@ jobs:
         run: |
           # Clean to avoid linker issues with stale artifacts
           cargo clean
+          # Clean up /tmp before starting
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.o" -type f -delete 2>/dev/null || true
+          df -h
+
+      - name: Check disk space
+        run: |
+          df -h
+          du -sh ~/.cargo ~/.rustup target /tmp 2>/dev/null || true
+
+      - name: Clean temp files
+        run: |
+          # Clean up /tmp aggressively before build
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.o" -type f -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -delete 2>/dev/null || true
+          df -h
 
       - name: build binary for tests
         run: |
           # Use system linker (bfd) instead of rust-lld to avoid crashes
-          # Limit parallelism to reduce memory pressure during linking
-          # This helps avoid linker crashes with large dependency trees like sourmash_plugin_branchwater
+          # Limit parallelism to reduce memory pressure and disk usage
+          # Set TMPDIR to avoid /tmp filling up
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo build --bin kmerseek-rust --all-features
+          CARGO_BUILD_JOBS=1 cargo build --bin kmerseek-rust --all-features
+          # Clean up incremental artifacts immediately
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
+          df -h
           ls -la target/debug/
           ls -la target/debug/kmerseek-rust || echo "Binary not found in target/debug/"
 
       - name: cargo test
         run: |
           # Use system linker and limit parallelism to reduce memory pressure
+          # Set TMPDIR to avoid /tmp filling up
+          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=2 cargo test --all-features --workspace
+          CARGO_BUILD_JOBS=1 cargo test --all-features --workspace
+          # Clean up after tests
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          df -h
 
       - name: test rust cli
         run: |
@@ -115,3 +152,15 @@ jobs:
       - name: pytest
         shell: bash -l {0}
         run: pytest -vv
+
+      - name: Cleanup after tests
+        if: always()
+        run: |
+          # Clean up build artifacts to free space
+          find target -name "*.o" -delete 2>/dev/null || true
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
+          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
+          df -h
