@@ -286,7 +286,7 @@ fn main() -> IndexResult<()> {
             // information. We only output SearchResults that have matched regions - if there are
             // no matched regions, the SearchResult is skipped. This ensures every CSV row has
             // complete matched region information.
-            use kmerseek::search::SearchResultWithRegionCsv;
+            use kmerseek::search::SearchResultCsv;
             if let Some(output_path) = output {
                 eprintln!("Writing results to: {}", output_path.display());
                 let mut writer = csv::Writer::from_path(output_path)?;
@@ -298,7 +298,7 @@ fn main() -> IndexResult<()> {
                     // repeated for each region.
                     for region in &result.matched_regions {
                         let csv_row =
-                            SearchResultWithRegionCsv::from_result_and_region(result, region);
+                            SearchResultCsv::from_result_and_region(result, region);
                         writer.serialize(&csv_row)?;
                     }
                 }
@@ -315,7 +315,7 @@ fn main() -> IndexResult<()> {
                     // repeated for each region.
                     for region in &result.matched_regions {
                         let csv_row =
-                            SearchResultWithRegionCsv::from_result_and_region(result, region);
+                            SearchResultCsv::from_result_and_region(result, region);
                         writer.serialize(&csv_row)?;
                     }
                 }

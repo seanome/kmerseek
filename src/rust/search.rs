@@ -18,73 +18,13 @@ pub const DEFAULT_PROGRESS_INTERVAL: u32 = 1000;
 /// Default batch size for FASTA processing (process N sequences per batch)
 pub const DEFAULT_BATCH_SIZE: usize = 1000;
 
-/// CSV-friendly version of SearchResult without matched_regions
-/// WHY: CSV format doesn't handle nested Vec structures well. This struct is used
-/// for CSV serialization while preserving all the important similarity metrics.
-/// This is idiomatic Rust - we create a separate struct for CSV output rather than
-/// trying to serialize complex nested structures that CSV doesn't support.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResultCsv {
-    pub query_name: String,
-    pub query_md5: String,
-    pub target_name: String,
-    pub target_md5: String,
-    pub containment: f64,
-    pub n_intersecting_hashes: usize,
-    pub ksize: u32,
-    pub scaled: u32,
-    pub moltype: String,
-    pub jaccard: f64,
-    pub max_containment: f64,
-    pub average_abund: f64,
-    pub median_abund: f64,
-    pub std_abund: f64,
-    pub containment_target_in_query: f64,
-    pub f_weighted_target_in_query: f64,
-    pub tfidf: f64,
-    pub average_database_kmer_frequency: f64,
-    pub prob_random_cooccurrence: f64,
-    pub prob_random_cooccurrence_symmetric: f64,
-    pub expected_intersecting_hashes: f64,
-    pub observed_over_expected: f64,
-}
-
-impl From<&SearchResult> for SearchResultCsv {
-    fn from(result: &SearchResult) -> Self {
-        Self {
-            query_name: result.query_name.clone(),
-            query_md5: result.query_md5.clone(),
-            target_name: result.target_name.clone(),
-            target_md5: result.target_md5.clone(),
-            containment: result.containment,
-            n_intersecting_hashes: result.n_intersecting_hashes,
-            ksize: result.ksize,
-            scaled: result.scaled,
-            moltype: result.moltype.clone(),
-            jaccard: result.jaccard,
-            max_containment: result.max_containment,
-            average_abund: result.average_abund,
-            median_abund: result.median_abund,
-            std_abund: result.std_abund,
-            containment_target_in_query: result.containment_target_in_query,
-            f_weighted_target_in_query: result.f_weighted_target_in_query,
-            tfidf: result.tfidf,
-            average_database_kmer_frequency: result.average_database_kmer_frequency,
-            prob_random_cooccurrence: result.prob_random_cooccurrence,
-            prob_random_cooccurrence_symmetric: result.prob_random_cooccurrence_symmetric,
-            expected_intersecting_hashes: result.expected_intersecting_hashes,
-            observed_over_expected: result.observed_over_expected,
-        }
-    }
-}
-
 /// CSV-friendly version of SearchResult with matched region information
 /// WHY: Each matched region gets its own row in the CSV, with all SearchResult similarity
 /// metrics repeated for each region. This makes it easy to analyze individual matched regions
 /// while still having access to the overall similarity metrics. Every CSV row must have matched
 /// region data - SearchResults without matched regions are not included in the CSV output.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct SearchResultWithRegionCsv {
+pub struct SearchResultCsv {
     // SearchResult fields
     pub query_name: String,
     pub query_md5: String,
@@ -119,7 +59,7 @@ pub struct SearchResultWithRegionCsv {
     pub region_length: u32,
 }
 
-impl SearchResultWithRegionCsv {
+impl SearchResultCsv {
     /// Create a CSV row from a SearchResult and a MatchedRegion
     /// WHY: Every CSV row must have matched region data. This method combines the SearchResult
     /// similarity metrics with a specific matched region to create one CSV row. Each SearchResult

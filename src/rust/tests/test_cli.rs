@@ -5,7 +5,7 @@ use tempfile::tempdir;
 
 use approx::assert_relative_eq;
 
-use crate::search::SearchResultWithRegionCsv;
+use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 
 #[test]
@@ -209,14 +209,14 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // Read and verify CSV contents
-    // WHY: We deserialize into SearchResultWithRegionCsv which is the same struct used for CSV output.
+    // WHY: We deserialize into SearchResultCsv which is the same struct used for CSV output.
     // This ensures type safety and matches exactly what the CLI writes to the CSV file.
     // Each matched region gets its own row, so we may have multiple rows per SearchResult.
     let mut reader = csv::Reader::from_path(&output_csv)?;
     let mut results_count = 0;
     let mut found_bcl2 = false;
 
-    for result in reader.deserialize::<SearchResultWithRegionCsv>() {
+    for result in reader.deserialize::<SearchResultCsv>() {
         let record = match result {
             Ok(r) => r,
             Err(e) => {
