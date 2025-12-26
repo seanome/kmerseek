@@ -46,6 +46,8 @@ pub struct SearchResultCsv {
     pub average_database_kmer_frequency: f64,
     pub prob_random_cooccurrence: f64,
     pub prob_random_cooccurrence_symmetric: f64,
+    pub sum_database_frequencies_of_matches: f64,
+    pub average_kmer_rarity: f64,
     pub expected_intersecting_hashes: f64,
     pub observed_over_expected: f64,
     // MatchedRegion fields (always present - every CSV row has a matched region)
@@ -87,6 +89,8 @@ impl SearchResultCsv {
             average_database_kmer_frequency: result.average_database_kmer_frequency,
             prob_random_cooccurrence: result.prob_random_cooccurrence,
             prob_random_cooccurrence_symmetric: result.prob_random_cooccurrence_symmetric,
+            sum_database_frequencies_of_matches: result.sum_database_frequencies_of_matches,
+            average_kmer_rarity: result.average_kmer_rarity,
             expected_intersecting_hashes: result.expected_intersecting_hashes,
             observed_over_expected: result.observed_over_expected,
             query_start: region.query_start,
@@ -170,7 +174,18 @@ pub struct SearchResult {
     /// Lower values = more significant matches.
     pub prob_random_cooccurrence_symmetric: f64,
 
+    /// Sum of database frequencies for all k-mers that match between query and target
+    /// This sums the frequency of each intersecting k-mer (how common it is across all sequences).
+    /// Higher values = matches are on more common k-mers. This is NOT the true expected value.
+    pub sum_database_frequencies_of_matches: f64,
+
+    /// Average rarity of matched k-mers (n_intersecting_hashes / sum_database_frequencies_of_matches)
+    /// Higher values = matches are on rarer, more specific k-mers.
+    /// Lower values = matches are on common, less discriminative k-mers.
+    pub average_kmer_rarity: f64,
+
     /// Expected number of shared k-mers by random chance given database composition
+    /// This is calculated across ALL query k-mers, not just those that match.
     pub expected_intersecting_hashes: f64,
 
     /// Ratio of observed to expected intersecting hashes (n_intersecting_hashes / expected_intersecting_hashes)
@@ -482,11 +497,22 @@ impl ProteinSearcher {
         let prob_random_cooccurrence_reverse = self.calculate_prob_random_cooccurrence(&intersection);
         let prob_random_cooccurrence_symmetric = (prob_random_cooccurrence * prob_random_cooccurrence_reverse).sqrt();
 
+        // Calculate sum of database frequencies for matches (the old "expected" calculation)
+        let sum_database_frequencies_of_matches = self.calculate_sum_database_frequencies_of_matches(query.sketch, target);
+
+        // Calculate the TRUE expected intersecting hashes (across all query k-mers)
         let expected_intersecting_hashes = self.calculate_expected_intersecting_hashes(query.sketch, target);
 
         // Get the base similarity result from the standalone function
         // Note: This will recalculate intersection, but that's acceptable for the cleaner API
         let mut result = calculate_similarity(query.sketch, target)?;
+
+        // Calculate average kmer rarity (inverse of sum of frequencies)
+        let average_kmer_rarity = if sum_database_frequencies_of_matches > 0.0 {
+            result.n_intersecting_hashes as f64 / sum_database_frequencies_of_matches
+        } else {
+            0.0
+        };
 
         // Calculate observed over expected ratio
         let observed_over_expected = if expected_intersecting_hashes > 0.0 {
@@ -500,6 +526,8 @@ impl ProteinSearcher {
         result.average_database_kmer_frequency = average_database_kmer_frequency;
         result.prob_random_cooccurrence = prob_random_cooccurrence;
         result.prob_random_cooccurrence_symmetric = prob_random_cooccurrence_symmetric;
+        result.sum_database_frequencies_of_matches = sum_database_frequencies_of_matches;
+        result.average_kmer_rarity = average_kmer_rarity;
         result.expected_intersecting_hashes = expected_intersecting_hashes;
         result.observed_over_expected = observed_over_expected;
 
@@ -591,22 +619,22 @@ impl ProteinSearcher {
         prob_random.clamp(0.0, 1.0)
     }
 
-    /// Calculate expected number of shared k-mers by random chance
+    /// Calculate sum of database frequencies for k-mers that match between query and target
     ///
-    /// This uses Option 2: Expected overlap calculation. For each k-mer in the query,
-    /// we calculate the probability that it would also appear in the target based on
-    /// its frequency in the database. We sum these probabilities to get the expected
-    /// number of shared k-mers.
+    /// **WARNING**: This is NOT the true expected value - it conditions on the observed intersection!
+    /// It sums database frequencies only for k-mers that actually appear in both sequences.
     ///
-    /// **Interpretation**:
-    /// - Compare to n_intersecting_hashes: if observed >> expected, the match is significant
-    /// - Values are NOT probabilities - they're counts (can be > 1.0)
-    /// - Lower expected values (given the same observed) indicate more significant matches
+    /// **What it tells you**:
+    /// - Higher values = matches are on more common k-mers
+    /// - Lower values = matches are on rarer k-mers
+    /// - Can be used to calculate average_kmer_rarity = n_intersecting_hashes / sum
     ///
-    /// **Example**: If we observe 24 intersecting k-mers but only expect 2.5 by chance,
-    /// that's a highly significant match.
-    #[must_use = "expected intersecting hashes should be compared to observed intersection size"]
-    pub fn calculate_expected_intersecting_hashes(
+    /// **Why it's useful for AUROC**:
+    /// Even though it conditions on observed data, it weights matches by commonness,
+    /// which helps distinguish true homologs (which share both rare and common k-mers)
+    /// from random matches (which only share the most common k-mers).
+    #[must_use = "sum of database frequencies should be used to calculate rarity metrics"]
+    pub fn calculate_sum_database_frequencies_of_matches(
         &self,
         query_sketch: &ProteinSketch,
         target_sketch: &ProteinSketch,
@@ -614,12 +642,11 @@ impl ProteinSearcher {
         let query_mins = query_sketch.signature().minhash.mins();
         let target_mins = target_sketch.mins_as_set();
 
-        // For each k-mer in the query, calculate the probability it would appear in the target
-        // based on its database frequency, then sum these probabilities
-        let expected: f64 = query_mins
+        // Sum database frequencies only for k-mers that actually match
+        let sum_frequencies: f64 = query_mins
             .par_iter()
             .map(|&hashval| {
-                // Skip k-mers not in target (we're calculating expected, not observed)
+                // Only consider k-mers that are in BOTH query and target (the actual intersection)
                 if !target_mins.contains(&hashval) {
                     return 0.0;
                 }
@@ -629,8 +656,50 @@ impl ProteinSearcher {
                     self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
                 let total_signatures = self.stats.total_signatures as f64;
 
-                // Probability that this k-mer would appear in a random target
+                // Database frequency (proportion of sequences containing this k-mer)
                 db_frequency / total_signatures
+            })
+            .sum();
+
+        sum_frequencies
+    }
+
+    /// Calculate the TRUE expected number of shared k-mers by random chance
+    ///
+    /// This calculates the expected overlap across ALL query k-mers (not just those that match),
+    /// based on database frequencies and target size.
+    ///
+    /// **What it tells you**:
+    /// - For each query k-mer, estimate probability it appears in target based on database frequency
+    /// - Sum these probabilities across ALL query k-mers
+    /// - Compare to n_intersecting_hashes: if observed >> expected, match is significant
+    ///
+    /// **Example**: If we observe 24 intersecting k-mers but only expect 2.5 by chance,
+    /// that's a highly significant match (observed_over_expected = 9.6x).
+    #[must_use = "expected intersecting hashes should be compared to observed intersection size"]
+    pub fn calculate_expected_intersecting_hashes(
+        &self,
+        query_sketch: &ProteinSketch,
+        _target_sketch: &ProteinSketch,
+    ) -> f64 {
+        let query_mins = query_sketch.signature().minhash.mins();
+        let total_signatures = self.stats.total_signatures as f64;
+
+        // For each k-mer in the query (regardless of whether it's in target),
+        // calculate the expected probability it would appear in the target
+        let expected: f64 = query_mins
+            .par_iter()
+            .map(|&hashval| {
+                // Get frequency of this k-mer in the database
+                let db_frequency =
+                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
+
+                // Probability this k-mer appears in a random sequence from the database
+                let prob_in_database = db_frequency / total_signatures;
+
+                // Expected contribution to intersection based on target size
+                // This is a simplified model - could be improved with hypergeometric distribution
+                prob_in_database
             })
             .sum();
 
@@ -759,6 +828,8 @@ pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Op
         average_database_kmer_frequency: 0.0,        // Default for 1v1 comparisons - requires database context
         prob_random_cooccurrence: 1.0,               // Default for 1v1 comparisons - requires database context
         prob_random_cooccurrence_symmetric: 1.0,     // Default for 1v1 comparisons - requires database context
+        sum_database_frequencies_of_matches: 0.0,    // Default for 1v1 comparisons - requires database context
+        average_kmer_rarity: 0.0,                    // Default for 1v1 comparisons - requires database context
         expected_intersecting_hashes: 0.0,           // Default for 1v1 comparisons - requires database context
         observed_over_expected: 0.0,                 // Default for 1v1 comparisons - requires database context
         matched_regions,
