@@ -490,18 +490,23 @@ impl ProteinSearcher {
         }
 
         // Calculate all database-specific overlap metrics
-        let average_database_kmer_frequency = self.calculate_average_database_kmer_frequency(&intersection);
+        let average_database_kmer_frequency =
+            self.calculate_average_database_kmer_frequency(&intersection);
         let prob_random_cooccurrence = self.calculate_prob_random_cooccurrence(&intersection);
 
         // Calculate symmetric version: geometric mean of both directions
-        let prob_random_cooccurrence_reverse = self.calculate_prob_random_cooccurrence(&intersection);
-        let prob_random_cooccurrence_symmetric = (prob_random_cooccurrence * prob_random_cooccurrence_reverse).sqrt();
+        let prob_random_cooccurrence_reverse =
+            self.calculate_prob_random_cooccurrence(&intersection);
+        let prob_random_cooccurrence_symmetric =
+            (prob_random_cooccurrence * prob_random_cooccurrence_reverse).sqrt();
 
         // Calculate sum of database frequencies for matches (the old "expected" calculation)
-        let sum_database_frequencies_of_matches = self.calculate_sum_database_frequencies_of_matches(query.sketch, target);
+        let sum_database_frequencies_of_matches =
+            self.calculate_sum_database_frequencies_of_matches(query.sketch, target);
 
         // Calculate the TRUE expected intersecting hashes (across all query k-mers)
-        let expected_intersecting_hashes = self.calculate_expected_intersecting_hashes(query.sketch, target);
+        let expected_intersecting_hashes =
+            self.calculate_expected_intersecting_hashes(query.sketch, target);
 
         // Get the base similarity result from the standalone function
         // Note: This will recalculate intersection, but that's acceptable for the cleaner API
@@ -824,14 +829,14 @@ pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Op
         std_abund,
         containment_target_in_query,
         f_weighted_target_in_query,
-        tfidf: 0.0,                                  // Default for 1v1 comparisons - requires database context
-        average_database_kmer_frequency: 0.0,        // Default for 1v1 comparisons - requires database context
-        prob_random_cooccurrence: 1.0,               // Default for 1v1 comparisons - requires database context
-        prob_random_cooccurrence_symmetric: 1.0,     // Default for 1v1 comparisons - requires database context
-        sum_database_frequencies_of_matches: 0.0,    // Default for 1v1 comparisons - requires database context
-        average_kmer_rarity: 0.0,                    // Default for 1v1 comparisons - requires database context
-        expected_intersecting_hashes: 0.0,           // Default for 1v1 comparisons - requires database context
-        observed_over_expected: 0.0,                 // Default for 1v1 comparisons - requires database context
+        tfidf: 0.0, // Default for 1v1 comparisons - requires database context
+        average_database_kmer_frequency: 0.0, // Default for 1v1 comparisons - requires database context
+        prob_random_cooccurrence: 1.0, // Default for 1v1 comparisons - requires database context
+        prob_random_cooccurrence_symmetric: 1.0, // Default for 1v1 comparisons - requires database context
+        sum_database_frequencies_of_matches: 0.0, // Default for 1v1 comparisons - requires database context
+        average_kmer_rarity: 0.0, // Default for 1v1 comparisons - requires database context
+        expected_intersecting_hashes: 0.0, // Default for 1v1 comparisons - requires database context
+        observed_over_expected: 0.0, // Default for 1v1 comparisons - requires database context
         matched_regions,
     })
 }
