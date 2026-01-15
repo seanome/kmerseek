@@ -372,3 +372,6 @@ results/
 *.trace.txt
 *.report.html
 *.timeline.html
+
+
+kmerseek-rust
