@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 use anyhow::Result;
+use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
@@ -357,6 +358,17 @@ impl ProteinSearcher {
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
     #[must_use = "search results should be used to process query matches"]
     pub fn search(&self, queries: &[ProteinSketch]) -> Result<Vec<SearchResult>> {
+        // Create progress bar for tracking query processing
+        let progress = ProgressBar::new(queries.len() as u64);
+        progress.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} queries ({percent}%) | ETA: {eta}",
+            )
+            .unwrap()
+            .progress_chars("=>-"),
+        );
+        progress.set_message("Searching...");
+
         // Perform parallel search across all queries
         let all_results: Vec<SearchResult> = queries
             .par_iter()
@@ -365,16 +377,24 @@ impl ProteinSearcher {
                 let prepared = self.prepare_query(query);
 
                 // Search this query against all targets
-                self.index
+                let results: Vec<_> = self
+                    .index
                     .get_signatures()
                     .iter()
                     .filter_map(|entry| {
                         let target = entry.value();
                         self.compare(&prepared, target)
                     })
-                    .collect::<Vec<_>>()
+                    .collect();
+
+                // Update progress after processing each query
+                progress.inc(1);
+
+                results
             })
             .collect();
+
+        progress.finish_with_message("Search complete");
 
         // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
@@ -406,6 +426,17 @@ impl ProteinSearcher {
         // avoids cloning the large ProteinSketch objects while still enabling parallel processing.
         let md5_keys: Vec<String> = signatures.iter().map(|entry| entry.key().clone()).collect();
 
+        // Create progress bar for tracking query processing
+        let progress = ProgressBar::new(md5_keys.len() as u64);
+        progress.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} queries ({percent}%) | ETA: {eta}",
+            )
+            .unwrap()
+            .progress_chars("=>-"),
+        );
+        progress.set_message("Searching all-vs-all...");
+
         // Perform parallel search across all signatures
         // WHY: We iterate over MD5 keys in parallel, then look up the actual signatures in the
         // DashMap. Each signature is used as both query and target, but we skip self-matches
@@ -416,24 +447,35 @@ impl ProteinSearcher {
                 // Look up query signature by MD5
                 // WHY: We use filter_map to handle the Option from get() gracefully. If the
                 // signature doesn't exist (shouldn't happen, but safe to handle), we skip it.
-                signatures.get(query_md5).map(|query_entry| {
-                    let query = query_entry.value();
+                let results: Vec<_> = signatures
+                    .get(query_md5)
+                    .map(|query_entry| {
+                        let query = query_entry.value();
 
-                    // Prepare query once - this pre-computes mins as HashSet and TF-IDF
-                    let prepared = self.prepare_query(query);
+                        // Prepare query once - this pre-computes mins as HashSet and TF-IDF
+                        let prepared = self.prepare_query(query);
 
-                    // Search this query against all targets (including itself, but compare() will skip self-matches)
-                    signatures
-                        .iter()
-                        .filter_map(|target_entry| {
-                            let target = target_entry.value();
-                            self.compare(&prepared, target)
-                        })
-                        .collect::<Vec<_>>()
-                })
+                        // Search this query against all targets (including itself, but compare() will skip self-matches)
+                        signatures
+                            .iter()
+                            .filter_map(|target_entry| {
+                                let target = target_entry.value();
+                                self.compare(&prepared, target)
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .into_iter()
+                    .flatten()
+                    .collect();
+
+                // Update progress after processing each query
+                progress.inc(1);
+
+                results
             })
-            .flatten()
             .collect();
+
+        progress.finish_with_message("Search complete");
 
         // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
