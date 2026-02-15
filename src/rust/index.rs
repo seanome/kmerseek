@@ -1,4 +1,5 @@
 use dashmap::DashMap;
+use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -1086,6 +1087,22 @@ impl ProteomeIndex {
             IndexError::ParseError(diagnostic)
         })?;
 
+        // Create progress bar for indexing (unknown total, so use spinner style)
+        let progress = if progress_interval > 0 {
+            let pb = ProgressBar::new_spinner();
+            pb.set_style(
+                ProgressStyle::with_template(
+                    "{spinner:.green} [{elapsed_precise}] {msg}",
+                )
+                .unwrap()
+                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+            );
+            pb.set_message("Indexing sequences...");
+            Some(pb)
+        } else {
+            None
+        };
+
         // Stream records and process in parallel batches
         let mut record_count = 0;
         let mut current_batch = Vec::new();
@@ -1106,9 +1123,10 @@ impl ProteomeIndex {
                 current_batch.clear(); // Free memory after processing
             }
 
-            // Print progress if interval is set and we've reached the interval
-            if progress_interval > 0 && record_count % progress_interval as usize == 0 {
-                eprintln!("Read {} sequences...", record_count);
+            // Update progress bar
+            if let Some(ref pb) = progress {
+                pb.set_message(format!("Indexed {} sequences", record_count));
+                pb.tick();
             }
         }
 
@@ -1120,8 +1138,8 @@ impl ProteomeIndex {
         // Save the index state to RocksDB
         self.save_state()?;
 
-        if progress_interval > 0 {
-            eprintln!("Successfully processed and stored {} sequences.", record_count);
+        if let Some(pb) = progress {
+            pb.finish_with_message(format!("Successfully indexed {} sequences", record_count));
         }
         Ok(())
     }
