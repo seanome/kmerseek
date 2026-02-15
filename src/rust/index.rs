@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -803,7 +803,9 @@ impl ProteomeIndex {
     ) -> IndexResult<()> {
         let ksize = self.ksize as usize;
         let seed = SEED;
-        let hashvals = &protein_signature.signature().get_minhash().to_vec();
+        // WHY: Use HashSet for O(1) lookups instead of Vec's O(n) linear search.
+        // This is critical for performance since we check every k-mer in every sequence.
+        let hashvals: HashSet<u64> = protein_signature.signature().get_minhash().to_vec().into_iter().collect();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = crate::kmer::Kmer::from_sequence(sequence, i, ksize);

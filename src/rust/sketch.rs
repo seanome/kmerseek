@@ -6,7 +6,7 @@ use crate::SEED;
 use serde::{Deserialize, Serialize};
 use sourmash::signature::SigsTrait;
 use sourmash::sketch::minhash::KmerMinHash;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub const PROTEIN_TO_MINHASH_RATIO: u32 = 3;
 
@@ -429,7 +429,9 @@ impl ProteinSketch {
         let encoding_fn = get_encoding_fn_from_moltype(&self.moltype.to_string())?;
         let ksize = self.protein_ksize as usize;
         let seed = SEED;
-        let hashvals: Vec<u64> = self.signature().minhash.mins().to_vec();
+        // WHY: Use HashSet for O(1) lookups instead of Vec's O(n) linear search.
+        // This is critical for performance since we check every k-mer in every sequence.
+        let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = Kmer::from_sequence(sequence, i, ksize);

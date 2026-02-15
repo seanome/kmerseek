@@ -1303,35 +1303,38 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let temp_path = temp_dir.path();
 
-        // Use the same test FASTA file for both query and target to ensure a match
-        // WHY: Using a known working test file (CED9) ensures the test will work correctly.
-        // This is simpler and more reliable than creating synthetic sequences.
-        let test_fasta = TEST_CED9_FASTA;
+        // Use BCL2 as query and CED9 as target - they should match via HP encoding
+        // WHY: The compare() function skips self-matches by checking MD5 sums, so we
+        // need to use different proteins. BCL2 and CED9 are known to match via HP encoding.
+        let query_fasta = TEST_BLC2_FASTA;
+        let target_fasta = TEST_CED9_FASTA;
 
-        // Create target index
+        // Create target index (CED9)
         let target_index_path = temp_path.join("target_index");
         let target_index = ProteomeIndex::new(
             &target_index_path,
-            10,    // ksize
+            15,    // ksize - k=15 is where BCL2/CED9 have good HP overlap
             1,     // scaled
             "hp",  // moltype
             false, // store_raw_sequences
         )?;
 
-        target_index.process_fasta(test_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        target_index.process_fasta(target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher
         let searcher = ProteinSearcher::new(target_index);
 
-        // Create query index
-        let query_index = ProteomeIndex::new_with_auto_filename(
-            test_fasta, 10,    // ksize
+        // Create query index (BCL2)
+        let query_index_path = temp_path.join("query_index");
+        let query_index = ProteomeIndex::new(
+            &query_index_path,
+            15,    // ksize
             1,     // scaled
             "hp",  // moltype
             false, // store_raw_sequences
         )?;
 
-        query_index.process_fasta(test_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        query_index.process_fasta(query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Get query signatures
         let query_signatures: Vec<_> =
@@ -1342,16 +1345,19 @@ mod tests {
         // Perform search
         let results = searcher.search(&query_signatures)?;
 
-        // Should find at least one match (exact match)
-        assert!(results.len() == 1, "Should find exactly one match");
+        // Should find at least one match (BCL2 vs CED9 via HP encoding)
+        assert!(!results.is_empty(), "Should find at least one match between BCL2 and CED9");
 
         // Check that the first result has reasonable values
         let first_result = &results[0];
-        assert!(first_result.query_name.contains("CED9_CAEEL"));
-        assert!(first_result.target_name.contains("CED9_CAEEL"));
-        assert!(first_result.containment == 1.0);
-        assert!(first_result.jaccard == 1.0);
-        assert!(first_result.n_intersecting_hashes == 10);
+        assert!(first_result.query_name.contains("BCL2_HUMAN") || first_result.query_name.contains("Q07817"),
+                "Query should be BCL2, got: {}", first_result.query_name);
+        assert!(first_result.target_name.contains("CED9_CAEEL") || first_result.target_name.contains("P41958"),
+                "Target should be CED9, got: {}", first_result.target_name);
+        // BCL2 and CED9 share HP k-mers, so containment should be > 0
+        assert!(first_result.containment > 0.0, "Should have positive containment");
+        assert!(first_result.jaccard > 0.0, "Should have positive jaccard");
+        assert!(first_result.n_intersecting_hashes > 0, "Should have intersecting hashes");
 
         Ok(())
     }

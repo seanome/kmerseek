@@ -168,7 +168,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     index_cmd
         .assert()
         .success()
-        .stdout(predicate::str::contains("Indexing completed successfully!"));
+        .stderr(predicate::str::contains("Indexing completed successfully!"));
     assert!(target_index_path.exists(), "Target index should be created");
 
     // Step 2: Run search with CED9 as query
@@ -193,8 +193,8 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     search_cmd
         .assert()
         .success()
-        .stdout(predicate::str::contains("Found"))
-        .stdout(predicate::str::contains("matches"));
+        .stderr(predicate::str::contains("Found"))
+        .stderr(predicate::str::contains("matches"));
 
     // Step 3: Verify output CSV exists and contains expected results
     assert!(output_csv.exists(), "Search results CSV should be created");
