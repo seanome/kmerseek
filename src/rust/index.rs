@@ -319,30 +319,36 @@ impl ProteomeIndex {
         if let Some(metadata_data) = metadata_serialized {
             let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
 
-            // Load all signature chunks
-            let mut all_signature_data = Vec::new();
+            // Load all chunk data from RocksDB (sequential)
+            let mut raw_chunks: Vec<Vec<u8>> = Vec::with_capacity(metadata.chunk_count);
             for chunk_idx in 0..metadata.chunk_count {
                 let chunk_key = format!("signatures_chunk_{}", chunk_idx);
-                let chunk_data = self.db.get(chunk_key.as_bytes())?;
-                if let Some(data) = chunk_data {
-                    let chunk: Vec<ProteinSketchStore> = bincode::deserialize(&data)?;
-                    all_signature_data.extend(chunk);
+                if let Some(data) = self.db.get(chunk_key.as_bytes())? {
+                    raw_chunks.push(data);
                 }
             }
 
-            // Reconstruct signatures from efficient data
-            let mut signatures_map = HashMap::new();
-            for signature_data in all_signature_data {
-                let protein_sig = ProteinSketch::from_efficient_data(
-                    signature_data,
-                    metadata.moltype.clone(),
-                    metadata.ksize,
-                    metadata.scaled,
-                )?;
+            // Deserialize and reconstruct signatures in parallel
+            use rayon::prelude::*;
+            let moltype = &metadata.moltype;
+            let ksize = metadata.ksize;
+            let scaled = metadata.scaled;
 
-                let md5sum = protein_sig.signature().md5sum.clone();
-                signatures_map.insert(md5sum.to_string(), protein_sig);
-            }
+            let new_signatures: DashMap<String, ProteinSketch> = DashMap::new();
+            raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
+                let chunk: Vec<ProteinSketchStore> = bincode::deserialize(raw_data)?;
+                for signature_data in chunk {
+                    let protein_sig = ProteinSketch::from_efficient_data(
+                        signature_data,
+                        moltype.clone(),
+                        ksize,
+                        scaled,
+                    )?;
+                    let md5sum = protein_sig.signature().md5sum.clone();
+                    new_signatures.insert(md5sum.to_string(), protein_sig);
+                }
+                Ok(())
+            })?;
 
             // Reconstruct the combined minhash
             let hash_function = get_hash_function_from_moltype(&metadata.moltype)?;
@@ -375,10 +381,10 @@ impl ProteomeIndex {
 
             // Update the current index state
             {
-                // Clear existing signatures and insert new ones
+                // Clear existing signatures and swap in new ones
                 self.signatures.clear();
-                for (key, value) in signatures_map {
-                    self.signatures.insert(key, value);
+                for entry in new_signatures.into_iter() {
+                    self.signatures.insert(entry.0, entry.1);
                 }
             }
 
@@ -508,34 +514,40 @@ impl ProteomeIndex {
                     .map_err(|e| IndexError::SourmashError(e.to_string()))?;
             }
 
-            // Load all signature chunks
-            let mut all_signature_data = Vec::new();
+            // Load all chunk data from RocksDB (sequential - RocksDB reads are single-threaded)
+            let mut raw_chunks: Vec<Vec<u8>> = Vec::with_capacity(metadata.chunk_count);
             for chunk_idx in 0..metadata.chunk_count {
                 let chunk_key = format!("signatures_chunk_{}", chunk_idx);
-                let chunk_data = db.get(chunk_key.as_bytes())?;
-                if let Some(data) = chunk_data {
-                    let chunk: Vec<ProteinSketchStore> = bincode::deserialize(&data)?;
-                    all_signature_data.extend(chunk);
+                if let Some(data) = db.get(chunk_key.as_bytes())? {
+                    raw_chunks.push(data);
                 }
             }
 
-            // Reconstruct signatures from efficient data
-            let mut signatures_map = HashMap::new();
-            for signature_data in all_signature_data {
-                let protein_sig = ProteinSketch::from_efficient_data(
-                    signature_data,
-                    metadata.moltype.clone(),
-                    metadata.ksize,
-                    metadata.scaled,
-                )?;
+            // Deserialize and reconstruct signatures in parallel
+            use rayon::prelude::*;
+            let moltype = &metadata.moltype;
+            let ksize = metadata.ksize;
+            let scaled = metadata.scaled;
 
-                let md5sum = protein_sig.signature().md5sum.clone();
-                signatures_map.insert(md5sum.to_string(), protein_sig);
-            }
+            let signatures: DashMap<String, ProteinSketch> = DashMap::new();
+            raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
+                let chunk: Vec<ProteinSketchStore> = bincode::deserialize(raw_data)?;
+                for signature_data in chunk {
+                    let protein_sig = ProteinSketch::from_efficient_data(
+                        signature_data,
+                        moltype.clone(),
+                        ksize,
+                        scaled,
+                    )?;
+                    let md5sum = protein_sig.signature().md5sum.clone();
+                    signatures.insert(md5sum.to_string(), protein_sig);
+                }
+                Ok(())
+            })?;
 
             let index = Self {
                 db,
-                signatures: signatures_map.into_iter().collect(),
+                signatures,
                 combined_minhash: Arc::new(Mutex::new(combined_minhash)),
                 aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
                 encoding_fn,
