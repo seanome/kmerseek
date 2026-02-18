@@ -234,31 +234,11 @@ fn main() -> IndexResult<()> {
                 );
                 eprintln!("Skipping self-matches (comparing MD5 sums)...");
                 searcher.search_all_vs_all()?
-            } else {
-                // Get query signatures using the detected parameters
-                let query_signatures: Vec<_> = if query_is_index {
-                    // Load pre-indexed query database
-                    eprintln!("Loading pre-indexed query database...");
-                    let query_index = ProteomeIndex::load(&query)?;
-                    query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
-                } else {
-                    // Process query sequences and create signatures using detected parameters
-                    eprintln!("Processing query sequences with detected parameters...");
-                    // WHY: We must store raw sequences for query signatures so that matched regions
-                    // can be found. The find_matched_regions function requires raw sequences to extract
-                    // subsequences. Without stored sequences, matched_regions will be empty and those
-                    // SearchResults won't be included in the CSV output.
-                    let query_index = ProteomeIndex::new_with_auto_filename(
-                        &query,
-                        final_ksize,
-                        final_scaled,
-                        final_encoding.into(),
-                        true, // Store raw sequences so matched regions can be found
-                    )?;
-
-                    query_index.process_fasta(&query, 1000, 1000)?;
-                    query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect()
-                };
+            } else if query_is_index {
+                // Load pre-indexed query database
+                eprintln!("Loading pre-indexed query database...");
+                let query_index = ProteomeIndex::load(&query)?;
+                let query_signatures: Vec<_> = query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
                 if query_signatures.is_empty() {
                     eprintln!("No query signatures found!");
@@ -266,10 +246,65 @@ fn main() -> IndexResult<()> {
                 }
 
                 eprintln!("Found {} query signatures", query_signatures.len());
-
-                // Perform comprehensive search (includes TF-IDF and overlap probability calculations)
                 eprintln!("Performing comprehensive search...");
                 searcher.search(&query_signatures)?
+            } else {
+                // Stream queries from FASTA one at a time to minimize memory usage
+                // WHY: Loading all query signatures into memory can require 50+ GB for large
+                // proteomes. Instead, we process one sequence at a time: create signature,
+                // search against target, collect results, discard signature.
+                eprintln!("Streaming query sequences from FASTA...");
+                use needletail::parse_fastx_file;
+                use kmerseek::sketch::ProteinSketch;
+
+                let mut reader = parse_fastx_file(&query)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
+
+                let mut all_results = Vec::new();
+                let mut query_count = 0u64;
+
+                let progress = indicatif::ProgressBar::new_spinner();
+                progress.set_style(
+                    indicatif::ProgressStyle::with_template(
+                        "{spinner:.green} [{elapsed_precise}] {msg}",
+                    )
+                    .unwrap()
+                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+                );
+
+                while let Some(record) = reader.next() {
+                    let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
+                    let sequence = std::str::from_utf8(&record.seq())
+                        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in sequence: {}", e))?
+                        .to_uppercase();
+                    let name = std::str::from_utf8(record.id())
+                        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
+
+                    // Create a single query signature with raw sequences stored
+                    let mut query_sig = ProteinSketch::new(
+                        name, final_ksize, final_scaled, final_encoding.into(),
+                    )?;
+                    query_sig.add_protein(&sequence, true)?;
+
+                    // Search this one query against all targets
+                    let results = searcher.search_one(&query_sig);
+                    all_results.extend(results);
+
+                    query_count += 1;
+                    if query_count % 1000 == 0 {
+                        progress.set_message(format!("Searched {} queries, {} matches so far", query_count, all_results.len()));
+                        progress.tick();
+                    }
+                }
+
+                progress.finish_with_message(format!("Searched {} queries, {} matches total", query_count, all_results.len()));
+
+                // Sort by containment
+                all_results.sort_by(|a, b| {
+                    b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
+                });
+
+                all_results
             };
 
             // Filter results by threshold

@@ -405,6 +405,25 @@ impl ProteinSearcher {
         Ok(sorted_results)
     }
 
+    /// Search a single query against all targets in the index
+    ///
+    /// WHY: This enables streaming search where queries are processed one at a time
+    /// without accumulating all query signatures in memory. This is critical for
+    /// large-scale searches (e.g., 159k human proteins) where loading all queries
+    /// into memory would require 50+ GB.
+    pub fn search_one(&self, query: &ProteinSketch) -> Vec<SearchResult> {
+        let prepared = self.prepare_query(query);
+
+        self.index
+            .get_signatures()
+            .iter()
+            .filter_map(|entry| {
+                let target = entry.value();
+                self.compare(&prepared, target)
+            })
+            .collect()
+    }
+
     /// Perform all-vs-all search without cloning signatures
     ///
     /// WHY: This method is optimized for all-vs-all searches where query and target are the same
