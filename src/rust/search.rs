@@ -643,8 +643,10 @@ impl ProteinSearcher {
         }
 
         // Calculate average frequency of intersecting k-mers in the database
+        // Sequential iter: intersections are typically small (< 200 elements); rayon
+        // thread-pool overhead dominates for small collections.
         let sum_freq: f64 = intersection
-            .par_iter()
+            .iter()
             .map(|&hashval| {
                 // Get frequency of this k-mer in the database (how many signatures contain it)
                 let db_frequency =
