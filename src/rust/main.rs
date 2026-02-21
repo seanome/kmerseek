@@ -249,19 +249,27 @@ fn main() -> IndexResult<()> {
                 eprintln!("Performing comprehensive search...");
                 searcher.search(&query_signatures)?
             } else {
-                // Stream queries from FASTA one at a time to minimize memory usage
-                // WHY: Loading all query signatures into memory can require 50+ GB for large
-                // proteomes. Instead, we process one sequence at a time: create signature,
-                // search against target, collect results, discard signature.
+                // Stream queries from FASTA, writing CSV results as we go
                 eprintln!("Streaming query sequences from FASTA...");
                 use needletail::parse_fastx_file;
                 use kmerseek::sketch::ProteinSketch;
+                use kmerseek::search::SearchResultCsv;
 
                 let mut reader = parse_fastx_file(&query)
                     .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
 
-                let mut all_results = Vec::new();
+                // Create CSV writer up front so we stream rows as they're found
+                let mut csv_writer: Box<dyn std::io::Write> = if let Some(ref output_path) = output {
+                    eprintln!("Streaming results to: {}", output_path.display());
+                    Box::new(std::io::BufWriter::new(std::fs::File::create(output_path)?))
+                } else {
+                    Box::new(std::io::BufWriter::new(std::io::stdout()))
+                };
+                let mut writer = csv::Writer::from_writer(&mut csv_writer);
+
                 let mut query_count = 0u64;
+                let mut match_count = 0u64;
+                let mut row_count = 0u64;
 
                 let progress = indicatif::ProgressBar::new_spinner();
                 progress.set_style(
@@ -271,6 +279,7 @@ fn main() -> IndexResult<()> {
                     .unwrap()
                     .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
                 );
+                progress.enable_steady_tick(std::time::Duration::from_millis(250));
 
                 while let Some(record) = reader.next() {
                     let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
@@ -280,34 +289,58 @@ fn main() -> IndexResult<()> {
                     let name = std::str::from_utf8(record.id())
                         .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
 
-                    // Create a single query signature with raw sequences stored
                     let mut query_sig = ProteinSketch::new(
                         name, final_ksize, final_scaled, final_encoding.into(),
                     )?;
                     query_sig.add_protein(&sequence, true)?;
 
-                    // Search this one query against all targets
                     let results = searcher.search_one(&query_sig);
-                    all_results.extend(results);
+
+                    // Write matching results to CSV immediately
+                    for result in &results {
+                        if result.containment >= threshold {
+                            match_count += 1;
+                            for region in &result.matched_regions {
+                                let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                                writer.serialize(&csv_row)?;
+                                row_count += 1;
+                            }
+                        }
+                    }
 
                     query_count += 1;
-                    if query_count % 1000 == 0 {
-                        progress.set_message(format!("Searched {} queries, {} matches so far", query_count, all_results.len()));
-                        progress.tick();
+                    if query_count % 100 == 0 {
+                        writer.flush()?;
                     }
+                    progress.set_message(format!(
+                        "{} queries | {} matches | {} rows written | {:.1} queries/sec",
+                        query_count,
+                        match_count,
+                        row_count,
+                        query_count as f64 / progress.elapsed().as_secs_f64(),
+                    ));
                 }
 
-                progress.finish_with_message(format!("Searched {} queries, {} matches total", query_count, all_results.len()));
+                writer.flush()?;
+                drop(writer);
+                drop(csv_writer);
 
-                // Sort by containment
-                all_results.sort_by(|a, b| {
-                    b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
-                });
+                progress.finish_with_message(format!(
+                    "Done! {} queries | {} matches | {} rows | {:.1} queries/sec",
+                    query_count,
+                    match_count,
+                    row_count,
+                    query_count as f64 / progress.elapsed().as_secs_f64(),
+                ));
 
-                all_results
+                eprintln!("\n=== Search Summary ===");
+                eprintln!("Total queries: {}", query_count);
+                eprintln!("Total matches: {}", match_count);
+                eprintln!("Total CSV rows: {}", row_count);
+                return Ok(());
             };
 
-            // Filter results by threshold
+            // Filter results by threshold (for query-is-index and all-vs-all paths)
             let filtered_results: Vec<_> = search_results
                 .into_iter()
                 .filter(|result| result.containment >= threshold)
@@ -315,22 +348,12 @@ fn main() -> IndexResult<()> {
 
             eprintln!("Found {} matches above threshold {}", filtered_results.len(), threshold);
 
-            // Output CSV to stdout or file
-            // WHY: We expand each SearchResult into multiple rows - one per matched region.
-            // Each row contains all the SearchResult similarity metrics plus the matched region
-            // information. We only output SearchResults that have matched regions - if there are
-            // no matched regions, the SearchResult is skipped. This ensures every CSV row has
-            // complete matched region information.
             use kmerseek::search::SearchResultCsv;
             if let Some(output_path) = output {
                 eprintln!("Writing results to: {}", output_path.display());
                 let mut writer = csv::Writer::from_path(output_path)?;
 
                 for result in &filtered_results {
-                    // Output one row per matched region
-                    // WHY: Every CSV row must have matched region data. Each SearchResult produces
-                    // multiple CSV rows (one per matched region), with all similarity metrics
-                    // repeated for each region.
                     for region in &result.matched_regions {
                         let csv_row =
                             SearchResultCsv::from_result_and_region(result, region);
@@ -340,14 +363,9 @@ fn main() -> IndexResult<()> {
 
                 writer.flush()?;
             } else {
-                // Output to stdout
                 let mut writer = csv::Writer::from_writer(std::io::stdout());
 
                 for result in &filtered_results {
-                    // Output one row per matched region
-                    // WHY: Every CSV row must have matched region data. Each SearchResult produces
-                    // multiple CSV rows (one per matched region), with all similarity metrics
-                    // repeated for each region.
                     for region in &result.matched_regions {
                         let csv_row =
                             SearchResultCsv::from_result_and_region(result, region);
@@ -358,9 +376,6 @@ fn main() -> IndexResult<()> {
                 writer.flush()?;
             }
 
-            // Display summary statistics (TF-IDF and overlap probabilities are now included in results)
-            // WHY: Summary statistics go to stderr so they don't interfere with CSV output to stdout.
-            // This allows users to pipe CSV data to other tools while still seeing progress and summary info.
             eprintln!("\n=== Search Summary ===");
             eprintln!("Total matches found: {}", filtered_results.len());
             if !filtered_results.is_empty() {
