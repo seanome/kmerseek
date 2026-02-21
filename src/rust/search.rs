@@ -683,8 +683,9 @@ impl ProteinSearcher {
         // Calculate the product of individual k-mer probabilities
         // WHY: We use product, not sum. The probability that ALL k-mers co-occur is the
         // product of their individual probabilities (assuming independence).
+        // Sequential iter: small intersection sizes make rayon overhead unjustified.
         let prob_random: f64 = intersection
-            .par_iter()
+            .iter()
             .map(|&hashval| {
                 // Get frequency of this k-mer in the database
                 let db_frequency =
@@ -697,6 +698,33 @@ impl ProteinSearcher {
             .product(); // PRODUCT not sum - all must co-occur
 
         prob_random.clamp(0.0, 1.0)
+    }
+
+    /// Calculate sum of database frequencies for k-mers that match between query and target.
+    ///
+    /// This version takes the pre-computed intersection set directly, avoiding redundant
+    /// HashSet allocations that `calculate_sum_database_frequencies_of_matches` would incur.
+    ///
+    /// **WARNING**: This is NOT the true expected value - it conditions on the observed intersection!
+    /// It sums database frequencies only for k-mers that actually appear in both sequences.
+    ///
+    /// **What it tells you**:
+    /// - Higher values = matches are on more common k-mers
+    /// - Lower values = matches are on rarer k-mers
+    /// - Can be used to calculate average_kmer_rarity = n_intersecting_hashes / sum
+    fn calculate_sum_database_frequencies_from_intersection(
+        &self,
+        intersection: &HashSet<u64>,
+    ) -> f64 {
+        let total_signatures = self.stats.total_signatures as f64;
+        intersection
+            .iter()
+            .map(|&hashval| {
+                let db_frequency =
+                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
+                db_frequency / total_signatures
+            })
+            .sum()
     }
 
     /// Calculate sum of database frequencies for k-mers that match between query and target
@@ -721,27 +749,18 @@ impl ProteinSearcher {
     ) -> f64 {
         let query_mins = query_sketch.signature().minhash.mins();
         let target_mins = target_sketch.mins_as_set();
+        let total_signatures = self.stats.total_signatures as f64;
 
-        // Sum database frequencies only for k-mers that actually match
-        let sum_frequencies: f64 = query_mins
-            .par_iter()
+        // Sum database frequencies only for k-mers that actually match (sequential iter)
+        query_mins
+            .iter()
+            .filter(|&&hashval| target_mins.contains(&hashval))
             .map(|&hashval| {
-                // Only consider k-mers that are in BOTH query and target (the actual intersection)
-                if !target_mins.contains(&hashval) {
-                    return 0.0;
-                }
-
-                // Get frequency of this k-mer in the database
                 let db_frequency =
                     self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
-                let total_signatures = self.stats.total_signatures as f64;
-
-                // Database frequency (proportion of sequences containing this k-mer)
                 db_frequency / total_signatures
             })
-            .sum();
-
-        sum_frequencies
+            .sum()
     }
 
     /// Calculate the TRUE expected number of shared k-mers by random chance
@@ -766,24 +785,16 @@ impl ProteinSearcher {
         let total_signatures = self.stats.total_signatures as f64;
 
         // For each k-mer in the query (regardless of whether it's in target),
-        // calculate the expected probability it would appear in the target
-        let expected: f64 = query_mins
-            .par_iter()
+        // calculate the expected probability it would appear in the target.
+        // Sequential iter: rayon overhead is unjustified for per-query-sized collections.
+        query_mins
+            .iter()
             .map(|&hashval| {
-                // Get frequency of this k-mer in the database
                 let db_frequency =
                     self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
-
-                // Probability this k-mer appears in a random sequence from the database
-                let prob_in_database = db_frequency / total_signatures;
-
-                // Expected contribution to intersection based on target size
-                // This is a simplified model - could be improved with hypergeometric distribution
-                prob_in_database
+                db_frequency / total_signatures
             })
-            .sum();
-
-        expected
+            .sum()
     }
 
     /// Get the underlying index
@@ -795,6 +806,81 @@ impl ProteinSearcher {
     pub fn stats(&self) -> &SearchStats {
         &self.stats
     }
+}
+
+/// Inner implementation: calculate similarity given pre-computed mins sets and intersection.
+///
+/// WHY: Called from both `calculate_similarity` (which computes the HashSets itself) and
+/// `ProteinSearcher::compare` (which has already computed them for candidate pre-filtering).
+/// Sharing one implementation prevents the intersection and size calculations from being
+/// redundantly repeated across the call stack.
+fn calculate_similarity_from_precomputed(
+    query: &ProteinSketch,
+    query_mins: &HashSet<u64>,
+    target: &ProteinSketch,
+    target_mins: &HashSet<u64>,
+    intersection: &HashSet<u64>,
+) -> Option<SearchResult> {
+    let n_intersecting_hashes = intersection.len();
+    if n_intersecting_hashes == 0 {
+        return None;
+    }
+
+    let query_size = query_mins.len();
+    let target_size = target_mins.len();
+    let union_size = query_size + target_size - n_intersecting_hashes;
+
+    let containment = n_intersecting_hashes as f64 / query_size as f64;
+    let jaccard = n_intersecting_hashes as f64 / union_size as f64;
+    let containment_target_in_query = n_intersecting_hashes as f64 / target_size as f64;
+    let max_containment = containment.max(containment_target_in_query);
+
+    let query_abunds = query.signature().minhash.abunds();
+    let target_abunds = target.signature().minhash.abunds();
+
+    let (average_abund, median_abund, std_abund) =
+        if let (Some(qa), Some(ta)) = (query_abunds.as_ref(), target_abunds.as_ref()) {
+            let query_mins_sorted = query.signature().minhash.mins();
+            let target_mins_sorted = target.signature().minhash.mins();
+            significance::abundance_stats(intersection, &query_mins_sorted, qa, &target_mins_sorted, ta)
+        } else {
+            (1.0, 1.0, 0.0)
+        };
+
+    let f_weighted_target_in_query = significance::weighted_fraction_target_in_query(
+        query_abunds.as_deref(),
+        target_abunds.as_deref(),
+    );
+
+    let matched_regions = find_matched_regions(query, target, intersection);
+
+    Some(SearchResult {
+        query_name: query.signature().name.clone(),
+        query_md5: query.signature().md5sum.clone(),
+        target_name: target.signature().name.clone(),
+        target_md5: target.signature().md5sum.clone(),
+        containment,
+        n_intersecting_hashes,
+        ksize: query.protein_ksize(),
+        scaled: query.signature().minhash.scaled(),
+        moltype: query.moltype().to_string(),
+        jaccard,
+        max_containment,
+        average_abund,
+        median_abund,
+        std_abund,
+        containment_target_in_query,
+        f_weighted_target_in_query,
+        tfidf: 0.0, // Default for 1v1 comparisons - requires database context
+        average_database_kmer_frequency: 0.0, // Default for 1v1 comparisons - requires database context
+        prob_random_cooccurrence: 1.0, // Default for 1v1 comparisons - requires database context
+        prob_random_cooccurrence_symmetric: 1.0, // Default for 1v1 comparisons - requires database context
+        sum_database_frequencies_of_matches: 0.0, // Default for 1v1 comparisons - requires database context
+        average_kmer_rarity: 0.0, // Default for 1v1 comparisons - requires database context
+        expected_intersecting_hashes: 0.0, // Default for 1v1 comparisons - requires database context
+        observed_over_expected: 0.0, // Default for 1v1 comparisons - requires database context
+        matched_regions,
+    })
 }
 
 /// Calculate similarity between two protein sketches without requiring database context.
@@ -830,90 +916,10 @@ impl ProteinSearcher {
 /// ```
 #[must_use]
 pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Option<SearchResult> {
-    // Extract query data
-    let query_abunds = query.signature().minhash.abunds();
-    let query_name = query.signature().name.clone();
-    let query_md5 = query.signature().md5sum.clone();
-
-    // Extract target data
-    let target_abunds = target.signature().minhash.abunds();
-
-    // Calculate intersection using the new intersect() method
-    let intersection = query.intersect(target);
-    let n_intersecting_hashes = intersection.len();
-
-    // Skip if no intersection
-    if n_intersecting_hashes == 0 {
-        return None;
-    }
-
-    let query_size = query.mins_as_set().len();
-    let target_size = target.mins_as_set().len();
-    let union_size = query_size + target_size - n_intersecting_hashes;
-
-    // Calculate basic metrics
-    let containment = n_intersecting_hashes as f64 / query_size as f64;
-    let jaccard = n_intersecting_hashes as f64 / union_size as f64;
-    let containment_target_in_query = n_intersecting_hashes as f64 / target_size as f64;
-    let max_containment = containment.max(containment_target_in_query);
-
-    // Calculate abundance statistics
-    // WHY: We pass the mins arrays along with the abundance arrays because abundances
-    // are stored in the same order as mins. We need to find the position of each
-    // intersecting hash in both arrays to get the correct corresponding abundances.
-    let (average_abund, median_abund, std_abund) =
-        if let (Some(query_abunds), Some(target_abunds)) =
-            (query_abunds.as_ref(), target_abunds.as_ref())
-        {
-            let query_mins = query.signature().minhash.mins();
-            let target_mins = target.signature().minhash.mins();
-            significance::abundance_stats(
-                &intersection,
-                &query_mins,
-                query_abunds,
-                &target_mins,
-                target_abunds,
-            )
-        } else {
-            (1.0, 1.0, 0.0)
-        };
-
-    // Calculate weighted metrics
-    let f_weighted_target_in_query = significance::weighted_fraction_target_in_query(
-        query_abunds.as_deref(),
-        target_abunds.as_deref(),
-    );
-
-    // Find matched regions
-    let matched_regions = find_matched_regions(query, target, &intersection);
-
-    Some(SearchResult {
-        query_name,
-        query_md5,
-        target_name: target.signature().name.clone(),
-        target_md5: target.signature().md5sum.clone(),
-        containment,
-        n_intersecting_hashes,
-        ksize: query.protein_ksize(),
-        scaled: query.signature().minhash.scaled(),
-        moltype: query.moltype().to_string(),
-        jaccard,
-        max_containment,
-        average_abund,
-        median_abund,
-        std_abund,
-        containment_target_in_query,
-        f_weighted_target_in_query,
-        tfidf: 0.0, // Default for 1v1 comparisons - requires database context
-        average_database_kmer_frequency: 0.0, // Default for 1v1 comparisons - requires database context
-        prob_random_cooccurrence: 1.0, // Default for 1v1 comparisons - requires database context
-        prob_random_cooccurrence_symmetric: 1.0, // Default for 1v1 comparisons - requires database context
-        sum_database_frequencies_of_matches: 0.0, // Default for 1v1 comparisons - requires database context
-        average_kmer_rarity: 0.0, // Default for 1v1 comparisons - requires database context
-        expected_intersecting_hashes: 0.0, // Default for 1v1 comparisons - requires database context
-        observed_over_expected: 0.0, // Default for 1v1 comparisons - requires database context
-        matched_regions,
-    })
+    let query_mins = query.mins_as_set();
+    let target_mins = target.mins_as_set();
+    let intersection: HashSet<u64> = query_mins.intersection(&target_mins).cloned().collect();
+    calculate_similarity_from_precomputed(query, &query_mins, target, &target_mins, &intersection)
 }
 
 /// Find all consecutive matched regions of k-mer overlap between a query and target sequences
