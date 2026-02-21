@@ -542,36 +542,48 @@ impl ProteinSearcher {
             return None;
         }
 
-        // Calculate intersection for overlap probability check
-        let intersection = query.sketch.intersect(target);
+        // Use pre-computed query.mins from PreparedQuery and compute target mins once.
+        // WHY: query.mins is already a HashSet built in prepare_query(). Using it directly
+        // avoids recomputing the query HashSet on every comparison. target_mins is computed
+        // once here and reused for intersection and calculate_similarity_from_precomputed,
+        // avoiding a second target HashSet allocation inside calculate_similarity.
+        let target_mins = target.mins_as_set();
+        let intersection: HashSet<u64> =
+            query.mins.intersection(&target_mins).cloned().collect();
 
         // Skip if no intersection
         if intersection.is_empty() {
             return None;
         }
 
-        // Calculate all database-specific overlap metrics
+        // Calculate all database-specific overlap metrics (sequential iter - intersections
+        // are small, rayon overhead dominates for small collections)
         let average_database_kmer_frequency =
             self.calculate_average_database_kmer_frequency(&intersection);
         let prob_random_cooccurrence = self.calculate_prob_random_cooccurrence(&intersection);
 
-        // Calculate symmetric version: geometric mean of both directions
-        let prob_random_cooccurrence_reverse =
-            self.calculate_prob_random_cooccurrence(&intersection);
-        let prob_random_cooccurrence_symmetric =
-            (prob_random_cooccurrence * prob_random_cooccurrence_reverse).sqrt();
+        // Symmetric version: geometric mean of both directions
+        // WHY: Currently both directions use the same intersection so they're identical;
+        // keeping the sqrt(p * p) = p form preserves the API contract for future asymmetric metrics.
+        let prob_random_cooccurrence_symmetric = prob_random_cooccurrence;
 
-        // Calculate sum of database frequencies for matches (the old "expected" calculation)
+        // Sum of database frequencies for matched k-mers
         let sum_database_frequencies_of_matches =
-            self.calculate_sum_database_frequencies_of_matches(query.sketch, target);
+            self.calculate_sum_database_frequencies_from_intersection(&intersection);
 
-        // Calculate the TRUE expected intersecting hashes (across all query k-mers)
+        // TRUE expected intersecting hashes (across all query k-mers)
         let expected_intersecting_hashes =
             self.calculate_expected_intersecting_hashes(query.sketch, target);
 
-        // Get the base similarity result from the standalone function
-        // Note: This will recalculate intersection, but that's acceptable for the cleaner API
-        let mut result = calculate_similarity(query.sketch, target)?;
+        // Build the similarity result using the pre-computed intersection and mins sets,
+        // avoiding a third recomputation of both HashSets inside calculate_similarity.
+        let mut result = calculate_similarity_from_precomputed(
+            query.sketch,
+            &query.mins,
+            target,
+            &target_mins,
+            &intersection,
+        )?;
 
         // Calculate average kmer rarity (inverse of sum of frequencies)
         let average_kmer_rarity = if sum_database_frequencies_of_matches > 0.0 {
