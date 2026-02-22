@@ -281,6 +281,43 @@ fn main() -> IndexResult<()> {
                 );
                 progress.enable_steady_tick(std::time::Duration::from_millis(250));
 
+                // Batch size for parallel query processing.
+                // Each batch is searched in parallel (par_iter over queries), then written
+                // sequentially. Larger batches = better parallelism but higher peak memory.
+                const BATCH_SIZE: usize = 500;
+                use rayon::prelude::*;
+                let mut batch: Vec<ProteinSketch> = Vec::with_capacity(BATCH_SIZE);
+
+                // Helper closure: process one batch and write results to CSV
+                let process_batch =
+                    |batch: &[ProteinSketch],
+                     writer: &mut csv::Writer<&mut Box<dyn std::io::Write>>,
+                     match_count: &mut u64,
+                     row_count: &mut u64|
+                     -> anyhow::Result<()> {
+                        // Search all queries in this batch in parallel
+                        let batch_results: Vec<Vec<kmerseek::search::SearchResult>> = batch
+                            .par_iter()
+                            .map(|q| searcher.search_one(q))
+                            .collect();
+
+                        // Write results sequentially (preserves per-query ordering within batch)
+                        for results in &batch_results {
+                            for result in results {
+                                if result.containment >= threshold {
+                                    *match_count += 1;
+                                    for region in &result.matched_regions {
+                                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                                        writer.serialize(&csv_row)?;
+                                        *row_count += 1;
+                                    }
+                                }
+                            }
+                        }
+                        writer.flush()?;
+                        Ok(())
+                    };
+
                 while let Some(record) = reader.next() {
                     let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
                     let sequence = std::str::from_utf8(&record.seq())
@@ -293,32 +330,26 @@ fn main() -> IndexResult<()> {
                         name, final_ksize, final_scaled, final_encoding.into(),
                     )?;
                     query_sig.add_protein(&sequence, true)?;
+                    batch.push(query_sig);
 
-                    let results = searcher.search_one(&query_sig);
-
-                    // Write matching results to CSV immediately
-                    for result in &results {
-                        if result.containment >= threshold {
-                            match_count += 1;
-                            for region in &result.matched_regions {
-                                let csv_row = SearchResultCsv::from_result_and_region(result, region);
-                                writer.serialize(&csv_row)?;
-                                row_count += 1;
-                            }
-                        }
+                    if batch.len() >= BATCH_SIZE {
+                        process_batch(&batch, &mut writer, &mut match_count, &mut row_count)?;
+                        query_count += batch.len() as u64;
+                        batch.clear();
+                        progress.set_message(format!(
+                            "{} queries | {} matches | {} rows written | {:.1} queries/sec",
+                            query_count,
+                            match_count,
+                            row_count,
+                            query_count as f64 / progress.elapsed().as_secs_f64(),
+                        ));
                     }
+                }
 
-                    query_count += 1;
-                    if query_count % 100 == 0 {
-                        writer.flush()?;
-                    }
-                    progress.set_message(format!(
-                        "{} queries | {} matches | {} rows written | {:.1} queries/sec",
-                        query_count,
-                        match_count,
-                        row_count,
-                        query_count as f64 / progress.elapsed().as_secs_f64(),
-                    ));
+                // Process final partial batch
+                if !batch.is_empty() {
+                    process_batch(&batch, &mut writer, &mut match_count, &mut row_count)?;
+                    query_count += batch.len() as u64;
                 }
 
                 writer.flush()?;
