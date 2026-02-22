@@ -193,8 +193,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     search_cmd
         .assert()
         .success()
-        .stderr(predicate::str::contains("Found"))
-        .stderr(predicate::str::contains("matches"));
+        .stderr(predicate::str::contains("Total matches"));
 
     // Step 3: Verify output CSV exists and contains expected results
     assert!(output_csv.exists(), "Search results CSV should be created");
