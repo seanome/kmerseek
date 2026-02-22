@@ -3,6 +3,7 @@ use std::fmt::{Display, Formatter};
 use std::path::Path;
 
 use anyhow::Result;
+use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
@@ -308,20 +309,93 @@ impl SearchStats {
 pub struct ProteinSearcher {
     index: ProteomeIndex,
     stats: SearchStats,
+    /// Ordered list of target MD5 keys, indexed by u32 for the inverted index
+    target_list: Vec<String>,
+    /// Inverted k-mer index: kmer_hash → Vec of target indices into target_list.
+    /// Enables candidate pre-filtering so search_one only compares against targets
+    /// that share at least one k-mer with the query, instead of all targets.
+    inverted_index: HashMap<u64, Vec<u32>>,
+    /// Lazy signature cache: populated on demand from RocksDB during search_one().
+    ///
+    /// WHY: When on-demand loading is used (fast startup path), the same target protein
+    /// may be a candidate for many queries. Without a cache, each query would trigger a
+    /// separate RocksDB get() for the same signature. The DashMap cache is thread-safe,
+    /// allowing concurrent reads from rayon's par_iter() in search_one(). Memory grows
+    /// only as candidates are accessed — hot targets are cached, cold ones are never loaded.
+    sig_cache: DashMap<String, ProteinSketch>,
 }
 
 impl ProteinSearcher {
     /// Create a new protein searcher from an index
     pub fn new(index: ProteomeIndex) -> Self {
         let stats = SearchStats::from_index(&index);
-        Self { index, stats }
+        let (target_list, inverted_index) = Self::build_search_structures(&index);
+        Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new() }
     }
 
-    /// Load a searcher from a saved index
+    /// Load a searcher from a saved index.
+    ///
+    /// Fast path: if the index was built with a recent version of kmerseek (which saves a
+    /// pre-built search cache), this method opens the DB without loading all signatures into
+    /// memory. Signatures are then loaded on demand during search via `get_signature_by_md5()`.
+    ///
+    /// Slow path (backward compat): for older databases without a search cache, falls back to
+    /// loading all signatures into memory and building the inverted index at startup.
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
-        let index = ProteomeIndex::load(path)?;
+        // Open DB minimally: read metadata only, leave signatures DashMap empty
+        let index = ProteomeIndex::open_for_search(&path)?;
+
+        // Fast path: pre-built search cache exists - no need to load all signatures
+        if let Some((target_list, inverted_index, kmer_frequencies)) =
+            index.load_search_cache()?
+        {
+            let total_signatures = target_list.len();
+            let idf: HashMap<u64, f64> = kmer_frequencies
+                .iter()
+                .map(|(&kmer, &freq)| {
+                    let idf_value = (total_signatures as f64 / freq as f64).ln();
+                    (kmer, idf_value)
+                })
+                .collect();
+            let stats = SearchStats { total_signatures, idf, kmer_frequencies };
+            eprintln!(
+                "Loaded search cache: {} targets, {} k-mers indexed",
+                total_signatures,
+                inverted_index.len()
+            );
+            return Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new() });
+        }
+
+        // Slow path: old DB without search cache - load all signatures and build structures
+        eprintln!(
+            "No search cache found; loading all signatures (run `kmerseek index` to rebuild)"
+        );
+        index.load_state()?;
         let stats = SearchStats::from_index(&index);
-        Ok(Self { index, stats })
+        let (target_list, inverted_index) = Self::build_search_structures(&index);
+        Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new() })
+    }
+
+    /// Build an ordered target list and inverted k-mer index from the index.
+    ///
+    /// WHY: The inverted index maps each k-mer hash to the set of target signatures that
+    /// contain it. This allows search_one to skip the vast majority of targets that share
+    /// no k-mers with the query, reducing search from O(Q×T) to O(Q×candidates) where
+    /// candidates << T for most real queries. Building this once at load time amortizes
+    /// the cost across all subsequent searches.
+    fn build_search_structures(index: &ProteomeIndex) -> (Vec<String>, HashMap<u64, Vec<u32>>) {
+        let mut target_list: Vec<String> = Vec::new();
+        let mut inverted_index: HashMap<u64, Vec<u32>> = HashMap::new();
+
+        for entry in index.get_signatures().iter() {
+            let idx = target_list.len() as u32;
+            target_list.push(entry.key().clone());
+            for min in entry.value().signature().minhash.mins() {
+                inverted_index.entry(min).or_default().push(idx);
+            }
+        }
+
+        (target_list, inverted_index)
     }
 
     /// Prepare a query for efficient batch searching
@@ -369,23 +443,12 @@ impl ProteinSearcher {
         );
         progress.set_message("Searching...");
 
-        // Perform parallel search across all queries
+        // Perform parallel search across all queries using the inverted index
         let all_results: Vec<SearchResult> = queries
             .par_iter()
             .flat_map(|query| {
-                // Prepare query once - this pre-computes mins as HashSet and TF-IDF
-                let prepared = self.prepare_query(query);
-
-                // Search this query against all targets
-                let results: Vec<_> = self
-                    .index
-                    .get_signatures()
-                    .iter()
-                    .filter_map(|entry| {
-                        let target = entry.value();
-                        self.compare(&prepared, target)
-                    })
-                    .collect();
+                // search_one uses the inverted index to find candidates
+                let results = self.search_one(query);
 
                 // Update progress after processing each query
                 progress.inc(1);
@@ -411,15 +474,50 @@ impl ProteinSearcher {
     /// without accumulating all query signatures in memory. This is critical for
     /// large-scale searches (e.g., 159k human proteins) where loading all queries
     /// into memory would require 50+ GB.
+    ///
+    /// Uses the inverted k-mer index to find candidate targets (those sharing ≥1 k-mer
+    /// with the query) before doing full pairwise comparison. This skips the vast majority
+    /// of targets with no k-mer overlap, reducing work from O(all_targets) to O(candidates).
     pub fn search_one(&self, query: &ProteinSketch) -> Vec<SearchResult> {
         let prepared = self.prepare_query(query);
 
-        self.index
-            .get_signatures()
-            .iter()
-            .filter_map(|entry| {
-                let target = entry.value();
-                self.compare(&prepared, target)
+        // Find candidate targets via inverted index: only compare against targets
+        // that share at least one k-mer with the query
+        let mut candidate_set: HashSet<u32> = HashSet::new();
+        for &kmer in &prepared.mins {
+            if let Some(indices) = self.inverted_index.get(&kmer) {
+                for &idx in indices {
+                    candidate_set.insert(idx);
+                }
+            }
+        }
+
+        // Compare only against candidates, in parallel.
+        // Three paths for signature access (checked in order of cost):
+        //   1. In-memory DashMap (populated in slow path for old DBs): zero-copy O(1) lookup
+        //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
+        //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
+        let sigs = self.index.get_signatures();
+        candidate_set
+            .par_iter()
+            .filter_map(|&idx| {
+                let md5 = &self.target_list[idx as usize];
+
+                // Path 1: in-memory signatures (slow path for old DBs without search cache)
+                if let Some(entry) = sigs.get(md5.as_str()) {
+                    return self.compare(&prepared, entry.value());
+                }
+
+                // Path 2: sig_cache hit (target was loaded by an earlier query)
+                if let Some(entry) = self.sig_cache.get(md5.as_str()) {
+                    return self.compare(&prepared, entry.value());
+                }
+
+                // Path 3: first-time load from RocksDB; store in cache for future queries
+                let target = self.index.get_signature_by_md5(md5).ok()??;
+                let result = self.compare(&prepared, &target);
+                self.sig_cache.insert(md5.clone(), target);
+                result
             })
             .collect()
     }
@@ -437,16 +535,31 @@ impl ProteinSearcher {
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
     #[must_use = "search results should be used to process query matches"]
     pub fn search_all_vs_all(&self) -> Result<Vec<SearchResult>> {
-        let signatures = self.index.get_signatures();
-
-        // Collect MD5 keys for parallel iteration (cheap String clones, not ProteinSketch clones)
-        // WHY: DashMap doesn't implement ParallelIterator directly. By collecting keys first,
-        // we can parallelize over them and look up the actual signatures in the DashMap. This
-        // avoids cloning the large ProteinSketch objects while still enabling parallel processing.
-        let md5_keys: Vec<String> = signatures.iter().map(|entry| entry.key().clone()).collect();
+        // Collect all signatures as owned ProteinSketch values to use as queries.
+        // Two paths: in-memory DashMap (slow path / old DBs) or on-demand RocksDB (fast path).
+        let all_queries: Vec<ProteinSketch> = {
+            let sigs = self.index.get_signatures();
+            if !sigs.is_empty() {
+                sigs.iter().map(|entry| entry.value().clone()).collect()
+            } else {
+                // Fast path: load all signatures from RocksDB via target_list
+                self.target_list
+                    .iter()
+                    .filter_map(|md5| {
+                        // Check sig_cache first, then RocksDB
+                        if let Some(entry) = self.sig_cache.get(md5.as_str()) {
+                            return Some(entry.value().clone());
+                        }
+                        let sig = self.index.get_signature_by_md5(md5).ok()??;
+                        self.sig_cache.insert(md5.clone(), sig.clone());
+                        Some(sig)
+                    })
+                    .collect()
+            }
+        };
 
         // Create progress bar for tracking query processing
-        let progress = ProgressBar::new(md5_keys.len() as u64);
+        let progress = ProgressBar::new(all_queries.len() as u64);
         progress.set_style(
             ProgressStyle::with_template(
                 "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {pos}/{len} queries ({percent}%) | ETA: {eta}",
@@ -456,40 +569,12 @@ impl ProteinSearcher {
         );
         progress.set_message("Searching all-vs-all...");
 
-        // Perform parallel search across all signatures
-        // WHY: We iterate over MD5 keys in parallel, then look up the actual signatures in the
-        // DashMap. Each signature is used as both query and target, but we skip self-matches
-        // in the compare() method by comparing MD5 sums.
-        let all_results: Vec<SearchResult> = md5_keys
+        // Use search_one (inverted index) for each query instead of exhaustive O(N²) iteration
+        let all_results: Vec<SearchResult> = all_queries
             .par_iter()
-            .flat_map(|query_md5| {
-                // Look up query signature by MD5
-                // WHY: We use filter_map to handle the Option from get() gracefully. If the
-                // signature doesn't exist (shouldn't happen, but safe to handle), we skip it.
-                let results: Vec<_> = signatures
-                    .get(query_md5)
-                    .map(|query_entry| {
-                        let query = query_entry.value();
-
-                        // Prepare query once - this pre-computes mins as HashSet and TF-IDF
-                        let prepared = self.prepare_query(query);
-
-                        // Search this query against all targets (including itself, but compare() will skip self-matches)
-                        signatures
-                            .iter()
-                            .filter_map(|target_entry| {
-                                let target = target_entry.value();
-                                self.compare(&prepared, target)
-                            })
-                            .collect::<Vec<_>>()
-                    })
-                    .into_iter()
-                    .flatten()
-                    .collect();
-
-                // Update progress after processing each query
+            .flat_map(|query| {
+                let results = self.search_one(query);
                 progress.inc(1);
-
                 results
             })
             .collect();
@@ -548,8 +633,7 @@ impl ProteinSearcher {
         // once here and reused for intersection and calculate_similarity_from_precomputed,
         // avoiding a second target HashSet allocation inside calculate_similarity.
         let target_mins = target.mins_as_set();
-        let intersection: HashSet<u64> =
-            query.mins.intersection(&target_mins).cloned().collect();
+        let intersection: HashSet<u64> = query.mins.intersection(&target_mins).cloned().collect();
 
         // Skip if no intersection
         if intersection.is_empty() {
@@ -838,14 +922,15 @@ fn calculate_similarity_from_precomputed(
     let query_abunds = query.signature().minhash.abunds();
     let target_abunds = target.signature().minhash.abunds();
 
-    let (average_abund, median_abund, std_abund) =
-        if let (Some(qa), Some(ta)) = (query_abunds.as_ref(), target_abunds.as_ref()) {
-            let query_mins_sorted = query.signature().minhash.mins();
-            let target_mins_sorted = target.signature().minhash.mins();
-            significance::abundance_stats(intersection, &query_mins_sorted, qa, &target_mins_sorted, ta)
-        } else {
-            (1.0, 1.0, 0.0)
-        };
+    let (average_abund, median_abund, std_abund) = if let (Some(qa), Some(ta)) =
+        (query_abunds.as_ref(), target_abunds.as_ref())
+    {
+        let query_mins_sorted = query.signature().minhash.mins();
+        let target_mins_sorted = target.signature().minhash.mins();
+        significance::abundance_stats(intersection, &query_mins_sorted, qa, &target_mins_sorted, ta)
+    } else {
+        (1.0, 1.0, 0.0)
+    };
 
     let f_weighted_target_in_query = significance::weighted_fraction_target_in_query(
         query_abunds.as_deref(),
@@ -1389,10 +1474,18 @@ mod tests {
 
         // Check that the first result has reasonable values
         let first_result = &results[0];
-        assert!(first_result.query_name.contains("BCL2_HUMAN") || first_result.query_name.contains("Q07817"),
-                "Query should be BCL2, got: {}", first_result.query_name);
-        assert!(first_result.target_name.contains("CED9_CAEEL") || first_result.target_name.contains("P41958"),
-                "Target should be CED9, got: {}", first_result.target_name);
+        assert!(
+            first_result.query_name.contains("BCL2_HUMAN")
+                || first_result.query_name.contains("Q07817"),
+            "Query should be BCL2, got: {}",
+            first_result.query_name
+        );
+        assert!(
+            first_result.target_name.contains("CED9_CAEEL")
+                || first_result.target_name.contains("P41958"),
+            "Target should be CED9, got: {}",
+            first_result.target_name
+        );
         // BCL2 and CED9 share HP k-mers, so containment should be > 0
         assert!(first_result.containment > 0.0, "Should have positive containment");
         assert!(first_result.jaccard > 0.0, "Should have positive jaccard");
@@ -1730,7 +1823,8 @@ mod tests {
             kmer_frequencies: HashMap::new(),
         };
 
-        let searcher = ProteinSearcher { index, stats };
+        let (target_list, inverted_index) = ProteinSearcher::build_search_structures(&index);
+        let searcher = ProteinSearcher { index, stats, target_list, inverted_index, sig_cache: DashMap::new() };
 
         let tfidf = searcher.calculate_tfidf(&query);
         assert!(tfidf >= 0.0);
