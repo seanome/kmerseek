@@ -57,6 +57,21 @@ struct ProteomeIndexMetadata {
     store_raw_sequences: bool,
 }
 
+/// Serializable search cache built at index time for fast search startup.
+///
+/// Stores the pre-built inverted index, ordered target list, and k-mer frequencies
+/// so that ProteinSearcher::load() can avoid loading all signatures into memory.
+/// Individual signatures are stored separately under "sig_{md5}" keys for on-demand access.
+#[derive(Serialize, Deserialize)]
+struct SearchCache {
+    /// Ordered list of target MD5 sums: index (u32) → md5 string
+    target_list: Vec<String>,
+    /// Inverted k-mer index: kmer_hash → Vec of target indices into target_list
+    inverted_index: HashMap<u64, Vec<u32>>,
+    /// K-mer frequency counts: kmer_hash → number of signatures containing it
+    kmer_frequencies: HashMap<u64, usize>,
+}
+
 pub struct ProteomeIndex {
     // RocksDB instance for persistent storage
     db: DB,
@@ -250,6 +265,48 @@ impl ProteomeIndex {
         &self.moltype
     }
 
+    /// Build and persist the search cache and individual signatures for fast search startup.
+    ///
+    /// This method:
+    /// 1. Builds target_list, inverted_index, and kmer_frequencies from in-memory signatures
+    /// 2. Stores each signature individually under "sig_{md5}" for on-demand loading
+    /// 3. Serializes the SearchCache (target_list + inverted_index + kmer_frequencies) to RocksDB
+    ///
+    /// WHY: Building these structures at index time (once) rather than at search startup
+    /// (every time) avoids the need to load all 200k+ signatures into memory before searching.
+    /// During search, only candidate signatures (those sharing ≥1 k-mer with the query) are
+    /// loaded on-demand from RocksDB, reducing startup time from minutes to seconds.
+    fn save_inverted_index(&self) -> IndexResult<()> {
+        let mut target_list: Vec<String> = Vec::new();
+        let mut inverted_index: HashMap<u64, Vec<u32>> = HashMap::new();
+        let mut kmer_frequencies: HashMap<u64, usize> = HashMap::new();
+
+        // Single pass: build index structures and save individual signatures
+        for entry in self.signatures.iter() {
+            let idx = target_list.len() as u32;
+            target_list.push(entry.key().clone());
+
+            // Store individual signature for on-demand loading during search
+            let sig_data = entry.value().to_efficient_data(self.store_raw_sequences);
+            let serialized = bincode::serialize(&sig_data)?;
+            let key = format!("sig_{}", entry.key());
+            self.db.put(key.as_bytes(), serialized)?;
+
+            // Build inverted index and kmer frequencies
+            for min in entry.value().signature().minhash.mins() {
+                inverted_index.entry(min).or_default().push(idx);
+                *kmer_frequencies.entry(min).or_insert(0) += 1;
+            }
+        }
+
+        // Serialize and store the search cache
+        let cache = SearchCache { target_list, inverted_index, kmer_frequencies };
+        let serialized = bincode::serialize(&cache)?;
+        self.db.put(b"search_cache", serialized)?;
+
+        Ok(())
+    }
+
     /// Save the current index state to RocksDB using chunked storage format
     ///
     /// This method stores signatures in chunks to avoid RocksDB value size limits.
@@ -290,6 +347,9 @@ impl ProteomeIndex {
 
         let serialized_metadata = bincode::serialize(&metadata)?;
         self.db.put(b"index_metadata", serialized_metadata)?;
+
+        // Build and persist search cache + individual signatures for fast search startup
+        self.save_inverted_index()?;
 
         // Flush to ensure data is written to disk
         self.db.flush()?;
@@ -562,6 +622,87 @@ impl ProteomeIndex {
             Ok(index)
         } else {
             Err(IndexError::NoSavedState)
+        }
+    }
+
+    /// Open a database for searching without loading all signatures into memory.
+    ///
+    /// Unlike `load()`, this method reads only the metadata header and leaves the
+    /// `signatures` DashMap empty. Signatures are loaded on demand via
+    /// `get_signature_by_md5()` during search. This avoids the minutes-long startup
+    /// cost of deserializing 200k+ signatures when only a small fraction will be needed.
+    ///
+    /// Call `load_search_cache()` after opening to retrieve the pre-built inverted index.
+    pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
+        let opts = Self::create_rocksdb_options(false);
+        let db = DB::open(&opts, path)?;
+
+        let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
+        let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
+
+        let encoding_fn = get_encoding_fn_from_moltype(&metadata.moltype)
+            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
+        let hash_function = get_hash_function_from_moltype(&metadata.moltype)
+            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
+        let minhash_ksize = metadata.ksize * 3;
+
+        // Create a minimal combined_minhash (not used for search, but required by struct)
+        let combined_minhash =
+            KmerMinHash::new(metadata.scaled, minhash_ksize, hash_function, SEED, true, 0);
+
+        Ok(Self {
+            db,
+            signatures: DashMap::new(), // Empty - signatures loaded on demand by get_signature_by_md5()
+            combined_minhash: Arc::new(Mutex::new(combined_minhash)),
+            aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
+            encoding_fn,
+            moltype: metadata.moltype,
+            ksize: metadata.ksize,
+            minhash_ksize,
+            scaled: metadata.scaled,
+            stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
+            store_raw_sequences: metadata.store_raw_sequences,
+        })
+    }
+
+    /// Load the pre-built search cache from RocksDB.
+    ///
+    /// Returns `Some((target_list, inverted_index, kmer_frequencies))` if the cache was
+    /// saved by `save_inverted_index()`, or `None` for older databases that predate the cache.
+    ///
+    /// The caller (ProteinSearcher::load) uses this to skip loading all signatures and instead
+    /// find candidates via the inverted index, loading individual signatures on demand.
+    pub fn load_search_cache(
+        &self,
+    ) -> IndexResult<Option<(Vec<String>, HashMap<u64, Vec<u32>>, HashMap<u64, usize>)>> {
+        if let Some(data) = self.db.get(b"search_cache")? {
+            let cache: SearchCache = bincode::deserialize(&data)?;
+            Ok(Some((cache.target_list, cache.inverted_index, cache.kmer_frequencies)))
+        } else {
+            Ok(None)
+        }
+    }
+
+    /// Load a single signature from RocksDB by its MD5 sum.
+    ///
+    /// Returns `None` if the signature was not found (e.g. the database was built without
+    /// `save_inverted_index()`). Returns an error on deserialization failures.
+    ///
+    /// WHY: During search, only candidate signatures (those sharing ≥1 k-mer with the query)
+    /// need to be loaded. This avoids loading all 200k+ signatures into memory at startup.
+    pub fn get_signature_by_md5(&self, md5: &str) -> IndexResult<Option<ProteinSketch>> {
+        let key = format!("sig_{}", md5);
+        if let Some(data) = self.db.get(key.as_bytes())? {
+            let sig_data: ProteinSketchStore = bincode::deserialize(&data)?;
+            let sketch = ProteinSketch::from_efficient_data(
+                sig_data,
+                self.moltype.clone(),
+                self.ksize,
+                self.scaled,
+            )?;
+            Ok(Some(sketch))
+        } else {
+            Ok(None)
         }
     }
 
