@@ -77,6 +77,12 @@ enum Commands {
         /// Whether to treat query as a pre-indexed database instead of FASTA file
         #[arg(long, default_value = "false")]
         query_is_index: bool,
+
+        /// Number of queries to process per parallel batch.
+        /// Larger values use more memory but improve CPU utilization on many-core machines.
+        /// Set to 1 to process queries one at a time (maximum streaming, minimum memory).
+        #[arg(long, default_value = "500")]
+        batch_size: usize,
     },
 }
 
@@ -174,6 +180,7 @@ fn main() -> IndexResult<()> {
             threshold,
             verbose,
             query_is_index,
+            batch_size,
         } => {
             eprintln!("Searching query sequences against target database");
             eprintln!("Query: {}", query.display());
@@ -281,12 +288,11 @@ fn main() -> IndexResult<()> {
                 );
                 progress.enable_steady_tick(std::time::Duration::from_millis(250));
 
-                // Batch size for parallel query processing.
-                // Each batch is searched in parallel (par_iter over queries), then written
-                // sequentially. Larger batches = better parallelism but higher peak memory.
-                const BATCH_SIZE: usize = 500;
+                // Process queries in parallel batches: `batch_size` queries searched in parallel
+                // (par_iter), then results written to CSV sequentially.
+                // Larger batches = better CPU utilization; smaller = lower peak memory.
                 use rayon::prelude::*;
-                let mut batch: Vec<ProteinSketch> = Vec::with_capacity(BATCH_SIZE);
+                let mut batch: Vec<ProteinSketch> = Vec::with_capacity(batch_size);
 
                 // Helper closure: process one batch and write results to CSV
                 let process_batch =
@@ -332,7 +338,7 @@ fn main() -> IndexResult<()> {
                     query_sig.add_protein(&sequence, true)?;
                     batch.push(query_sig);
 
-                    if batch.len() >= BATCH_SIZE {
+                    if batch.len() >= batch_size {
                         process_batch(&batch, &mut writer, &mut match_count, &mut row_count)?;
                         query_count += batch.len() as u64;
                         batch.clear();
