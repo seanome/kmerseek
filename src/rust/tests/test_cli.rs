@@ -261,7 +261,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
             assert_relative_eq!(record.containment_target_in_query, 0.10909, epsilon = 1e-5);
 
             // Verify TF-IDF is meaningful (should not be 0 with multiple signatures)
-            assert_relative_eq!(record.tfidf, 565.119680433367, epsilon = 1e-5);
+            assert_relative_eq!(record.query_tfidf, 565.119680433367, epsilon = 1e-5);
         }
     }
 

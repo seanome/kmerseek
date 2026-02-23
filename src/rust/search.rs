@@ -44,14 +44,11 @@ pub struct SearchResultCsv {
     pub std_abund: f64,
     pub containment_target_in_query: f64,
     pub f_weighted_target_in_query: f64,
-    pub tfidf: f64,
-    pub average_database_kmer_frequency: f64,
-    pub prob_random_cooccurrence: f64,
-    pub prob_random_cooccurrence_symmetric: f64,
-    pub sum_database_frequencies_of_matches: f64,
-    pub average_kmer_rarity: f64,
-    pub expected_intersecting_hashes: f64,
-    pub observed_over_expected: f64,
+    pub query_tfidf: f64,
+    pub mean_matched_kmer_freq: f64,
+    pub sum_matched_kmer_freq: f64,
+    pub expected_shared_kmers: f64,
+    pub enrichment: f64,
     // MatchedRegion fields (always present - every CSV row has a matched region)
     pub query_start: u32,
     pub query_end: u32,
@@ -87,14 +84,11 @@ impl SearchResultCsv {
             std_abund: result.std_abund,
             containment_target_in_query: result.containment_target_in_query,
             f_weighted_target_in_query: result.f_weighted_target_in_query,
-            tfidf: result.tfidf,
-            average_database_kmer_frequency: result.average_database_kmer_frequency,
-            prob_random_cooccurrence: result.prob_random_cooccurrence,
-            prob_random_cooccurrence_symmetric: result.prob_random_cooccurrence_symmetric,
-            sum_database_frequencies_of_matches: result.sum_database_frequencies_of_matches,
-            average_kmer_rarity: result.average_kmer_rarity,
-            expected_intersecting_hashes: result.expected_intersecting_hashes,
-            observed_over_expected: result.observed_over_expected,
+            query_tfidf: result.query_tfidf,
+            mean_matched_kmer_freq: result.mean_matched_kmer_freq,
+            sum_matched_kmer_freq: result.sum_matched_kmer_freq,
+            expected_shared_kmers: result.expected_shared_kmers,
+            enrichment: result.enrichment,
             query_start: region.query_start,
             query_end: region.query_end,
             query_subseq: region.query_subseq.clone(),
@@ -158,41 +152,24 @@ pub struct SearchResult {
     /// Weighted fraction of target in query
     pub f_weighted_target_in_query: f64,
 
-    /// TF-IDF score for the query signature
-    pub tfidf: f64,
+    /// TF-IDF score for the query signature against the target database
+    pub query_tfidf: f64,
 
-    /// Average k-mer frequency in the database (symmetric between query and target, requires database context)
-    /// Mean frequency of intersecting k-mers across the entire database.
-    /// Higher values = more common k-mers. Range: [0,1].
-    pub average_database_kmer_frequency: f64,
+    /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
+    /// Higher = matched k-mers are common in the target DB (less discriminative).
+    pub mean_matched_kmer_freq: f64,
 
-    /// Probability that all intersecting k-mers would co-occur by random chance (asymmetric - depends on query/target order)
-    /// Product of individual k-mer probabilities. Lower values = more significant matches.
-    /// This is like a p-value: values near 0 indicate rare k-mers matching.
-    pub prob_random_cooccurrence: f64,
+    /// Sum of target-DB frequencies for matched k-mers: Σ freq_target[h]/N over intersection.
+    /// Higher = matched k-mers are collectively more common in the target DB.
+    pub sum_matched_kmer_freq: f64,
 
-    /// Symmetric version of prob_random_cooccurrence (same regardless of query/target order)
-    /// Geometric mean of query→target and target→query cooccurrence probabilities.
-    /// Lower values = more significant matches.
-    pub prob_random_cooccurrence_symmetric: f64,
+    /// Expected number of shared k-mers by chance: Σ freq_target[h]/N over ALL query k-mers.
+    /// Uses this query's specific k-mers, so it is query-dependent.
+    pub expected_shared_kmers: f64,
 
-    /// Sum of database frequencies for all k-mers that match between query and target
-    /// This sums the frequency of each intersecting k-mer (how common it is across all sequences).
-    /// Higher values = matches are on more common k-mers. This is NOT the true expected value.
-    pub sum_database_frequencies_of_matches: f64,
-
-    /// Average rarity of matched k-mers (n_intersecting_hashes / sum_database_frequencies_of_matches)
-    /// Higher values = matches are on rarer, more specific k-mers.
-    /// Lower values = matches are on common, less discriminative k-mers.
-    pub average_kmer_rarity: f64,
-
-    /// Expected number of shared k-mers by random chance given database composition
-    /// This is calculated across ALL query k-mers, not just those that match.
-    pub expected_intersecting_hashes: f64,
-
-    /// Ratio of observed to expected intersecting hashes (n_intersecting_hashes / expected_intersecting_hashes)
-    /// Higher values = more significant matches (e.g., 8.0 means 8x more k-mers than expected by chance)
-    pub observed_over_expected: f64,
+    /// Fold-enrichment: n_intersecting_hashes / expected_shared_kmers.
+    /// Higher = more k-mers matched than expected by chance given target DB composition.
+    pub enrichment: f64,
 
     /// 1 or more regions of 1+ k-mers overlapping between query and target
     pub matched_regions: Vec<MatchedRegion>,
@@ -640,27 +617,12 @@ impl ProteinSearcher {
             return None;
         }
 
-        // Calculate all database-specific overlap metrics (sequential iter - intersections
-        // are small, rayon overhead dominates for small collections)
-        let average_database_kmer_frequency =
-            self.calculate_average_database_kmer_frequency(&intersection);
-        let prob_random_cooccurrence = self.calculate_prob_random_cooccurrence(&intersection);
+        // Calculate database-specific overlap metrics
+        let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&intersection);
+        let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&intersection);
+        let expected_shared_kmers = self.calculate_expected_shared_kmers(query.sketch, target);
 
-        // Symmetric version: geometric mean of both directions
-        // WHY: Currently both directions use the same intersection so they're identical;
-        // keeping the sqrt(p * p) = p form preserves the API contract for future asymmetric metrics.
-        let prob_random_cooccurrence_symmetric = prob_random_cooccurrence;
-
-        // Sum of database frequencies for matched k-mers
-        let sum_database_frequencies_of_matches =
-            self.calculate_sum_database_frequencies_from_intersection(&intersection);
-
-        // TRUE expected intersecting hashes (across all query k-mers)
-        let expected_intersecting_hashes =
-            self.calculate_expected_intersecting_hashes(query.sketch, target);
-
-        // Build the similarity result using the pre-computed intersection and mins sets,
-        // avoiding a third recomputation of both HashSets inside calculate_similarity.
+        // Build the similarity result using the pre-computed intersection and mins sets
         let mut result = calculate_similarity_from_precomputed(
             query.sketch,
             &query.mins,
@@ -669,29 +631,18 @@ impl ProteinSearcher {
             &intersection,
         )?;
 
-        // Calculate average kmer rarity (inverse of sum of frequencies)
-        let average_kmer_rarity = if sum_database_frequencies_of_matches > 0.0 {
-            result.n_intersecting_hashes as f64 / sum_database_frequencies_of_matches
+        let enrichment = if expected_shared_kmers > 0.0 {
+            result.n_intersecting_hashes as f64 / expected_shared_kmers
         } else {
             0.0
         };
 
-        // Calculate observed over expected ratio
-        let observed_over_expected = if expected_intersecting_hashes > 0.0 {
-            result.n_intersecting_hashes as f64 / expected_intersecting_hashes
-        } else {
-            0.0
-        };
-
-        // Override with database-specific metrics
-        result.tfidf = query.tfidf;
-        result.average_database_kmer_frequency = average_database_kmer_frequency;
-        result.prob_random_cooccurrence = prob_random_cooccurrence;
-        result.prob_random_cooccurrence_symmetric = prob_random_cooccurrence_symmetric;
-        result.sum_database_frequencies_of_matches = sum_database_frequencies_of_matches;
-        result.average_kmer_rarity = average_kmer_rarity;
-        result.expected_intersecting_hashes = expected_intersecting_hashes;
-        result.observed_over_expected = observed_over_expected;
+        // Fill in database-specific metrics
+        result.query_tfidf = query.tfidf;
+        result.mean_matched_kmer_freq = mean_matched_kmer_freq;
+        result.sum_matched_kmer_freq = sum_matched_kmer_freq;
+        result.expected_shared_kmers = expected_shared_kmers;
+        result.enrichment = enrichment;
 
         Some(result)
     }
@@ -713,15 +664,10 @@ impl ProteinSearcher {
         tfidf_sum
     }
 
-    /// Calculate the average k-mer frequency in the database for intersecting k-mers.
-    ///
-    /// This is a symmetric metric (same for query vs target and target vs query) that measures
-    /// how common the intersecting k-mers are across the entire database. Higher values indicate
-    /// that the matching k-mers are common/frequent in the database.
-    ///
-    /// **Returns**: Mean of normalized frequencies. Range: [0,1].
-    #[must_use = "average database kmer frequency should be used to assess k-mer commonality"]
-    pub fn calculate_average_database_kmer_frequency(&self, intersection: &HashSet<u64>) -> f64 {
+    /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
+    /// Higher values = matched k-mers are more common in the target DB (less discriminative).
+    /// Range: [0, 1].
+    pub fn calculate_mean_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
         if intersection.is_empty() {
             return 0.0;
         }
@@ -746,57 +692,10 @@ impl ProteinSearcher {
         sum_freq / intersection.len() as f64
     }
 
-    /// Calculate probability that all intersecting k-mers would co-occur by random chance
-    ///
-    /// This is an asymmetric metric (depends on which sequence is query vs target) that uses
-    /// the product of individual k-mer probabilities (assuming independence). The probability
-    /// represents how likely it is that ALL the intersecting k-mers would appear together by
-    /// random chance in two randomly selected sequences from the database.
-    ///
-    /// **Interpretation**:
-    /// - Values near 0.0 = highly significant match (rare k-mers matching)
-    /// - Values near 1.0 = likely random match (common k-mers matching)
-    ///
-    /// This is like a p-value: smaller values indicate more significant matches.
-    #[must_use = "random cooccurrence probability should be used to assess match significance"]
-    pub fn calculate_prob_random_cooccurrence(&self, intersection: &HashSet<u64>) -> f64 {
-        if intersection.is_empty() {
-            return 1.0; // No intersection = completely expected by chance
-        }
-
-        // Calculate the product of individual k-mer probabilities
-        // WHY: We use product, not sum. The probability that ALL k-mers co-occur is the
-        // product of their individual probabilities (assuming independence).
-        // Sequential iter: small intersection sizes make rayon overhead unjustified.
-        let prob_random: f64 = intersection
-            .iter()
-            .map(|&hashval| {
-                // Get frequency of this k-mer in the database
-                let db_frequency =
-                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
-                let total_signatures = self.stats.total_signatures as f64;
-
-                // Probability that this k-mer appears in a randomly selected signature
-                db_frequency / total_signatures
-            })
-            .product(); // PRODUCT not sum - all must co-occur
-
-        prob_random.clamp(0.0, 1.0)
-    }
-
-    /// Calculate sum of database frequencies for k-mers that match between query and target.
-    ///
-    /// This version takes the pre-computed intersection set directly, avoiding redundant
-    /// HashSet allocations that `calculate_sum_database_frequencies_of_matches` would incur.
-    ///
-    /// **WARNING**: This is NOT the true expected value - it conditions on the observed intersection!
-    /// It sums database frequencies only for k-mers that actually appear in both sequences.
-    ///
-    /// **What it tells you**:
-    /// - Higher values = matches are on more common k-mers
-    /// - Lower values = matches are on rarer k-mers
-    /// - Can be used to calculate average_kmer_rarity = n_intersecting_hashes / sum
-    fn calculate_sum_database_frequencies_from_intersection(
+    /// Sum of target-DB frequencies for matched k-mers: Σ freq_target[h]/N over intersection.
+    /// Takes the pre-computed intersection set directly.
+    /// Higher = matched k-mers are collectively more common in the target DB.
+    fn calculate_sum_matched_kmer_freq(
         &self,
         intersection: &HashSet<u64>,
     ) -> f64 {
@@ -811,22 +710,10 @@ impl ProteinSearcher {
             .sum()
     }
 
-    /// Calculate sum of database frequencies for k-mers that match between query and target
-    ///
-    /// **WARNING**: This is NOT the true expected value - it conditions on the observed intersection!
-    /// It sums database frequencies only for k-mers that actually appear in both sequences.
-    ///
-    /// **What it tells you**:
-    /// - Higher values = matches are on more common k-mers
-    /// - Lower values = matches are on rarer k-mers
-    /// - Can be used to calculate average_kmer_rarity = n_intersecting_hashes / sum
-    ///
-    /// **Why it's useful for AUROC**:
-    /// Even though it conditions on observed data, it weights matches by commonness,
-    /// which helps distinguish true homologs (which share both rare and common k-mers)
-    /// from random matches (which only share the most common k-mers).
-    #[must_use = "sum of database frequencies should be used to calculate rarity metrics"]
-    pub fn calculate_sum_database_frequencies_of_matches(
+    /// Sum of target-DB frequencies for matched k-mers, computed from two sketches directly.
+    /// Equivalent to `calculate_sum_matched_kmer_freq` but takes sketches instead of a pre-computed
+    /// intersection (useful when no intersection HashSet is available).
+    pub fn calculate_sum_matched_kmer_freq_from_sketches(
         &self,
         query_sketch: &ProteinSketch,
         target_sketch: &ProteinSketch,
@@ -847,20 +734,12 @@ impl ProteinSearcher {
             .sum()
     }
 
-    /// Calculate the TRUE expected number of shared k-mers by random chance
+    /// Expected number of shared k-mers by chance: Σ freq_target[h]/N over ALL query k-mers.
     ///
-    /// This calculates the expected overlap across ALL query k-mers (not just those that match),
-    /// based on database frequencies and target size.
-    ///
-    /// **What it tells you**:
-    /// - For each query k-mer, estimate probability it appears in target based on database frequency
-    /// - Sum these probabilities across ALL query k-mers
-    /// - Compare to n_intersecting_hashes: if observed >> expected, match is significant
-    ///
-    /// **Example**: If we observe 24 intersecting k-mers but only expect 2.5 by chance,
-    /// that's a highly significant match (observed_over_expected = 9.6x).
-    #[must_use = "expected intersecting hashes should be compared to observed intersection size"]
-    pub fn calculate_expected_intersecting_hashes(
+    /// For each k-mer in this specific query, sums its probability of appearing in a random
+    /// target sequence. Query-dependent (changes with different query sequences).
+    /// Compare to n_intersecting_hashes: if observed >> expected, match is significant.
+    pub fn calculate_expected_shared_kmers(
         &self,
         query_sketch: &ProteinSketch,
         _target_sketch: &ProteinSketch,
@@ -956,14 +835,11 @@ fn calculate_similarity_from_precomputed(
         std_abund,
         containment_target_in_query,
         f_weighted_target_in_query,
-        tfidf: 0.0, // Default for 1v1 comparisons - requires database context
-        average_database_kmer_frequency: 0.0, // Default for 1v1 comparisons - requires database context
-        prob_random_cooccurrence: 1.0, // Default for 1v1 comparisons - requires database context
-        prob_random_cooccurrence_symmetric: 1.0, // Default for 1v1 comparisons - requires database context
-        sum_database_frequencies_of_matches: 0.0, // Default for 1v1 comparisons - requires database context
-        average_kmer_rarity: 0.0, // Default for 1v1 comparisons - requires database context
-        expected_intersecting_hashes: 0.0, // Default for 1v1 comparisons - requires database context
-        observed_over_expected: 0.0, // Default for 1v1 comparisons - requires database context
+        query_tfidf: 0.0,          // requires database context
+        mean_matched_kmer_freq: 0.0, // requires database context
+        sum_matched_kmer_freq: 0.0,  // requires database context
+        expected_shared_kmers: 0.0,  // requires database context
+        enrichment: 0.0,             // requires database context
         matched_regions,
     })
 }
@@ -1966,27 +1842,11 @@ mod tests {
         assert_eq!(result.matched_regions.len(), expected.matched_regions_count);
 
         // Verify database-specific metrics are defaults for 1v1 comparisons
-        assert_eq!(result.tfidf, 0.0, "TF-IDF should be 0.0 for 1v1 comparisons");
-        assert_eq!(
-            result.average_database_kmer_frequency, 0.0,
-            "Average database k-mer frequency should be 0.0 for 1v1 comparisons"
-        );
-        assert_eq!(
-            result.prob_random_cooccurrence, 1.0,
-            "Random cooccurrence probability should be 1.0 for 1v1 comparisons"
-        );
-        assert_eq!(
-            result.prob_random_cooccurrence_symmetric, 1.0,
-            "Symmetric random cooccurrence probability should be 1.0 for 1v1 comparisons"
-        );
-        assert_eq!(
-            result.expected_intersecting_hashes, 0.0,
-            "Expected intersecting hashes should be 0.0 for 1v1 comparisons"
-        );
-        assert_eq!(
-            result.observed_over_expected, 0.0,
-            "Observed over expected should be 0.0 for 1v1 comparisons"
-        );
+        assert_eq!(result.query_tfidf, 0.0, "query_tfidf should be 0.0 for 1v1 comparisons");
+        assert_eq!(result.mean_matched_kmer_freq, 0.0, "mean_matched_kmer_freq should be 0.0 for 1v1 comparisons");
+        assert_eq!(result.sum_matched_kmer_freq, 0.0, "sum_matched_kmer_freq should be 0.0 for 1v1 comparisons");
+        assert_eq!(result.expected_shared_kmers, 0.0, "expected_shared_kmers should be 0.0 for 1v1 comparisons");
+        assert_eq!(result.enrichment, 0.0, "enrichment should be 0.0 for 1v1 comparisons");
 
         Ok(())
     }
@@ -2098,22 +1958,16 @@ mod tests {
         // higher IDF values, making TF-IDF > 0. In a real database search, TF-IDF helps
         // identify matches based on rare, significant k-mers.
         assert!(
-            bcl2_result.tfidf == 565.119680433367,
-            "TF-IDF should be 565.119680433367, got {}",
-            bcl2_result.tfidf
+            bcl2_result.query_tfidf == 565.119680433367,
+            "query_tfidf should be 565.119680433367, got {}",
+            bcl2_result.query_tfidf
         );
 
-        // Verify average database k-mer frequency is meaningful (should not be 0.0 with multiple signatures)
-        // WHY: With multiple signatures, k-mers will have varying frequencies. Average database
-        // k-mer frequency indicates how common the intersecting k-mers are across the database.
-        // Values in (0,1] range indicate k-mer presence across the database.
         assert!(
-            bcl2_result.average_database_kmer_frequency > 0.0,
-            "Average database k-mer frequency should be > 0.0, got {}",
-            bcl2_result.average_database_kmer_frequency
+            bcl2_result.mean_matched_kmer_freq > 0.0,
+            "mean_matched_kmer_freq should be > 0.0, got {}",
+            bcl2_result.mean_matched_kmer_freq
         );
-        // Note: Higher values indicate k-mers that appear in many signatures (common),
-        // while lower values indicate k-mers that are more specific to certain proteins
 
         // Verify matched regions are present
         assert!(

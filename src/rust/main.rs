@@ -419,10 +419,10 @@ fn main() -> IndexResult<()> {
                 let avg_containment: f64 =
                     filtered_results.iter().map(|r| r.containment).sum::<f64>()
                         / filtered_results.len() as f64;
-                let avg_tfidf: f64 = filtered_results.iter().map(|r| r.tfidf).sum::<f64>()
+                let avg_tfidf: f64 = filtered_results.iter().map(|r| r.query_tfidf).sum::<f64>()
                     / filtered_results.len() as f64;
                 let avg_database_kmer_freq: f64 =
-                    filtered_results.iter().map(|r| r.average_database_kmer_frequency).sum::<f64>()
+                    filtered_results.iter().map(|r| r.mean_matched_kmer_freq).sum::<f64>()
                         / filtered_results.len() as f64;
 
                 eprintln!("Average containment: {:.6}", avg_containment);
