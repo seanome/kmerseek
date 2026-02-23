@@ -228,7 +228,7 @@ fn main() -> IndexResult<()> {
 
             // Load the target database
             eprintln!("Loading target database...");
-            let searcher = ProteinSearcher::load(&target)?;
+            let mut searcher = ProteinSearcher::load(&target)?;
 
             // Perform search - use optimized all-vs-all method if query == target
             let search_results = if is_all_vs_all {
@@ -261,6 +261,32 @@ fn main() -> IndexResult<()> {
                 use needletail::parse_fastx_file;
                 use kmerseek::sketch::ProteinSketch;
                 use kmerseek::search::SearchResultCsv;
+
+                // First pass: build query-proteome k-mer frequencies for prob_overlap.
+                eprintln!("First pass: scanning query proteome for k-mer frequencies...");
+                {
+                    use std::collections::HashMap;
+                    let mut qfreqs: HashMap<u64, usize> = HashMap::new();
+                    let mut total_queries: usize = 0;
+                    let mut freq_reader = parse_fastx_file(&query)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
+                    while let Some(record) = freq_reader.next() {
+                        let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
+                        let sequence = std::str::from_utf8(&record.seq())
+                            .map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))?
+                            .to_uppercase();
+                        let name = std::str::from_utf8(record.id())
+                            .map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))?;
+                        let mut sig = ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
+                        sig.add_protein(&sequence, true)?;
+                        for min in sig.signature().minhash.mins() {
+                            *qfreqs.entry(min).or_insert(0) += 1;
+                        }
+                        total_queries += 1;
+                    }
+                    eprintln!("First pass complete: {} query sequences, {} unique k-mers", total_queries, qfreqs.len());
+                    searcher.set_query_frequencies(qfreqs, total_queries);
+                }
 
                 let mut reader = parse_fastx_file(&query)
                     .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;

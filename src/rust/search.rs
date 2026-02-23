@@ -49,6 +49,10 @@ pub struct SearchResultCsv {
     pub sum_matched_kmer_freq: f64,
     pub expected_shared_kmers: f64,
     pub enrichment: f64,
+    /// Probability of overlap given both query and target proteome compositions.
+    /// Σ freq_query[h] * freq_target[h] for h in intersection.
+    /// 0.0 when query frequencies are not available (one-pass mode).
+    pub prob_overlap: f64,
     // MatchedRegion fields (always present - every CSV row has a matched region)
     pub query_start: u32,
     pub query_end: u32,
@@ -89,6 +93,7 @@ impl SearchResultCsv {
             sum_matched_kmer_freq: result.sum_matched_kmer_freq,
             expected_shared_kmers: result.expected_shared_kmers,
             enrichment: result.enrichment,
+            prob_overlap: result.prob_overlap,
             query_start: region.query_start,
             query_end: region.query_end,
             query_subseq: region.query_subseq.clone(),
@@ -170,6 +175,11 @@ pub struct SearchResult {
     /// Fold-enrichment: n_intersecting_hashes / expected_shared_kmers.
     /// Higher = more k-mers matched than expected by chance given target DB composition.
     pub enrichment: f64,
+
+    /// Probability of overlap given both query and target proteome compositions.
+    /// Σ freq_query[h] * freq_target[h] for h in intersection (two-pass; 0.0 if query
+    /// frequencies not provided via set_query_frequencies()).
+    pub prob_overlap: f64,
 
     /// 1 or more regions of 1+ k-mers overlapping between query and target
     pub matched_regions: Vec<MatchedRegion>,
@@ -300,6 +310,11 @@ pub struct ProteinSearcher {
     /// allowing concurrent reads from rayon's par_iter() in search_one(). Memory grows
     /// only as candidates are accessed — hot targets are cached, cold ones are never loaded.
     sig_cache: DashMap<String, ProteinSketch>,
+    /// K-mer frequencies across the query proteome, set via set_query_frequencies() before
+    /// searching. None = single-pass mode; prob_overlap will be 0.0 for all results.
+    query_kmer_frequencies: Option<HashMap<u64, usize>>,
+    /// Total number of query sequences used to build query_kmer_frequencies.
+    total_queries: usize,
 }
 
 impl ProteinSearcher {
@@ -307,7 +322,7 @@ impl ProteinSearcher {
     pub fn new(index: ProteomeIndex) -> Self {
         let stats = SearchStats::from_index(&index);
         let (target_list, inverted_index) = Self::build_search_structures(&index);
-        Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new() }
+        Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 }
     }
 
     /// Load a searcher from a saved index.
@@ -340,7 +355,7 @@ impl ProteinSearcher {
                 total_signatures,
                 inverted_index.len()
             );
-            return Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new() });
+            return Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 });
         }
 
         // Slow path: old DB without search cache - load all signatures and build structures
@@ -350,7 +365,7 @@ impl ProteinSearcher {
         index.load_state()?;
         let stats = SearchStats::from_index(&index);
         let (target_list, inverted_index) = Self::build_search_structures(&index);
-        Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new() })
+        Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 })
     }
 
     /// Build an ordered target list and inverted k-mer index from the index.
@@ -638,13 +653,38 @@ impl ProteinSearcher {
         };
 
         // Fill in database-specific metrics
+        // prob_overlap = Σ freq_query[h] * freq_target[h] for h in intersection.
+        // Only computed in two-pass mode (when set_query_frequencies() has been called).
+        let prob_overlap = if let Some(qfreqs) = &self.query_kmer_frequencies {
+            let total_q = self.total_queries as f64;
+            let total_t = self.stats.total_signatures as f64;
+            intersection.iter().map(|&h| {
+                let fq = qfreqs.get(&h).copied().unwrap_or(0) as f64 / total_q;
+                let ft = self.stats.kmer_frequencies.get(&h).copied().unwrap_or(0) as f64 / total_t;
+                fq * ft
+            }).sum()
+        } else {
+            0.0
+        };
+
         result.query_tfidf = query.tfidf;
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.expected_shared_kmers = expected_shared_kmers;
         result.enrichment = enrichment;
+        result.prob_overlap = prob_overlap;
 
         Some(result)
+    }
+
+    /// Set query-proteome k-mer frequencies for two-pass prob_overlap computation.
+    ///
+    /// Call this after loading the searcher and before the search loop.
+    /// `freqs` maps each k-mer hash to the number of query sequences containing it.
+    /// `total` is the total number of query sequences processed.
+    pub fn set_query_frequencies(&mut self, freqs: HashMap<u64, usize>, total: usize) {
+        self.query_kmer_frequencies = Some(freqs);
+        self.total_queries = total;
     }
 
     /// Calculate TF-IDF score for a query signature
@@ -840,6 +880,7 @@ fn calculate_similarity_from_precomputed(
         sum_matched_kmer_freq: 0.0,  // requires database context
         expected_shared_kmers: 0.0,  // requires database context
         enrichment: 0.0,             // requires database context
+        prob_overlap: 0.0,           // requires two-pass query frequencies
         matched_regions,
     })
 }
@@ -1700,7 +1741,7 @@ mod tests {
         };
 
         let (target_list, inverted_index) = ProteinSearcher::build_search_structures(&index);
-        let searcher = ProteinSearcher { index, stats, target_list, inverted_index, sig_cache: DashMap::new() };
+        let searcher = ProteinSearcher { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 };
 
         let tfidf = searcher.calculate_tfidf(&query);
         assert!(tfidf >= 0.0);
@@ -1847,6 +1888,7 @@ mod tests {
         assert_eq!(result.sum_matched_kmer_freq, 0.0, "sum_matched_kmer_freq should be 0.0 for 1v1 comparisons");
         assert_eq!(result.expected_shared_kmers, 0.0, "expected_shared_kmers should be 0.0 for 1v1 comparisons");
         assert_eq!(result.enrichment, 0.0, "enrichment should be 0.0 for 1v1 comparisons");
+        assert_eq!(result.prob_overlap, 0.0, "prob_overlap should be 0.0 without query frequencies");
 
         Ok(())
     }
@@ -1969,6 +2011,13 @@ mod tests {
             bcl2_result.mean_matched_kmer_freq
         );
 
+        // prob_overlap is 0.0 because set_query_frequencies() was not called
+        assert_eq!(
+            bcl2_result.prob_overlap, 0.0,
+            "prob_overlap should be 0.0 without query frequencies, got {}",
+            bcl2_result.prob_overlap
+        );
+
         // Verify matched regions are present
         assert!(
             !bcl2_result.matched_regions.is_empty(),
@@ -1988,6 +2037,75 @@ mod tests {
                 results[i].containment
             );
         }
+
+        Ok(())
+    }
+
+    /// Test prob_overlap is computed correctly when set_query_frequencies() is called.
+    ///
+    /// Key invariant: when total_queries=1 and every query k-mer has frequency 1
+    /// (i.e. the "query proteome" is a single sequence),
+    ///   prob_overlap = Σ (freq_q[h]/1) * (freq_t[h]/N_targets)
+    ///               = Σ freq_t[h]/N_targets
+    ///               = sum_matched_kmer_freq
+    /// so the two metrics must be equal in this degenerate case.
+    #[test]
+    fn test_prob_overlap_two_pass() -> Result<()> {
+        let ksize = 12;
+        let scaled = 1;
+        let moltype = "hp";
+
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+
+        let mut searcher = ProteinSearcher::new(target_index);
+
+        // Build a query sketch for CED9
+        let mut query_sig = ProteinSketch::new("ced9_query", ksize, scaled, moltype)?;
+        let ced9_seq = {
+            let mut reader = needletail::parse_fastx_file(TEST_CED9_FASTA)
+                .map_err(|e| anyhow::anyhow!("{}", e))?;
+            let record = reader.next().unwrap().map_err(|e| anyhow::anyhow!("{}", e))?;
+            std::str::from_utf8(&record.seq()).unwrap().to_uppercase()
+        };
+        query_sig.add_protein(&ced9_seq, true)?;
+
+        // Simulate a "query proteome" of exactly 1 sequence: every k-mer in ced9 has freq=1
+        let qfreqs: HashMap<u64, usize> = query_sig
+            .signature()
+            .minhash
+            .mins()
+            .iter()
+            .map(|&h| (h, 1usize))
+            .collect();
+        let total_queries = 1;
+        searcher.set_query_frequencies(qfreqs, total_queries);
+
+        let results = searcher.search_one(&query_sig);
+
+        // Find bcl2 result
+        let bcl2_result = results
+            .iter()
+            .find(|r| r.target_name.contains("BCL2_HUMAN"))
+            .expect("Should find BCL2_HUMAN in results");
+
+        // With total_queries=1 and all query k-mer frequencies=1:
+        //   prob_overlap = sum_matched_kmer_freq (exact equality)
+        // prob_overlap must equal sum_matched_kmer_freq when total_queries=1, all query freqs=1
+        assert_relative_eq!(
+            bcl2_result.prob_overlap,
+            bcl2_result.sum_matched_kmer_freq,
+            epsilon = 1e-12
+        );
+
+        // Also verify it's non-zero (there's an actual intersection)
+        assert!(
+            bcl2_result.prob_overlap > 0.0,
+            "prob_overlap should be > 0.0, got {}",
+            bcl2_result.prob_overlap
+        );
 
         Ok(())
     }
