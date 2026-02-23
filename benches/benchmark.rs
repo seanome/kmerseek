@@ -413,7 +413,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
     use kmerseek::sketch::ProteinSketch;
 
     let target_fasta =
-        "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
+        "tests/testdata/fasta/uniprotkb_protein_name_Uncharacterized_2025_04_15.fasta.gz";
     let query_fasta = "tests/testdata/fasta/ced9.fasta";
 
     // Read query sequence once
@@ -479,6 +479,77 @@ fn benchmark_search_throughput(c: &mut Criterion) {
     }
 }
 
+/// Benchmark indexing and searching the 2.8k uncharacterized protein file with hp encoding
+/// at large k-mer sizes (15, 20, 30) to see index build time, load time, and search selectivity.
+fn benchmark_index_hp_large_k(c: &mut Criterion) {
+    use kmerseek::search::ProteinSearcher;
+    use kmerseek::sketch::ProteinSketch;
+
+    let target_fasta =
+        "tests/testdata/fasta/uniprotkb_protein_name_Uncharacterized_2025_04_15.fasta.gz";
+    let query_fasta = "tests/testdata/fasta/ced9.fasta";
+
+    let query_seq = {
+        let mut reader = needletail::parse_fastx_file(query_fasta).unwrap();
+        let record = reader.next().unwrap().unwrap();
+        (
+            std::str::from_utf8(record.id()).unwrap().to_string(),
+            std::str::from_utf8(&record.seq()).unwrap().to_uppercase(),
+        )
+    };
+
+    let mut group = c.benchmark_group("index_hp_large_k");
+    group.sample_size(10);
+
+    for ksize in [15u32, 20, 30] {
+        // Benchmark index build time
+        {
+            let bench_name = format!("index_hp_k{ksize}");
+            group.bench_function(&bench_name, |b| {
+                b.iter(|| {
+                    let temp_dir = tempdir().unwrap();
+                    let db_path = temp_dir.path().join(format!("bench_idx_hp_{}", ksize));
+                    let index =
+                        ProteomeIndex::new(db_path.clone(), ksize, 1, "hp", true).unwrap();
+                    index.process_fasta(target_fasta, 0, 1000).unwrap();
+                    index.save_state().unwrap();
+                });
+            });
+        }
+
+        // Build index once for load + search benchmarks
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join(format!("bench_search_hp_{}", ksize));
+        {
+            let index = ProteomeIndex::new(db_path.clone(), ksize, 1, "hp", true).unwrap();
+            index.process_fasta(target_fasta, 0, 1000).unwrap();
+            index.save_state().unwrap();
+        }
+
+        // Benchmark searcher load time (proxy for inverted index size)
+        {
+            let load_name = format!("load_hp_k{ksize}");
+            let db = db_path.clone();
+            group.bench_function(&load_name, |b| {
+                b.iter(|| ProteinSearcher::load(&db).unwrap())
+            });
+        }
+
+        // Benchmark search_one (shows selectivity improvement from larger k)
+        {
+            let searcher = ProteinSearcher::load(&db_path).unwrap();
+            let mut query_sig =
+                ProteinSketch::new(&query_seq.0, ksize, 1, "hp").unwrap();
+            query_sig.add_protein(&query_seq.1, true).unwrap();
+            let search_name = format!("search_one_hp_k{ksize}");
+            group.bench_function(&search_name, |b| {
+                b.iter(|| searcher.search_one(&query_sig))
+            });
+        }
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_create_protein_signature,
@@ -489,5 +560,6 @@ criterion_group!(
     benchmark_process_fasta,
     benchmark_process_fasta_with_efficient_storage,
     benchmark_search_throughput,
+    benchmark_index_hp_large_k,
 );
 criterion_main!(benches);
