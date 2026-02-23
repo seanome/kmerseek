@@ -8,6 +8,7 @@ use std::mem;
 use std::path::PathBuf;
 use std::time::Instant;
 use tempfile::tempdir;
+use needletail;
 
 // Test protein sequence
 const TEST_PROTEIN: &str = "PLANTYANDANIMALGENQMESCOFFEE";
@@ -401,6 +402,83 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
     }
 }
 
+/// Benchmark search throughput: queries/sec for search_one() with a pre-built index.
+///
+/// Uses bcl2_first25 as the target database and ced9 as the query protein.
+/// The index is built once outside of timing; each iteration measures pure search cost.
+///
+/// Also benchmarks batch sizes to help tune the --batch-size CLI default.
+fn benchmark_search_throughput(c: &mut Criterion) {
+    use kmerseek::search::ProteinSearcher;
+    use kmerseek::sketch::ProteinSketch;
+
+    let target_fasta =
+        "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
+    let query_fasta = "tests/testdata/fasta/ced9.fasta";
+
+    // Read query sequence once
+    let query_seq = {
+        let mut reader = needletail::parse_fastx_file(query_fasta).unwrap();
+        let record = reader.next().unwrap().unwrap();
+        (
+            std::str::from_utf8(record.id()).unwrap().to_string(),
+            std::str::from_utf8(&record.seq()).unwrap().to_uppercase(),
+        )
+    };
+
+    for moltype in ["hp", "protein", "dayhoff"] {
+        for ksize in [10u32, 12] {
+            let temp_dir = tempdir().unwrap();
+            let db_path = temp_dir.path().join(format!("bench_search_{}_{}", moltype, ksize));
+
+            // Build index once (not timed); drop it to release the RocksDB lock
+            {
+                let index = ProteomeIndex::new(db_path.clone(), ksize, 1, moltype, true).unwrap();
+                index.process_fasta(target_fasta, 0, 1000).unwrap();
+                index.save_state().unwrap();
+            }
+
+            // benchmark: ProteinSearcher::load() startup time
+            {
+                let bench_name = format!("searcher_load_{moltype}_k{ksize}");
+                let db = db_path.clone();
+                c.bench_function(&bench_name, |b| {
+                    b.iter(|| ProteinSearcher::load(&db).unwrap())
+                });
+            }
+
+            // Load searcher once for search benchmarks
+            let searcher = ProteinSearcher::load(&db_path).unwrap();
+            let mut query_sig =
+                ProteinSketch::new(&query_seq.0, ksize, 1, moltype).unwrap();
+            query_sig.add_protein(&query_seq.1, true).unwrap();
+
+            // benchmark: single query search_one()
+            {
+                let bench_name = format!("search_one_{moltype}_k{ksize}");
+                c.bench_function(&bench_name, |b| {
+                    b.iter(|| searcher.search_one(&query_sig))
+                });
+            }
+
+            // benchmark: batch search at several batch sizes (simulated by repeating query)
+            for n_queries in [10usize, 100, 500] {
+                let queries: Vec<ProteinSketch> = vec![query_sig.clone(); n_queries];
+                let bench_name =
+                    format!("search_batch{n_queries}_{moltype}_k{ksize}");
+                c.bench_function(&bench_name, |b| {
+                    b.iter(|| {
+                        queries
+                            .iter()
+                            .map(|q| searcher.search_one(q))
+                            .collect::<Vec<_>>()
+                    })
+                });
+            }
+        }
+    }
+}
+
 criterion_group!(
     benches,
     benchmark_create_protein_signature,
@@ -410,5 +488,6 @@ criterion_group!(
     benchmark_process_protein_kmers,
     benchmark_process_fasta,
     benchmark_process_fasta_with_efficient_storage,
+    benchmark_search_throughput,
 );
 criterion_main!(benches);
