@@ -952,59 +952,27 @@ pub fn find_matched_regions(
     let mut hashval_to_target_positions: HashMap<u64, Vec<usize>> = HashMap::new();
 
     for &hashval in intersection {
-        if let (Some(query_kmer_info), Some(target_kmer_info)) =
-            (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
+        if let (Some(query_poss_raw), Some(target_poss_raw)) =
+            (query_sketch.kmer_positions().get(&hashval), target_sketch.kmer_positions().get(&hashval))
         {
-            // Collect all query positions for this hashval
-            let mut query_poss = Vec::new();
-            for positions in query_kmer_info.original_kmer_to_position.values() {
-                query_poss.extend(positions.iter().cloned());
-            }
+            let mut query_poss = query_poss_raw.clone();
             query_poss.sort();
             query_poss.dedup();
             hashval_to_query_positions.insert(hashval, query_poss);
 
-            // Collect all target positions for this hashval
-            let mut target_poss = Vec::new();
-            for positions in target_kmer_info.original_kmer_to_position.values() {
-                target_poss.extend(positions.iter().cloned());
-            }
+            let mut target_poss = target_poss_raw.clone();
             target_poss.sort();
             target_poss.dedup();
             hashval_to_target_positions.insert(hashval, target_poss);
         }
     }
 
-    // Build mapping from (query_pos, target_pos) pairs for each hashval
-    // WHY: We need to track the correspondence between query and target positions for each
-    // k-mer hash. This allows us to find regions where both query and target positions are
-    // consecutive, ensuring we match the correct target region to each query region.
-    let mut query_target_pairs: Vec<(usize, usize, u64)> = Vec::new(); // (query_pos, target_pos, hashval)
-    for &hashval in intersection {
-        if let (Some(query_kmer_info), Some(target_kmer_info)) =
-            (query_sketch.kmer_infos().get(&hashval), target_sketch.kmer_infos().get(&hashval))
-        {
-            // Get all query positions for this hashval
-            let mut query_poss = Vec::new();
-            for positions in query_kmer_info.original_kmer_to_position.values() {
-                query_poss.extend(positions.iter().cloned());
-            }
-            query_poss.sort();
-            query_poss.dedup();
-
-            // Get all target positions for this hashval
-            let mut target_poss = Vec::new();
-            for positions in target_kmer_info.original_kmer_to_position.values() {
-                target_poss.extend(positions.iter().cloned());
-            }
-            target_poss.sort();
-            target_poss.dedup();
-
-            // Create all pairs of (query_pos, target_pos) for this hashval
-            // WHY: Each hashval can appear at multiple positions in both query and target.
-            // We create all pairs to find the correct correspondences.
-            for &qpos in &query_poss {
-                for &tpos in &target_poss {
+    // Build (query_pos, target_pos) pairs for each hashval using the maps built above.
+    let mut query_target_pairs: Vec<(usize, usize, u64)> = Vec::new();
+    for (&hashval, query_poss) in &hashval_to_query_positions {
+        if let Some(target_poss) = hashval_to_target_positions.get(&hashval) {
+            for &qpos in query_poss {
+                for &tpos in target_poss {
                     query_target_pairs.push((qpos, tpos, hashval));
                 }
             }

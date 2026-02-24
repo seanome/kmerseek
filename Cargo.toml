@@ -55,6 +55,7 @@ predicates = "3.0"
 cargo-tarpaulin = "0.28"
 rstest = "0.26.1"
 approx = "0.5"
+sourmash = { version = "0.20.0", features = ["branchwater"] }
 
 [profile.dev]
 # Reduce debuginfo to save disk space in CI

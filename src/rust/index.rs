@@ -19,7 +19,6 @@ use crate::encoding::{
     encode_with_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::errors::{IndexError, IndexResult};
-use crate::kmer::KmerInfo;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
@@ -783,36 +782,12 @@ impl ProteomeIndex {
                     return Ok(false);
                 }
 
-                // Compare kmer_infos
-                let self_kmer_infos = self_sig.kmer_infos();
-                let other_kmer_infos = other_sig.kmer_infos();
+                // Compare kmer_positions
+                let self_kmer_positions = self_sig.kmer_positions();
+                let other_kmer_positions = other_sig.kmer_positions();
 
-                if self_kmer_infos.len() != other_kmer_infos.len() {
+                if self_kmer_positions != other_kmer_positions {
                     return Ok(false);
-                }
-
-                for (hashval, self_kmer_info) in self_kmer_infos.iter() {
-                    if let Some(other_kmer_info) = other_kmer_infos.get(hashval) {
-                        // Compare kmer_info fields
-                        if self_kmer_info.ksize != other_kmer_info.ksize {
-                            return Ok(false);
-                        }
-                        if self_kmer_info.hashval != other_kmer_info.hashval {
-                            return Ok(false);
-                        }
-                        if self_kmer_info.encoded_kmer != other_kmer_info.encoded_kmer {
-                            return Ok(false);
-                        }
-
-                        // Compare positions - need to compare the HashMap structure
-                        if self_kmer_info.original_kmer_to_position
-                            != other_kmer_info.original_kmer_to_position
-                        {
-                            return Ok(false);
-                        }
-                    } else {
-                        return Ok(false);
-                    }
                 }
             } else {
                 return Ok(false);
@@ -955,38 +930,14 @@ impl ProteomeIndex {
         protein_signature: &mut ProteinSketch,
     ) -> IndexResult<()> {
         let ksize = self.ksize as usize;
-        let seed = SEED;
-        // WHY: Use HashSet for O(1) lookups instead of Vec's O(n) linear search.
-        // This is critical for performance since we check every k-mer in every sequence.
-        let hashvals: HashSet<u64> = protein_signature.signature().get_minhash().to_vec().into_iter().collect();
+        let hashvals: HashSet<u64> =
+            protein_signature.signature().get_minhash().to_vec().into_iter().collect();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            let kmer = crate::kmer::Kmer::from_sequence(sequence, i, ksize);
-
-            // Process the k-mer to get encoded version
-            if let Ok(encoded_kmer) = encode_with_fn(kmer.as_ref(), self.encoding_fn) {
-                // Get the hash from the minhash implementation
-                let hashval = _hash_murmur(encoded_kmer.as_bytes(), seed);
-
-                // If this hashval is in the minhash, then save its k-mer positions
+            if let Ok(encoded_kmer) = encode_with_fn(&sequence[i..i + ksize], self.encoding_fn) {
+                let hashval = _hash_murmur(encoded_kmer.as_bytes(), SEED);
                 if hashvals.contains(&hashval) {
-                    let ksize_u32 = ksize.try_into().unwrap();
-                    let kmer_info =
-                        protein_signature.kmer_infos_mut().entry(hashval).or_insert_with(|| {
-                            // WHY: Pre-allocate encoded_kmer with exact k-mer size since k-mer
-                            // length is fixed and will never change. This avoids unnecessary
-                            // reallocations.
-                            let mut encoded = String::with_capacity(ksize);
-                            encoded.push_str(&encoded_kmer);
-                            KmerInfo {
-                                ksize: ksize_u32,
-                                hashval,
-                                encoded_kmer: encoded,
-                                original_kmer_to_position: HashMap::new(),
-                            }
-                        });
-
-                    kmer_info.add_position(kmer.as_ref(), i);
+                    protein_signature.kmer_positions_mut().entry(hashval).or_default().push(i);
                 }
             }
         }
@@ -1369,7 +1320,7 @@ mod tests {
     use crate::tests::test_fixtures::{
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };
-    use crate::tests::test_utils::{self, print_kmer_infos};
+    use crate::tests::test_utils::{self, print_kmer_positions};
     use std::collections::HashMap;
     use std::path::PathBuf;
 
@@ -1400,66 +1351,47 @@ mod tests {
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
         println!("{}", protein_sig.signature().name);
-        println!("{:?}", protein_sig.kmer_infos().keys());
-        let kmer_count = protein_sig.kmer_infos().len();
+        println!("{:?}", protein_sig.kmer_positions().keys());
+        let kmer_count = protein_sig.kmer_positions().len();
 
         // Should have 17 kmers (length 21 - ksize 5 + 1)
         assert_eq!(kmer_count, 17);
 
         // Print all kmer infos for debugging
-        test_utils::print_kmer_infos(&protein_sig);
+        test_utils::print_kmer_positions(&protein_sig);
 
-        // Create expected hashmap of kmer info
-        let raw_data = [
-            // Hash               Original  Position
-            (2140811952770908281, ("GENQM", [14])),
-            (4381446250900425522, ("ENQME", [15])),
-            (5798339600059429290, ("DANIM", [7])),
-            (7681438632487987439, ("ANIMA", [8])),
-            (12896310179337320481, ("LANTA", [1])),
-            (2542642819229379552, ("NTAND", [3])),
-            (11965201914550078735, ("TANDA", [4])),
-            (5893010049374798421, ("PLANT", [0])),
-            (110005740849399217, ("NDANI", [6])),
-            (3791883307084689782, ("LGENQ", [13])),
-            (14610011480386804007, ("ALGEN", [12])),
-            (6941015416212662126, ("ANTAN", [2])),
-            (12636705882654324958, ("NQMES", [16])),
-            (11154024130290913208, ("IMALG", [10])),
-            (1225702037828834387, ("MALGE", [11])),
-            (12274863873578753245, ("NIMAL", [9])),
-            (13616372540306653069, ("ANDAN", [5])),
-        ];
+        // Expected: hash -> sorted positions
+        // Sequence: PLANTANDANIMALGENQMES (length 21, ksize 5)
+        let expected_positions: HashMap<u64, Vec<usize>> = [
+            (2140811952770908281,  vec![14]), // GENQM
+            (4381446250900425522,  vec![15]), // ENQME
+            (5798339600059429290,  vec![7]),  // DANIM
+            (7681438632487987439,  vec![8]),  // ANIMA
+            (12896310179337320481, vec![1]),  // LANTA
+            (2542642819229379552,  vec![3]),  // NTAND
+            (11965201914550078735, vec![4]),  // TANDA
+            (5893010049374798421,  vec![0]),  // PLANT
+            (110005740849399217,   vec![6]),  // NDANI
+            (3791883307084689782,  vec![13]), // LGENQ
+            (14610011480386804007, vec![12]), // ALGEN
+            (6941015416212662126,  vec![2]),  // ANTAN
+            (12636705882654324958, vec![16]), // NQMES
+            (11154024130290913208, vec![10]), // IMALG
+            (1225702037828834387,  vec![11]), // MALGE
+            (12274863873578753245, vec![9]),  // NIMAL
+            (13616372540306653069, vec![5]),  // ANDAN
+        ]
+        .into_iter()
+        .collect();
 
-        // Convert raw data into the required format with proper string types
-        let expected_kmers: HashMap<_, _> = raw_data
-            .into_iter()
-            .map(|(hash, (kmer, positions))| {
-                let mut original_map = HashMap::new();
-                original_map.insert(kmer.to_string(), positions.to_vec());
-                (hash, (kmer.to_string(), original_map))
-            })
-            .collect();
-
-        // Verify each kmer info matches expected values
-        for (hash, kmer_info) in protein_sig.kmer_infos().iter() {
-            let (expected_kmer, expected_positions) = expected_kmers
+        assert_eq!(protein_sig.kmer_positions().len(), expected_positions.len());
+        for (hash, positions) in protein_sig.kmer_positions().iter() {
+            let expected = expected_positions
                 .get(hash)
-                .unwrap_or_else(|| panic!("Missing expected hash {}", hash));
-
-            // Verify the k-mer
-            assert_eq!(
-                &kmer_info.encoded_kmer, expected_kmer,
-                "K-mer mismatch for hash {}: expected {}, got {}",
-                hash, expected_kmer, kmer_info.encoded_kmer
-            );
-
-            // Verify positions for the k-mer - now we compare the entire HashMap structure
-            assert_eq!(
-                &kmer_info.original_kmer_to_position, expected_positions,
-                "Position mismatch for k-mer {}: expected {:?}, got {:?}",
-                kmer_info.encoded_kmer, expected_positions, &kmer_info.original_kmer_to_position
-            );
+                .unwrap_or_else(|| panic!("Unexpected hash {}", hash));
+            let mut sorted = positions.clone();
+            sorted.sort();
+            assert_eq!(&sorted, expected, "Position mismatch for hash {}", hash);
         }
 
         Ok(())
@@ -1488,87 +1420,48 @@ mod tests {
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
         println!("{}", protein_sig.signature().name);
-        let hashvals = protein_sig.kmer_infos().keys().collect::<Vec<_>>();
+        let hashvals = protein_sig.kmer_positions().keys().collect::<Vec<_>>();
         println!("{:?}", hashvals);
-        let kmer_count = protein_sig.kmer_infos().len();
+        let kmer_count = protein_sig.kmer_positions().len();
 
         // Should have 17 kmers (length 21 - ksize 5 + 1)
         assert_eq!(kmer_count, 17);
 
         // Print all kmer infos for debugging
-        test_utils::print_kmer_infos(&protein_sig);
+        test_utils::print_kmer_positions(&protein_sig);
 
-        // Define the raw data without string conversions
-        let raw_data = [
-            (17444159595263538048, ("ceebe", "NIMAL", [9])),
-            (2945598193614695589, ("cccec", "ENQME", [15])),
-            (4548757849819812604, ("bbccb", "TANDA", [4])),
-            (6463872878592804545, ("ebccc", "LGENQ", [13])),
-            (4030406117949362159, ("cbcee", "DANIM", [7])),
-            (7014407397606522347, ("ebcbb", "LANTA", [1])),
-            (5045972850709227854, ("bebcb", "PLANT", [0])),
-            (11417072151730334367, ("bcbbc", "ANTAN", [2])),
-            (13574922562423607435, ("bceeb", "ANIMA", [8])),
-            (15050500149255106627, ("bccce", "GENQM", [14])),
-            (5430883729707969951, ("eebeb", "IMALG", [10])),
-            (13894194422852851851, ("bebcc", "ALGEN", [12])),
-            (9604281550621775790, ("bccbc", "ANDAN", [5])),
-            (6161374941338912337, ("ccecb", "NQMES", [16])),
-            (655307631517862365, ("ccbce", "NDANI", [6])),
-            (360995089333906261, ("ebebc", "MALGE", [11])),
-            (15056713696431004031, ("cbbcc", "NTAND", [3])),
-        ];
+        // Expected: hash -> sorted positions (dayhoff encoding collapses 20 aa to 6 letters)
+        // Sequence: PLANTANDANIMALGENQMES (length 21, ksize 5)
+        let expected_positions: HashMap<u64, Vec<usize>> = [
+            (17444159595263538048, vec![9]),  // NIMAL
+            (2945598193614695589,  vec![15]), // ENQME
+            (4548757849819812604,  vec![4]),  // TANDA
+            (6463872878592804545,  vec![13]), // LGENQ
+            (4030406117949362159,  vec![7]),  // DANIM
+            (7014407397606522347,  vec![1]),  // LANTA
+            (5045972850709227854,  vec![0]),  // PLANT
+            (11417072151730334367, vec![2]),  // ANTAN
+            (13574922562423607435, vec![8]),  // ANIMA
+            (15050500149255106627, vec![14]), // GENQM
+            (5430883729707969951,  vec![10]), // IMALG
+            (13894194422852851851, vec![12]), // ALGEN
+            (9604281550621775790,  vec![5]),  // ANDAN
+            (6161374941338912337,  vec![16]), // NQMES
+            (655307631517862365,   vec![6]),  // NDANI
+            (360995089333906261,   vec![11]), // MALGE
+            (15056713696431004031, vec![3]),  // NTAND
+        ]
+        .into_iter()
+        .collect();
 
-        // Convert raw strings to owned types and create the HashMap
-        let expected_kmers: HashMap<_, _> = raw_data
-            .into_iter()
-            .map(|(hash, (encoded, original, positions))| {
-                let mut original_map = HashMap::new();
-                original_map.insert(original.to_string(), positions.to_vec());
-                (hash, (encoded.to_string(), original_map))
-            })
-            .collect();
-
-        // Verify all expected hashes are present
-        let expected_hashes: Vec<_> = expected_kmers.keys().collect();
-        let actual_hashes: Vec<_> = protein_sig.kmer_infos().keys().collect();
-        assert_eq!(
-            expected_hashes.len(),
-            actual_hashes.len(),
-            "Number of hashes mismatch: expected {}, got {}",
-            expected_hashes.len(),
-            actual_hashes.len()
-        );
-
-        for hash in expected_hashes {
-            assert!(protein_sig.kmer_infos().contains_key(hash), "Missing expected hash {}", hash);
-        }
-
-        // Verify each kmer info matches expected values
-        for (hash, kmer_info) in protein_sig.kmer_infos().iter() {
-            let (expected_encoded, expected_originals) = expected_kmers
+        assert_eq!(protein_sig.kmer_positions().len(), expected_positions.len());
+        for (hash, positions) in protein_sig.kmer_positions().iter() {
+            let expected = expected_positions
                 .get(hash)
-                .unwrap_or_else(|| panic!("Missing expected hash {}", hash));
-
-            // Verify the encoded k-mer
-            assert_eq!(
-                &kmer_info.encoded_kmer, expected_encoded,
-                "Encoded k-mer mismatch for hash {}: expected {}, got {}",
-                hash, expected_encoded, kmer_info.encoded_kmer
-            );
-
-            // Verify each original k-mer and its positions
-            for (original_kmer, expected_positions) in expected_originals {
-                let positions =
-                    kmer_info.original_kmer_to_position.get(original_kmer).unwrap_or_else(|| {
-                        panic!("Missing original k-mer {} for hash {}", original_kmer, hash)
-                    });
-                assert_eq!(
-                    positions, expected_positions,
-                    "Position mismatch for k-mer {}: expected {:?}, got {:?}",
-                    original_kmer, expected_positions, positions
-                );
-            }
+                .unwrap_or_else(|| panic!("Unexpected hash {}", hash));
+            let mut sorted = positions.clone();
+            sorted.sort();
+            assert_eq!(&sorted, expected, "Position mismatch for hash {}", hash);
         }
 
         Ok(())
@@ -1598,94 +1491,45 @@ mod tests {
         println!("small_sig.minhash.to_vec(): {:?}", protein_sig.signature().minhash.to_vec());
 
         println!("{}", protein_sig.signature().name);
-        let hashvals = protein_sig.kmer_infos().keys().collect::<Vec<_>>();
+        let hashvals = protein_sig.kmer_positions().keys().collect::<Vec<_>>();
         println!("{:?}", hashvals);
-        let kmer_count = protein_sig.kmer_infos().len();
+        let kmer_count = protein_sig.kmer_positions().len();
 
         // // Should have 14 kmers (length 21 - ksize 5 + 1), but a few duplicates
         assert_eq!(kmer_count, 14);
 
         // Print all kmer infos for debugging
-        test_utils::print_kmer_infos(&protein_sig);
+        test_utils::print_kmer_positions(&protein_sig);
 
-        // Define test data in a more readable format
-        let kmer_data: HashMap<u64, (String, HashMap<String, Vec<usize>>)> = vec![
-            // Single k-mer cases
-            (17248460043117039725, ("hhhhp", vec!["MALGE"], vec![11])),
-            (5673218808929106268, ("phhhh", vec!["NIMAL"], vec![9])),
-            (16969835101383990681, ("hhpph", vec!["LANTA"], vec![1])),
-            (7345312524621807974, ("pphph", vec!["NDANI"], vec![6])),
-            (16370543730027378051, ("phpph", vec!["TANDA"], vec![4])),
-            (3278382041688965244, ("hphhh", vec!["ANIMA"], vec![8])),
-            (8541583772724823208, ("hhhhh", vec!["IMALG"], vec![10])),
-            (16158526221854164806, ("hppph", vec!["GENQM"], vec![14])),
-            (11553019557737058697, ("hhppp", vec!["LGENQ"], vec![13])),
-            (9081059129327932468, ("ppphp", vec!["ENQME"], vec![15])),
-            (2863220259252354754, ("phphh", vec!["DANIM"], vec![7])),
-            // Multiple original protein k-mer sequences mapping to same HP encoding
-            (4230974618842309829, ("hhhpp", vec!["PLANT", "ALGEN"], vec![0, 12])),
-            (13058023948041027181, ("pphpp", vec!["NQMES", "NTAND"], vec![16, 3])),
-            (4144736064335623701, ("hpphp", vec!["ANDAN", "ANTAN"], vec![5, 2])),
+        // HP encoding collapses 20 aa to 2 letters (h/p), so multiple original k-mers
+        // can produce the same hash. We store all positions together in sorted order.
+        let expected_positions: HashMap<u64, Vec<usize>> = [
+            (17248460043117039725, vec![11]),     // MALGE
+            (5673218808929106268,  vec![9]),      // NIMAL
+            (16969835101383990681, vec![1]),      // LANTA
+            (7345312524621807974,  vec![6]),      // NDANI
+            (16370543730027378051, vec![4]),      // TANDA
+            (3278382041688965244,  vec![8]),      // ANIMA
+            (8541583772724823208,  vec![10]),     // IMALG
+            (16158526221854164806, vec![14]),     // GENQM
+            (11553019557737058697, vec![13]),     // LGENQ
+            (9081059129327932468,  vec![15]),     // ENQME
+            (2863220259252354754,  vec![7]),      // DANIM
+            (4230974618842309829,  vec![0, 12]),  // PLANT(0) + ALGEN(12) → same HP hash
+            (13058023948041027181, vec![3, 16]),  // NTAND(3) + NQMES(16) → same HP hash
+            (4144736064335623701,  vec![2, 5]),   // ANTAN(2) + ANDAN(5) → same HP hash
         ]
         .into_iter()
-        .map(|(hash, (encoded, originals, positions))| {
-            let mut original_map = HashMap::new();
-            for (i, orig) in originals.into_iter().enumerate() {
-                original_map.insert(orig.to_string(), vec![positions[i]]);
-            }
-            (hash, (encoded.to_string(), original_map))
-        })
         .collect();
 
-        // Verify all expected hashes are present
-        let expected_hashes: Vec<_> = kmer_data.keys().collect();
-        let actual_hashes: Vec<_> = protein_sig.kmer_infos().keys().collect();
-        assert_eq!(
-            expected_hashes.len(),
-            actual_hashes.len(),
-            "Number of hashes mismatch: expected {}, got {}",
-            expected_hashes.len(),
-            actual_hashes.len()
-        );
-
-        for hash in expected_hashes {
-            assert!(protein_sig.kmer_infos().contains_key(hash), "Missing expected hash {}", hash);
-        }
-
-        // Verify each kmer info matches expected values
-        for (hash, kmer_info) in protein_sig.kmer_infos().iter() {
-            let (expected_encoded, expected_originals) =
-                kmer_data.get(hash).unwrap_or_else(|| panic!("Missing expected hash {}", hash));
-
-            // Verify the encoded k-mer
-            assert_eq!(
-                &kmer_info.encoded_kmer, expected_encoded,
-                "Encoded k-mer mismatch for hash {}: expected {}, got {}",
-                hash, expected_encoded, kmer_info.encoded_kmer
-            );
-
-            // Verify each original k-mer and its positions
-            for (original_kmer, expected_positions) in expected_originals {
-                let positions =
-                    kmer_info.original_kmer_to_position.get(original_kmer).unwrap_or_else(|| {
-                        panic!("Missing original k-mer {} for hash {}", original_kmer, hash)
-                    });
-                assert_eq!(
-                    positions, expected_positions,
-                    "Position mismatch for k-mer {}: expected {:?}, got {:?}",
-                    original_kmer, expected_positions, positions
-                );
-            }
-
-            // Verify we have the expected number of original k-mers
-            assert_eq!(
-                kmer_info.original_kmer_to_position.len(),
-                expected_originals.len(),
-                "Expected {} original k-mers for hash {}, got {}",
-                expected_originals.len(),
-                hash,
-                kmer_info.original_kmer_to_position.len()
-            );
+        assert_eq!(protein_sig.kmer_positions().len(), expected_positions.len());
+        for (hash, positions) in protein_sig.kmer_positions().iter() {
+            let expected = expected_positions
+                .get(hash)
+                .unwrap_or_else(|| panic!("Unexpected hash {}", hash));
+            let mut sorted = positions.clone();
+            sorted.sort();
+            assert_eq!(&sorted, expected, "Position mismatch for hash {}", hash);
         }
 
         Ok(())
@@ -1714,12 +1558,12 @@ mod tests {
         let signature = index.create_protein_signature(sequence, name)?;
 
         // Verify the signature has the expected number of k-mers
-        assert_eq!(signature.kmer_infos().len(), 17, "Expected 17 k-mers for the test protein");
+        assert_eq!(signature.kmer_positions().len(), 17, "Expected 17 k-mers for the test protein");
 
         // Verify some specific k-mers are present
         let expected_hash = 5893010049374798421; // Hash for "PLANT"
         assert!(
-            signature.kmer_infos().contains_key(&expected_hash),
+            signature.kmer_positions().contains_key(&expected_hash),
             "Expected k-mer hash {} to be present",
             expected_hash
         );
@@ -1765,12 +1609,12 @@ mod tests {
         let signature = index.create_protein_signature(sequence, name)?;
 
         // Verify the signature has the expected number of k-mers
-        assert_eq!(signature.kmer_infos().len(), 17, "Expected 17 k-mers for the test protein");
+        assert_eq!(signature.kmer_positions().len(), 17, "Expected 17 k-mers for the test protein");
 
         // Verify some specific k-mers are present
         let expected_hash = 5045972850709227854; // Hash for "PLANT" in Dayhoff encoding ("bebcb")
         assert!(
-            signature.kmer_infos().contains_key(&expected_hash),
+            signature.kmer_positions().contains_key(&expected_hash),
             "Expected k-mer hash {} to be present",
             expected_hash
         );
@@ -1816,12 +1660,12 @@ mod tests {
         let signature = index.create_protein_signature(sequence, name)?;
 
         // Verify the signature has the expected number of k-mers
-        assert_eq!(signature.kmer_infos().len(), 14, "Expected 14 k-mers for the test protein");
+        assert_eq!(signature.kmer_positions().len(), 14, "Expected 14 k-mers for the test protein");
 
         // Verify some specific k-mers are present
         let expected_hash = 4230974618842309829; // Hash for "PLANT" in HP encoding ("hhhpp")
         assert!(
-            signature.kmer_infos().contains_key(&expected_hash),
+            signature.kmer_positions().contains_key(&expected_hash),
             "Expected k-mer hash {} to be present",
             expected_hash
         );
@@ -1879,18 +1723,18 @@ mod tests {
                 let stored_signature = entry.value();
                 if md5sum == "f7661cd829e75c0d" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 7,
+                        stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
                 } else if md5sum == "7641839ad508ab8" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 17,
+                        stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
                     );
                 } else {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
-                    println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                    println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                     panic!("Unknown md5sum: {}", md5sum);
                 }
             }
@@ -1941,18 +1785,18 @@ mod tests {
                 let stored_signature = entry.value();
                 if md5sum == "a963d06839b6d6a9" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 7,
+                        stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 dayhoff 5-mers"
                     );
                 } else if md5sum == "84d7545d531dcf51" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 17,
+                        stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 dayhoff 5-mers"
                     );
                 } else {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
-                    println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                    println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                     panic!("Unknown md5sum: {}", md5sum);
                 }
             }
@@ -2003,18 +1847,18 @@ mod tests {
                 let stored_signature = entry.value();
                 if md5sum == "24ca8d939672666b" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 6,
+                        stored_signature.kmer_positions().len() == 6,
                         "LIVINGALIVE should have 6 hp 5-mers"
                     );
                 } else if md5sum == "668d7173d661287b" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 14,
+                        stored_signature.kmer_positions().len() == 14,
                         "PLANTANDANIMALGENQMES should have 14 hp 5-mers"
                     );
                 } else {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
-                    println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                    println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                     panic!("Unknown md5sum: {}", md5sum);
                 }
             }
@@ -2060,18 +1904,18 @@ mod tests {
                 let stored_signature = entry.value();
                 if md5sum == "f7661cd829e75c0d" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 7,
+                        stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
                 } else if md5sum == "7641839ad508ab8" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 17,
+                        stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
                     );
                 } else {
                     println!("md5sum: {}", md5sum);
                     println!("Name: {}", stored_signature.signature().name);
-                    println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                    println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                     panic!("Unknown md5sum: {}", md5sum);
                 }
             }
@@ -2117,16 +1961,16 @@ mod tests {
                 let stored_signature = entry.value();
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
-                println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                 if md5sum == "4d565dee9c8de9db" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 474,
+                        stored_signature.kmer_positions().len() == 474,
                         "sp|O43236|SEPT4_HUMAN should have 474 protein 5-mers"
                     );
                 }
                 if md5sum == "4da1f84ad8be618e" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 235,
+                        stored_signature.kmer_positions().len() == 235,
                         "sp|P10415|BCL2_HUMAN should have 235 protein 5-mers"
                     );
                 }
@@ -2176,16 +2020,16 @@ mod tests {
                 let stored_signature = entry.value();
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
-                println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                 if md5sum == "fc27dcd533217385" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 433,
+                        stored_signature.kmer_positions().len() == 433,
                         "sp|O43236|SEPT4_HUMAN should have 433 dayhoff 5-mers"
                     );
                 }
                 if md5sum == "3206706fa14185e7" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 204,
+                        stored_signature.kmer_positions().len() == 204,
                         "sp|P10415|BCL2_HUMAN should have 204 dayhoff 5-mers"
                     );
                 }
@@ -2242,16 +2086,16 @@ mod tests {
                 let stored_signature = entry.value();
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
-                println!("Len of Kmer infos: {}", stored_signature.kmer_infos().len());
+                println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
                 if md5sum == "38ffedf9d3ec7cec" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 452,
+                        stored_signature.kmer_positions().len() == 452,
                         "sp|O43236|SEPT4_HUMAN should have 452 hp 12-mers"
                     );
                 }
                 if md5sum == "204716e4d80eb350" {
                     assert!(
-                        stored_signature.kmer_infos().len() == 220,
+                        stored_signature.kmer_positions().len() == 220,
                         "sp|P10415|BCL2_HUMAN should have 220 hp 12-mers"
                     );
                 }
@@ -2296,30 +2140,30 @@ mod tests {
 
         for sequence in valid_sequences.iter() {
             let protein_signature = index.create_protein_signature(sequence, "test_protein")?;
-            test_utils::print_kmer_infos(&protein_signature);
+            test_utils::print_kmer_positions(&protein_signature);
             if protein_signature.signature().md5sum == "7641839ad508ab8" {
                 assert!(
-                    protein_signature.kmer_infos().len() == 17,
+                    protein_signature.kmer_positions().len() == 17,
                     "Valid sequence 'PLANTANDANIMALGENQMES' should be accepted and have 17 protein 5-mers",
                 );
             } else if protein_signature.signature().md5sum == "b95f0777d5439d56" {
                 assert!(
-                    protein_signature.kmer_infos().len() == 16,
+                    protein_signature.kmer_positions().len() == 16,
                     "Valid sequence 'ACDEFGHIKLMNPQRSTVWY' should be accepted and have 16 protein 5-mers",
                 );
             } else if protein_signature.signature().md5sum == "fa11c30a562fd82" {
                 assert!(
-                    protein_signature.kmer_infos().len() == 5,
+                    protein_signature.kmer_positions().len() == 5,
                     "Valid sequence 'ACDEFXBZJ' should be accepted and have 5 protein 5-mers",
                 );
             } else {
                 // For the third sequence, just check the length is correct
-                if protein_signature.kmer_infos().len() == 5 {
+                if protein_signature.kmer_positions().len() == 5 {
                     // This is the expected case for ACDEFXBZJ
                 } else {
                     panic!(
                         "Unexpected kmer count: {} for md5sum: {}",
-                        protein_signature.kmer_infos().len(),
+                        protein_signature.kmer_positions().len(),
                         protein_signature.signature().md5sum
                     );
                 }
@@ -2362,10 +2206,10 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            print_kmer_infos(&protein_signature);
+            print_kmer_positions(&protein_signature);
             // Should have the same number of k-mers as the original sequence
             assert_eq!(
-                protein_signature.kmer_infos().len(),
+                protein_signature.kmer_positions().len(),
                 17,
                 "Resolved sequence should have 17 protein 5-mers"
             );
@@ -2406,52 +2250,34 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            print_kmer_infos(&protein_signature);
+            print_kmer_positions(&protein_signature);
             // Should have the same number of k-mers as the original sequence
             println!("sequence: {}", sequence);
             assert_eq!(
-                protein_signature.kmer_infos().len(),
+                protein_signature.kmer_positions().len(),
                 17,
                 "Resolved sequence should have 17 protein 5-mers"
             );
             // Check that the ambiguous k-mer is resolved correctly
             if sequence == &"PLANTANDANIMALGENBMES" {
-                let kmer_info = protein_signature.kmer_infos().get(&6161374941338912337);
+                // B resolves to D or N → dayhoff hash for NDMES/NNMES (both map to same dayhoff 6-letter encoding)
                 assert!(
-                    kmer_info.is_some(),
-                    "Expected k-mer with hash 6161374941338912337 to be present in {}",
-                    sequence
-                );
-                let kmer_info = kmer_info.unwrap();
-                assert_eq!(
-                    kmer_info.encoded_kmer, "ccecb",
-                    "Expected encoded k-mer 'ccecb' (NDMES/NNMES) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&6161374941338912337),
+                    "Expected k-mer with hash 6161374941338912337 (NDMES/NNMES dayhoff) to be present in {}",
                     sequence
                 );
             } else if sequence == &"PLANTANDANIMALGENZMES" {
-                let kmer_info = protein_signature.kmer_infos().get(&6161374941338912337);
+                // Z resolves to E or Q → dayhoff hash for NEMES/NQMES
                 assert!(
-                    kmer_info.is_some(),
-                    "Expected k-mer with hash 6161374941338912337 to be present in {}",
-                    sequence
-                );
-                let kmer_info = kmer_info.unwrap();
-                assert_eq!(
-                    kmer_info.encoded_kmer, "ccecb",
-                    "Expected encoded k-mer 'ccecb' (NEMES/NQMES) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&6161374941338912337),
+                    "Expected k-mer with hash 6161374941338912337 (NEMES/NQMES dayhoff) to be present in {}",
                     sequence
                 );
             } else if sequence == &"PLANTANDANIMALGENJMES" {
-                let kmer_info = protein_signature.kmer_infos().get(&9182605311834199497);
+                // J resolves to I or L → dayhoff hash for NLMES/NIMES
                 assert!(
-                    kmer_info.is_some(),
-                    "Expected k-mer with hash 9182605311834199497 to be present in {}",
-                    sequence
-                );
-                let kmer_info = kmer_info.unwrap();
-                assert_eq!(
-                    kmer_info.encoded_kmer, "ceecb",
-                    "Expected encoded k-mer 'ceecb' (NLMES/NIMES) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&9182605311834199497),
+                    "Expected k-mer with hash 9182605311834199497 (NLMES/NIMES dayhoff) to be present in {}",
                     sequence
                 );
             }
@@ -2492,52 +2318,34 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            print_kmer_infos(&protein_signature);
+            print_kmer_positions(&protein_signature);
             // Should have the same number of k-mers as the original sequence
             println!("sequence: {}", sequence);
             assert_eq!(
-                protein_signature.kmer_infos().len(),
+                protein_signature.kmer_positions().len(),
                 14,
                 "Resolved sequence should have 14 protein 5-mers"
             );
             // Check that the ambiguous k-mer is resolved correctly
             if sequence == &"PLANTANDANIMALGENBMES" {
-                let kmer_info = protein_signature.kmer_infos().get(&13058023948041027181);
+                // B resolves to D or N → HP hash for NDMES/NNMES (both map to "pphpp" HP encoding)
                 assert!(
-                    kmer_info.is_some(),
-                    "Expected k-mer with hash 6161374941338912337 to be present in {}",
-                    sequence
-                );
-                let kmer_info = kmer_info.unwrap();
-                assert_eq!(
-                    kmer_info.encoded_kmer, "pphpp",
-                    "Expected encoded k-mer 'pphpp' (NDMES/NNMES) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&13058023948041027181),
+                    "Expected k-mer with hash 13058023948041027181 (NDMES/NNMES HP) to be present in {}",
                     sequence
                 );
             } else if sequence == &"PLANTANDANIMALGENZMES" {
-                let kmer_info = protein_signature.kmer_infos().get(&13058023948041027181);
+                // Z resolves to E or Q → HP hash for NEMES/NQMES (both map to "pphpp" HP encoding)
                 assert!(
-                    kmer_info.is_some(),
-                    "Expected k-mer with hash 13058023948041027181 to be present in {}",
-                    sequence
-                );
-                let kmer_info = kmer_info.unwrap();
-                assert_eq!(
-                    kmer_info.encoded_kmer, "pphpp",
-                    "Expected encoded k-mer 'pphpp' (NEMES/NQMES) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&13058023948041027181),
+                    "Expected k-mer with hash 13058023948041027181 (NEMES/NQMES HP) to be present in {}",
                     sequence
                 );
             } else if sequence == &"PLANTANDANIMALGENJMES" {
-                let kmer_info = protein_signature.kmer_infos().get(&10495165127682499337);
+                // J resolves to I or L → HP hash for NLMES/NIMES (both map to "phhpp" HP encoding)
                 assert!(
-                    kmer_info.is_some(),
-                    "Expected k-mer with hash 10495165127682499337 to be present in {}",
-                    sequence
-                );
-                let kmer_info = kmer_info.unwrap();
-                assert_eq!(
-                    kmer_info.encoded_kmer, "phhpp",
-                    "Expected encoded k-mer 'phhpp' (NLMES/NIMES) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&10495165127682499337),
+                    "Expected k-mer with hash 10495165127682499337 (NLMES/NIMES HP) to be present in {}",
                     sequence
                 );
             }
@@ -2619,12 +2427,12 @@ mod tests {
         let signature = index.create_protein_signature(sequence, "test_protein")?;
 
         // Verify the signature has the expected number of k-mers
-        assert_eq!(signature.kmer_infos().len(), 17, "Expected 17 k-mers for the test protein");
+        assert_eq!(signature.kmer_positions().len(), 17, "Expected 17 k-mers for the test protein");
 
         // Verify some specific k-mers are present
         let expected_hash = 5893010049374798421; // Hash for "PLANT"
         assert!(
-            signature.kmer_infos().contains_key(&expected_hash),
+            signature.kmer_positions().contains_key(&expected_hash),
             "Expected k-mer hash {} to be present",
             expected_hash
         );
@@ -3083,7 +2891,7 @@ mod tests {
 
         // Extract k-mer counts and raw sequences using functional programming
         let kmer_counts: Vec<usize> =
-            signatures.iter().map(|entry| entry.value().kmer_infos().len()).collect();
+            signatures.iter().map(|entry| entry.value().kmer_positions().len()).collect();
 
         let raw_sequences: Vec<String> = signatures
             .iter()
