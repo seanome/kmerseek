@@ -39,6 +39,7 @@ indicatif = { version = "0.17", features = ["rayon"] }
 # PR: https://github.com/sourmash-bio/sourmash_plugin_branchwater/pull/657
 sourmash_plugin_branchwater = { git = "https://github.com/sourmash-bio/sourmash_plugin_branchwater", rev = "585dabf4f50239dbcf56dddf94a7ed181fc03046" }
 zip = { version = "4.0", default-features = false }
+statrs = "0.17"
 
 [features]
 default = ["python"]

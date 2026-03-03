@@ -8,6 +8,8 @@ use indicatif::{ProgressBar, ProgressStyle};
 use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
+use statrs::distribution::{DiscreteCDF, Poisson};
+
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::significance;
@@ -49,10 +51,13 @@ pub struct SearchResultCsv {
     pub sum_matched_kmer_freq: f64,
     pub expected_shared_kmers: f64,
     pub enrichment: f64,
-    /// Probability of overlap given both query and target proteome compositions.
-    /// Σ freq_query[h] * freq_target[h] for h in intersection.
+    /// Joint k-mer frequency: Σ freq_query[h] * freq_target[h] for h in intersection.
+    /// Dot product of query and target frequency vectors over shared k-mers.
     /// 0.0 when query frequencies are not available (one-pass mode).
-    pub prob_overlap: f64,
+    pub joint_kmer_freq: f64,
+    /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = expected_shared_kmers).
+    /// 1.0 when expected_shared_kmers is unavailable (no database context).
+    pub poisson_pvalue: f64,
     // MatchedRegion fields (always present - every CSV row has a matched region)
     pub query_start: u32,
     pub query_end: u32,
@@ -93,7 +98,8 @@ impl SearchResultCsv {
             sum_matched_kmer_freq: result.sum_matched_kmer_freq,
             expected_shared_kmers: result.expected_shared_kmers,
             enrichment: result.enrichment,
-            prob_overlap: result.prob_overlap,
+            joint_kmer_freq: result.joint_kmer_freq,
+            poisson_pvalue: result.poisson_pvalue,
             query_start: region.query_start,
             query_end: region.query_end,
             query_subseq: region.query_subseq.clone(),
@@ -176,10 +182,14 @@ pub struct SearchResult {
     /// Higher = more k-mers matched than expected by chance given target DB composition.
     pub enrichment: f64,
 
-    /// Probability of overlap given both query and target proteome compositions.
-    /// Σ freq_query[h] * freq_target[h] for h in intersection (two-pass; 0.0 if query
-    /// frequencies not provided via set_query_frequencies()).
-    pub prob_overlap: f64,
+    /// Joint k-mer frequency: Σ freq_query[h] * freq_target[h] for h in intersection.
+    /// Dot product of query and target frequency vectors over shared k-mers (two-pass;
+    /// 0.0 if query frequencies not provided via set_query_frequencies()).
+    pub joint_kmer_freq: f64,
+
+    /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = expected_shared_kmers).
+    /// 1.0 when expected_shared_kmers is unavailable (no database context).
+    pub poisson_pvalue: f64,
 
     /// 1 or more regions of 1+ k-mers overlapping between query and target
     pub matched_regions: Vec<MatchedRegion>,
@@ -311,7 +321,7 @@ pub struct ProteinSearcher {
     /// only as candidates are accessed — hot targets are cached, cold ones are never loaded.
     sig_cache: DashMap<String, ProteinSketch>,
     /// K-mer frequencies across the query proteome, set via set_query_frequencies() before
-    /// searching. None = single-pass mode; prob_overlap will be 0.0 for all results.
+    /// searching. None = single-pass mode; joint_kmer_freq will be 0.0 for all results.
     query_kmer_frequencies: Option<HashMap<u64, usize>>,
     /// Total number of query sequences used to build query_kmer_frequencies.
     total_queries: usize,
@@ -653,9 +663,9 @@ impl ProteinSearcher {
         };
 
         // Fill in database-specific metrics
-        // prob_overlap = Σ freq_query[h] * freq_target[h] for h in intersection.
+        // joint_kmer_freq = Σ freq_query[h] * freq_target[h] for h in intersection.
         // Only computed in two-pass mode (when set_query_frequencies() has been called).
-        let prob_overlap = if let Some(qfreqs) = &self.query_kmer_frequencies {
+        let joint_kmer_freq = if let Some(qfreqs) = &self.query_kmer_frequencies {
             let total_q = self.total_queries as f64;
             let total_t = self.stats.total_signatures as f64;
             intersection.iter().map(|&h| {
@@ -667,17 +677,30 @@ impl ProteinSearcher {
             0.0
         };
 
+        // P(X >= k | lambda) where k = observed intersecting hashes, lambda = expected by chance.
+        // Uses the Poisson survival function: 1 - CDF(k-1).
+        let k = result.n_intersecting_hashes;
+        let poisson_pvalue = if expected_shared_kmers > 0.0 && k > 0 {
+            match Poisson::new(expected_shared_kmers) {
+                Ok(dist) => (1.0 - dist.cdf((k - 1) as u64)).max(0.0),
+                Err(_) => 1.0,
+            }
+        } else {
+            1.0
+        };
+
         result.query_tfidf = query.tfidf;
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.expected_shared_kmers = expected_shared_kmers;
         result.enrichment = enrichment;
-        result.prob_overlap = prob_overlap;
+        result.joint_kmer_freq = joint_kmer_freq;
+        result.poisson_pvalue = poisson_pvalue;
 
         Some(result)
     }
 
-    /// Set query-proteome k-mer frequencies for two-pass prob_overlap computation.
+    /// Set query-proteome k-mer frequencies for two-pass joint_kmer_freq computation.
     ///
     /// Call this after loading the searcher and before the search loop.
     /// `freqs` maps each k-mer hash to the number of query sequences containing it.
@@ -880,7 +903,8 @@ fn calculate_similarity_from_precomputed(
         sum_matched_kmer_freq: 0.0,  // requires database context
         expected_shared_kmers: 0.0,  // requires database context
         enrichment: 0.0,             // requires database context
-        prob_overlap: 0.0,           // requires two-pass query frequencies
+        joint_kmer_freq: 0.0,           // requires two-pass query frequencies
+        poisson_pvalue: 1.0,         // requires database context (expected_shared_kmers)
         matched_regions,
     })
 }
@@ -1856,7 +1880,7 @@ mod tests {
         assert_eq!(result.sum_matched_kmer_freq, 0.0, "sum_matched_kmer_freq should be 0.0 for 1v1 comparisons");
         assert_eq!(result.expected_shared_kmers, 0.0, "expected_shared_kmers should be 0.0 for 1v1 comparisons");
         assert_eq!(result.enrichment, 0.0, "enrichment should be 0.0 for 1v1 comparisons");
-        assert_eq!(result.prob_overlap, 0.0, "prob_overlap should be 0.0 without query frequencies");
+        assert_eq!(result.joint_kmer_freq, 0.0, "joint_kmer_freq should be 0.0 without query frequencies");
 
         Ok(())
     }
@@ -1979,11 +2003,11 @@ mod tests {
             bcl2_result.mean_matched_kmer_freq
         );
 
-        // prob_overlap is 0.0 because set_query_frequencies() was not called
+        // joint_kmer_freq is 0.0 because set_query_frequencies() was not called
         assert_eq!(
-            bcl2_result.prob_overlap, 0.0,
-            "prob_overlap should be 0.0 without query frequencies, got {}",
-            bcl2_result.prob_overlap
+            bcl2_result.joint_kmer_freq, 0.0,
+            "joint_kmer_freq should be 0.0 without query frequencies, got {}",
+            bcl2_result.joint_kmer_freq
         );
 
         // Verify matched regions are present
@@ -2009,16 +2033,16 @@ mod tests {
         Ok(())
     }
 
-    /// Test prob_overlap is computed correctly when set_query_frequencies() is called.
+    /// Test joint_kmer_freq is computed correctly when set_query_frequencies() is called.
     ///
     /// Key invariant: when total_queries=1 and every query k-mer has frequency 1
     /// (i.e. the "query proteome" is a single sequence),
-    ///   prob_overlap = Σ (freq_q[h]/1) * (freq_t[h]/N_targets)
+    ///   joint_kmer_freq = Σ (freq_q[h]/1) * (freq_t[h]/N_targets)
     ///               = Σ freq_t[h]/N_targets
     ///               = sum_matched_kmer_freq
     /// so the two metrics must be equal in this degenerate case.
     #[test]
-    fn test_prob_overlap_two_pass() -> Result<()> {
+    fn test_joint_kmer_freq_two_pass() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
         let moltype = "hp";
@@ -2060,19 +2084,19 @@ mod tests {
             .expect("Should find BCL2_HUMAN in results");
 
         // With total_queries=1 and all query k-mer frequencies=1:
-        //   prob_overlap = sum_matched_kmer_freq (exact equality)
-        // prob_overlap must equal sum_matched_kmer_freq when total_queries=1, all query freqs=1
+        //   joint_kmer_freq = sum_matched_kmer_freq (exact equality)
+        // joint_kmer_freq must equal sum_matched_kmer_freq when total_queries=1, all query freqs=1
         assert_relative_eq!(
-            bcl2_result.prob_overlap,
+            bcl2_result.joint_kmer_freq,
             bcl2_result.sum_matched_kmer_freq,
             epsilon = 1e-12
         );
 
         // Also verify it's non-zero (there's an actual intersection)
         assert!(
-            bcl2_result.prob_overlap > 0.0,
-            "prob_overlap should be > 0.0, got {}",
-            bcl2_result.prob_overlap
+            bcl2_result.joint_kmer_freq > 0.0,
+            "joint_kmer_freq should be > 0.0, got {}",
+            bcl2_result.joint_kmer_freq
         );
 
         Ok(())

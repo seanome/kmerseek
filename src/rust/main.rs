@@ -262,7 +262,7 @@ fn main() -> IndexResult<()> {
                 use kmerseek::sketch::ProteinSketch;
                 use kmerseek::search::SearchResultCsv;
 
-                // First pass: build query-proteome k-mer frequencies for prob_overlap.
+                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq.
                 eprintln!("First pass: scanning query proteome for k-mer frequencies...");
                 {
                     use std::collections::HashMap;
