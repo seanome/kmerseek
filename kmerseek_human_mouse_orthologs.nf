@@ -22,9 +22,9 @@ params.kmerseek = "${System.getProperty('user.home')}/code/kmerseek/target/relea
 // Ortholog mapping URL
 params.ortholog_url = "https://www.informatics.jax.org/downloads/reports/HOM_MouseHumanSequence.rpt"
 
-// K-mer size range for HP encoding (15-30)
-params.k_min = 15
-params.k_max = 30
+
+// Minimum containment threshold — 0.0 keeps all hits (large CSVs; polars handles them)
+params.threshold = 0.0
 
 process buildRelease {
     output:
@@ -211,368 +211,194 @@ process evaluateOrthologs {
     tuple val(ksize), path("ortholog_evaluation.hp.k${ksize}.tsv")
     path "ortholog_evaluation.hp.k${ksize}.summary.txt"
     path "ortholog_evaluation.hp.k${ksize}.roc_data.tsv"
+    path "ortholog_evaluation.hp.k${ksize}.mht.csv"
+    path "metrics_*.hp.k${ksize}.png"
 
     script:
     """
     #!/usr/bin/env python3
-    import csv
-    import re
+    import polars as pl
+    import numpy as np
     import json
-    from collections import defaultdict
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
 
-    # Load ortholog pairs (ground truth)
-    ortholog_pairs_dict = defaultdict(set)
-    with open('${ortholog_pairs}', 'r') as f:
-        reader = csv.DictReader(f, delimiter='\\t')
-        for row in reader:
-            human_gene = row['human_gene'].upper()
-            mouse_gene = row['mouse_gene']
-            ortholog_pairs_dict[human_gene].add(mouse_gene)
+    ksize = ${ksize}
 
-    # Extract gene symbol from GENCODE FASTA header
-    # Format: ENSP...|ENST...|ENSG...|...|...|SYMBOL-201|SYMBOL|length
-    def extract_gene_symbol(header):
-        parts = header.split('|')
-        if len(parts) >= 7:
-            return parts[6]  # Gene symbol is 7th field (0-indexed: 6)
-        return None
+    # ── Load ortholog ground truth ─────────────────────────────────────────────
+    ortho = (
+        pl.read_csv('${ortholog_pairs}', separator='\\t')
+        .with_columns(pl.col('human_gene').str.to_uppercase(), pl.lit(True).alias('is_ortholog'))
+    )
 
-    # Process kmerseek results
-    # Expected columns: query_name, target_name, score, etc.
-    results = []
-    with open('${results_csv}', 'r') as f:
-        reader = csv.DictReader(f)
-        for row in reader:
-            query_header = row['query_name']
-            target_header = row['target_name']
+    # ── Lazy scan results + gene-symbol extraction + ortholog join ─────────────
+    df = (
+        pl.scan_csv('${results_csv}')
+        .with_columns([
+            pl.col('query_name').str.split('|').list.get(6).alias('human_gene'),
+            pl.col('target_name').str.split('|').list.get(6).alias('mouse_gene'),
+        ])
+        .with_columns(pl.col('human_gene').str.to_uppercase())
+        .join(
+            ortho.lazy().select(['human_gene', 'mouse_gene', 'is_ortholog']),
+            on=['human_gene', 'mouse_gene'], how='left',
+        )
+        .with_columns(pl.col('is_ortholog').fill_null(False))
+        .collect()
+    )
 
-            human_gene = extract_gene_symbol(query_header)
-            mouse_gene = extract_gene_symbol(target_header)
+    n_total = len(df)
+    n_orth  = int(df['is_ortholog'].sum())
+    n_non   = n_total - n_orth
+    print(f"Loaded {n_total:,} rows  |  {n_orth:,} orthologs  |  {n_non:,} non-orthologs")
 
-            if human_gene and mouse_gene:
-                # Check if human gene is uppercase (as expected)
-                human_gene_upper = human_gene.upper()
+    # ── Metric columns ─────────────────────────────────────────────────────────
+    METRIC_COLS = [
+        'n_intersecting_hashes', 'jaccard', 'containment', 'query_tfidf',
+        'mean_matched_kmer_freq', 'sum_matched_kmer_freq',
+        'expected_shared_kmers', 'enrichment', 'prob_overlap',
+    ]
+    metrics = [c for c in METRIC_COLS if c in df.columns]
 
-                # Check if this is a true ortholog pair
-                is_ortholog = mouse_gene in ortholog_pairs_dict.get(human_gene_upper, set())
+    # ── Histograms (ortholog vs non-ortholog) ──────────────────────────────────
+    orth_df = df.filter(pl.col('is_ortholog'))
+    nort_df = df.filter(~pl.col('is_ortholog'))
 
-                # Get score for ranking (try multiple possible score columns)
-                score = 0.0
-                for score_col in ['average_kmer_rarity', 'score', 'jaccard', 'containment']:
-                    if score_col in row and row[score_col]:
-                        try:
-                            score = float(row[score_col])
-                            break
-                        except ValueError:
-                            continue
+    for metric in metrics:
+        ov  = orth_df[metric].drop_nulls().to_numpy()
+        nov = nort_df[metric].drop_nulls().to_numpy()
+        if len(ov) == 0 and len(nov) == 0:
+            continue
+        all_vals = np.concatenate([ov, nov])
+        lo, hi   = np.nanpercentile(all_vals, [0.5, 99.5])
+        bins     = np.linspace(lo, hi, 60)
 
-                results.append({
-                    'query_header': query_header,
-                    'target_header': target_header,
-                    'human_gene': human_gene,
-                    'mouse_gene': mouse_gene,
-                    'is_ortholog': is_ortholog,
-                    'score': score,
-                    **{k: v for k, v in row.items() if k not in ['query_name', 'target_name']}
-                })
+        fig, ax = plt.subplots(figsize=(8, 5))
+        ax.hist(nov, bins=bins, alpha=0.6, density=True,
+                label=f'Non-ortholog (n={len(nov):,})', color='steelblue')
+        ax.hist(ov,  bins=bins, alpha=0.6, density=True,
+                label=f'Ortholog (n={len(ov):,})', color='tomato')
+        ax.set_xlabel(metric)
+        ax.set_ylabel('Density')
+        ax.set_title(f'{metric}  —  HP k={ksize}')
+        ax.legend()
+        plt.tight_layout()
+        plt.savefig(f'metrics_{metric}.hp.k{ksize}.png', dpi=150)
+        plt.close()
 
-    # Write detailed evaluation results
-    with open('ortholog_evaluation.hp.k${ksize}.tsv', 'w') as f:
-        if results:
-            fieldnames = ['human_gene', 'mouse_gene', 'is_ortholog', 'score'] + \\
-                        [k for k in results[0].keys() if k not in ['human_gene', 'mouse_gene', 'is_ortholog', 'score']]
-            writer = csv.DictWriter(f, fieldnames=fieldnames, delimiter='\\t')
-            writer.writeheader()
-            for row in results:
-                writer.writerow(row)
+    # ── MHT corrections on prob_overlap ───────────────────────────────────────
+    pvals = df['prob_overlap'].fill_null(1.0).to_numpy()
+    n = len(pvals)
 
-    # ============================================
-    # ML METRICS CALCULATION
-    # ============================================
+    def bh_adj(p):
+        idx = np.argsort(p); sp = p[idx]; m = len(p)
+        adj = np.minimum(1, sp * m / np.arange(1, m + 1))
+        adj = np.minimum.accumulate(adj[::-1])[::-1]
+        out = np.empty(m); out[idx] = adj; return out
 
-    # Hit-level metrics
-    total_hits = len(results)
-    TP_hits = sum(1 for r in results if r['is_ortholog'])  # True positives at hit level
-    FP_hits = total_hits - TP_hits  # False positives at hit level
+    def by_adj(p):
+        idx = np.argsort(p); sp = p[idx]; m = len(p)
+        c   = np.sum(1.0 / np.arange(1, m + 1))
+        adj = np.minimum(1, sp * m * c / np.arange(1, m + 1))
+        adj = np.minimum.accumulate(adj[::-1])[::-1]
+        out = np.empty(m); out[idx] = adj; return out
 
-    # Precision at hit level
-    precision_hits = TP_hits / total_hits if total_hits > 0 else 0
+    def two_stage_bh_adj(p, alpha=0.05):
+        m0  = max(n - int(np.sum(bh_adj(p) <= alpha)), 1)
+        idx = np.argsort(p); sp = p[idx]
+        adj = np.minimum(1, sp * m0 / np.arange(1, n + 1))
+        adj = np.minimum.accumulate(adj[::-1])[::-1]
+        out = np.empty(n); out[idx] = adj; return out
 
-    # Gene-level analysis
-    # Get all unique human genes that were queried
-    human_genes_searched = set(r['human_gene'].upper() for r in results)
-    human_genes_in_ground_truth = set(ortholog_pairs_dict.keys())
+    adj_bonf = np.minimum(pvals * n, 1.0)
+    adj_bh   = bh_adj(pvals)
+    adj_by   = by_adj(pvals)
+    adj_2s   = two_stage_bh_adj(pvals)
 
-    # For recall: count unique ortholog pairs found vs total possible
-    found_pairs = set()
-    for r in results:
-        if r['is_ortholog']:
-            found_pairs.add((r['human_gene'].upper(), r['mouse_gene']))
+    (
+        df.select(['query_name', 'target_name', 'human_gene', 'mouse_gene',
+                   'is_ortholog', 'prob_overlap', 'containment', 'jaccard'])
+        .with_columns([
+            pl.Series('bonferroni',   adj_bonf),
+            pl.Series('bh',           adj_bh),
+            pl.Series('by',           adj_by),
+            pl.Series('two_stage_bh', adj_2s),
+        ])
+        .write_csv(f'ortholog_evaluation.hp.k{ksize}.mht.csv')
+    )
 
-    # Total ortholog pairs that could have been found (human gene was searched)
-    searchable_pairs = set()
-    for human_gene in human_genes_searched:
-        for mouse_gene in ortholog_pairs_dict.get(human_gene, set()):
-            searchable_pairs.add((human_gene, mouse_gene))
+    # ── Summary stats ──────────────────────────────────────────────────────────
+    alpha   = 0.05
+    is_orth = df['is_ortholog'].to_numpy()
 
-    TP_pairs = len(found_pairs)
-    FN_pairs = len(searchable_pairs) - TP_pairs
-
-    # Recall (sensitivity) at pair level
-    sensitivity = TP_pairs / len(searchable_pairs) if searchable_pairs else 0
-    recall = sensitivity  # Alias
-
-    # For specificity, we need to consider negative pairs
-    # Negative pairs = pairs that are NOT orthologs but were returned as hits
-    FP_pairs = sum(1 for r in results if not r['is_ortholog'])
-
-    # Gene-level recall: fraction of human genes that found at least one correct ortholog
-    human_genes_with_orthologs_found = set(p[0] for p in found_pairs)
-    searchable_human_genes = human_genes_searched & human_genes_in_ground_truth
-    gene_level_recall = len(human_genes_with_orthologs_found) / len(searchable_human_genes) if searchable_human_genes else 0
-
-    # F1 score
-    f1 = 2 * precision_hits * recall / (precision_hits + recall) if (precision_hits + recall) > 0 else 0
-
-    # ============================================
-    # BEST HIT ANALYSIS
-    # ============================================
-    best_hits = {}
-    for result in results:
-        query = result['query_header']
-        score = result['score']
-        if query not in best_hits or score > best_hits[query]['score']:
-            best_hits[query] = {
-                'human_gene': result['human_gene'],
-                'mouse_gene': result['mouse_gene'],
-                'is_ortholog': result['is_ortholog'],
-                'score': score
-            }
-
-    best_hit_TP = sum(1 for h in best_hits.values() if h['is_ortholog'])
-    best_hit_FP = len(best_hits) - best_hit_TP
-    best_hit_precision = best_hit_TP / len(best_hits) if best_hits else 0
-
-    # ============================================
-    # ROC CURVE AND AUC CALCULATION
-    # ============================================
-    # Sort results by score (descending) for ROC curve
-    sorted_results = sorted(results, key=lambda x: -x['score'])
-
-    # Calculate ROC curve points
-    roc_points = []
-    cumulative_TP = 0
-    cumulative_FP = 0
-    total_positives = TP_hits
-    total_negatives = FP_hits
-
-    prev_score = None
-    for i, r in enumerate(sorted_results):
-        if r['is_ortholog']:
-            cumulative_TP += 1
-        else:
-            cumulative_FP += 1
-
-        # Calculate TPR (sensitivity) and FPR (1 - specificity)
-        TPR = cumulative_TP / total_positives if total_positives > 0 else 0
-        FPR = cumulative_FP / total_negatives if total_negatives > 0 else 0
-
-        # Add point when score changes or at the end
-        if prev_score is None or r['score'] != prev_score or i == len(sorted_results) - 1:
-            roc_points.append({
-                'threshold': r['score'],
-                'TPR': TPR,
-                'FPR': FPR,
-                'cumulative_TP': cumulative_TP,
-                'cumulative_FP': cumulative_FP
-            })
-        prev_score = r['score']
-
-    # Calculate AUC using trapezoidal rule
-    auc = 0.0
-    for i in range(1, len(roc_points)):
-        # Trapezoid area = (x2 - x1) * (y1 + y2) / 2
-        dx = roc_points[i]['FPR'] - roc_points[i-1]['FPR']
-        avg_y = (roc_points[i]['TPR'] + roc_points[i-1]['TPR']) / 2
-        auc += dx * avg_y
-
-    # Write ROC data
-    with open('ortholog_evaluation.hp.k${ksize}.roc_data.tsv', 'w') as f:
-        f.write('threshold\\tTPR\\tFPR\\tcumulative_TP\\tcumulative_FP\\n')
-        for point in roc_points:
-            f.write(f"{point['threshold']:.6f}\\t{point['TPR']:.6f}\\t{point['FPR']:.6f}\\t{point['cumulative_TP']}\\t{point['cumulative_FP']}\\n")
-
-    # ============================================
-    # PRECISION-RECALL CURVE
-    # ============================================
-    pr_points = []
-    cumulative_TP = 0
-    for i, r in enumerate(sorted_results):
-        if r['is_ortholog']:
-            cumulative_TP += 1
-        total_predicted = i + 1
-        prec = cumulative_TP / total_predicted
-        rec = cumulative_TP / total_positives if total_positives > 0 else 0
-        pr_points.append({'precision': prec, 'recall': rec, 'threshold': r['score']})
-
-    # Calculate Average Precision (AP)
-    ap = 0.0
-    prev_recall = 0
-    for point in pr_points:
-        if point['recall'] > prev_recall:
-            ap += point['precision'] * (point['recall'] - prev_recall)
-            prev_recall = point['recall']
-
-    # ============================================
-    # ADDITIONAL METRICS AT VARIOUS THRESHOLDS
-    # ============================================
-    # Find metrics at specific recall levels (0.9, 0.8, 0.7, etc.)
-    recall_thresholds = [0.9, 0.8, 0.7, 0.6, 0.5]
-    precision_at_recall = {}
-    for target_recall in recall_thresholds:
-        for point in pr_points:
-            if point['recall'] >= target_recall:
-                precision_at_recall[target_recall] = point['precision']
-                break
-        else:
-            precision_at_recall[target_recall] = 0.0
-
-    # ============================================
-    # TOP-K ACCURACY
-    # ============================================
-    # For each query, check if ortholog is in top-K results
-    query_results = defaultdict(list)
-    for r in results:
-        query_results[r['query_header']].append(r)
-
-    top_k_values = [1, 3, 5, 10, 20]
-    top_k_accuracy = {}
-    for k in top_k_values:
-        correct = 0
-        total_queries_with_orthologs = 0
-        for query, hits in query_results.items():
-            # Sort hits by score
-            sorted_hits = sorted(hits, key=lambda x: -x['score'])
-            # Check if query's gene has known orthologs
-            human_gene = sorted_hits[0]['human_gene'].upper()
-            if human_gene in ortholog_pairs_dict:
-                total_queries_with_orthologs += 1
-                # Check if any of top-K are orthologs
-                top_k_hits = sorted_hits[:k]
-                if any(h['is_ortholog'] for h in top_k_hits):
-                    correct += 1
-        top_k_accuracy[k] = correct / total_queries_with_orthologs if total_queries_with_orthologs > 0 else 0
-
-    # ============================================
-    # MEAN RECIPROCAL RANK (MRR)
-    # ============================================
-    reciprocal_ranks = []
-    for query, hits in query_results.items():
-        sorted_hits = sorted(hits, key=lambda x: -x['score'])
-        human_gene = sorted_hits[0]['human_gene'].upper()
-        if human_gene in ortholog_pairs_dict:
-            # Find rank of first correct ortholog
-            for rank, hit in enumerate(sorted_hits, start=1):
-                if hit['is_ortholog']:
-                    reciprocal_ranks.append(1.0 / rank)
-                    break
-            else:
-                reciprocal_ranks.append(0.0)  # No ortholog found
-
-    mrr = sum(reciprocal_ranks) / len(reciprocal_ranks) if reciprocal_ranks else 0
-
-    # ============================================
-    # WRITE SUMMARY
-    # ============================================
-    with open('ortholog_evaluation.hp.k${ksize}.summary.txt', 'w') as f:
-        f.write(f'K-size: ${ksize}\\n')
-        f.write(f'Encoding: hp\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('HIT-LEVEL METRICS\\n')
-        f.write('='*50 + '\\n')
-        f.write(f'Total search hits: {total_hits}\\n')
-        f.write(f'True positive hits (orthologs): {TP_hits}\\n')
-        f.write(f'False positive hits (non-orthologs): {FP_hits}\\n')
-        f.write(f'Precision: {precision_hits:.4f}\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('PAIR-LEVEL METRICS\\n')
-        f.write('='*50 + '\\n')
-        f.write(f'Searchable ortholog pairs: {len(searchable_pairs)}\\n')
-        f.write(f'True positives (pairs found): {TP_pairs}\\n')
-        f.write(f'False negatives (pairs missed): {FN_pairs}\\n')
-        f.write(f'Sensitivity (Recall): {sensitivity:.4f}\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('GENE-LEVEL METRICS\\n')
-        f.write('='*50 + '\\n')
-        f.write(f'Human genes searched: {len(human_genes_searched)}\\n')
-        f.write(f'Human genes with known orthologs: {len(human_genes_in_ground_truth)}\\n')
-        f.write(f'Human genes searched with known orthologs: {len(searchable_human_genes)}\\n')
-        f.write(f'Human genes with correct ortholog found: {len(human_genes_with_orthologs_found)}\\n')
-        f.write(f'Gene-level recall: {gene_level_recall:.4f}\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('COMPOSITE METRICS\\n')
-        f.write('='*50 + '\\n')
-        f.write(f'F1 Score: {f1:.4f}\\n')
-        f.write(f'AUC-ROC: {auc:.4f}\\n')
-        f.write(f'Average Precision (AP): {ap:.4f}\\n')
-        f.write(f'Mean Reciprocal Rank (MRR): {mrr:.4f}\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('BEST HIT ANALYSIS\\n')
-        f.write('='*50 + '\\n')
-        f.write(f'Total unique queries: {len(best_hits)}\\n')
-        f.write(f'Best hits that are orthologs (TP): {best_hit_TP}\\n')
-        f.write(f'Best hits that are not orthologs (FP): {best_hit_FP}\\n')
-        f.write(f'Best hit precision: {best_hit_precision:.4f}\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('TOP-K ACCURACY\\n')
-        f.write('='*50 + '\\n')
-        for k in top_k_values:
-            f.write(f'Top-{k} accuracy: {top_k_accuracy[k]:.4f}\\n')
-        f.write(f'\\n')
-
-        f.write('='*50 + '\\n')
-        f.write('PRECISION AT RECALL LEVELS\\n')
-        f.write('='*50 + '\\n')
-        for r, p in sorted(precision_at_recall.items(), reverse=True):
-            f.write(f'Precision @ Recall={r:.1f}: {p:.4f}\\n')
-        f.write(f'\\n')
-
-        # JSON summary for easy parsing
-        f.write('='*50 + '\\n')
-        f.write('JSON SUMMARY\\n')
-        f.write('='*50 + '\\n')
-        summary_json = {
-            'ksize': ${ksize},
-            'encoding': 'hp',
-            'total_hits': total_hits,
-            'TP_hits': TP_hits,
-            'FP_hits': FP_hits,
-            'precision': round(precision_hits, 4),
-            'sensitivity': round(sensitivity, 4),
-            'recall': round(recall, 4),
-            'gene_level_recall': round(gene_level_recall, 4),
-            'f1': round(f1, 4),
-            'auc_roc': round(auc, 4),
-            'average_precision': round(ap, 4),
-            'mrr': round(mrr, 4),
-            'best_hit_precision': round(best_hit_precision, 4),
-            'top_k_accuracy': {f'top_{k}': round(v, 4) for k, v in top_k_accuracy.items()},
-            'precision_at_recall': {f'recall_{r}': round(p, 4) for r, p in precision_at_recall.items()}
+    def mht_stats(adj):
+        rej = adj <= alpha
+        tp  = int((rej & is_orth).sum())
+        tot = int(rej.sum())
+        return {
+            'rejected':  tot,
+            'TP':        tp,
+            'precision': round(tp / tot    if tot    else 0.0, 4),
+            'recall':    round(tp / n_orth if n_orth else 0.0, 4),
         }
-        f.write(json.dumps(summary_json, indent=2))
-        f.write('\\n')
+
+    mht_summary = {
+        'bonferroni':   mht_stats(adj_bonf),
+        'bh':           mht_stats(adj_bh),
+        'by':           mht_stats(adj_by),
+        'two_stage_bh': mht_stats(adj_2s),
+    }
+
+    metric_stats = {}
+    for m in metrics:
+        ov = orth_df[m].drop_nulls().to_numpy()
+        nv = nort_df[m].drop_nulls().to_numpy()
+        metric_stats[m] = {
+            'ortholog':     {'mean': float(np.mean(ov)),   'median': float(np.median(ov)),   'n': len(ov)},
+            'non_ortholog': {'mean': float(np.mean(nv)),   'median': float(np.median(nv)),   'n': len(nv)},
+        }
+
+    summary_json = {
+        'ksize': ksize, 'encoding': 'hp',
+        'total_hits': n_total, 'n_ortholog': n_orth, 'n_non_ortholog': n_non,
+        'mht': mht_summary, 'metric_stats': metric_stats,
+    }
+
+    with open(f'ortholog_evaluation.hp.k{ksize}.summary.txt', 'w') as f:
+        f.write(f'K-size: {ksize}\\nEncoding: hp\\n\\n')
+        f.write(f'Total hits: {n_total:,}  |  Orthologs: {n_orth:,}  |  Non-orthologs: {n_non:,}\\n\\n')
+
+        f.write('=== MHT Rejections (alpha=0.05) ===\\n')
+        for method, s in mht_summary.items():
+            f.write(f'  {method:15s}: {s["rejected"]:>10,} rejected  '
+                    f'TP={s["TP"]:>8,}  prec={s["precision"]:.4f}  rec={s["recall"]:.4f}\\n')
+
+        f.write('\\n=== Metric Means (orthologs vs non-orthologs) ===\\n')
+        for m, st in metric_stats.items():
+            ov, nv = st['ortholog'], st['non_ortholog']
+            f.write(f'  {m}:\\n')
+            f.write(f'    ortholog     mean={ov["mean"]:.4f}  median={ov["median"]:.4f}  n={ov["n"]:,}\\n')
+            f.write(f'    non-ortholog mean={nv["mean"]:.4f}  median={nv["median"]:.4f}  n={nv["n"]:,}\\n')
+
+        f.write('\\n=== JSON SUMMARY ===\\n')
+        f.write(json.dumps(summary_json, indent=2) + '\\n')
+
+    # ── Full evaluation TSV ────────────────────────────────────────────────────
+    df.write_csv(f'ortholog_evaluation.hp.k{ksize}.tsv', separator='\\t')
+
+    # ── ROC data (sampled to ≤10k points) ─────────────────────────────────────
+    n_pos_t   = n_orth or 1
+    n_neg_t   = n_non  or 1
+    sorted_df = df.sort('prob_overlap')
+    cum_tp    = sorted_df['is_ortholog'].cast(pl.Int32).cum_sum().to_numpy()
+    cum_fp    = (~sorted_df['is_ortholog']).cast(pl.Int32).cum_sum().to_numpy()
+    step      = max(1, n_total // 10_000)
+    pl.DataFrame({
+        'threshold': sorted_df['prob_overlap'].to_numpy()[::step],
+        'TPR':       cum_tp[::step] / n_pos_t,
+        'FPR':       cum_fp[::step] / n_neg_t,
+    }).write_csv(f'ortholog_evaluation.hp.k{ksize}.roc_data.tsv', separator='\\t')
     """
 }
 
@@ -589,109 +415,57 @@ process aggregateResults {
     script:
     """
     #!/usr/bin/env python3
-    import re
-    import os
-    import glob
-    import json
+    import glob, json, re
 
     results = []
-
-    for summary_file in glob.glob('*.summary.txt'):
-        ksize_match = re.search(r'k(\\d+)', summary_file)
-        if not ksize_match:
+    for f in sorted(glob.glob('*.summary.txt')):
+        m = re.search(r'k(\\d+)', f)
+        if not m:
             continue
-        ksize = int(ksize_match.group(1))
-
-        with open(summary_file) as f:
-            content = f.read()
-
-        # Try to parse JSON summary from the file
-        json_match = re.search(r'JSON SUMMARY\\n=+\\n(\\{[\\s\\S]+\\})', content)
-        if json_match:
+        with open(f) as fh:
+            content = fh.read()
+        jm = re.search(r'=== JSON SUMMARY ===\\n(\\{[\\s\\S]+\\})', content)
+        if jm:
             try:
-                metrics = json.loads(json_match.group(1))
-                results.append(metrics)
+                results.append(json.loads(jm.group(1)))
                 continue
             except json.JSONDecodeError:
                 pass
+        results.append({'ksize': int(m.group(1))})
 
-        # Fallback: parse metrics manually
-        def extract_float(pattern, default=0.0):
-            match = re.search(pattern, content)
-            return float(match.group(1)) if match else default
-
-        def extract_int(pattern, default=0):
-            match = re.search(pattern, content)
-            return int(match.group(1)) if match else default
-
-        results.append({
-            'ksize': ksize,
-            'precision': extract_float(r'Precision: ([\\d.]+)'),
-            'sensitivity': extract_float(r'Sensitivity \\(Recall\\): ([\\d.]+)'),
-            'recall': extract_float(r'Sensitivity \\(Recall\\): ([\\d.]+)'),
-            'gene_level_recall': extract_float(r'Gene-level recall: ([\\d.]+)'),
-            'f1': extract_float(r'F1 Score: ([\\d.]+)'),
-            'auc_roc': extract_float(r'AUC-ROC: ([\\d.]+)'),
-            'average_precision': extract_float(r'Average Precision \\(AP\\): ([\\d.]+)'),
-            'mrr': extract_float(r'Mean Reciprocal Rank \\(MRR\\): ([\\d.]+)'),
-            'best_hit_precision': extract_float(r'Best hit precision: ([\\d.]+)'),
-            'total_hits': extract_int(r'Total search hits: (\\d+)'),
-            'TP_hits': extract_int(r'True positive hits \\(orthologs\\): (\\d+)'),
-            'FP_hits': extract_int(r'False positive hits \\(non-orthologs\\): (\\d+)'),
-            'top_k_accuracy': {
-                'top_1': extract_float(r'Top-1 accuracy: ([\\d.]+)'),
-                'top_3': extract_float(r'Top-3 accuracy: ([\\d.]+)'),
-                'top_5': extract_float(r'Top-5 accuracy: ([\\d.]+)'),
-                'top_10': extract_float(r'Top-10 accuracy: ([\\d.]+)'),
-                'top_20': extract_float(r'Top-20 accuracy: ([\\d.]+)')
-            }
-        })
-
-    # Sort by ksize
     results.sort(key=lambda x: x['ksize'])
 
-    # Write comprehensive TSV summary table
-    with open('kmer_sweep_summary.tsv', 'w') as f:
-        headers = [
-            'ksize', 'precision', 'sensitivity', 'gene_level_recall', 'f1',
-            'auc_roc', 'average_precision', 'mrr', 'best_hit_precision',
-            'top_1_accuracy', 'top_3_accuracy', 'top_5_accuracy', 'top_10_accuracy', 'top_20_accuracy',
-            'total_hits', 'TP_hits', 'FP_hits'
-        ]
-        f.write('\\t'.join(headers) + '\\n')
+    MHT_METHODS = ['bonferroni', 'bh', 'by', 'two_stage_bh']
 
+    # Build TSV header
+    headers = ['ksize', 'total_hits', 'n_ortholog', 'n_non_ortholog']
+    for method in MHT_METHODS:
+        headers += [f'{method}_rejected', f'{method}_precision', f'{method}_recall']
+
+    with open('kmer_sweep_summary.tsv', 'w') as f:
+        f.write('\\t'.join(headers) + '\\n')
         for r in results:
-            top_k = r.get('top_k_accuracy', {})
             row = [
                 str(r.get('ksize', '')),
-                f"{r.get('precision', 0):.4f}",
-                f"{r.get('sensitivity', 0):.4f}",
-                f"{r.get('gene_level_recall', 0):.4f}",
-                f"{r.get('f1', 0):.4f}",
-                f"{r.get('auc_roc', 0):.4f}",
-                f"{r.get('average_precision', 0):.4f}",
-                f"{r.get('mrr', 0):.4f}",
-                f"{r.get('best_hit_precision', 0):.4f}",
-                f"{top_k.get('top_1', 0):.4f}",
-                f"{top_k.get('top_3', 0):.4f}",
-                f"{top_k.get('top_5', 0):.4f}",
-                f"{top_k.get('top_10', 0):.4f}",
-                f"{top_k.get('top_20', 0):.4f}",
-                str(r.get('total_hits', 0)),
-                str(r.get('TP_hits', 0)),
-                str(r.get('FP_hits', 0))
+                str(r.get('total_hits', '')),
+                str(r.get('n_ortholog', '')),
+                str(r.get('n_non_ortholog', '')),
             ]
+            mht = r.get('mht', {})
+            for method in MHT_METHODS:
+                s = mht.get(method, {})
+                row += [
+                    str(s.get('rejected', '')),
+                    f"{s.get('precision', 0):.4f}",
+                    f"{s.get('recall', 0):.4f}",
+                ]
             f.write('\\t'.join(row) + '\\n')
 
-    # Write JSON for programmatic access
     with open('kmer_sweep_summary.json', 'w') as f:
-        json.dump({
-            'encoding': 'hp',
-            'k_range': [min(r['ksize'] for r in results), max(r['ksize'] for r in results)],
-            'results': results
-        }, f, indent=2)
+        json.dump({'encoding': 'hp', 'results': results}, f, indent=2)
     """
 }
+
 
 workflow {
     // Build kmerseek in release mode
@@ -701,7 +475,7 @@ workflow {
     ortholog_file = downloadOrthologMapping()
     (ortholog_pairs, ortholog_stats) = parseOrthologMapping(ortholog_file)
 
-    // Create k-size channel (15-30 for HP encoding)
+    // Create k-size channel (24-40 for HP encoding)
     ksizes = Channel.of(15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30)
 
     // FASTA files are already uncompressed - use directly
