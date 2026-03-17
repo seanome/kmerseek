@@ -179,9 +179,12 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-
+# Mac OS metadata files
+.DS_Store
 
 ### Kmerseek specific stuff
+
+
 # Ignore signature files created by tests
 tests/testdata/fasta/*sig.zip*
 *.manysketch.csv
