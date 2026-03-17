@@ -109,6 +109,8 @@ impl From<ProteinEncoding> for &'static str {
 fn main() -> IndexResult<()> {
     let cli = Cli::parse();
 
+    eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
+
     match cli.command {
         Commands::Index { input, output, ksize, scaled, encoding, progress_interval } => {
             eprintln!("Indexing FASTA file: {}", input.display());
