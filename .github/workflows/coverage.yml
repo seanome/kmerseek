@@ -8,11 +8,10 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  PYO3_PYTHON: python3
 
 jobs:
   coverage:
-    name: Python and Rust Coverage
+    name: Rust Coverage
     runs-on: ubuntu-latest
 
     steps:
@@ -36,89 +35,34 @@ jobs:
           path: ~/.cargo/bin/cargo-tarpaulin
           key: cargo-tarpaulin-${{ hashFiles('Cargo.lock') }}
 
-      - name: cache conda
-        uses: actions/cache@v4
-        env:
-          CACHE_NUMBER: 1
-        with:
-          path: ~/conda_pkgs_dir
-          key: ${{ runner.os }}-conda-${{ env.CACHE_NUMBER }}-${{ hashFiles('environment.yml') }}
-
-      - name: setup conda
-        uses: conda-incubator/setup-miniconda@v3
-        with:
-          auto-update-conda: true
-          python-version: 3.12
-          channels: conda-forge,bioconda
-          miniforge-version: latest
-          use-mamba: true
-          mamba-version: "*"
-          activate-environment: kmerseek-dev
-          auto-activate-base: false
-
       - name: Setup TMPDIR
         run: |
-          # Set TMPDIR to workspace to avoid /tmp filling up
           export TMPDIR=$HOME/tmp
           mkdir -p $TMPDIR
           echo "TMPDIR=$TMPDIR" >> $GITHUB_ENV
-
-      - name: install python dependencies
-        shell: bash -l {0}
-        run: mamba install compilers polars sourmash sourmash_plugin_branchwater click pytest pandas pytest-cov coverage
 
       - name: install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev build-essential binutils
-          # Show available resources
           df -h
           free -h
 
-      - name: build
-        run: make
-
-      - name: pytest with coverage
-        shell: bash -l {0}
+      - name: Build binary for tests
         run: |
-          pytest -vv --cov=src/python/kmerseek --cov-report=xml --cov-report=html --cov-report=term
-
-      - name: Check disk space
-        run: |
-          df -h
-          du -sh ~/.cargo ~/.rustup target /tmp 2>/dev/null || true
-
-      - name: Clean temp files
-        run: |
-          # Clean up /tmp aggressively before build
-          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
-          find /tmp -name "cc*" -type f -delete 2>/dev/null || true
-          find /tmp -name "*.s" -type f -delete 2>/dev/null || true
-          find /tmp -name "*.o" -type f -delete 2>/dev/null || true
-          find $TMPDIR -name "rustc*" -type f -delete 2>/dev/null || true
-          df -h
-
-      - name: Build Rust binary for tests
-        run: |
-          # Use system linker and limit parallelism to reduce disk usage
-          # Set TMPDIR to avoid /tmp filling up
           export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo build --bin kmerseek-rust --all-features
-          # Clean up incremental artifacts immediately
+          CARGO_BUILD_JOBS=1 cargo build --bin kmerseek --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
           df -h
-          ls -la target/debug/
-          ls -la target/debug/kmerseek-rust || echo "Binary not found in target/debug/"
+          ls -la target/debug/kmerseek || echo "Binary not found in target/debug/"
 
       - name: Run Rust tests
         run: |
-          # Set TMPDIR to avoid /tmp filling up
           export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo test --verbose
-          # Clean up after tests
+          CARGO_BUILD_JOBS=1 cargo test --verbose --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
           find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
@@ -126,25 +70,14 @@ jobs:
 
       - name: Generate Rust coverage report
         run: |
-          # Set TMPDIR to avoid /tmp filling up
           export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           cargo install cargo-tarpaulin
-          CARGO_BUILD_JOBS=1 cargo tarpaulin --out Xml --output-dir coverage/ --timeout 120 --skip-clean
-          # Clean up after coverage
+          CARGO_BUILD_JOBS=1 cargo tarpaulin --out Xml --output-dir coverage/ --timeout 120 --skip-clean --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
           find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
           df -h
-
-      - name: Upload Python coverage to Codecov
-        uses: codecov/codecov-action@v4
-        with:
-          file: ./coverage.xml
-          flags: python
-          name: codecov-python
-          fail_ci_if_error: false
-          token: ${{ secrets.CODECOV_TOKEN }}
 
       - name: Upload Rust coverage to Codecov
         uses: codecov/codecov-action@v4

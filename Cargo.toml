@@ -7,18 +7,14 @@ rust-version = "1.82.0"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 [lib]
 name = "kmerseek"
-crate-type = ["cdylib", "rlib"]
+crate-type = ["rlib"]
 path = "src/rust/lib.rs"
 
 [[bin]]
-name = "kmerseek-rust"
+name = "kmerseek"
 path = "src/rust/main.rs"
 
 [dependencies]
-pyo3 = { version = "0.25.0", features = [
-    "extension-module",
-    "anyhow",
-], optional = true }
 anyhow = "1.0"
 thiserror = "1.0"
 parking_lot = "0.12"
@@ -41,9 +37,6 @@ sourmash_plugin_branchwater = { git = "https://github.com/sourmash-bio/sourmash_
 zip = { version = "4.0", default-features = false }
 statrs = "0.17"
 
-[features]
-default = ["python"]
-python = ["pyo3"]
 
 [dev-dependencies]
 tempfile = "3.20"

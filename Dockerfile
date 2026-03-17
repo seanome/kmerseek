@@ -9,7 +9,6 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git \
     libclang-dev \
     python3 \
-    python3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
@@ -19,7 +18,7 @@ COPY src/ src/
 COPY benches/ benches/
 COPY examples/ examples/
 
-RUN cargo build --release --no-default-features --bin kmerseek-rust
+RUN cargo build --release --no-default-features --bin kmerseek
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim AS runtime
@@ -28,8 +27,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /build/target/release/kmerseek-rust /usr/local/bin/kmerseek-rust
+COPY --from=builder /build/target/release/kmerseek /usr/local/bin/kmerseek
 
 WORKDIR /data
 
-ENTRYPOINT ["kmerseek-rust"]
+ENTRYPOINT ["kmerseek"]

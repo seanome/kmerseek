@@ -33,7 +33,7 @@ for test_file_info in "${TEST_FILES[@]}"; do
             # Time the execution
             START_TIME=$(date +%s.%N)
             
-            kmerseek-rust index \
+            kmerseek index \
                 --input "$test_file" \
                 --output "$TEMP_DIR/output_${ksize}_${encoding}.db" \
                 --ksize "$ksize" \
@@ -59,7 +59,7 @@ LARGE_FILE="tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_acce
 
 echo "Memory usage for large file (k=10, encoding=hp):"
 echo "Rust CLI:"
-/usr/bin/time -l kmerseek-rust index \
+/usr/bin/time -l kmerseek index \
     --input "$LARGE_FILE" \
     --output "$TEMP_DIR/memory_test.db" \
     --ksize 10 \

@@ -1780,7 +1780,6 @@ dependencies = [
  "niffler",
  "parking_lot",
  "predicates",
- "pyo3",
  "quick-xml 0.37.5",
  "rand 0.9.1",
  "rayon",

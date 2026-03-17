@@ -1,4 +1,3 @@
-PYTHON ?= python
 IMAGE ?= kmerseek
 VERSION ?= $(shell grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')
 
@@ -7,14 +6,14 @@ all: build
 .PHONY:
 
 build: .PHONY
-	$(PYTHON) -m pip install -e .
+	cargo build --release --no-default-features
 
 clean:
 	rm -rf tests/testdata/fasta/*sig.zip*
 	rm -rf tests/testdata/fasta/*manysketch.csv
 
 test: clean
-	pytest
+	cargo test --no-default-features --lib -- --test-threads=2
 
 docker-build:
 	docker build -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
