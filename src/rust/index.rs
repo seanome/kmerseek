@@ -22,6 +22,13 @@ use crate::errors::{IndexError, IndexResult};
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
+/// Schema version for the on-disk index format.
+/// Increment this constant whenever the stored format changes in a backward-incompatible way
+/// (e.g. new fields in SearchCache, renamed fields in ProteinSketchStore, etc.).
+/// Indices that predate versioning (schema_version key absent) are treated as version 0
+/// and will be rejected with a clear error message asking the user to rebuild.
+pub const SCHEMA_VERSION: u32 = 1;
+
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProteomeIndexKmerStats {
@@ -346,6 +353,11 @@ impl ProteomeIndex {
 
         let serialized_metadata = bincode::serialize(&metadata)?;
         self.db.put(b"index_metadata", serialized_metadata)?;
+
+        // Store schema version as a separate key so it can be validated without
+        // deserializing the full metadata (and without breaking old bincode layouts).
+        let serialized_version = bincode::serialize(&SCHEMA_VERSION)?;
+        self.db.put(b"schema_version", serialized_version)?;
 
         // Build and persist search cache + individual signatures for fast search startup
         self.save_inverted_index()?;
@@ -720,6 +732,28 @@ impl ProteomeIndex {
 
         // Open the database
         let db = DB::open(&opts, path)?;
+
+        // Validate schema version before loading anything else.
+        // Indices built before versioning was added have no schema_version key and are
+        // treated as version 0.
+        // Version 0 indexes built after commit 9d083c8 (Feb 24 2026) use kmer_positions
+        // format and are fully compatible with schema version 1. We accept them here.
+        // Only truly incompatible formats (e.g., pre-Feb-24 kmer_infos format) need rebuilding,
+        // but those can't be detected by this key alone.
+        let stored_version: u32 = match db.get(b"schema_version")? {
+            Some(data) => bincode::deserialize(&data)?,
+            None => 0, // pre-versioning index
+        };
+        if stored_version > SCHEMA_VERSION {
+            return Err(IndexError::ValidationError {
+                message: format!(
+                    "Index schema version mismatch: index was built with schema version {}, \
+                     but this binary uses schema version {}. \
+                     Please upgrade the binary.",
+                    stored_version, SCHEMA_VERSION
+                ),
+            });
+        }
 
         // Try to load metadata from new chunked format first
         let metadata_serialized = db.get(b"index_metadata")?;
