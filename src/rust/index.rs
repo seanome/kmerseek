@@ -70,13 +70,13 @@ struct ProteomeIndexMetadata {
 /// so that ProteinSearcher::load() can avoid loading all signatures into memory.
 /// Individual signatures are stored separately under "sig_{md5}" keys for on-demand access.
 #[derive(Serialize, Deserialize)]
-struct SearchCache {
+pub struct SearchCache {
     /// Ordered list of target MD5 sums: index (u32) → md5 string
-    target_list: Vec<String>,
+    pub target_list: Vec<String>,
     /// Inverted k-mer index: kmer_hash → Vec of target indices into target_list
-    inverted_index: HashMap<u64, Vec<u32>>,
+    pub inverted_index: HashMap<u64, Vec<u32>>,
     /// K-mer frequency counts: kmer_hash → number of signatures containing it
-    kmer_frequencies: HashMap<u64, usize>,
+    pub kmer_frequencies: HashMap<u64, usize>,
 }
 
 pub struct ProteomeIndex {
@@ -774,12 +774,10 @@ impl ProteomeIndex {
     ///
     /// The caller (ProteinSearcher::load) uses this to skip loading all signatures and instead
     /// find candidates via the inverted index, loading individual signatures on demand.
-    pub fn load_search_cache(
-        &self,
-    ) -> IndexResult<Option<(Vec<String>, HashMap<u64, Vec<u32>>, HashMap<u64, usize>)>> {
+    pub fn load_search_cache(&self) -> IndexResult<Option<SearchCache>> {
         if let Some(data) = self.db.get(b"search_cache")? {
             let cache: SearchCache = bincode::deserialize(&data)?;
-            Ok(Some((cache.target_list, cache.inverted_index, cache.kmer_frequencies)))
+            Ok(Some(cache))
         } else {
             Ok(None)
         }

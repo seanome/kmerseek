@@ -356,26 +356,28 @@ impl ProteinSearcher {
         let index = ProteomeIndex::open_for_search(&path)?;
 
         // Fast path: pre-built search cache exists - no need to load all signatures
-        if let Some((target_list, inverted_index, kmer_frequencies)) = index.load_search_cache()? {
-            let total_signatures = target_list.len();
-            let idf: HashMap<u64, f64> = kmer_frequencies
+        if let Some(cache) = index.load_search_cache()? {
+            let total_signatures = cache.target_list.len();
+            let idf: HashMap<u64, f64> = cache
+                .kmer_frequencies
                 .iter()
                 .map(|(&kmer, &freq)| {
                     let idf_value = (total_signatures as f64 / freq as f64).ln();
                     (kmer, idf_value)
                 })
                 .collect();
-            let stats = SearchStats { total_signatures, idf, kmer_frequencies };
+            let stats =
+                SearchStats { total_signatures, idf, kmer_frequencies: cache.kmer_frequencies };
             eprintln!(
                 "Loaded search cache: {} targets, {} k-mers indexed",
                 total_signatures,
-                inverted_index.len()
+                cache.inverted_index.len()
             );
             return Ok(Self {
                 index,
                 stats,
-                target_list,
-                inverted_index,
+                target_list: cache.target_list,
+                inverted_index: cache.inverted_index,
                 sig_cache: DashMap::new(),
                 query_kmer_frequencies: None,
                 total_queries: 0,
