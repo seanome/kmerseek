@@ -1,7 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use kmerseek::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
-use needletail;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -632,7 +631,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
             {
                 let name = query_name.clone();
                 let seq = query_seq.clone();
-                group.bench_function(&format!("index_approach1_current_{moltype}_k{ksize}"), |b| {
+                group.bench_function(format!("index_approach1_current_{moltype}_k{ksize}"), |b| {
                     b.iter(|| {
                         let mut sketch = ProteinSketch::new(&name, ksize, 1, moltype).unwrap();
                         sketch.add_protein(&seq, true).unwrap();
@@ -645,7 +644,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
             {
                 let seq = query_seq.clone();
                 let hfn2 = hash_fn.clone();
-                group.bench_function(&format!("index_approach2_raw_seq_{moltype}_k{ksize}"), |b| {
+                group.bench_function(format!("index_approach2_raw_seq_{moltype}_k{ksize}"), |b| {
                     b.iter(|| {
                         let mut mh =
                             KmerMinHash::new(1, minhash_ksize, hfn2.clone(), SEED, true, 0);
@@ -663,7 +662,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
                 let seq = query_seq.clone();
                 let hfn3 = hash_fn;
                 group.bench_function(
-                    &format!("index_approach3_positions_{moltype}_k{ksize}"),
+                    format!("index_approach3_positions_{moltype}_k{ksize}"),
                     |b| {
                         b.iter(|| {
                             let mut mh =
@@ -705,7 +704,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
 
                 // Approach 1/3: full find_matched_regions with pre-computed kmer_infos
                 group.bench_function(
-                    &format!("search_approach1_precomputed_{moltype}_k{ksize}"),
+                    format!("search_approach1_precomputed_{moltype}_k{ksize}"),
                     |b| {
                         b.iter(|| {
                             std::hint::black_box(find_matched_regions(
@@ -724,7 +723,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
                     let t = target_seq.clone();
                     let isect = intersection.clone();
                     group.bench_function(
-                        &format!("search_approach2_rescan_{moltype}_k{ksize}"),
+                        format!("search_approach2_rescan_{moltype}_k{ksize}"),
                         |b| {
                             b.iter(|| {
                                 let mut q_pos: HashMap<u64, Vec<usize>> = HashMap::new();
