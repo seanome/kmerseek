@@ -10,7 +10,7 @@ use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut cmd = Command::cargo_bin("kmerseek")?;
     cmd.arg("--help");
     cmd.assert().success().stdout(predicate::str::contains(
         "Efficient protein domain annotation search with reduced amino acid k-mers",
@@ -21,7 +21,7 @@ fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_cli_index_help() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut cmd = Command::cargo_bin("kmerseek")?;
     cmd.args(["index", "--help"]);
     cmd.assert().success().stdout(predicate::str::contains("Index a FASTA file"));
 
@@ -33,7 +33,7 @@ fn test_cli_index_basic() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("test_output.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut cmd = Command::cargo_bin("kmerseek")?;
     cmd.args([
         "index",
         "--input",
@@ -59,7 +59,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("test_output_gz.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut cmd = Command::cargo_bin("kmerseek")?;
     cmd.args([
         "index",
         "--input",
@@ -87,7 +87,7 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
     for encoding in ["protein", "dayhoff", "hp"] {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", encoding));
 
-        let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+        let mut cmd = Command::cargo_bin("kmerseek")?;
         cmd.args([
             "index",
             "--input",
@@ -114,7 +114,7 @@ fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("test_error.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut cmd = Command::cargo_bin("kmerseek")?;
     cmd.args([
         "index",
         "--input",
@@ -136,7 +136,7 @@ fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_cli_index_missing_required_args() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut cmd = Command::cargo_bin("kmerseek")?;
     cmd.args(["index", "--ksize", "5"]);
 
     cmd.assert().failure().stderr(predicate::str::contains("required"));
@@ -150,7 +150,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Create target index from bcl2_first25 FASTA
     let target_index_path = temp_dir.path().join("target_index.db");
-    let mut index_cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut index_cmd = Command::cargo_bin("kmerseek")?;
     index_cmd.args([
         "index",
         "--input",
@@ -173,7 +173,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Run search with CED9 as query
     let output_csv = temp_dir.path().join("search_results.csv");
-    let mut search_cmd = Command::cargo_bin("kmerseek-rust")?;
+    let mut search_cmd = Command::cargo_bin("kmerseek")?;
     search_cmd.args([
         "search",
         "--query",

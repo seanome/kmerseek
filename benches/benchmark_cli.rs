@@ -27,7 +27,7 @@ fn benchmark_rust_cli_performance(c: &mut Criterion) {
                         let temp_dir = tempdir().unwrap();
                         let output_path = temp_dir.path().join("test_output.db");
 
-                        let status = Command::new("kmerseek-rust")
+                        let status = Command::new("kmerseek")
                             .args([
                                 "index",
                                 "--input",
@@ -40,9 +40,9 @@ fn benchmark_rust_cli_performance(c: &mut Criterion) {
                                 encoding,
                             ])
                             .status()
-                            .expect("Failed to execute kmerseek-rust");
+                            .expect("Failed to execute kmerseek");
 
-                        assert!(status.success(), "kmerseek-rust failed");
+                        assert!(status.success(), "kmerseek failed");
                     });
                 });
             }
@@ -67,7 +67,7 @@ fn benchmark_memory_usage(c: &mut Criterion) {
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(format!(
-                    "/usr/bin/time -l kmerseek-rust index --input {} --output {} --ksize 10 --encoding hp 2>&1",
+                    "/usr/bin/time -l kmerseek index --input {} --output {} --ksize 10 --encoding hp 2>&1",
                     test_file,
                     output_path.to_str().unwrap()
                 ))
@@ -96,7 +96,7 @@ fn benchmark_output_size(c: &mut Criterion) {
             let temp_dir = tempdir().unwrap();
             let output_path = temp_dir.path().join("test_output.db");
 
-            let status = Command::new("kmerseek-rust")
+            let status = Command::new("kmerseek")
                 .args([
                     "index",
                     "--input",
@@ -109,9 +109,9 @@ fn benchmark_output_size(c: &mut Criterion) {
                     "protein",
                 ])
                 .status()
-                .expect("Failed to execute kmerseek-rust");
+                .expect("Failed to execute kmerseek");
 
-            assert!(status.success(), "kmerseek-rust failed");
+            assert!(status.success(), "kmerseek failed");
 
             // Measure output size
             let metadata = std::fs::metadata(&output_path).unwrap();
