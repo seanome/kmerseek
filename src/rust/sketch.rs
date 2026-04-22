@@ -217,14 +217,7 @@ impl ProteinSketch {
         let hash_function = get_hash_function_from_moltype(&moltype)?;
         let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO;
 
-        let mut minhash = KmerMinHash::new(
-            scaled,
-            minhash_ksize,
-            hash_function,
-            SEED,
-            true,
-            0,
-        );
+        let mut minhash = KmerMinHash::new(scaled, minhash_ksize, hash_function, SEED, true, 0);
 
         if let Some(abunds) = &data.abunds {
             minhash.add_many_with_abund(

@@ -1,6 +1,7 @@
 use criterion::{criterion_group, criterion_main, Criterion};
 use kmerseek::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
+use needletail;
 use std::fs;
 use std::fs::File;
 use std::io::Write;
@@ -8,7 +9,6 @@ use std::mem;
 use std::path::PathBuf;
 use std::time::Instant;
 use tempfile::tempdir;
-use needletail;
 
 // Test protein sequence
 const TEST_PROTEIN: &str = "PLANTYANDANIMALGENQMESCOFFEE";
@@ -442,37 +442,26 @@ fn benchmark_search_throughput(c: &mut Criterion) {
             {
                 let bench_name = format!("searcher_load_{moltype}_k{ksize}");
                 let db = db_path.clone();
-                c.bench_function(&bench_name, |b| {
-                    b.iter(|| ProteinSearcher::load(&db).unwrap())
-                });
+                c.bench_function(&bench_name, |b| b.iter(|| ProteinSearcher::load(&db).unwrap()));
             }
 
             // Load searcher once for search benchmarks
             let searcher = ProteinSearcher::load(&db_path).unwrap();
-            let mut query_sig =
-                ProteinSketch::new(&query_seq.0, ksize, 1, moltype).unwrap();
+            let mut query_sig = ProteinSketch::new(&query_seq.0, ksize, 1, moltype).unwrap();
             query_sig.add_protein(&query_seq.1, true).unwrap();
 
             // benchmark: single query search_one()
             {
                 let bench_name = format!("search_one_{moltype}_k{ksize}");
-                c.bench_function(&bench_name, |b| {
-                    b.iter(|| searcher.search_one(&query_sig))
-                });
+                c.bench_function(&bench_name, |b| b.iter(|| searcher.search_one(&query_sig)));
             }
 
             // benchmark: batch search at several batch sizes (simulated by repeating query)
             for n_queries in [10usize, 100, 500] {
                 let queries: Vec<ProteinSketch> = vec![query_sig.clone(); n_queries];
-                let bench_name =
-                    format!("search_batch{n_queries}_{moltype}_k{ksize}");
+                let bench_name = format!("search_batch{n_queries}_{moltype}_k{ksize}");
                 c.bench_function(&bench_name, |b| {
-                    b.iter(|| {
-                        queries
-                            .iter()
-                            .map(|q| searcher.search_one(q))
-                            .collect::<Vec<_>>()
-                    })
+                    b.iter(|| queries.iter().map(|q| searcher.search_one(q)).collect::<Vec<_>>())
                 });
             }
         }
@@ -509,8 +498,7 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
                 b.iter(|| {
                     let temp_dir = tempdir().unwrap();
                     let db_path = temp_dir.path().join(format!("bench_idx_hp_{}", ksize));
-                    let index =
-                        ProteomeIndex::new(db_path.clone(), ksize, 1, "hp", true).unwrap();
+                    let index = ProteomeIndex::new(db_path.clone(), ksize, 1, "hp", true).unwrap();
                     index.process_fasta(target_fasta, 0, 1000).unwrap();
                     index.save_state().unwrap();
                 });
@@ -530,21 +518,16 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
         {
             let load_name = format!("load_hp_k{ksize}");
             let db = db_path.clone();
-            group.bench_function(&load_name, |b| {
-                b.iter(|| ProteinSearcher::load(&db).unwrap())
-            });
+            group.bench_function(&load_name, |b| b.iter(|| ProteinSearcher::load(&db).unwrap()));
         }
 
         // Benchmark search_one (shows selectivity improvement from larger k)
         {
             let searcher = ProteinSearcher::load(&db_path).unwrap();
-            let mut query_sig =
-                ProteinSketch::new(&query_seq.0, ksize, 1, "hp").unwrap();
+            let mut query_sig = ProteinSketch::new(&query_seq.0, ksize, 1, "hp").unwrap();
             query_sig.add_protein(&query_seq.1, true).unwrap();
             let search_name = format!("search_one_hp_k{ksize}");
-            group.bench_function(&search_name, |b| {
-                b.iter(|| searcher.search_one(&query_sig))
-            });
+            group.bench_function(&search_name, |b| b.iter(|| searcher.search_one(&query_sig)));
         }
     }
     group.finish();
@@ -603,7 +586,11 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
             {
                 // Approach 1: full ProteinSketchStore (current)
                 let sketch1 = ProteinSketch::from_protein_sequence(
-                    &query_name, &query_seq, ksize, 1, moltype,
+                    &query_name,
+                    &query_seq,
+                    ksize,
+                    1,
+                    moltype,
                 )
                 .unwrap();
                 let store1 = sketch1.to_efficient_data(true);
@@ -645,37 +632,30 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
             {
                 let name = query_name.clone();
                 let seq = query_seq.clone();
-                group.bench_function(
-                    &format!("index_approach1_current_{moltype}_k{ksize}"),
-                    |b| {
-                        b.iter(|| {
-                            let mut sketch =
-                                ProteinSketch::new(&name, ksize, 1, moltype).unwrap();
-                            sketch.add_protein(&seq, true).unwrap();
-                            std::hint::black_box(sketch)
-                        })
-                    },
-                );
+                group.bench_function(&format!("index_approach1_current_{moltype}_k{ksize}"), |b| {
+                    b.iter(|| {
+                        let mut sketch = ProteinSketch::new(&name, ksize, 1, moltype).unwrap();
+                        sketch.add_protein(&seq, true).unwrap();
+                        std::hint::black_box(sketch)
+                    })
+                });
             }
 
             // Approach 2: raw sequence only — just minhash + clone string
             {
                 let seq = query_seq.clone();
                 let hfn2 = hash_fn.clone();
-                group.bench_function(
-                    &format!("index_approach2_raw_seq_{moltype}_k{ksize}"),
-                    |b| {
-                        b.iter(|| {
-                            let mut mh =
-                                KmerMinHash::new(1, minhash_ksize, hfn2.clone(), SEED, true, 0);
-                            mh.add_protein(seq.as_bytes()).unwrap();
-                            let mins = mh.mins().to_vec();
-                            let abunds = mh.abunds().map(|a| a.to_vec());
-                            let raw = seq.clone();
-                            std::hint::black_box((mins, abunds, raw))
-                        })
-                    },
-                );
+                group.bench_function(&format!("index_approach2_raw_seq_{moltype}_k{ksize}"), |b| {
+                    b.iter(|| {
+                        let mut mh =
+                            KmerMinHash::new(1, minhash_ksize, hfn2.clone(), SEED, true, 0);
+                        mh.add_protein(seq.as_bytes()).unwrap();
+                        let mins = mh.mins().to_vec();
+                        let abunds = mh.abunds().map(|a| a.to_vec());
+                        let raw = seq.clone();
+                        std::hint::black_box((mins, abunds, raw))
+                    })
+                });
             }
 
             // Approach 3: positions only — minhash + flat HashMap<u64, Vec<usize>>
@@ -709,14 +689,12 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
 
             // ---- SEARCH: FIND MATCHED REGIONS ----
 
-            let q_sketch = ProteinSketch::from_protein_sequence(
-                &query_name, &query_seq, ksize, 1, moltype,
-            )
-            .unwrap();
-            let t_sketch = ProteinSketch::from_protein_sequence(
-                &target_name, &target_seq, ksize, 1, moltype,
-            )
-            .unwrap();
+            let q_sketch =
+                ProteinSketch::from_protein_sequence(&query_name, &query_seq, ksize, 1, moltype)
+                    .unwrap();
+            let t_sketch =
+                ProteinSketch::from_protein_sequence(&target_name, &target_seq, ksize, 1, moltype)
+                    .unwrap();
             let intersection = q_sketch.intersect(&t_sketch);
 
             if !intersection.is_empty() {
@@ -751,9 +729,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
                             b.iter(|| {
                                 let mut q_pos: HashMap<u64, Vec<usize>> = HashMap::new();
                                 for i in 0..q.len().saturating_sub(k - 1) {
-                                    if let Ok(enc) =
-                                        encode_with_fn(&q[i..i + k], encoding_fn)
-                                    {
+                                    if let Ok(enc) = encode_with_fn(&q[i..i + k], encoding_fn) {
                                         let h = _hash_murmur(enc.as_bytes(), SEED);
                                         if isect.contains(&h) {
                                             q_pos.entry(h).or_default().push(i);
@@ -762,9 +738,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
                                 }
                                 let mut t_pos: HashMap<u64, Vec<usize>> = HashMap::new();
                                 for i in 0..t.len().saturating_sub(k - 1) {
-                                    if let Ok(enc) =
-                                        encode_with_fn(&t[i..i + k], encoding_fn)
-                                    {
+                                    if let Ok(enc) = encode_with_fn(&t[i..i + k], encoding_fn) {
                                         let h = _hash_murmur(enc.as_bytes(), SEED);
                                         if isect.contains(&h) {
                                             t_pos.entry(h).or_default().push(i);

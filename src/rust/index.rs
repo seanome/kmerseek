@@ -330,13 +330,19 @@ impl ProteomeIndex {
         );
 
         // Serialize and store the search cache
-        eprintln!("[save] Serializing SearchCache ({} targets, {} unique kmers)...",
-            target_list.len(), inverted_index.len());
+        eprintln!(
+            "[save] Serializing SearchCache ({} targets, {} unique kmers)...",
+            target_list.len(),
+            inverted_index.len()
+        );
         let t1 = Instant::now();
         let cache = SearchCache { target_list, inverted_index, kmer_frequencies };
         let serialized = bincode::serialize(&cache)?;
-        eprintln!("[save] SearchCache serialized to {} bytes in {:.1}s, writing to RocksDB...",
-            serialized.len(), t1.elapsed().as_secs_f32());
+        eprintln!(
+            "[save] SearchCache serialized to {} bytes in {:.1}s, writing to RocksDB...",
+            serialized.len(),
+            t1.elapsed().as_secs_f32()
+        );
         let t2 = Instant::now();
         self.db.put(b"search_cache", serialized)?;
         eprintln!("[save] search_cache written in {:.1}s", t2.elapsed().as_secs_f32());
@@ -350,14 +356,15 @@ impl ProteomeIndex {
     /// Each chunk contains a maximum number of signatures to keep serialized data manageable.
     pub fn save_state(&self) -> IndexResult<()> {
         let t_start = Instant::now();
-        eprintln!("[save] save_state() started ({} signatures in memory)",
-            self.signatures.len());
+        eprintln!("[save] save_state() started ({} signatures in memory)", self.signatures.len());
 
         // DashMap is already thread-safe, no need to lock
         eprintln!("[save] Acquiring combined_minhash lock...");
         let combined_minhash = self.combined_minhash.lock();
-        eprintln!("[save] Lock acquired. combined_minhash has {} mins.",
-            combined_minhash.mins().len());
+        eprintln!(
+            "[save] Lock acquired. combined_minhash has {} mins.",
+            combined_minhash.mins().len()
+        );
 
         // Convert signatures to efficient storage format
         eprintln!("[save] Converting signatures to storage format...");
@@ -367,16 +374,21 @@ impl ProteomeIndex {
             let efficient_data = sig.value().to_efficient_data(self.store_raw_sequences);
             signature_data.push(efficient_data);
         }
-        eprintln!("[save] Converted {} signatures in {:.1}s",
-            signature_data.len(), t1.elapsed().as_secs_f32());
+        eprintln!(
+            "[save] Converted {} signatures in {:.1}s",
+            signature_data.len(),
+            t1.elapsed().as_secs_f32()
+        );
 
         // Store signatures in chunks to avoid RocksDB value size limits
         // Use smaller chunks for better memory efficiency and faster loading
         const CHUNK_SIZE: usize = 100; // Store 100 signatures per chunk
         let total_signatures = signature_data.len();
         let chunk_count = total_signatures.div_ceil(CHUNK_SIZE);
-        eprintln!("[save] Writing {} signatures in {} chunks to RocksDB...",
-            total_signatures, chunk_count);
+        eprintln!(
+            "[save] Writing {} signatures in {} chunks to RocksDB...",
+            total_signatures, chunk_count
+        );
         let t2 = Instant::now();
 
         for (chunk_idx, chunk) in signature_data.chunks(CHUNK_SIZE).enumerate() {
@@ -384,15 +396,21 @@ impl ProteomeIndex {
             let serialized_chunk = bincode::serialize(chunk)?;
             self.db.put(chunk_key.as_bytes(), serialized_chunk)?;
             if chunk_idx > 0 && chunk_idx % 50 == 0 {
-                eprintln!("[save] chunk {}/{} written ({:.1}s elapsed)",
-                    chunk_idx, chunk_count, t2.elapsed().as_secs_f32());
+                eprintln!(
+                    "[save] chunk {}/{} written ({:.1}s elapsed)",
+                    chunk_idx,
+                    chunk_count,
+                    t2.elapsed().as_secs_f32()
+                );
             }
         }
         eprintln!("[save] All chunks written in {:.1}s", t2.elapsed().as_secs_f32());
 
         // Store metadata separately
-        eprintln!("[save] Writing metadata (combined_minhash has {} mins)...",
-            combined_minhash.mins().len());
+        eprintln!(
+            "[save] Writing metadata (combined_minhash has {} mins)...",
+            combined_minhash.mins().len()
+        );
         let t3 = Instant::now();
         let metadata = ProteomeIndexMetadata {
             total_signatures,
@@ -406,16 +424,21 @@ impl ProteomeIndex {
         };
 
         let serialized_metadata = bincode::serialize(&metadata)?;
-        eprintln!("[save] Metadata serialized to {} bytes in {:.1}s",
-            serialized_metadata.len(), t3.elapsed().as_secs_f32());
+        eprintln!(
+            "[save] Metadata serialized to {} bytes in {:.1}s",
+            serialized_metadata.len(),
+            t3.elapsed().as_secs_f32()
+        );
         self.db.put(b"index_metadata", serialized_metadata)?;
 
         // Store schema version as a separate key so it can be validated without
         // deserializing the full metadata (and without breaking old bincode layouts).
         let serialized_version = bincode::serialize(&SCHEMA_VERSION)?;
         self.db.put(b"schema_version", serialized_version)?;
-        eprintln!("[save] Metadata + schema_version written in {:.1}s total",
-            t3.elapsed().as_secs_f32());
+        eprintln!(
+            "[save] Metadata + schema_version written in {:.1}s total",
+            t3.elapsed().as_secs_f32()
+        );
 
         // Build and persist search cache + individual signatures for fast search startup
         eprintln!("[save] Building search cache...");
@@ -427,8 +450,11 @@ impl ProteomeIndex {
         eprintln!("[save] Flushing RocksDB...");
         let t5 = Instant::now();
         self.db.flush()?;
-        eprintln!("[save] Flush complete in {:.1}s. Total save_state() time: {:.1}s",
-            t5.elapsed().as_secs_f32(), t_start.elapsed().as_secs_f32());
+        eprintln!(
+            "[save] Flush complete in {:.1}s. Total save_state() time: {:.1}s",
+            t5.elapsed().as_secs_f32(),
+            t_start.elapsed().as_secs_f32()
+        );
 
         Ok(())
     }
@@ -1296,11 +1322,9 @@ impl ProteomeIndex {
         let progress = if progress_interval > 0 {
             let pb = ProgressBar::new_spinner();
             pb.set_style(
-                ProgressStyle::with_template(
-                    "{spinner:.green} [{elapsed_precise}] {msg}",
-                )
-                .unwrap()
-                .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+                ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] {msg}")
+                    .unwrap()
+                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
             );
             pb.set_message("Indexing sequences...");
             Some(pb)
@@ -1463,21 +1487,21 @@ mod tests {
         // Expected: hash -> sorted positions
         // Sequence: PLANTANDANIMALGENQMES (length 21, ksize 5)
         let expected_positions: HashMap<u64, Vec<usize>> = [
-            (2140811952770908281,  vec![14]), // GENQM
-            (4381446250900425522,  vec![15]), // ENQME
-            (5798339600059429290,  vec![7]),  // DANIM
-            (7681438632487987439,  vec![8]),  // ANIMA
+            (2140811952770908281, vec![14]),  // GENQM
+            (4381446250900425522, vec![15]),  // ENQME
+            (5798339600059429290, vec![7]),   // DANIM
+            (7681438632487987439, vec![8]),   // ANIMA
             (12896310179337320481, vec![1]),  // LANTA
-            (2542642819229379552,  vec![3]),  // NTAND
+            (2542642819229379552, vec![3]),   // NTAND
             (11965201914550078735, vec![4]),  // TANDA
-            (5893010049374798421,  vec![0]),  // PLANT
-            (110005740849399217,   vec![6]),  // NDANI
-            (3791883307084689782,  vec![13]), // LGENQ
+            (5893010049374798421, vec![0]),   // PLANT
+            (110005740849399217, vec![6]),    // NDANI
+            (3791883307084689782, vec![13]),  // LGENQ
             (14610011480386804007, vec![12]), // ALGEN
-            (6941015416212662126,  vec![2]),  // ANTAN
+            (6941015416212662126, vec![2]),   // ANTAN
             (12636705882654324958, vec![16]), // NQMES
             (11154024130290913208, vec![10]), // IMALG
-            (1225702037828834387,  vec![11]), // MALGE
+            (1225702037828834387, vec![11]),  // MALGE
             (12274863873578753245, vec![9]),  // NIMAL
             (13616372540306653069, vec![5]),  // ANDAN
         ]
@@ -1486,9 +1510,8 @@ mod tests {
 
         assert_eq!(protein_sig.kmer_positions().len(), expected_positions.len());
         for (hash, positions) in protein_sig.kmer_positions().iter() {
-            let expected = expected_positions
-                .get(hash)
-                .unwrap_or_else(|| panic!("Unexpected hash {}", hash));
+            let expected =
+                expected_positions.get(hash).unwrap_or_else(|| panic!("Unexpected hash {}", hash));
             let mut sorted = positions.clone();
             sorted.sort();
             assert_eq!(&sorted, expected, "Position mismatch for hash {}", hash);
@@ -1534,21 +1557,21 @@ mod tests {
         // Sequence: PLANTANDANIMALGENQMES (length 21, ksize 5)
         let expected_positions: HashMap<u64, Vec<usize>> = [
             (17444159595263538048, vec![9]),  // NIMAL
-            (2945598193614695589,  vec![15]), // ENQME
-            (4548757849819812604,  vec![4]),  // TANDA
-            (6463872878592804545,  vec![13]), // LGENQ
-            (4030406117949362159,  vec![7]),  // DANIM
-            (7014407397606522347,  vec![1]),  // LANTA
-            (5045972850709227854,  vec![0]),  // PLANT
+            (2945598193614695589, vec![15]),  // ENQME
+            (4548757849819812604, vec![4]),   // TANDA
+            (6463872878592804545, vec![13]),  // LGENQ
+            (4030406117949362159, vec![7]),   // DANIM
+            (7014407397606522347, vec![1]),   // LANTA
+            (5045972850709227854, vec![0]),   // PLANT
             (11417072151730334367, vec![2]),  // ANTAN
             (13574922562423607435, vec![8]),  // ANIMA
             (15050500149255106627, vec![14]), // GENQM
-            (5430883729707969951,  vec![10]), // IMALG
+            (5430883729707969951, vec![10]),  // IMALG
             (13894194422852851851, vec![12]), // ALGEN
-            (9604281550621775790,  vec![5]),  // ANDAN
-            (6161374941338912337,  vec![16]), // NQMES
-            (655307631517862365,   vec![6]),  // NDANI
-            (360995089333906261,   vec![11]), // MALGE
+            (9604281550621775790, vec![5]),   // ANDAN
+            (6161374941338912337, vec![16]),  // NQMES
+            (655307631517862365, vec![6]),    // NDANI
+            (360995089333906261, vec![11]),   // MALGE
             (15056713696431004031, vec![3]),  // NTAND
         ]
         .into_iter()
@@ -1556,9 +1579,8 @@ mod tests {
 
         assert_eq!(protein_sig.kmer_positions().len(), expected_positions.len());
         for (hash, positions) in protein_sig.kmer_positions().iter() {
-            let expected = expected_positions
-                .get(hash)
-                .unwrap_or_else(|| panic!("Unexpected hash {}", hash));
+            let expected =
+                expected_positions.get(hash).unwrap_or_else(|| panic!("Unexpected hash {}", hash));
             let mut sorted = positions.clone();
             sorted.sort();
             assert_eq!(&sorted, expected, "Position mismatch for hash {}", hash);
@@ -1604,29 +1626,28 @@ mod tests {
         // HP encoding collapses 20 aa to 2 letters (h/p), so multiple original k-mers
         // can produce the same hash. We store all positions together in sorted order.
         let expected_positions: HashMap<u64, Vec<usize>> = [
-            (17248460043117039725, vec![11]),     // MALGE
-            (5673218808929106268,  vec![9]),      // NIMAL
-            (16969835101383990681, vec![1]),      // LANTA
-            (7345312524621807974,  vec![6]),      // NDANI
-            (16370543730027378051, vec![4]),      // TANDA
-            (3278382041688965244,  vec![8]),      // ANIMA
-            (8541583772724823208,  vec![10]),     // IMALG
-            (16158526221854164806, vec![14]),     // GENQM
-            (11553019557737058697, vec![13]),     // LGENQ
-            (9081059129327932468,  vec![15]),     // ENQME
-            (2863220259252354754,  vec![7]),      // DANIM
-            (4230974618842309829,  vec![0, 12]),  // PLANT(0) + ALGEN(12) → same HP hash
-            (13058023948041027181, vec![3, 16]),  // NTAND(3) + NQMES(16) → same HP hash
-            (4144736064335623701,  vec![2, 5]),   // ANTAN(2) + ANDAN(5) → same HP hash
+            (17248460043117039725, vec![11]),    // MALGE
+            (5673218808929106268, vec![9]),      // NIMAL
+            (16969835101383990681, vec![1]),     // LANTA
+            (7345312524621807974, vec![6]),      // NDANI
+            (16370543730027378051, vec![4]),     // TANDA
+            (3278382041688965244, vec![8]),      // ANIMA
+            (8541583772724823208, vec![10]),     // IMALG
+            (16158526221854164806, vec![14]),    // GENQM
+            (11553019557737058697, vec![13]),    // LGENQ
+            (9081059129327932468, vec![15]),     // ENQME
+            (2863220259252354754, vec![7]),      // DANIM
+            (4230974618842309829, vec![0, 12]),  // PLANT(0) + ALGEN(12) → same HP hash
+            (13058023948041027181, vec![3, 16]), // NTAND(3) + NQMES(16) → same HP hash
+            (4144736064335623701, vec![2, 5]),   // ANTAN(2) + ANDAN(5) → same HP hash
         ]
         .into_iter()
         .collect();
 
         assert_eq!(protein_sig.kmer_positions().len(), expected_positions.len());
         for (hash, positions) in protein_sig.kmer_positions().iter() {
-            let expected = expected_positions
-                .get(hash)
-                .unwrap_or_else(|| panic!("Unexpected hash {}", hash));
+            let expected =
+                expected_positions.get(hash).unwrap_or_else(|| panic!("Unexpected hash {}", hash));
             let mut sorted = positions.clone();
             sorted.sort();
             assert_eq!(&sorted, expected, "Position mismatch for hash {}", hash);

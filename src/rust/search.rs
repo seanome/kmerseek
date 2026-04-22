@@ -332,7 +332,15 @@ impl ProteinSearcher {
     pub fn new(index: ProteomeIndex) -> Self {
         let stats = SearchStats::from_index(&index);
         let (target_list, inverted_index) = Self::build_search_structures(&index);
-        Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 }
+        Self {
+            index,
+            stats,
+            target_list,
+            inverted_index,
+            sig_cache: DashMap::new(),
+            query_kmer_frequencies: None,
+            total_queries: 0,
+        }
     }
 
     /// Load a searcher from a saved index.
@@ -348,9 +356,7 @@ impl ProteinSearcher {
         let index = ProteomeIndex::open_for_search(&path)?;
 
         // Fast path: pre-built search cache exists - no need to load all signatures
-        if let Some((target_list, inverted_index, kmer_frequencies)) =
-            index.load_search_cache()?
-        {
+        if let Some((target_list, inverted_index, kmer_frequencies)) = index.load_search_cache()? {
             let total_signatures = target_list.len();
             let idf: HashMap<u64, f64> = kmer_frequencies
                 .iter()
@@ -365,7 +371,15 @@ impl ProteinSearcher {
                 total_signatures,
                 inverted_index.len()
             );
-            return Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 });
+            return Ok(Self {
+                index,
+                stats,
+                target_list,
+                inverted_index,
+                sig_cache: DashMap::new(),
+                query_kmer_frequencies: None,
+                total_queries: 0,
+            });
         }
 
         // Slow path: old DB without search cache - load all signatures and build structures
@@ -375,7 +389,15 @@ impl ProteinSearcher {
         index.load_state()?;
         let stats = SearchStats::from_index(&index);
         let (target_list, inverted_index) = Self::build_search_structures(&index);
-        Ok(Self { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 })
+        Ok(Self {
+            index,
+            stats,
+            target_list,
+            inverted_index,
+            sig_cache: DashMap::new(),
+            query_kmer_frequencies: None,
+            total_queries: 0,
+        })
     }
 
     /// Build an ordered target list and inverted k-mer index from the index.
@@ -668,11 +690,15 @@ impl ProteinSearcher {
         let joint_kmer_freq = if let Some(qfreqs) = &self.query_kmer_frequencies {
             let total_q = self.total_queries as f64;
             let total_t = self.stats.total_signatures as f64;
-            intersection.iter().map(|&h| {
-                let fq = qfreqs.get(&h).copied().unwrap_or(0) as f64 / total_q;
-                let ft = self.stats.kmer_frequencies.get(&h).copied().unwrap_or(0) as f64 / total_t;
-                fq * ft
-            }).sum()
+            intersection
+                .iter()
+                .map(|&h| {
+                    let fq = qfreqs.get(&h).copied().unwrap_or(0) as f64 / total_q;
+                    let ft =
+                        self.stats.kmer_frequencies.get(&h).copied().unwrap_or(0) as f64 / total_t;
+                    fq * ft
+                })
+                .sum()
         } else {
             0.0
         };
@@ -758,10 +784,7 @@ impl ProteinSearcher {
     /// Sum of target-DB frequencies for matched k-mers: Σ freq_target[h]/N over intersection.
     /// Takes the pre-computed intersection set directly.
     /// Higher = matched k-mers are collectively more common in the target DB.
-    fn calculate_sum_matched_kmer_freq(
-        &self,
-        intersection: &HashSet<u64>,
-    ) -> f64 {
+    fn calculate_sum_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
         intersection
             .iter()
@@ -898,12 +921,12 @@ fn calculate_similarity_from_precomputed(
         std_abund,
         containment_target_in_query,
         f_weighted_target_in_query,
-        query_tfidf: 0.0,          // requires database context
+        query_tfidf: 0.0,            // requires database context
         mean_matched_kmer_freq: 0.0, // requires database context
         sum_matched_kmer_freq: 0.0,  // requires database context
         expected_shared_kmers: 0.0,  // requires database context
         enrichment: 0.0,             // requires database context
-        joint_kmer_freq: 0.0,           // requires two-pass query frequencies
+        joint_kmer_freq: 0.0,        // requires two-pass query frequencies
         poisson_pvalue: 1.0,         // requires database context (expected_shared_kmers)
         matched_regions,
     })
@@ -976,9 +999,10 @@ pub fn find_matched_regions(
     let mut hashval_to_target_positions: HashMap<u64, Vec<usize>> = HashMap::new();
 
     for &hashval in intersection {
-        if let (Some(query_poss_raw), Some(target_poss_raw)) =
-            (query_sketch.kmer_positions().get(&hashval), target_sketch.kmer_positions().get(&hashval))
-        {
+        if let (Some(query_poss_raw), Some(target_poss_raw)) = (
+            query_sketch.kmer_positions().get(&hashval),
+            target_sketch.kmer_positions().get(&hashval),
+        ) {
             let mut query_poss = query_poss_raw.clone();
             query_poss.sort();
             query_poss.dedup();
@@ -1733,7 +1757,15 @@ mod tests {
         };
 
         let (target_list, inverted_index) = ProteinSearcher::build_search_structures(&index);
-        let searcher = ProteinSearcher { index, stats, target_list, inverted_index, sig_cache: DashMap::new(), query_kmer_frequencies: None, total_queries: 0 };
+        let searcher = ProteinSearcher {
+            index,
+            stats,
+            target_list,
+            inverted_index,
+            sig_cache: DashMap::new(),
+            query_kmer_frequencies: None,
+            total_queries: 0,
+        };
 
         let tfidf = searcher.calculate_tfidf(&query);
         assert!(tfidf >= 0.0);
@@ -1876,11 +1908,23 @@ mod tests {
 
         // Verify database-specific metrics are defaults for 1v1 comparisons
         assert_eq!(result.query_tfidf, 0.0, "query_tfidf should be 0.0 for 1v1 comparisons");
-        assert_eq!(result.mean_matched_kmer_freq, 0.0, "mean_matched_kmer_freq should be 0.0 for 1v1 comparisons");
-        assert_eq!(result.sum_matched_kmer_freq, 0.0, "sum_matched_kmer_freq should be 0.0 for 1v1 comparisons");
-        assert_eq!(result.expected_shared_kmers, 0.0, "expected_shared_kmers should be 0.0 for 1v1 comparisons");
+        assert_eq!(
+            result.mean_matched_kmer_freq, 0.0,
+            "mean_matched_kmer_freq should be 0.0 for 1v1 comparisons"
+        );
+        assert_eq!(
+            result.sum_matched_kmer_freq, 0.0,
+            "sum_matched_kmer_freq should be 0.0 for 1v1 comparisons"
+        );
+        assert_eq!(
+            result.expected_shared_kmers, 0.0,
+            "expected_shared_kmers should be 0.0 for 1v1 comparisons"
+        );
         assert_eq!(result.enrichment, 0.0, "enrichment should be 0.0 for 1v1 comparisons");
-        assert_eq!(result.joint_kmer_freq, 0.0, "joint_kmer_freq should be 0.0 without query frequencies");
+        assert_eq!(
+            result.joint_kmer_freq, 0.0,
+            "joint_kmer_freq should be 0.0 without query frequencies"
+        );
 
         Ok(())
     }
@@ -2065,13 +2109,8 @@ mod tests {
         query_sig.add_protein(&ced9_seq, true)?;
 
         // Simulate a "query proteome" of exactly 1 sequence: every k-mer in ced9 has freq=1
-        let qfreqs: HashMap<u64, usize> = query_sig
-            .signature()
-            .minhash
-            .mins()
-            .iter()
-            .map(|&h| (h, 1usize))
-            .collect();
+        let qfreqs: HashMap<u64, usize> =
+            query_sig.signature().minhash.mins().iter().map(|&h| (h, 1usize)).collect();
         let total_queries = 1;
         searcher.set_query_frequencies(qfreqs, total_queries);
 

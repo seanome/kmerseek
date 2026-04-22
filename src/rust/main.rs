@@ -247,7 +247,11 @@ fn main() -> IndexResult<()> {
                 // Load pre-indexed query database
                 eprintln!("Loading pre-indexed query database...");
                 let query_index = ProteomeIndex::load(&query)?;
-                let query_signatures: Vec<_> = query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+                let query_signatures: Vec<_> = query_index
+                    .get_signatures()
+                    .iter()
+                    .map(|entry| entry.value().clone())
+                    .collect();
 
                 if query_signatures.is_empty() {
                     eprintln!("No query signatures found!");
@@ -260,9 +264,9 @@ fn main() -> IndexResult<()> {
             } else {
                 // Stream queries from FASTA, writing CSV results as we go
                 eprintln!("Streaming query sequences from FASTA...");
-                use needletail::parse_fastx_file;
-                use kmerseek::sketch::ProteinSketch;
                 use kmerseek::search::SearchResultCsv;
+                use kmerseek::sketch::ProteinSketch;
+                use needletail::parse_fastx_file;
 
                 // First pass: build query-proteome k-mer frequencies for joint_kmer_freq.
                 eprintln!("First pass: scanning query proteome for k-mer frequencies...");
@@ -273,20 +277,30 @@ fn main() -> IndexResult<()> {
                     let mut freq_reader = parse_fastx_file(&query)
                         .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
                     while let Some(record) = freq_reader.next() {
-                        let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
+                        let record =
+                            record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
                         let sequence = std::str::from_utf8(&record.seq())
                             .map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))?
                             .to_uppercase();
                         let name = std::str::from_utf8(record.id())
                             .map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))?;
-                        let mut sig = ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
+                        let mut sig = ProteinSketch::new(
+                            name,
+                            final_ksize,
+                            final_scaled,
+                            final_encoding.into(),
+                        )?;
                         sig.add_protein(&sequence, true)?;
                         for min in sig.signature().minhash.mins() {
                             *qfreqs.entry(min).or_insert(0) += 1;
                         }
                         total_queries += 1;
                     }
-                    eprintln!("First pass complete: {} query sequences, {} unique k-mers", total_queries, qfreqs.len());
+                    eprintln!(
+                        "First pass complete: {} query sequences, {} unique k-mers",
+                        total_queries,
+                        qfreqs.len()
+                    );
                     searcher.set_query_frequencies(qfreqs, total_queries);
                 }
 
@@ -294,7 +308,8 @@ fn main() -> IndexResult<()> {
                     .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
 
                 // Create CSV writer up front so we stream rows as they're found
-                let mut csv_writer: Box<dyn std::io::Write> = if let Some(ref output_path) = output {
+                let mut csv_writer: Box<dyn std::io::Write> = if let Some(ref output_path) = output
+                {
                     eprintln!("Streaming results to: {}", output_path.display());
                     Box::new(std::io::BufWriter::new(std::fs::File::create(output_path)?))
                 } else {
@@ -323,34 +338,32 @@ fn main() -> IndexResult<()> {
                 let mut batch: Vec<ProteinSketch> = Vec::with_capacity(batch_size);
 
                 // Helper closure: process one batch and write results to CSV
-                let process_batch =
-                    |batch: &[ProteinSketch],
-                     writer: &mut csv::Writer<&mut Box<dyn std::io::Write>>,
-                     match_count: &mut u64,
-                     row_count: &mut u64|
-                     -> anyhow::Result<()> {
-                        // Search all queries in this batch in parallel
-                        let batch_results: Vec<Vec<kmerseek::search::SearchResult>> = batch
-                            .par_iter()
-                            .map(|q| searcher.search_one(q))
-                            .collect();
+                let process_batch = |batch: &[ProteinSketch],
+                                     writer: &mut csv::Writer<&mut Box<dyn std::io::Write>>,
+                                     match_count: &mut u64,
+                                     row_count: &mut u64|
+                 -> anyhow::Result<()> {
+                    // Search all queries in this batch in parallel
+                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
+                        batch.par_iter().map(|q| searcher.search_one(q)).collect();
 
-                        // Write results sequentially (preserves per-query ordering within batch)
-                        for results in &batch_results {
-                            for result in results {
-                                if result.containment >= threshold {
-                                    *match_count += 1;
-                                    for region in &result.matched_regions {
-                                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
-                                        writer.serialize(&csv_row)?;
-                                        *row_count += 1;
-                                    }
+                    // Write results sequentially (preserves per-query ordering within batch)
+                    for results in &batch_results {
+                        for result in results {
+                            if result.containment >= threshold {
+                                *match_count += 1;
+                                for region in &result.matched_regions {
+                                    let csv_row =
+                                        SearchResultCsv::from_result_and_region(result, region);
+                                    writer.serialize(&csv_row)?;
+                                    *row_count += 1;
                                 }
                             }
                         }
-                        writer.flush()?;
-                        Ok(())
-                    };
+                    }
+                    writer.flush()?;
+                    Ok(())
+                };
 
                 while let Some(record) = reader.next() {
                     let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
@@ -360,9 +373,8 @@ fn main() -> IndexResult<()> {
                     let name = std::str::from_utf8(record.id())
                         .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
 
-                    let mut query_sig = ProteinSketch::new(
-                        name, final_ksize, final_scaled, final_encoding.into(),
-                    )?;
+                    let mut query_sig =
+                        ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
                     query_sig.add_protein(&sequence, true)?;
                     batch.push(query_sig);
 
@@ -420,8 +432,7 @@ fn main() -> IndexResult<()> {
 
                 for result in &filtered_results {
                     for region in &result.matched_regions {
-                        let csv_row =
-                            SearchResultCsv::from_result_and_region(result, region);
+                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
                         writer.serialize(&csv_row)?;
                     }
                 }
@@ -432,8 +443,7 @@ fn main() -> IndexResult<()> {
 
                 for result in &filtered_results {
                     for region in &result.matched_regions {
-                        let csv_row =
-                            SearchResultCsv::from_result_and_region(result, region);
+                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
                         writer.serialize(&csv_row)?;
                     }
                 }
