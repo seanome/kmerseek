@@ -25,6 +25,8 @@ FROM debian:trixie-slim AS runtime
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     ca-certificates \
+    procps \
+    zstd \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /build/target/release/kmerseek /usr/local/bin/kmerseek

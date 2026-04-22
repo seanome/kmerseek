@@ -4,6 +4,7 @@ use parking_lot::Mutex;
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Instant;
 
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
@@ -283,6 +284,10 @@ impl ProteomeIndex {
     /// During search, only candidate signatures (those sharing ≥1 k-mer with the query) are
     /// loaded on-demand from RocksDB, reducing startup time from minutes to seconds.
     fn save_inverted_index(&self) -> IndexResult<()> {
+        let t0 = Instant::now();
+        let total_sigs = self.signatures.len();
+        eprintln!("[save] Building inverted index for {} signatures...", total_sigs);
+
         let mut target_list: Vec<String> = Vec::new();
         let mut inverted_index: HashMap<u64, Vec<u32>> = HashMap::new();
         let mut kmer_frequencies: HashMap<u64, usize> = HashMap::new();
@@ -299,16 +304,42 @@ impl ProteomeIndex {
             self.db.put(key.as_bytes(), serialized)?;
 
             // Build inverted index and kmer frequencies
-            for min in entry.value().signature().minhash.mins() {
+            let mins = entry.value().signature().minhash.mins();
+            for min in mins {
                 inverted_index.entry(min).or_default().push(idx);
                 *kmer_frequencies.entry(min).or_insert(0) += 1;
             }
+
+            if idx > 0 && idx % 1000 == 0 {
+                let mins_so_far = entry.value().signature().minhash.mins().len();
+                eprintln!(
+                    "[save] {}/{} signatures written ({:.1}s elapsed, last sig had {} mins)",
+                    idx,
+                    total_sigs,
+                    t0.elapsed().as_secs_f32(),
+                    mins_so_far,
+                );
+            }
         }
 
+        eprintln!(
+            "[save] All {} signatures written in {:.1}s. Inverted index has {} unique k-mers.",
+            total_sigs,
+            t0.elapsed().as_secs_f32(),
+            inverted_index.len(),
+        );
+
         // Serialize and store the search cache
+        eprintln!("[save] Serializing SearchCache ({} targets, {} unique kmers)...",
+            target_list.len(), inverted_index.len());
+        let t1 = Instant::now();
         let cache = SearchCache { target_list, inverted_index, kmer_frequencies };
         let serialized = bincode::serialize(&cache)?;
+        eprintln!("[save] SearchCache serialized to {} bytes in {:.1}s, writing to RocksDB...",
+            serialized.len(), t1.elapsed().as_secs_f32());
+        let t2 = Instant::now();
         self.db.put(b"search_cache", serialized)?;
+        eprintln!("[save] search_cache written in {:.1}s", t2.elapsed().as_secs_f32());
 
         Ok(())
     }
@@ -318,31 +349,54 @@ impl ProteomeIndex {
     /// This method stores signatures in chunks to avoid RocksDB value size limits.
     /// Each chunk contains a maximum number of signatures to keep serialized data manageable.
     pub fn save_state(&self) -> IndexResult<()> {
+        let t_start = Instant::now();
+        eprintln!("[save] save_state() started ({} signatures in memory)",
+            self.signatures.len());
+
         // DashMap is already thread-safe, no need to lock
+        eprintln!("[save] Acquiring combined_minhash lock...");
         let combined_minhash = self.combined_minhash.lock();
+        eprintln!("[save] Lock acquired. combined_minhash has {} mins.",
+            combined_minhash.mins().len());
 
         // Convert signatures to efficient storage format
+        eprintln!("[save] Converting signatures to storage format...");
+        let t1 = Instant::now();
         let mut signature_data = Vec::new();
         for sig in self.signatures.iter() {
             let efficient_data = sig.value().to_efficient_data(self.store_raw_sequences);
             signature_data.push(efficient_data);
         }
+        eprintln!("[save] Converted {} signatures in {:.1}s",
+            signature_data.len(), t1.elapsed().as_secs_f32());
 
         // Store signatures in chunks to avoid RocksDB value size limits
         // Use smaller chunks for better memory efficiency and faster loading
         const CHUNK_SIZE: usize = 100; // Store 100 signatures per chunk
         let total_signatures = signature_data.len();
+        let chunk_count = total_signatures.div_ceil(CHUNK_SIZE);
+        eprintln!("[save] Writing {} signatures in {} chunks to RocksDB...",
+            total_signatures, chunk_count);
+        let t2 = Instant::now();
 
         for (chunk_idx, chunk) in signature_data.chunks(CHUNK_SIZE).enumerate() {
             let chunk_key = format!("signatures_chunk_{}", chunk_idx);
             let serialized_chunk = bincode::serialize(chunk)?;
             self.db.put(chunk_key.as_bytes(), serialized_chunk)?;
+            if chunk_idx > 0 && chunk_idx % 50 == 0 {
+                eprintln!("[save] chunk {}/{} written ({:.1}s elapsed)",
+                    chunk_idx, chunk_count, t2.elapsed().as_secs_f32());
+            }
         }
+        eprintln!("[save] All chunks written in {:.1}s", t2.elapsed().as_secs_f32());
 
         // Store metadata separately
+        eprintln!("[save] Writing metadata (combined_minhash has {} mins)...",
+            combined_minhash.mins().len());
+        let t3 = Instant::now();
         let metadata = ProteomeIndexMetadata {
             total_signatures,
-            chunk_count: total_signatures.div_ceil(CHUNK_SIZE),
+            chunk_count,
             combined_mins: combined_minhash.mins().to_vec(),
             combined_abunds: combined_minhash.abunds().map(|abunds| abunds.to_vec()),
             moltype: self.moltype.clone(),
@@ -352,18 +406,29 @@ impl ProteomeIndex {
         };
 
         let serialized_metadata = bincode::serialize(&metadata)?;
+        eprintln!("[save] Metadata serialized to {} bytes in {:.1}s",
+            serialized_metadata.len(), t3.elapsed().as_secs_f32());
         self.db.put(b"index_metadata", serialized_metadata)?;
 
         // Store schema version as a separate key so it can be validated without
         // deserializing the full metadata (and without breaking old bincode layouts).
         let serialized_version = bincode::serialize(&SCHEMA_VERSION)?;
         self.db.put(b"schema_version", serialized_version)?;
+        eprintln!("[save] Metadata + schema_version written in {:.1}s total",
+            t3.elapsed().as_secs_f32());
 
         // Build and persist search cache + individual signatures for fast search startup
+        eprintln!("[save] Building search cache...");
+        let t4 = Instant::now();
         self.save_inverted_index()?;
+        eprintln!("[save] Search cache saved in {:.1}s", t4.elapsed().as_secs_f32());
 
         // Flush to ensure data is written to disk
+        eprintln!("[save] Flushing RocksDB...");
+        let t5 = Instant::now();
         self.db.flush()?;
+        eprintln!("[save] Flush complete in {:.1}s. Total save_state() time: {:.1}s",
+            t5.elapsed().as_secs_f32(), t_start.elapsed().as_secs_f32());
 
         Ok(())
     }
@@ -1276,6 +1341,7 @@ impl ProteomeIndex {
         }
 
         // Save the index state to RocksDB
+        eprintln!("Done reading FASTA ({} sequences total). Saving index...", record_count);
         self.save_state()?;
 
         if let Some(pb) = progress {

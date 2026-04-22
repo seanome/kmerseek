@@ -1,7 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(du:*)"
+      "Bash(du:*)",
+      "Bash(gh api:*)",
+      "Bash(docker build:*)"
     ]
   }
 }
