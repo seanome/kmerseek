@@ -1175,7 +1175,7 @@ pub fn find_matched_regions(
     // target positions differ. For example, a 12-mer match at query 170:182 and target 81:93 is
     // distinct from a 19-mer match at query 162:181 and target 138:157, even though the query
     // positions overlap. All matches are reported because they represent different alignments.
-    consecutive_regions.sort_by(|a, b| a.query_start.cmp(&b.query_start));
+    consecutive_regions.sort_by_key(|a| a.query_start);
 
     consecutive_regions
 }
