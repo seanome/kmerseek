@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  TARPAULIN_VERSION: "0.31.2"
 
 jobs:
   coverage:
@@ -28,22 +29,20 @@ jobs:
 
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
-        with:
-          key: stable
 
-      - name: Cache cargo-tarpaulin
-        uses: actions/cache@v3
+      - name: Cache cargo-tarpaulin binary
+        id: cache-tarpaulin
+        uses: actions/cache@v4
         with:
           path: ~/.cargo/bin/cargo-tarpaulin
-          key: cargo-tarpaulin-${{ hashFiles('Cargo.lock') }}
+          key: cargo-tarpaulin-${{ env.TARPAULIN_VERSION }}
 
       - name: Setup TMPDIR
         run: |
-          export TMPDIR=$HOME/tmp
-          mkdir -p $TMPDIR
-          echo "TMPDIR=$TMPDIR" >> $GITHUB_ENV
+          mkdir -p $HOME/tmp
+          echo "TMPDIR=$HOME/tmp" >> $GITHUB_ENV
 
-      - name: install system dependencies
+      - name: Install system dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev build-essential binutils python3-dev
@@ -52,35 +51,25 @@ jobs:
           df -h
           free -h
 
-      - name: Build binary for tests
+      - name: Install cargo-tarpaulin (prebuilt)
+        if: steps.cache-tarpaulin.outputs.cache-hit != 'true'
         run: |
-          export TMPDIR=$HOME/tmp
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo build --bin kmerseek --no-default-features
-          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
-          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
-          df -h
-          ls -la target/debug/kmerseek || echo "Binary not found in target/debug/"
+          curl -sL "https://github.com/xd009642/tarpaulin/releases/download/${TARPAULIN_VERSION}/cargo-tarpaulin-x86_64-unknown-linux-musl.tar.gz" \
+            | tar xz -C ~/.cargo/bin
 
-      - name: Run Rust tests
+      - name: Preflight build (fast fail on link errors)
         run: |
-          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo test --verbose --no-default-features
-          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
-          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
-          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
-          df -h
+          CARGO_BUILD_JOBS=1 cargo test --no-run --no-default-features -q
 
       - name: Generate Rust coverage report
         run: |
-          export TMPDIR=$HOME/tmp
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          cargo install cargo-tarpaulin
-          CARGO_BUILD_JOBS=1 cargo tarpaulin --out Xml --output-dir coverage/ --timeout 120 --skip-clean --no-default-features
+          CARGO_BUILD_JOBS=1 cargo tarpaulin \
+            --out Xml --output-dir coverage/ \
+            --timeout 120 --skip-clean --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
-          find /tmp -name "rustc*" -type f -delete 2>/dev/null || true
           df -h
 
       - name: Upload Rust coverage to Codecov
