@@ -105,6 +105,7 @@ enum ProteinEncoding {
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
     HpLehningerPlusC,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
+    #[value(name = "hp-pbotc-1st-ed")]
     HpPBotC1stEd,
     /// HP shuffled negative control (scrambled hydrophobicity signal)
     HpShuffledControl,
