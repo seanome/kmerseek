@@ -52,7 +52,7 @@ jobs:
         run: |
           export TMPDIR=$HOME/tmp
           PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd -C link-arg=-lpython${PYTHON_VERSION}"
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo build --bin kmerseek --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
@@ -63,7 +63,7 @@ jobs:
         run: |
           export TMPDIR=$HOME/tmp
           PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd -C link-arg=-lpython${PYTHON_VERSION}"
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo test --verbose --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
@@ -74,7 +74,7 @@ jobs:
         run: |
           export TMPDIR=$HOME/tmp
           PYTHON_VERSION=$(python3 -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}')")
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd -C link-arg=-lpython${PYTHON_VERSION}"
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           cargo install cargo-tarpaulin
           CARGO_BUILD_JOBS=1 cargo tarpaulin --out Xml --output-dir coverage/ --timeout 120 --skip-clean --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
