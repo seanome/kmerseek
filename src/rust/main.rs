@@ -36,6 +36,10 @@ enum Commands {
         #[arg(short, long, default_value = "protein")]
         encoding: ProteinEncoding,
 
+        /// Seed for hp_shuffled_control (1-10). Produces moltype hp_shuffled_control_N.
+        #[arg(long)]
+        shuffled_seed: Option<u64>,
+
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
         progress_interval: u32,
@@ -65,6 +69,10 @@ enum Commands {
         /// Protein encoding method (must match the database)
         #[arg(short, long, default_value = "protein")]
         encoding: ProteinEncoding,
+
+        /// Seed for hp_shuffled_control (1-10). Must match the seed used during indexing.
+        #[arg(long)]
+        shuffled_seed: Option<u64>,
 
         /// Minimum containment threshold (0.0 = show all matches)
         #[arg(long, default_value = "0.0")]
@@ -134,8 +142,20 @@ fn main() -> IndexResult<()> {
     eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
 
     match cli.command {
-        Commands::Index { input, output, ksize, scaled, encoding, progress_interval } => {
+        Commands::Index { input, output, ksize, scaled, encoding, shuffled_seed, progress_interval } => {
             eprintln!("Indexing FASTA file: {}", input.display());
+
+            // Resolve effective moltype: seeded shuffled control -> "hp_shuffled_control_N".
+            let effective_moltype: String = match (encoding, shuffled_seed) {
+                (ProteinEncoding::HpShuffledControl, Some(seed)) => {
+                    assert!((1..=10).contains(&seed), "--shuffled-seed must be 1-10, got {seed}");
+                    format!("hp_shuffled_control_{seed}")
+                }
+                _ => {
+                    let s: &'static str = encoding.into();
+                    s.to_string()
+                }
+            };
 
             // Determine output path
             let output_path = if let Some(output) = output {
@@ -151,7 +171,7 @@ fn main() -> IndexResult<()> {
                     &input,
                     ksize,
                     scaled,
-                    encoding.into(),
+                    &effective_moltype,
                     true, // Always store raw sequences
                 )?;
 
@@ -167,7 +187,7 @@ fn main() -> IndexResult<()> {
 
             eprintln!("\n-------\nK-mer size: {}", ksize);
             eprintln!("Scaled: {}", scaled);
-            eprintln!("Encoding: {:?}", encoding);
+            eprintln!("Encoding: {}", effective_moltype);
             eprintln!("Progress interval: {}", progress_interval);
             eprintln!("-------\n");
 
@@ -176,7 +196,7 @@ fn main() -> IndexResult<()> {
                 &output_path,
                 ksize,
                 scaled,
-                encoding.into(),
+                &effective_moltype,
                 true, // Always store raw sequences
             )?;
 
@@ -201,6 +221,7 @@ fn main() -> IndexResult<()> {
             ksize,
             scaled,
             encoding,
+            shuffled_seed: _,
             threshold,
             verbose,
             query_is_index,
@@ -514,13 +535,17 @@ fn assign_encoding(
         "hp_lehninger_plus_c" => ProteinEncoding::HpLehningerPlusC,
         "hp_pbotc_1st_ed" => ProteinEncoding::HpPBotC1stEd,
         "hp_shuffled_control" => ProteinEncoding::HpShuffledControl,
+        // Seeded shuffled controls (hp_shuffled_control_N) are stored with the seed
+        // in the moltype; map them back to HpShuffledControl so the encoding path
+        // picks them up via HpAlphabet::from_moltype() which parses the numeric suffix.
+        s if s.starts_with("hp_shuffled_control_") => ProteinEncoding::HpShuffledControl,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
                     "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp, \
                      hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
                      hp_thomas_dill_no_c, hp_lehninger_plus_c, hp_pbotc_1st_ed, \
-                     hp_shuffled_control",
+                     hp_shuffled_control (or hp_shuffled_control_N for seeded variants)",
                     detected_moltype
                 ),
             });

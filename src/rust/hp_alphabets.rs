@@ -21,6 +21,8 @@ pub enum HpAlphabet {
     LehningerPlusC,
     PBotC1stEd,
     ShuffledControl,
+    /// Seeded shuffled control; seed must be 1-10.
+    Shuffled(u64),
 }
 
 impl HpAlphabet {
@@ -33,6 +35,17 @@ impl HpAlphabet {
             Self::LehningerPlusC => &LEHNINGER_PLUS_C_HP,
             Self::PBotC1stEd => &PBOTC_1ST_ED_HP,
             Self::ShuffledControl => &SHUFFLED_CONTROL_HP,
+            Self::Shuffled(1) => &SHUFFLED_HP_1,
+            Self::Shuffled(2) => &SHUFFLED_HP_2,
+            Self::Shuffled(3) => &SHUFFLED_HP_3,
+            Self::Shuffled(4) => &SHUFFLED_HP_4,
+            Self::Shuffled(5) => &SHUFFLED_HP_5,
+            Self::Shuffled(6) => &SHUFFLED_HP_6,
+            Self::Shuffled(7) => &SHUFFLED_HP_7,
+            Self::Shuffled(8) => &SHUFFLED_HP_8,
+            Self::Shuffled(9) => &SHUFFLED_HP_9,
+            Self::Shuffled(10) => &SHUFFLED_HP_10,
+            Self::Shuffled(n) => panic!("shuffled seed {n} not pre-computed (only 1-10 supported)"),
         }
     }
 
@@ -46,6 +59,17 @@ impl HpAlphabet {
             Self::LehningerPlusC => "lehninger_plus_c",
             Self::PBotC1stEd => "pbotc_1st_ed",
             Self::ShuffledControl => "shuffled_control",
+            Self::Shuffled(1) => "shuffled_control_1",
+            Self::Shuffled(2) => "shuffled_control_2",
+            Self::Shuffled(3) => "shuffled_control_3",
+            Self::Shuffled(4) => "shuffled_control_4",
+            Self::Shuffled(5) => "shuffled_control_5",
+            Self::Shuffled(6) => "shuffled_control_6",
+            Self::Shuffled(7) => "shuffled_control_7",
+            Self::Shuffled(8) => "shuffled_control_8",
+            Self::Shuffled(9) => "shuffled_control_9",
+            Self::Shuffled(10) => "shuffled_control_10",
+            Self::Shuffled(n) => panic!("shuffled seed {n} not pre-computed (only 1-10 supported)"),
         }
     }
 
@@ -70,7 +94,17 @@ impl HpAlphabet {
     /// and for unrecognized strings.
     pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
         let name = s.strip_prefix("hp_")?;
-        Self::all_named().iter().find(|a| a.name() == name).copied()
+        // Try named alphabets first.
+        if let Some(a) = Self::all_named().iter().find(|a| a.name() == name) {
+            return Some(*a);
+        }
+        // Try seeded shuffled controls: "shuffled_control_N" -> Shuffled(N).
+        if let Some(n_str) = name.strip_prefix("shuffled_control_") {
+            if let Ok(n) = n_str.parse::<u64>() {
+                return Some(HpAlphabet::Shuffled(n));
+            }
+        }
+        None
     }
 }
 
@@ -206,6 +240,18 @@ static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
 // -----------------------------------------------------------------------------
 static SHUFFLED_CONTROL_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ADGKLMQRWY", b"CEFHINPSTV"));
+
+// Seeded shuffled controls — 10 independent random partitions for null-distribution estimation.
+static SHUFFLED_HP_1: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(1));
+static SHUFFLED_HP_2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(2));
+static SHUFFLED_HP_3: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(3));
+static SHUFFLED_HP_4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(4));
+static SHUFFLED_HP_5: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(5));
+static SHUFFLED_HP_6: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(6));
+static SHUFFLED_HP_7: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(7));
+static SHUFFLED_HP_8: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(8));
+static SHUFFLED_HP_9: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(9));
+static SHUFFLED_HP_10: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(10));
 
 /// Generate a seeded random HP partition for negative-control runs.
 /// Pass multiple seeds to characterize the null distribution.
