@@ -57,10 +57,10 @@ jobs:
           curl -sL "https://github.com/xd009642/tarpaulin/releases/download/${TARPAULIN_VERSION}/cargo-tarpaulin-x86_64-unknown-linux-musl.tar.gz" \
             | tar xz -C ~/.cargo/bin
 
-      - name: Preflight build (fast fail on link errors)
+      - name: Run tests (fast fail before coverage)
         run: |
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo test --no-run --no-default-features -q
+          CARGO_BUILD_JOBS=1 cargo test --no-default-features
 
       - name: Build binary (required for CLI tests via assert_cmd)
         run: |
