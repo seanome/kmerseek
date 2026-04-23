@@ -60,6 +60,18 @@ impl HpAlphabet {
             HpAlphabet::ShuffledControl,
         ]
     }
+
+    /// Moltype string stored in the index (e.g. `"hp_thomas_dill"`).
+    pub fn to_moltype(&self) -> String {
+        format!("hp_{}", self.name())
+    }
+
+    /// Parse from a moltype string. Returns `None` for `"hp"` (sourmash built-in)
+    /// and for unrecognized strings.
+    pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
+        let name = s.strip_prefix("hp_")?;
+        Self::all_named().iter().find(|a| a.name() == name).copied()
+    }
 }
 
 fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {

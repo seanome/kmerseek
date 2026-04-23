@@ -326,24 +326,50 @@ impl ProteinSketch {
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
         use crate::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
+        use crate::hp_alphabets::HpAlphabet;
         use sourmash::_hash_murmur;
 
-        self.signature.minhash.add_protein(sequence.as_bytes())?;
+        let moltype_str = self.moltype.to_string();
+        let custom_hp = HpAlphabet::from_moltype(&moltype_str);
+
+        if let Some(ref alpha) = custom_hp {
+            // Pre-encode with our custom HP table so sourmash hashes h/p bytes via
+            // Murmur64Protein (identity). Unknown bytes pass through unchanged.
+            let table = alpha.table();
+            let pre_encoded: String = sequence
+                .bytes()
+                .map(|b| table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b) as char)
+                .collect();
+            self.signature.minhash.add_protein(pre_encoded.as_bytes())?;
+        } else {
+            self.signature.minhash.add_protein(sequence.as_bytes())?;
+        }
 
         let md5sum =
             self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         self.signature.md5sum = format!("{:x}", md5sum);
 
-        let encoding_fn = get_encoding_fn_from_moltype(&self.moltype.to_string())?;
         let ksize = self.protein_ksize as usize;
         let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            if let Ok(encoded_kmer) = encode_with_fn(&sequence[i..i + ksize], encoding_fn) {
-                let hashval = _hash_murmur(encoded_kmer.as_bytes(), SEED);
-                if hashvals.contains(&hashval) {
-                    self.kmer_positions_mut().entry(hashval).or_default().push(i);
+            let kmer = &sequence[i..i + ksize];
+            let hashval = if let Some(ref alpha) = custom_hp {
+                let table = alpha.table();
+                let encoded: String = kmer
+                    .bytes()
+                    .map(|b| table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b) as char)
+                    .collect();
+                _hash_murmur(encoded.as_bytes(), SEED)
+            } else {
+                let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
+                match encode_with_fn(kmer, encoding_fn) {
+                    Ok(encoded_kmer) => _hash_murmur(encoded_kmer.as_bytes(), SEED),
+                    Err(_) => continue,
                 }
+            };
+            if hashvals.contains(&hashval) {
+                self.kmer_positions_mut().entry(hashval).or_default().push(i);
             }
         }
 

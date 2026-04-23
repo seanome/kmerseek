@@ -23,8 +23,14 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
         "protein" | "raw" => Ok(HashFunctions::Murmur64Protein),
         "hp" => Ok(HashFunctions::Murmur64Hp),
         "dayhoff" => Ok(HashFunctions::Murmur64Dayhoff),
+        // Custom HP alphabets pre-encode the sequence before hashing, so the
+        // hash function sees an already-encoded h/p sequence and uses identity.
+        s if s.starts_with("hp_") => Ok(HashFunctions::Murmur64Protein),
         _ => Err(anyhow::anyhow!(
-            "Invalid moltype: {}, only 'protein', 'hp', or 'dayhoff' are supported",
+            "Invalid moltype: {}. Supported values: 'protein', 'dayhoff', 'hp', \
+             'hp_lehninger', 'hp_thomas_dill', 'hp_kyte_doolittle', \
+             'hp_thomas_dill_no_c', 'hp_lehninger_plus_c', 'hp_pbotc_1st_ed', \
+             'hp_shuffled_control'",
             moltype
         )),
     }

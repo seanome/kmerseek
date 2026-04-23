@@ -92,8 +92,22 @@ enum ProteinEncoding {
     Protein,
     /// Dayhoff encoding (6 groups)
     Dayhoff,
-    /// HP encoding (hydrophobic/polar)
+    /// HP encoding — sourmash built-in Lehninger classification (backward-compatible)
     Hp,
+    /// HP Lehninger (explicit; identical hashes to hp)
+    HpLehninger,
+    /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
+    HpThomasDill,
+    /// HP Kyte-Doolittle 1982 binarized at hydropathy > 0 (W=p, Y=p)
+    HpKyteDoolittle,
+    /// HP Thomas-Dill with C reassigned to polar (isolation variant)
+    HpThomasDillNoC,
+    /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
+    HpLehningerPlusC,
+    /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
+    HpPBotC1stEd,
+    /// HP shuffled negative control (scrambled hydrophobicity signal)
+    HpShuffledControl,
 }
 
 impl From<ProteinEncoding> for &'static str {
@@ -102,6 +116,13 @@ impl From<ProteinEncoding> for &'static str {
             ProteinEncoding::Protein => "protein",
             ProteinEncoding::Dayhoff => "dayhoff",
             ProteinEncoding::Hp => "hp",
+            ProteinEncoding::HpLehninger => "hp_lehninger",
+            ProteinEncoding::HpThomasDill => "hp_thomas_dill",
+            ProteinEncoding::HpKyteDoolittle => "hp_kyte_doolittle",
+            ProteinEncoding::HpThomasDillNoC => "hp_thomas_dill_no_c",
+            ProteinEncoding::HpLehningerPlusC => "hp_lehninger_plus_c",
+            ProteinEncoding::HpPBotC1stEd => "hp_pbotc_1st_ed",
+            ProteinEncoding::HpShuffledControl => "hp_shuffled_control",
         }
     }
 }
@@ -485,10 +506,20 @@ fn assign_encoding(
         "protein" => ProteinEncoding::Protein,
         "dayhoff" => ProteinEncoding::Dayhoff,
         "hp" => ProteinEncoding::Hp,
+        "hp_lehninger" => ProteinEncoding::HpLehninger,
+        "hp_thomas_dill" => ProteinEncoding::HpThomasDill,
+        "hp_kyte_doolittle" => ProteinEncoding::HpKyteDoolittle,
+        "hp_thomas_dill_no_c" => ProteinEncoding::HpThomasDillNoC,
+        "hp_lehninger_plus_c" => ProteinEncoding::HpLehningerPlusC,
+        "hp_pbotc_1st_ed" => ProteinEncoding::HpPBotC1stEd,
+        "hp_shuffled_control" => ProteinEncoding::HpShuffledControl,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp",
+                    "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp, \
+                     hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
+                     hp_thomas_dill_no_c, hp_lehninger_plus_c, hp_pbotc_1st_ed, \
+                     hp_shuffled_control",
                     detected_moltype
                 ),
             });
