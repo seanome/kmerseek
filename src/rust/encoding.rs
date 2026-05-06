@@ -81,6 +81,9 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
         "protein" | "raw" => Ok(|b| b),
         "hp" => Ok(aa_to_hp),
         "dayhoff" => Ok(aa_to_dayhoff),
+        // Custom HP alphabets pre-encode in HpAlphabet::table(); return identity here so
+        // callers that only need a fn(u8)->u8 don't crash. process_kmers handles them separately.
+        s if s.starts_with("hp_") => Ok(|b| b),
         _ => Err(anyhow::anyhow!(
             "Invalid moltype: {}, only 'protein', 'hp', or 'dayhoff' are supported",
             moltype

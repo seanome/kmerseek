@@ -354,16 +354,21 @@ impl ProteinSketch {
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = &sequence[i..i + ksize];
+            // WHY: sourmash's ReadingFrame::new_protein calls to_ascii_uppercase() before
+            // hashing, so we must uppercase the encoded k-mer to get matching hash values.
             let hashval = if let Some(ref alpha) = custom_hp {
                 let table = alpha.table();
-                let encoded: String = kmer
+                let encoded: Vec<u8> = kmer
                     .bytes()
-                    .map(|b| table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b) as char)
+                    .map(|b| table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b).to_ascii_uppercase())
                     .collect();
-                _hash_murmur(encoded.as_bytes(), SEED)
+                _hash_murmur(&encoded, SEED)
             } else {
                 let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
                 match encode_with_fn(kmer, encoding_fn) {
+                    // WHY: For dayhoff and standard HP, sourmash's ReadingFrame encodes
+                    // internally and hashes lowercase codes (a-f / h/p). Do NOT uppercase
+                    // here — only custom HP pre-encoding needs uppercase (Bug 1 fix).
                     Ok(encoded_kmer) => _hash_murmur(encoded_kmer.as_bytes(), SEED),
                     Err(_) => continue,
                 }
@@ -380,7 +385,23 @@ impl ProteinSketch {
 
             let moltype_str = self.moltype.to_string();
             if moltype_str != "protein" {
-                let encoded_sequence = encode_by_moltype(sequence, &moltype_str)?;
+                let encoded_sequence = if let Some(ref alpha) = custom_hp {
+                    // Custom HP alphabets: apply the HP table directly, uppercased to match
+                    // the hashes stored in minhash (sourmash uppercases before hashing).
+                    let table = alpha.table();
+                    sequence
+                        .bytes()
+                        .map(|b| {
+                            table
+                                .get(&b.to_ascii_uppercase())
+                                .copied()
+                                .unwrap_or(b)
+                                .to_ascii_uppercase() as char
+                        })
+                        .collect::<String>()
+                } else {
+                    encode_by_moltype(sequence, &moltype_str)?
+                };
                 efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
             }
 

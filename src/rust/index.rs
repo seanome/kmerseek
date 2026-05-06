@@ -19,6 +19,7 @@ use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{
     encode_with_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
+use crate::hp_alphabets::HpAlphabet;
 use crate::errors::{IndexError, IndexResult};
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
@@ -1056,12 +1057,24 @@ impl ProteomeIndex {
         let hashvals: HashSet<u64> =
             protein_signature.signature().get_minhash().to_vec().into_iter().collect();
 
+        let custom_hp = HpAlphabet::from_moltype(&self.moltype);
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            if let Ok(encoded_kmer) = encode_with_fn(&sequence[i..i + ksize], self.encoding_fn) {
-                let hashval = _hash_murmur(encoded_kmer.as_bytes(), SEED);
-                if hashvals.contains(&hashval) {
-                    protein_signature.kmer_positions_mut().entry(hashval).or_default().push(i);
+            let kmer = &sequence[i..i + ksize];
+            // WHY: sourmash's ReadingFrame::new_protein uppercases before hashing.
+            let hashval = if let Some(ref alpha) = custom_hp {
+                let encoded: Vec<u8> = kmer
+                    .bytes()
+                    .map(|b| alpha.table().get(&b.to_ascii_uppercase()).copied().unwrap_or(b).to_ascii_uppercase())
+                    .collect();
+                _hash_murmur(&encoded, SEED)
+            } else {
+                match encode_with_fn(kmer, self.encoding_fn) {
+                    Ok(enc) => _hash_murmur(enc.to_ascii_uppercase().as_bytes(), SEED),
+                    Err(_) => continue,
                 }
+            };
+            if hashvals.contains(&hashval) {
+                protein_signature.kmer_positions_mut().entry(hashval).or_default().push(i);
             }
         }
 

@@ -62,6 +62,11 @@ jobs:
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo test --no-run --no-default-features -q
 
+      - name: Build binary (required for CLI tests via assert_cmd)
+        run: |
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
+          CARGO_BUILD_JOBS=1 cargo build --bins --no-default-features
+
       - name: Generate Rust coverage report
         run: |
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
