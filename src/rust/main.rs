@@ -103,19 +103,25 @@ enum ProteinEncoding {
     /// HP encoding — sourmash built-in Lehninger classification (backward-compatible)
     Hp,
     /// HP Lehninger (explicit; identical hashes to hp)
+    #[value(alias = "hp_lehninger")]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
+    #[value(alias = "hp_thomas_dill")]
     HpThomasDill,
     /// HP Kyte-Doolittle 1982 binarized at hydropathy > 0 (W=p, Y=p)
+    #[value(alias = "hp_kyte_doolittle")]
     HpKyteDoolittle,
     /// HP Thomas-Dill with C reassigned to polar (isolation variant)
+    #[value(alias = "hp_thomas_dill_no_c")]
     HpThomasDillNoC,
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
+    #[value(alias = "hp_lehninger_plus_c")]
     HpLehningerPlusC,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
-    #[value(name = "hp-pbotc-1st-ed")]
+    #[value(name = "hp-pbotc-1st-ed", alias = "hp_pbotc_1st_ed")]
     HpPBotC1stEd,
     /// HP shuffled negative control (scrambled hydrophobicity signal)
+    #[value(alias = "hp_shuffled_control")]
     HpShuffledControl,
 }
 
