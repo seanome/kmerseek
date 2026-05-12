@@ -766,7 +766,9 @@ impl ProteomeIndex {
     /// Call `load_search_cache()` after opening to retrieve the pre-built inverted index.
     pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let opts = Self::create_rocksdb_options(false);
-        let db = DB::open(&opts, path)?;
+        // WHY: open_for_read_only avoids acquiring the exclusive LOCK file, allowing
+        // multiple search processes to query the same index concurrently.
+        let db = DB::open_for_read_only(&opts, path, false)?;
 
         let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
         let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
