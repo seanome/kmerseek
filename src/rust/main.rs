@@ -148,7 +148,15 @@ fn main() -> IndexResult<()> {
     eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
 
     match cli.command {
-        Commands::Index { input, output, ksize, scaled, encoding, shuffled_seed, progress_interval } => {
+        Commands::Index {
+            input,
+            output,
+            ksize,
+            scaled,
+            encoding,
+            shuffled_seed,
+            progress_interval,
+        } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
             // Resolve effective moltype: seeded shuffled control -> "hp_shuffled_control_N".

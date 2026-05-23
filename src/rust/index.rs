@@ -19,8 +19,8 @@ use crate::aminoacid::AminoAcidAmbiguity;
 use crate::encoding::{
     encode_with_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
-use crate::hp_alphabets::HpAlphabet;
 use crate::errors::{IndexError, IndexResult};
+use crate::hp_alphabets::HpAlphabet;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
@@ -361,11 +361,8 @@ impl ProteomeIndex {
     /// With millions of hashes this becomes hours. One sort + add in sorted order is O(N log N)
     /// (each add_hash becomes O(1) push because hashes arrive in ascending order).
     pub fn rebuild_combined_minhash(&self) -> IndexResult<()> {
-        let mut all_hashes: Vec<u64> = self
-            .signatures
-            .iter()
-            .flat_map(|e| e.value().signature().minhash.mins())
-            .collect();
+        let mut all_hashes: Vec<u64> =
+            self.signatures.iter().flat_map(|e| e.value().signature().minhash.mins()).collect();
         all_hashes.sort_unstable();
         all_hashes.dedup();
         let hash_function = get_hash_function_from_moltype(&self.moltype)?;
@@ -1094,7 +1091,14 @@ impl ProteomeIndex {
             let hashval = if let Some(ref alpha) = custom_hp {
                 let encoded: Vec<u8> = kmer
                     .bytes()
-                    .map(|b| alpha.table().get(&b.to_ascii_uppercase()).copied().unwrap_or(b).to_ascii_uppercase())
+                    .map(|b| {
+                        alpha
+                            .table()
+                            .get(&b.to_ascii_uppercase())
+                            .copied()
+                            .unwrap_or(b)
+                            .to_ascii_uppercase()
+                    })
                     .collect();
                 _hash_murmur(&encoded, SEED)
             } else {
@@ -1381,7 +1385,10 @@ impl ProteomeIndex {
             self.process_batch_parallel(&current_batch, progress_interval, record_count)?;
         }
 
-        eprintln!("Done reading FASTA ({} sequences total). Building combined minhash...", record_count);
+        eprintln!(
+            "Done reading FASTA ({} sequences total). Building combined minhash...",
+            record_count
+        );
         let t_cm = Instant::now();
         self.rebuild_combined_minhash()?;
         eprintln!(

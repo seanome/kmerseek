@@ -360,7 +360,13 @@ impl ProteinSketch {
                 let table = alpha.table();
                 let encoded: Vec<u8> = kmer
                     .bytes()
-                    .map(|b| table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b).to_ascii_uppercase())
+                    .map(|b| {
+                        table
+                            .get(&b.to_ascii_uppercase())
+                            .copied()
+                            .unwrap_or(b)
+                            .to_ascii_uppercase()
+                    })
                     .collect();
                 _hash_murmur(&encoded, SEED)
             } else {

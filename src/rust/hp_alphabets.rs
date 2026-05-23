@@ -256,9 +256,9 @@ static SHUFFLED_HP_10: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(
 /// Generate a seeded random HP partition for negative-control runs.
 /// Pass multiple seeds to characterize the null distribution.
 pub fn shuffled_hp(seed: u64) -> HashMap<u8, u8> {
+    use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::SeedableRng;
-    use rand::rngs::StdRng;
     let mut residues: Vec<u8> = b"ACDEFGHIKLMNPQRSTVWY".to_vec();
     let mut rng = StdRng::seed_from_u64(seed);
     residues.shuffle(&mut rng);
@@ -282,12 +282,7 @@ mod tests {
             // 20 amino acids + 1 stop codon
             assert_eq!(t.len(), 21, "alphabet {:?} has wrong table size", alpha);
             for &r in ALL_RESIDUES {
-                assert!(
-                    t.contains_key(&r),
-                    "alphabet {:?} missing residue {}",
-                    alpha,
-                    r as char
-                );
+                assert!(t.contains_key(&r), "alphabet {:?} missing residue {}", alpha, r as char);
             }
         }
     }
@@ -327,46 +322,122 @@ mod tests {
     #[test]
     fn cysteine_placement() {
         // C = polar in Lehninger (polar uncharged group) and ThomasDillNoC (by construction).
-        assert_eq!(HpAlphabet::Lehninger.table()[&b'C'], b'p', "Lehninger: C polar (Nelson & Cox 2021, Ch. 3)");
-        assert_eq!(HpAlphabet::ThomasDillNoC.table()[&b'C'], b'p', "ThomasDillNoC: C polar by construction");
+        assert_eq!(
+            HpAlphabet::Lehninger.table()[&b'C'],
+            b'p',
+            "Lehninger: C polar (Nelson & Cox 2021, Ch. 3)"
+        );
+        assert_eq!(
+            HpAlphabet::ThomasDillNoC.table()[&b'C'],
+            b'p',
+            "ThomasDillNoC: C polar by construction"
+        );
 
         // C = hydrophobic in ThomasDill, KyteDoolittle, LehningerPlusC, PBotC1stEd.
-        assert_eq!(HpAlphabet::ThomasDill.table()[&b'C'], b'h', "ThomasDill: C hydrophobic (Thomas & Dill 1996, Fig. 3)");
-        assert_eq!(HpAlphabet::KyteDoolittle.table()[&b'C'], b'h', "KyteDoolittle: C hydrophobic (hydropathy +2.5, Kyte & Doolittle 1982)");
-        assert_eq!(HpAlphabet::LehningerPlusC.table()[&b'C'], b'h', "LehningerPlusC: C hydrophobic by construction");
-        assert_eq!(HpAlphabet::PBotC1stEd.table()[&b'C'], b'h', "PBotC1stEd: C borderline-h (Phillips et al. 2008, Fig. 8.30)");
+        assert_eq!(
+            HpAlphabet::ThomasDill.table()[&b'C'],
+            b'h',
+            "ThomasDill: C hydrophobic (Thomas & Dill 1996, Fig. 3)"
+        );
+        assert_eq!(
+            HpAlphabet::KyteDoolittle.table()[&b'C'],
+            b'h',
+            "KyteDoolittle: C hydrophobic (hydropathy +2.5, Kyte & Doolittle 1982)"
+        );
+        assert_eq!(
+            HpAlphabet::LehningerPlusC.table()[&b'C'],
+            b'h',
+            "LehningerPlusC: C hydrophobic by construction"
+        );
+        assert_eq!(
+            HpAlphabet::PBotC1stEd.table()[&b'C'],
+            b'h',
+            "PBotC1stEd: C borderline-h (Phillips et al. 2008, Fig. 8.30)"
+        );
     }
 
     #[test]
     fn glycine_placement() {
         // G = hydrophobic in Lehninger (nonpolar aliphatic) and LehningerPlusC.
-        assert_eq!(HpAlphabet::Lehninger.table()[&b'G'], b'h', "Lehninger: G nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)");
-        assert_eq!(HpAlphabet::LehningerPlusC.table()[&b'G'], b'h', "LehningerPlusC: G inherits Lehninger placement");
+        assert_eq!(
+            HpAlphabet::Lehninger.table()[&b'G'],
+            b'h',
+            "Lehninger: G nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)"
+        );
+        assert_eq!(
+            HpAlphabet::LehningerPlusC.table()[&b'G'],
+            b'h',
+            "LehningerPlusC: G inherits Lehninger placement"
+        );
 
         // G = polar in ThomasDill, KyteDoolittle, ThomasDillNoC, PBotC1stEd.
-        assert_eq!(HpAlphabet::ThomasDill.table()[&b'G'], b'p', "ThomasDill: G polar (Thomas & Dill 1996, Fig. 3)");
-        assert_eq!(HpAlphabet::KyteDoolittle.table()[&b'G'], b'p', "KyteDoolittle: G polar (hydropathy -0.4, Kyte & Doolittle 1982)");
-        assert_eq!(HpAlphabet::ThomasDillNoC.table()[&b'G'], b'p', "ThomasDillNoC: G polar (inherits ThomasDill)");
-        assert_eq!(HpAlphabet::PBotC1stEd.table()[&b'G'], b'p', "PBotC1stEd: G polar (Phillips et al. 2008, Fig. 8.30)");
+        assert_eq!(
+            HpAlphabet::ThomasDill.table()[&b'G'],
+            b'p',
+            "ThomasDill: G polar (Thomas & Dill 1996, Fig. 3)"
+        );
+        assert_eq!(
+            HpAlphabet::KyteDoolittle.table()[&b'G'],
+            b'p',
+            "KyteDoolittle: G polar (hydropathy -0.4, Kyte & Doolittle 1982)"
+        );
+        assert_eq!(
+            HpAlphabet::ThomasDillNoC.table()[&b'G'],
+            b'p',
+            "ThomasDillNoC: G polar (inherits ThomasDill)"
+        );
+        assert_eq!(
+            HpAlphabet::PBotC1stEd.table()[&b'G'],
+            b'p',
+            "PBotC1stEd: G polar (Phillips et al. 2008, Fig. 8.30)"
+        );
     }
 
     #[test]
     fn proline_placement() {
         // P = hydrophobic in Lehninger (nonpolar aliphatic), LehningerPlusC, PBotC1stEd.
-        assert_eq!(HpAlphabet::Lehninger.table()[&b'P'], b'h', "Lehninger: P nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)");
-        assert_eq!(HpAlphabet::LehningerPlusC.table()[&b'P'], b'h', "LehningerPlusC: P inherits Lehninger placement");
-        assert_eq!(HpAlphabet::PBotC1stEd.table()[&b'P'], b'h', "PBotC1stEd: P hydrophobic (Phillips et al. 2008, Fig. 8.30; moved to p in 2nd ed)");
+        assert_eq!(
+            HpAlphabet::Lehninger.table()[&b'P'],
+            b'h',
+            "Lehninger: P nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)"
+        );
+        assert_eq!(
+            HpAlphabet::LehningerPlusC.table()[&b'P'],
+            b'h',
+            "LehningerPlusC: P inherits Lehninger placement"
+        );
+        assert_eq!(
+            HpAlphabet::PBotC1stEd.table()[&b'P'],
+            b'h',
+            "PBotC1stEd: P hydrophobic (Phillips et al. 2008, Fig. 8.30; moved to p in 2nd ed)"
+        );
 
         // P = polar in ThomasDill, KyteDoolittle, ThomasDillNoC.
-        assert_eq!(HpAlphabet::ThomasDill.table()[&b'P'], b'p', "ThomasDill: P polar (Thomas & Dill 1996, Fig. 3)");
-        assert_eq!(HpAlphabet::KyteDoolittle.table()[&b'P'], b'p', "KyteDoolittle: P polar (hydropathy -1.6, Kyte & Doolittle 1982)");
-        assert_eq!(HpAlphabet::ThomasDillNoC.table()[&b'P'], b'p', "ThomasDillNoC: P polar (inherits ThomasDill)");
+        assert_eq!(
+            HpAlphabet::ThomasDill.table()[&b'P'],
+            b'p',
+            "ThomasDill: P polar (Thomas & Dill 1996, Fig. 3)"
+        );
+        assert_eq!(
+            HpAlphabet::KyteDoolittle.table()[&b'P'],
+            b'p',
+            "KyteDoolittle: P polar (hydropathy -1.6, Kyte & Doolittle 1982)"
+        );
+        assert_eq!(
+            HpAlphabet::ThomasDillNoC.table()[&b'P'],
+            b'p',
+            "ThomasDillNoC: P polar (inherits ThomasDill)"
+        );
     }
 
     #[test]
     fn tryptophan_placement() {
         // W = polar in KyteDoolittle only (hydropathy -0.9 due to indole NH).
-        assert_eq!(HpAlphabet::KyteDoolittle.table()[&b'W'], b'p', "KyteDoolittle: W polar (hydropathy -0.9, Kyte & Doolittle 1982)");
+        assert_eq!(
+            HpAlphabet::KyteDoolittle.table()[&b'W'],
+            b'p',
+            "KyteDoolittle: W polar (hydropathy -0.9, Kyte & Doolittle 1982)"
+        );
 
         // W = hydrophobic in all other named alphabets.
         for alpha in [
@@ -376,19 +447,18 @@ mod tests {
             HpAlphabet::LehningerPlusC,
             HpAlphabet::PBotC1stEd,
         ] {
-            assert_eq!(
-                alpha.table()[&b'W'],
-                b'h',
-                "{:?}: W hydrophobic (aromatic)",
-                alpha
-            );
+            assert_eq!(alpha.table()[&b'W'], b'h', "{:?}: W hydrophobic (aromatic)", alpha);
         }
     }
 
     #[test]
     fn tyrosine_placement() {
         // Y = polar in KyteDoolittle only (hydropathy -1.3 due to hydroxyl).
-        assert_eq!(HpAlphabet::KyteDoolittle.table()[&b'Y'], b'p', "KyteDoolittle: Y polar (hydropathy -1.3, Kyte & Doolittle 1982)");
+        assert_eq!(
+            HpAlphabet::KyteDoolittle.table()[&b'Y'],
+            b'p',
+            "KyteDoolittle: Y polar (hydropathy -1.3, Kyte & Doolittle 1982)"
+        );
 
         // Y = hydrophobic in all other named alphabets.
         for alpha in [
@@ -398,12 +468,7 @@ mod tests {
             HpAlphabet::LehningerPlusC,
             HpAlphabet::PBotC1stEd,
         ] {
-            assert_eq!(
-                alpha.table()[&b'Y'],
-                b'h',
-                "{:?}: Y hydrophobic (aromatic)",
-                alpha
-            );
+            assert_eq!(alpha.table()[&b'Y'], b'h', "{:?}: Y hydrophobic (aromatic)", alpha);
         }
     }
 

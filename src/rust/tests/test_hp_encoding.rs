@@ -9,28 +9,20 @@
 #[cfg(test)]
 mod tests {
     use crate::sketch::ProteinSketch;
-    use sourmash::_hash_murmur;
     use crate::SEED;
+    use sourmash::_hash_murmur;
 
     /// For a custom HP alphabet, every hash in kmer_positions must also be in the minhash.
     #[test]
     fn test_custom_hp_kmer_positions_match_minhash() {
         let seq = "NSQLAGKRILVTQADTFMGPTLCEVFAEMGNTLSGFLNYCSFNLNLQTLRHYVLAKILNKH";
         let ksize = 10;
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test_seq",
-            seq,
-            ksize,
-            1,
-            "hp_kyte_doolittle",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle")
+                .unwrap();
 
         let minhash_set = sketch.mins_as_set();
-        assert!(
-            !minhash_set.is_empty(),
-            "minhash should not be empty"
-        );
+        assert!(!minhash_set.is_empty(), "minhash should not be empty");
 
         let kmer_positions = sketch.kmer_positions();
         assert!(
@@ -60,24 +52,15 @@ mod tests {
     #[test]
     fn test_custom_hp_encoded_sequence_contains_hp_chars() {
         let seq = "MKTAYIAKQRFLVS";
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test_hp_enc",
-            seq,
-            8,
-            1,
-            "hp_kyte_doolittle",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle")
+                .unwrap();
 
         let enc = sketch
             .get_moltype_sequence()
             .expect("encoded_sequence should be Some for custom HP alphabet (Bug 2)");
 
-        assert_eq!(
-            enc.len(),
-            seq.len(),
-            "encoded sequence should have same length as input"
-        );
+        assert_eq!(enc.len(), seq.len(), "encoded sequence should have same length as input");
 
         for ch in enc.chars() {
             assert!(
@@ -91,14 +74,9 @@ mod tests {
     #[test]
     fn test_custom_hp_encoded_sequence_differs_from_raw() {
         let seq = "MKTAYIAKQRFLVS";
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test_hp_diff",
-            seq,
-            8,
-            1,
-            "hp_kyte_doolittle",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle")
+                .unwrap();
 
         let raw = sketch.get_raw_sequence().expect("raw_sequence should be Some");
         let enc = sketch.get_moltype_sequence().expect("encoded_sequence should be Some");
@@ -133,23 +111,14 @@ mod tests {
 
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
 
-        let sketch = ProteinSketch::from_protein_sequence(
-            "self_test",
-            seq,
-            8,
-            1,
-            "hp_kyte_doolittle",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle")
+                .unwrap();
 
         let shared_hashes = sketch.mins_as_set();
         assert!(!shared_hashes.is_empty(), "self-hit must share hashes");
 
-        let regions = find_matched_regions(
-            &sketch,
-            &sketch,
-            &shared_hashes,
-        );
+        let regions = find_matched_regions(&sketch, &sketch, &shared_hashes);
 
         assert!(
             !regions.is_empty(),
@@ -249,9 +218,8 @@ mod tests {
         use std::collections::HashSet;
 
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test", seq, 8, 1, "hp_kyte_doolittle",
-        ).unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle").unwrap();
 
         let empty: HashSet<u64> = HashSet::new();
         let regions = find_matched_regions(&sketch, &sketch, &empty);
@@ -269,14 +237,13 @@ mod tests {
         let seq_a = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
         let seq_b = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"; // all-cys: likely different HP pattern
 
-        let sketch_a = ProteinSketch::from_protein_sequence(
-            "a", seq_a, 8, 1, "hp_kyte_doolittle",
-        ).unwrap();
-        let sketch_b = ProteinSketch::from_protein_sequence(
-            "b", seq_b, 8, 1, "hp_kyte_doolittle",
-        ).unwrap();
+        let sketch_a =
+            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle").unwrap();
+        let sketch_b =
+            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle").unwrap();
 
-        let shared = sketch_a.mins_as_set()
+        let shared = sketch_a
+            .mins_as_set()
             .intersection(&sketch_b.mins_as_set())
             .cloned()
             .collect::<std::collections::HashSet<_>>();
