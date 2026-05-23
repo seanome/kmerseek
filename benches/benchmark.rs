@@ -778,9 +778,7 @@ fn benchmark_rebuild_combined_minhash(c: &mut Criterion) {
 
         let n_unique = index.combined_minhash_size();
         let bench_name = format!("rebuild_hp_k{ksize}_{n_unique}_unique_kmers");
-        group.bench_function(&bench_name, |b| {
-            b.iter(|| index.rebuild_combined_minhash().unwrap())
-        });
+        group.bench_function(&bench_name, |b| b.iter(|| index.rebuild_combined_minhash().unwrap()));
     }
     group.finish();
 }
