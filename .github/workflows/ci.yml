@@ -43,7 +43,9 @@ jobs:
         run: cargo test --verbose --no-default-features --lib
 
       - name: Run CLI tests
-        run: cargo test tests::test_cli --verbose --no-default-features
+        run: |
+          cargo build --bin kmerseek --no-default-features
+          cargo test tests::test_cli --verbose --no-default-features
 
       - name: Test CLI binary
         run: |
