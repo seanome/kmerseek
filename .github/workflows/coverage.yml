@@ -72,7 +72,7 @@ jobs:
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo tarpaulin \
             --out Xml --output-dir coverage/ \
-            --timeout 120 --skip-clean --no-default-features
+            --timeout 120 --skip-clean --no-default-features --bins
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
           df -h
