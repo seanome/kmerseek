@@ -3,7 +3,8 @@
     "allow": [
       "Bash(du:*)",
       "Bash(gh api:*)",
-      "Bash(docker build:*)"
+      "Bash(docker build:*)",
+      "Bash(git -C /Users/olga/code/kmerseek/.claude/worktrees/agent-af3534a11cc25be52 log --oneline --all)"
     ]
   }
 }
