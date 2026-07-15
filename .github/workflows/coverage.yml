@@ -57,17 +57,21 @@ jobs:
           curl -sL "https://github.com/xd009642/tarpaulin/releases/download/${TARPAULIN_VERSION}/cargo-tarpaulin-x86_64-unknown-linux-musl.tar.gz" \
             | tar xz -C ~/.cargo/bin
 
-      - name: Run tests (fast fail before coverage)
+      - name: Build binary for CLI tests
         run: |
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo test --no-default-features
+          CARGO_BUILD_JOBS=1 cargo build --bins --no-default-features
+          echo "CARGO_BIN_EXE_kmerseek=$(pwd)/target/debug/kmerseek" >> $GITHUB_ENV
 
       - name: Generate Rust coverage report
         run: |
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
           CARGO_BUILD_JOBS=1 cargo tarpaulin \
             --out Xml --output-dir coverage/ \
-            --timeout 120 --skip-clean --no-default-features --bins
+            --timeout 120 --skip-clean --no-default-features
+          find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
+          find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
+          df -h
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
           find $TMPDIR -name "rustc*" -type f -mmin +1 -delete 2>/dev/null || true
           df -h
