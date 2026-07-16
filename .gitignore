@@ -1,4 +1,6 @@
 /target
+# Linux target dir used by scripts/coverage-local.sh (Docker)
+/target-linux
 
 
 # IntelliJ/PyCharm files
@@ -46,6 +48,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+*.profraw
+/coverage/
 htmlcov/
 .tox/
 .nox/
