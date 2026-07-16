@@ -47,7 +47,15 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pkg-config libssl-dev build-essential binutils python3-dev
           PYTHON_LIB_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+          PYTHON_LDVERSION=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LDVERSION'))")
           echo "LD_LIBRARY_PATH=${PYTHON_LIB_DIR}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+          # pyo3 is pulled in (transitively via sourmash_plugin_branchwater) with the
+          # extension-module feature, so its build script does NOT emit the libpython
+          # link flags. A normal `cargo build` links fine because --gc-sections drops
+          # the unused pyo3 FFI code, but `cargo tarpaulin` builds with -C link-dead-code
+          # which keeps it, leaving PyGen_Type/PyCapsule_Import unresolved. Link libpython
+          # explicitly so those symbols resolve.
+          echo "PYTHON_LINK_FLAGS=-C link-arg=-L${PYTHON_LIB_DIR} -C link-arg=-lpython${PYTHON_LDVERSION}" >> $GITHUB_ENV
           df -h
           free -h
 
@@ -59,13 +67,13 @@ jobs:
 
       - name: Build binary for CLI tests
         run: |
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd ${PYTHON_LINK_FLAGS}"
           CARGO_BUILD_JOBS=1 cargo build --bins --no-default-features
           echo "CARGO_BIN_EXE_kmerseek=$(pwd)/target/debug/kmerseek" >> $GITHUB_ENV
 
       - name: Generate Rust coverage report
         run: |
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
+          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd ${PYTHON_LINK_FLAGS}"
           CARGO_BUILD_JOBS=1 cargo tarpaulin \
             --out Xml --output-dir coverage/ \
             --timeout 120 --skip-clean --no-default-features
