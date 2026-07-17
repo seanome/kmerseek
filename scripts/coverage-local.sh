@@ -30,6 +30,7 @@ fi
 docker run --rm -it \
   -v "${REPO_ROOT}:/work" \
   -v kmerseek-cargo-registry:/usr/local/cargo/registry \
+  -v kmerseek-tarpaulin-bin:/opt/tarpaulin \
   -v kmerseek-linux-target:/work/target-linux \
   -e CARGO_TARGET_DIR=/work/target-linux \
   -e CARGO_TERM_COLOR=always \
