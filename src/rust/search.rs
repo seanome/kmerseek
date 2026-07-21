@@ -1191,6 +1191,70 @@ mod tests {
     use std::path::Path;
     use tempfile::TempDir;
 
+    #[test]
+    fn test_search_result_csv_from_result_and_region() {
+        use crate::types::MolType;
+
+        let region = MatchedRegion {
+            query_name: "q".to_string(),
+            query_start: 3,
+            query_end: 9,
+            query_subseq: "QSUBSEQ".to_string(),
+            target_name: "t".to_string(),
+            target_start: 11,
+            target_end: 17,
+            target_subseq: "TSUBSEQ".to_string(),
+            moltype_seq: "hphph".to_string(),
+            moltype: MolType::new("hp").unwrap(),
+            length: 6,
+        };
+
+        let result = SearchResult {
+            query_name: "query1".to_string(),
+            query_md5: "qmd5".to_string(),
+            target_name: "target1".to_string(),
+            target_md5: "tmd5".to_string(),
+            containment: 0.5,
+            n_intersecting_hashes: 7,
+            ksize: 5,
+            scaled: 1,
+            moltype: "hp".to_string(),
+            jaccard: 0.25,
+            max_containment: 0.6,
+            average_abund: 2.0,
+            median_abund: 2.0,
+            std_abund: 0.5,
+            containment_target_in_query: 0.4,
+            f_weighted_target_in_query: 0.3,
+            query_tfidf: 1.5,
+            mean_matched_kmer_freq: 0.1,
+            sum_matched_kmer_freq: 0.7,
+            expected_shared_kmers: 3.0,
+            enrichment: 2.33,
+            joint_kmer_freq: 0.05,
+            poisson_pvalue: 0.01,
+            matched_regions: vec![],
+        };
+
+        let row = SearchResultCsv::from_result_and_region(&result, &region);
+
+        // Fields carried from the SearchResult.
+        assert_eq!(row.query_name, "query1");
+        assert_eq!(row.target_md5, "tmd5");
+        assert_eq!(row.n_intersecting_hashes, 7);
+        assert_eq!(row.ksize, 5);
+        assert_eq!(row.containment, 0.5);
+        assert_eq!(row.poisson_pvalue, 0.01);
+        // Fields carried from the MatchedRegion.
+        assert_eq!(row.query_start, 3);
+        assert_eq!(row.query_end, 9);
+        assert_eq!(row.query_subseq, "QSUBSEQ");
+        assert_eq!(row.target_start, 11);
+        assert_eq!(row.target_subseq, "TSUBSEQ");
+        assert_eq!(row.moltype_seq, "hphph");
+        assert_eq!(row.region_length, 6);
+    }
+
     #[allow(dead_code)] // Test data structure - fields may be used for comparison
     struct ExpectedSimilarity {
         ksize: usize,

@@ -144,7 +144,22 @@ pub mod functional {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::sketch::ProteinSketch;
+    use crate::types::Position;
     use std::collections::HashMap;
+
+    // 40-residue sequence: the 10-residue motif "MKTAYIAKQR" repeated 4 times.
+    // At protein k=5, scaled=1 it yields 36 k-mer occurrences over 10 distinct hashes,
+    // each hash recurring across the 4 copies.
+    const REPEAT_SEQ: &str = "MKTAYIAKQRMKTAYIAKQRMKTAYIAKQRMKTAYIAKQR";
+    const REP_DISTINCT: usize = 10;
+    const REP_TOTAL_OCC: usize = 36;
+    // Hash of the first k-mer "MKTAY" (murmur64, seed 42, protein encoding).
+    const REP_HASH_AT_0: u64 = 8299134706416968033;
+
+    fn sketch() -> ProteinSketch {
+        ProteinSketch::from_protein_sequence("p", REPEAT_SEQ, 5, 1, "protein").unwrap()
+    }
 
     #[test]
     fn test_kmer_positions_iterator() {
@@ -157,5 +172,41 @@ mod tests {
     fn test_functional_utilities() {
         let empty_map: HashMap<usize, Vec<HashValue>> = HashMap::new();
         assert!(empty_map.is_empty());
+    }
+
+    #[test]
+    fn test_protein_sketch_ext_iterators() {
+        let s = sketch();
+        assert_eq!(s.kmer_positions().len(), REP_DISTINCT);
+
+        assert_eq!(s.kmer_positions_iter().len(), REP_DISTINCT);
+        assert_eq!(s.kmer_hashes().count(), REP_DISTINCT);
+        assert_eq!(s.kmer_counts().count(), REP_DISTINCT);
+        assert_eq!(s.total_kmer_occurrences(), REP_TOTAL_OCC);
+
+        // Exactly the "MKTAY" hash starts at position 0.
+        let at_zero: Vec<HashValue> = s.kmers_at_position(Position(0)).collect();
+        assert_eq!(at_zero, vec![HashValue(REP_HASH_AT_0)]);
+    }
+
+    #[test]
+    fn test_functional_grouping_and_density() {
+        use functional::*;
+        let s = sketch();
+
+        let groups = group_kmers_by_count(&s);
+        let grouped_hashes: usize = groups.values().map(|v| v.len()).sum();
+        assert_eq!(grouped_hashes, REP_DISTINCT);
+
+        // Every distinct k-mer recurs across the 4 motif copies, so all 10 are multi-position.
+        assert_eq!(find_multi_position_kmers(&s).len(), REP_DISTINCT);
+
+        // Density = 36 occurrences / 40 residues = 0.9.
+        assert_eq!(calculate_kmer_density(&s, REPEAT_SEQ.len()), 0.9);
+        assert_eq!(calculate_kmer_density(&s, 0), 0.0);
+
+        // Distinct k-mers never share a start position, so no overlaps are found,
+        // but the call still exercises the overlap-detection loop.
+        assert_eq!(find_overlapping_kmers(&s).len(), 0);
     }
 }
