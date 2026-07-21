@@ -264,3 +264,109 @@ impl From<SigStore> for StableSignature {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::sketch::ProteinSketch;
+
+    const SEQ: &str =
+        "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR";
+
+    fn make_stable() -> StableSignature {
+        let mut sig = ProteinSketch::from_protein_sequence("test_seq", SEQ, 5, 1, "protein")
+            .unwrap()
+            .into_signature();
+        sig.location = "loc.fasta".to_string();
+        sig.md5sum = "abc123".to_string();
+        sig
+    }
+
+    fn small_signature() -> SmallSignature {
+        let minhash = ProteinSketch::from_protein_sequence("small_seq", SEQ, 5, 1, "protein")
+            .unwrap()
+            .signature()
+            .get_minhash()
+            .clone();
+        SmallSignature {
+            location: "small.fasta".to_string(),
+            name: "small_seq".to_string(),
+            md5sum: "small-md5".to_string(),
+            minhash,
+        }
+    }
+
+    /// Exercises the SignatureAccess trait through a generic bound so that the
+    /// concrete impl for the passed type (owned, &ref, or SmallSignature) is used.
+    fn access_all<T: SignatureAccess>(s: T) -> (String, String, String, usize) {
+        (
+            s.get_name().to_string(),
+            s.get_location().to_string(),
+            s.get_md5sum().to_string(),
+            s.get_minhash().mins().len(),
+        )
+    }
+
+    // SEQ has 78 residues; with protein k=5, scaled=1 all 74 k-mers hash distinctly.
+    const SEQ_MINS: usize = 74;
+
+    #[test]
+    fn test_access_owned_stable_signature() {
+        let (name, loc, md5, n_mins) = access_all(make_stable());
+        assert_eq!(name, "test_seq");
+        assert_eq!(loc, "loc.fasta");
+        assert_eq!(md5, "abc123");
+        assert_eq!(n_mins, SEQ_MINS);
+    }
+
+    #[test]
+    fn test_access_borrowed_stable_signature() {
+        // T = &StableSignature selects the `impl SignatureAccess for &StableSignature`.
+        let sig = make_stable();
+        let (name, loc, md5, n_mins) = access_all(&sig);
+        assert_eq!(name, "test_seq");
+        assert_eq!(loc, "loc.fasta");
+        assert_eq!(md5, "abc123");
+        assert_eq!(n_mins, SEQ_MINS);
+    }
+
+    #[test]
+    fn test_access_small_signature() {
+        let (name, loc, md5, n_mins) = access_all(small_signature());
+        assert_eq!(name, "small_seq");
+        assert_eq!(loc, "small.fasta");
+        assert_eq!(md5, "small-md5");
+        assert_eq!(n_mins, SEQ_MINS);
+    }
+
+    #[test]
+    fn test_from_small_signature() {
+        let small = small_signature();
+        let expected_mins = small.minhash.mins();
+        let stable: StableSignature = small.into();
+        assert_eq!(stable.get_name(), "small_seq");
+        assert_eq!(stable.get_location(), "small.fasta");
+        assert_eq!(stable.moltype, "protein");
+        // From uses the minhash ksize (protein k=5 * PROTEIN_TO_MINHASH_RATIO=3).
+        assert_eq!(stable.ksize, 15);
+        assert_eq!(stable.minhash.mins().len(), SEQ_MINS);
+        assert_eq!(stable.minhash.mins(), expected_mins);
+    }
+
+    #[test]
+    fn test_serde_json_roundtrip_preserves_fields() {
+        let sig = make_stable();
+        let json = serde_json::to_string(&sig).unwrap();
+        let back: StableSignature = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(back.get_name(), sig.get_name());
+        assert_eq!(back.get_location(), sig.get_location());
+        assert_eq!(back.get_md5sum(), sig.get_md5sum());
+        assert_eq!(back.moltype, sig.moltype);
+        assert_eq!(back.minhash.ksize(), sig.minhash.ksize());
+        assert_eq!(back.minhash.scaled(), sig.minhash.scaled());
+        assert_eq!(back.minhash.mins(), sig.minhash.mins());
+        // from_protein_sequence tracks abundance, so this exercises the abunds branch.
+        assert_eq!(back.minhash.abunds(), sig.minhash.abunds());
+    }
+}
