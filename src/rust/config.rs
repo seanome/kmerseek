@@ -228,7 +228,7 @@ mod tests {
         assert_eq!(config.ksize.get(), 5);
         assert_eq!(config.scaled.get(), 5);
         assert_eq!(config.moltype.get(), "protein");
-        assert_eq!(config.store_raw_sequences, false);
+        assert!(!config.store_raw_sequences);
     }
 
     #[test]
@@ -274,7 +274,7 @@ mod tests {
             .build()
             .unwrap();
 
-        assert_eq!(config.store_raw_sequences, true);
+        assert!(config.store_raw_sequences);
         assert_eq!(config.performance.num_threads, Some(4));
         assert_eq!(config.performance.batch_size, 500);
     }

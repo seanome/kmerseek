@@ -126,11 +126,10 @@ impl MetricsCollector {
             signatures_processed,
             kmers_processed: self.kmers_processed.load(Ordering::Relaxed),
             total_processing_time: total_time,
-            avg_time_per_signature: if signatures_processed > 0 {
-                Duration::from_nanos(total_time.as_nanos() as u64 / signatures_processed)
-            } else {
-                Duration::ZERO
-            },
+            avg_time_per_signature: (total_time.as_nanos() as u64)
+                .checked_div(signatures_processed)
+                .map(Duration::from_nanos)
+                .unwrap_or(Duration::ZERO),
             memory_usage_bytes: 0, // Would need to implement memory tracking
             database_operations: self.database_operations.load(Ordering::Relaxed),
             cache_hits: self.cache_hits.load(Ordering::Relaxed),

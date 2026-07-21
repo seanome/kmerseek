@@ -1,47 +1,36 @@
-use std::collections::HashMap;
+use std::ops::Deref;
 
-use serde::{Deserialize, Serialize};
-
-/// Represents information about a k-mer occurrence
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct KmerInfo {
-    pub ksize: usize,
-    pub hashval: u64,
-    pub encoded_kmer: String,
-    pub original_kmer_to_position: HashMap<String, Vec<usize>>,
+/// An immutable k-mer string with pre-allocated capacity
+///
+/// WHY: K-mers have fixed length and are never modified after creation.
+/// This struct ensures capacity is always set correctly and provides
+/// type safety to distinguish k-mers from regular strings.
+#[derive(Debug, Clone)]
+pub struct Kmer {
+    inner: String,
 }
 
-impl KmerInfo {
-    /// Creates a new KmerInfo with pre-allocated strings for k-mers
-    pub fn new(hashval: u64, ksize: usize) -> Self {
-        Self {
-            ksize,
-            hashval,
-            encoded_kmer: String::with_capacity(ksize),
-            original_kmer_to_position: HashMap::with_capacity(ksize),
-        }
+impl Kmer {
+    pub fn new(subseq: &str) -> Self {
+        let mut s = String::with_capacity(subseq.len());
+        s.push_str(subseq);
+        Self { inner: s }
     }
 
-    /// Adds a k-mer position with a pre-allocated string
-    pub fn add_kmer_position(&mut self, kmer: &str, position: usize) {
-        self.original_kmer_to_position
-            .entry(kmer.to_string())
-            .or_insert_with(|| Vec::with_capacity(1))
-            .push(position);
+    pub fn from_sequence(sequence: &str, start: usize, ksize: usize) -> Self {
+        Self::new(&sequence[start..start + ksize])
     }
+}
 
-    /// Get the number of unique original k-mers
-    pub fn unique_kmer_count(&self) -> usize {
-        self.original_kmer_to_position.len()
+impl Deref for Kmer {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.inner
     }
+}
 
-    /// Get the total number of k-mer occurrences
-    pub fn total_occurrences(&self) -> usize {
-        self.original_kmer_to_position.values().map(|positions| positions.len()).sum()
-    }
-
-    /// Check if this k-mer appears at a specific position
-    pub fn has_position(&self, position: usize) -> bool {
-        self.original_kmer_to_position.values().any(|positions| positions.contains(&position))
+impl AsRef<str> for Kmer {
+    fn as_ref(&self) -> &str {
+        &self.inner
     }
 }

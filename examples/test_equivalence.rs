@@ -43,7 +43,7 @@ fn main() -> anyhow::Result<()> {
 
     // Create a third index with different parameters
     println!("\nCreating a third index with different parameters...");
-    let index3 = ProteomeIndex::new(&temp_dir.path().join("index3.db"), 10, 1, "protein", false)?;
+    let index3 = ProteomeIndex::new(temp_dir.path().join("index3.db"), 10, 1, "protein", false)?;
     let sig3 = index3.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test_protein")?;
     index3.store_signatures(vec![sig3])?;
 
@@ -54,7 +54,7 @@ fn main() -> anyhow::Result<()> {
 
     // Test with different sequences
     println!("\nCreating a fourth index with different sequences...");
-    let index4 = ProteomeIndex::new(&temp_dir.path().join("index4.db"), 5, 1, "protein", false)?;
+    let index4 = ProteomeIndex::new(temp_dir.path().join("index4.db"), 5, 1, "protein", false)?;
     let sig4 = index4.create_protein_signature("DIFFERENTSEQUENCE", "different")?;
     index4.store_signatures(vec![sig4])?;
 

@@ -153,13 +153,13 @@ mod tests {
 
         // Test ambiguous codes (should return one of their possible resolutions)
         let b_resolution = aa.resolve_ambiguity('B');
-        assert!(vec!['D', 'N'].contains(&b_resolution.unwrap()));
+        assert!(['D', 'N'].contains(&b_resolution.unwrap()));
 
         let z_resolution = aa.resolve_ambiguity('Z');
-        assert!(vec!['E', 'Q'].contains(&z_resolution.unwrap()));
+        assert!(['E', 'Q'].contains(&z_resolution.unwrap()));
 
         let j_resolution = aa.resolve_ambiguity('J');
-        assert!(vec!['I', 'L'].contains(&j_resolution.unwrap()));
+        assert!(['I', 'L'].contains(&j_resolution.unwrap()));
     }
 
     #[test]
@@ -207,7 +207,7 @@ mod tests {
         assert!(resolved.as_ref().ends_with("*"));
         // The B should be resolved to either D or N
         let fifth_char = resolved.as_ref().chars().nth(5).unwrap();
-        assert!(vec!['D', 'N'].contains(&fifth_char));
+        assert!(['D', 'N'].contains(&fifth_char));
     }
 
     #[test]
@@ -228,9 +228,9 @@ mod tests {
         let seventh_char = resolved.as_ref().chars().nth(6).unwrap();
         let eighth_char = resolved.as_ref().chars().nth(7).unwrap();
         let ninth_char = resolved.as_ref().chars().nth(8).unwrap();
-        assert!(vec!['D', 'N'].contains(&seventh_char));
-        assert!(vec!['E', 'Q'].contains(&eighth_char));
-        assert!(vec!['I', 'L'].contains(&ninth_char));
+        assert!(['D', 'N'].contains(&seventh_char));
+        assert!(['E', 'Q'].contains(&eighth_char));
+        assert!(['I', 'L'].contains(&ninth_char));
     }
 
     #[test]

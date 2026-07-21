@@ -1,4 +1,6 @@
 /target
+# Linux target dir used by scripts/coverage-local.sh (Docker)
+/target-linux
 
 
 # IntelliJ/PyCharm files
@@ -46,6 +48,8 @@ pip-log.txt
 pip-delete-this-directory.txt
 
 # Unit test / coverage reports
+*.profraw
+/coverage/
 htmlcov/
 .tox/
 .nox/
@@ -179,9 +183,12 @@ cython_debug/
 # PyPI configuration file
 .pypirc
 
-
+# Mac OS metadata files
+.DS_Store
 
 ### Kmerseek specific stuff
+
+
 # Ignore signature files created by tests
 tests/testdata/fasta/*sig.zip*
 *.manysketch.csv
@@ -315,3 +322,63 @@ http-client.private.env.json
 # Apifox Helper cache
 .idea/.cache/.Apifox_Helper
 .idea/ApifoxUploaderProjectSetting.xml
+
+# -- Nextflow -- #
+
+.idea/**
+.gradle
+.*.log*
+.cache/*
+.vagrant/*
+.cache/*
+.nextflow*
+.node-nextflow*
+.devcontainer
+.vscode/*
+.lineage/
+*/*/bin/*
+**/build/**
+build/**
+modules/**/build/
+modules/**/*.iml
+modules/nextflow/work/
+**/out/*
+tmp/*
+work/*
+nextflow.eml
+nextflow.iml
+Vagrantfile
+resources/*
+test/*
+tools/*
+tests_other
+other
+docs/_build/
+./*.txt
+errors/
+misc/
+cloud/my-*
+docker-test
+docker/dist
+docker/nextflow
+temp
+.dockerignore
+.launch.classpath
+plugins-prod
+sandbox
+wave-tests
+x/*
+nextflow_runs/work/*
+
+# -- Custom -- #
+data/
+results/
+*/work/*
+
+*results/
+*.trace.txt
+*.report.html
+*.timeline.html
+
+
+kmerseek-rust

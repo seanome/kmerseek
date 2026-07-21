@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::IndexResult;
-use kmerseek::ProteomeIndex;
+use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
 
 #[derive(Parser)]
@@ -39,14 +39,54 @@ enum Commands {
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
         progress_interval: u32,
+    },
+    /// Search query sequences against a protein database
+    Search {
+        /// Query FASTA file path
+        #[arg(short, long)]
+        query: PathBuf,
 
-        /// Whether to store raw protein sequences (increases storage size)
+        /// Target database path
+        #[arg(short, long)]
+        target: PathBuf,
+
+        /// Output CSV file path (optional - will output to stdout if not provided)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// K-mer size (must match the database; if not provided, will use database value)
+        #[arg(short, long)]
+        ksize: Option<u32>,
+
+        /// Scaled factor (must match the database; if not provided, will use database value)
+        #[arg(short, long)]
+        scaled: Option<u32>,
+
+        /// Protein encoding method (must match the database)
+        #[arg(short, long, default_value = "protein")]
+        encoding: ProteinEncoding,
+
+        /// Minimum containment threshold (0.0 = show all matches)
+        #[arg(long, default_value = "0.0")]
+        threshold: f64,
+
+        /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
-        store_raw_sequences: bool,
+        verbose: bool,
+
+        /// Whether to treat query as a pre-indexed database instead of FASTA file
+        #[arg(long, default_value = "false")]
+        query_is_index: bool,
+
+        /// Number of queries to process per parallel batch.
+        /// Larger values use more memory but improve CPU utilization on many-core machines.
+        /// Set to 1 to process queries one at a time (maximum streaming, minimum memory).
+        #[arg(long, default_value = "500")]
+        batch_size: usize,
     },
 }
 
-#[derive(ValueEnum, Clone, Copy, Debug)]
+#[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum ProteinEncoding {
     /// Raw protein encoding (20 amino acids)
     Protein,
@@ -69,21 +109,15 @@ impl From<ProteinEncoding> for &'static str {
 fn main() -> IndexResult<()> {
     let cli = Cli::parse();
 
+    eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
+
     match cli.command {
-        Commands::Index {
-            input,
-            output,
-            ksize,
-            scaled,
-            encoding,
-            progress_interval,
-            store_raw_sequences,
-        } => {
-            println!("Indexing FASTA file: {}", input.display());
+        Commands::Index { input, output, ksize, scaled, encoding, progress_interval } => {
+            eprintln!("Indexing FASTA file: {}", input.display());
 
             // Determine output path
             let output_path = if let Some(output) = output {
-                println!("Output database: {}", output.display());
+                eprintln!("Output database: {}", output.display());
                 output
             } else {
                 // Auto-generate filename based on input file
@@ -96,7 +130,7 @@ fn main() -> IndexResult<()> {
                     ksize,
                     scaled,
                     encoding.into(),
-                    store_raw_sequences,
+                    true, // Always store raw sequences
                 )?;
 
                 let generated_filename = temp_index.generate_filename(base_name);
@@ -105,16 +139,15 @@ fn main() -> IndexResult<()> {
                     .unwrap_or_else(|| std::path::Path::new("."))
                     .join(generated_filename);
 
-                println!("Auto-generated output database: {}", output_path.display());
+                eprintln!("Auto-generated output database: {}", output_path.display());
                 output_path
             };
 
-            println!("\n-------\nK-mer size: {}", ksize);
-            println!("Scaled: {}", scaled);
-            println!("Encoding: {:?}", encoding);
-            println!("Progress interval: {}", progress_interval);
-            println!("Store raw sequences: {}", store_raw_sequences);
-            println!("-------\n");
+            eprintln!("\n-------\nK-mer size: {}", ksize);
+            eprintln!("Scaled: {}", scaled);
+            eprintln!("Encoding: {:?}", encoding);
+            eprintln!("Progress interval: {}", progress_interval);
+            eprintln!("-------\n");
 
             // Create the index
             let index = ProteomeIndex::new(
@@ -122,21 +155,450 @@ fn main() -> IndexResult<()> {
                 ksize,
                 scaled,
                 encoding.into(),
-                store_raw_sequences,
+                true, // Always store raw sequences
             )?;
 
             // Process the FASTA file
-            println!("Processing FASTA file...");
+            eprintln!("Processing FASTA file...");
             index.process_fasta(&input, progress_interval, 1000)?;
 
             // Enable compactions for better read performance
-            println!("Optimizing database for read operations...");
+            eprintln!("Optimizing database for read operations...");
             index.enable_compactions()?;
 
-            println!("Indexing completed successfully!");
-            println!("Database saved to: {}", output_path.display());
+            // Save the index state for loading
+            index.save_state()?;
+
+            eprintln!("Indexing completed successfully!");
+            eprintln!("Database saved to: {}", output_path.display());
+        }
+        Commands::Search {
+            query,
+            target,
+            output,
+            ksize,
+            scaled,
+            encoding,
+            threshold,
+            verbose,
+            query_is_index,
+            batch_size,
+        } => {
+            eprintln!("Searching query sequences against target database");
+            eprintln!("Query: {}", query.display());
+            eprintln!("Target: {}", target.display());
+
+            // Autodetect parameters from the target database
+            eprintln!("Autodetecting parameters from target database...");
+            let (detected_ksize, detected_scaled, detected_moltype) =
+                ProteomeIndex::get_index_parameters(&target)?;
+
+            // Validate and assign all parameters
+            // WHY: This method centralizes parameter validation logic, making the main search
+            // command handler much easier to read. It validates that user-provided parameters
+            // match the database, or uses detected values if not provided. This is idiomatic
+            // Rust - we extract complex logic into well-named methods for clarity.
+            let (final_ksize, final_scaled, final_encoding) = validate_and_assign_parameters(
+                ksize,
+                scaled,
+                encoding,
+                detected_ksize,
+                detected_scaled,
+                &detected_moltype,
+            )?;
+
+            eprintln!("\n---\nUsing parameters:");
+            eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
+            eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
+            eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            eprintln!("  Threshold: {}", threshold);
+            eprintln!("  Verbose output: {}", verbose);
+            eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
+
+            // Check if query and target are the same database (all-vs-all search)
+            // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
+            // When doing an all-vs-all search (query == target), we need to reuse the same database
+            // instance instead of opening it twice. This prevents "No locks available" errors.
+            let is_all_vs_all = if query_is_index {
+                // Compare paths using canonicalize to handle symlinks and relative paths
+                let query_path = query.canonicalize().ok().unwrap_or_else(|| query.clone());
+                let target_path = target.canonicalize().ok().unwrap_or_else(|| target.clone());
+                query_path == target_path
+            } else {
+                false
+            };
+
+            // Load the target database
+            eprintln!("Loading target database...");
+            let mut searcher = ProteinSearcher::load(&target)?;
+
+            // Perform search - use optimized all-vs-all method if query == target
+            let search_results = if is_all_vs_all {
+                // Use optimized all-vs-all search that avoids cloning signatures
+                // WHY: When query == target, we can use a specialized method that works directly
+                // with references from the index, avoiding expensive clones. This is much more
+                // memory-efficient for large databases and automatically skips self-matches.
+                eprintln!(
+                    "Detected all-vs-all search (query == target), using optimized search method..."
+                );
+                eprintln!("Skipping self-matches (comparing MD5 sums)...");
+                searcher.search_all_vs_all()?
+            } else if query_is_index {
+                // Load pre-indexed query database
+                eprintln!("Loading pre-indexed query database...");
+                let query_index = ProteomeIndex::load(&query)?;
+                let query_signatures: Vec<_> = query_index
+                    .get_signatures()
+                    .iter()
+                    .map(|entry| entry.value().clone())
+                    .collect();
+
+                if query_signatures.is_empty() {
+                    eprintln!("No query signatures found!");
+                    return Ok(());
+                }
+
+                eprintln!("Found {} query signatures", query_signatures.len());
+                eprintln!("Performing comprehensive search...");
+                searcher.search(&query_signatures)?
+            } else {
+                // Stream queries from FASTA, writing CSV results as we go
+                eprintln!("Streaming query sequences from FASTA...");
+                use kmerseek::search::SearchResultCsv;
+                use kmerseek::sketch::ProteinSketch;
+                use needletail::parse_fastx_file;
+
+                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq.
+                eprintln!("First pass: scanning query proteome for k-mer frequencies...");
+                {
+                    use std::collections::HashMap;
+                    let mut qfreqs: HashMap<u64, usize> = HashMap::new();
+                    let mut total_queries: usize = 0;
+                    let mut freq_reader = parse_fastx_file(&query)
+                        .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
+                    while let Some(record) = freq_reader.next() {
+                        let record =
+                            record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
+                        let sequence = std::str::from_utf8(&record.seq())
+                            .map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))?
+                            .to_uppercase();
+                        let name = std::str::from_utf8(record.id())
+                            .map_err(|e| anyhow::anyhow!("Invalid UTF-8: {}", e))?;
+                        let mut sig = ProteinSketch::new(
+                            name,
+                            final_ksize,
+                            final_scaled,
+                            final_encoding.into(),
+                        )?;
+                        sig.add_protein(&sequence, true)?;
+                        for min in sig.signature().minhash.mins() {
+                            *qfreqs.entry(min).or_insert(0) += 1;
+                        }
+                        total_queries += 1;
+                    }
+                    eprintln!(
+                        "First pass complete: {} query sequences, {} unique k-mers",
+                        total_queries,
+                        qfreqs.len()
+                    );
+                    searcher.set_query_frequencies(qfreqs, total_queries);
+                }
+
+                let mut reader = parse_fastx_file(&query)
+                    .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
+
+                // Create CSV writer up front so we stream rows as they're found
+                let mut csv_writer: Box<dyn std::io::Write> = if let Some(ref output_path) = output
+                {
+                    eprintln!("Streaming results to: {}", output_path.display());
+                    Box::new(std::io::BufWriter::new(std::fs::File::create(output_path)?))
+                } else {
+                    Box::new(std::io::BufWriter::new(std::io::stdout()))
+                };
+                let mut writer = csv::Writer::from_writer(&mut csv_writer);
+
+                let mut query_count = 0u64;
+                let mut match_count = 0u64;
+                let mut row_count = 0u64;
+
+                let progress = indicatif::ProgressBar::new_spinner();
+                progress.set_style(
+                    indicatif::ProgressStyle::with_template(
+                        "{spinner:.green} [{elapsed_precise}] {msg}",
+                    )
+                    .unwrap()
+                    .tick_chars("⠁⠂⠄⡀⢀⠠⠐⠈ "),
+                );
+                progress.enable_steady_tick(std::time::Duration::from_millis(250));
+
+                // Process queries in parallel batches: `batch_size` queries searched in parallel
+                // (par_iter), then results written to CSV sequentially.
+                // Larger batches = better CPU utilization; smaller = lower peak memory.
+                use rayon::prelude::*;
+                let mut batch: Vec<ProteinSketch> = Vec::with_capacity(batch_size);
+
+                // Helper closure: process one batch and write results to CSV
+                let process_batch = |batch: &[ProteinSketch],
+                                     writer: &mut csv::Writer<&mut Box<dyn std::io::Write>>,
+                                     match_count: &mut u64,
+                                     row_count: &mut u64|
+                 -> anyhow::Result<()> {
+                    // Search all queries in this batch in parallel
+                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
+                        batch.par_iter().map(|q| searcher.search_one(q)).collect();
+
+                    // Write results sequentially (preserves per-query ordering within batch)
+                    for results in &batch_results {
+                        for result in results {
+                            if result.containment >= threshold {
+                                *match_count += 1;
+                                for region in &result.matched_regions {
+                                    let csv_row =
+                                        SearchResultCsv::from_result_and_region(result, region);
+                                    writer.serialize(&csv_row)?;
+                                    *row_count += 1;
+                                }
+                            }
+                        }
+                    }
+                    writer.flush()?;
+                    Ok(())
+                };
+
+                while let Some(record) = reader.next() {
+                    let record = record.map_err(|e| anyhow::anyhow!("FASTA parse error: {}", e))?;
+                    let sequence = std::str::from_utf8(&record.seq())
+                        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in sequence: {}", e))?
+                        .to_uppercase();
+                    let name = std::str::from_utf8(record.id())
+                        .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
+
+                    let mut query_sig =
+                        ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
+                    query_sig.add_protein(&sequence, true)?;
+                    batch.push(query_sig);
+
+                    if batch.len() >= batch_size {
+                        process_batch(&batch, &mut writer, &mut match_count, &mut row_count)?;
+                        query_count += batch.len() as u64;
+                        batch.clear();
+                        progress.set_message(format!(
+                            "{} queries | {} matches | {} rows written | {:.1} queries/sec",
+                            query_count,
+                            match_count,
+                            row_count,
+                            query_count as f64 / progress.elapsed().as_secs_f64(),
+                        ));
+                    }
+                }
+
+                // Process final partial batch
+                if !batch.is_empty() {
+                    process_batch(&batch, &mut writer, &mut match_count, &mut row_count)?;
+                    query_count += batch.len() as u64;
+                }
+
+                writer.flush()?;
+                drop(writer);
+                drop(csv_writer);
+
+                progress.finish_with_message(format!(
+                    "Done! {} queries | {} matches | {} rows | {:.1} queries/sec",
+                    query_count,
+                    match_count,
+                    row_count,
+                    query_count as f64 / progress.elapsed().as_secs_f64(),
+                ));
+
+                eprintln!("\n=== Search Summary ===");
+                eprintln!("Total queries: {}", query_count);
+                eprintln!("Total matches: {}", match_count);
+                eprintln!("Total CSV rows: {}", row_count);
+                return Ok(());
+            };
+
+            // Filter results by threshold (for query-is-index and all-vs-all paths)
+            let filtered_results: Vec<_> = search_results
+                .into_iter()
+                .filter(|result| result.containment >= threshold)
+                .collect();
+
+            eprintln!("Found {} matches above threshold {}", filtered_results.len(), threshold);
+
+            use kmerseek::search::SearchResultCsv;
+            if let Some(output_path) = output {
+                eprintln!("Writing results to: {}", output_path.display());
+                let mut writer = csv::Writer::from_path(output_path)?;
+
+                for result in &filtered_results {
+                    for region in &result.matched_regions {
+                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                        writer.serialize(&csv_row)?;
+                    }
+                }
+
+                writer.flush()?;
+            } else {
+                let mut writer = csv::Writer::from_writer(std::io::stdout());
+
+                for result in &filtered_results {
+                    for region in &result.matched_regions {
+                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                        writer.serialize(&csv_row)?;
+                    }
+                }
+
+                writer.flush()?;
+            }
+
+            eprintln!("\n=== Search Summary ===");
+            eprintln!("Total matches found: {}", filtered_results.len());
+            if !filtered_results.is_empty() {
+                let avg_containment: f64 =
+                    filtered_results.iter().map(|r| r.containment).sum::<f64>()
+                        / filtered_results.len() as f64;
+                let avg_tfidf: f64 = filtered_results.iter().map(|r| r.query_tfidf).sum::<f64>()
+                    / filtered_results.len() as f64;
+                let avg_database_kmer_freq: f64 =
+                    filtered_results.iter().map(|r| r.mean_matched_kmer_freq).sum::<f64>()
+                        / filtered_results.len() as f64;
+
+                eprintln!("Average containment: {:.6}", avg_containment);
+                eprintln!("Average TF-IDF: {:.6}", avg_tfidf);
+                eprintln!("Average database k-mer frequency: {:.6}", avg_database_kmer_freq);
+            }
         }
     }
 
     Ok(())
+}
+
+fn assign_encoding(
+    encoding: ProteinEncoding,
+    detected_moltype: &str,
+) -> kmerseek::errors::IndexResult<ProteinEncoding> {
+    // Convert detected moltype string to enum
+    // WHY: We need to compare the user-provided encoding with the detected encoding.
+    // The detected encoding comes from the database as a string, so we convert it to
+    // the enum type for comparison.
+    let detected_encoding = match detected_moltype {
+        "protein" => ProteinEncoding::Protein,
+        "dayhoff" => ProteinEncoding::Dayhoff,
+        "hp" => ProteinEncoding::Hp,
+        _ => {
+            return Err(kmerseek::errors::IndexError::ValidationError {
+                message: format!(
+                    "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp",
+                    detected_moltype
+                ),
+            });
+        }
+    };
+
+    // Validate encoding: if user provided encoding doesn't match database, error
+    // WHY: The database encoding is authoritative. If the user explicitly provides
+    // an encoding that doesn't match, that's an error. This prevents silent failures
+    // where searches would produce incorrect results. However, since encoding has
+    // a default value, we can't distinguish "user specified" from "using default",
+    // so we only error if it's clearly wrong (not the default and doesn't match).
+    // In practice, users should not specify --encoding and let it autodetect.
+    if encoding != detected_encoding && encoding != ProteinEncoding::Protein {
+        // User explicitly provided a non-default encoding that doesn't match
+        return Err(kmerseek::errors::IndexError::ValidationError {
+            message: format!(
+                "Encoding mismatch: database has encoding={}, but you specified --encoding={:?}.\n\
+                The encoding must match the database. Remove --encoding to use the database value ({:?}).",
+                detected_moltype, encoding, detected_encoding
+            ),
+        });
+    }
+
+    Ok(detected_encoding)
+}
+
+/// Validate and assign search parameters from user input and database detection
+///
+/// WHY: This function centralizes the parameter validation logic, making the main search
+/// command handler easier to read. It validates that user-provided parameters match the
+/// database (which is authoritative), or uses detected values if not provided. This follows
+/// idiomatic Rust patterns: extract complex logic into well-named functions, validate
+/// preconditions, and provide clear error messages.
+///
+/// # Arguments
+/// * `user_ksize` - User-provided ksize (None if not specified)
+/// * `user_scaled` - User-provided scaled (None if not specified)
+/// * `user_encoding` - User-provided encoding (may be default value)
+/// * `detected_ksize` - Ksize detected from database
+/// * `detected_scaled` - Scaled detected from database
+/// * `detected_moltype` - Moltype detected from database (as string)
+///
+/// # Returns
+/// Tuple of (final_ksize, final_scaled, final_encoding) or ValidationError if mismatch
+fn validate_and_assign_parameters(
+    user_ksize: Option<u32>,
+    user_scaled: Option<u32>,
+    user_encoding: ProteinEncoding,
+    detected_ksize: u32,
+    detected_scaled: u32,
+    detected_moltype: &str,
+) -> IndexResult<(u32, u32, ProteinEncoding)> {
+    // Validate and assign ksize: use detected if not provided, error if mismatch
+    // WHY: The database parameters are authoritative. If the user explicitly provides
+    // a ksize that doesn't match, that's an error (they're trying to search with wrong
+    // parameters). If they don't provide ksize, we use the detected value. This is
+    // idiomatic Rust - we validate preconditions and fail fast with clear error messages.
+    let final_ksize = match user_ksize {
+        Some(ksize) if ksize != detected_ksize => {
+            return Err(kmerseek::errors::IndexError::ValidationError {
+                message: format!(
+                    "K-mer size mismatch: database has ksize={}, but you specified --ksize={}.\n\
+                    The ksize must match the database. Remove --ksize to use the database value ({}).",
+                    detected_ksize, ksize, detected_ksize
+                ),
+            });
+        }
+        Some(ksize) => {
+            // User provided ksize and it matches - use it (though it's the same as detected)
+            ksize
+        }
+        None => {
+            // User didn't provide ksize - use detected value
+            eprintln!(
+                "Using detected ksize: {} (not specified, using database value)",
+                detected_ksize
+            );
+            detected_ksize
+        }
+    };
+
+    // Validate and assign scaled: use detected if not provided, error if mismatch
+    // WHY: Same logic as ksize - database parameters are authoritative.
+    let final_scaled = match user_scaled {
+        Some(scaled) if scaled != detected_scaled => {
+            return Err(kmerseek::errors::IndexError::ValidationError {
+                message: format!(
+                    "Scaled factor mismatch: database has scaled={}, but you specified --scaled={}.\n\
+                    The scaled factor must match the database. Remove --scaled to use the database value ({}).",
+                    detected_scaled, scaled, detected_scaled
+                ),
+            });
+        }
+        Some(scaled) => {
+            // User provided scaled and it matches - use it
+            scaled
+        }
+        None => {
+            // User didn't provide scaled - use detected value
+            eprintln!(
+                "Using detected scaled: {} (not specified, using database value)",
+                detected_scaled
+            );
+            detected_scaled
+        }
+    };
+
+    // Validate and assign encoding
+    let final_encoding = assign_encoding(user_encoding, detected_moltype)?;
+
+    Ok((final_ksize, final_scaled, final_encoding))
 }
