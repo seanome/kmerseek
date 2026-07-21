@@ -1786,6 +1786,7 @@ dependencies = [
  "rocksdb",
  "rstest",
  "serde",
+ "serde_json",
  "sourmash",
  "sourmash_plugin_branchwater",
  "statrs 0.17.1",
