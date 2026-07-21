@@ -21,7 +21,6 @@ use crate::encoding::{
 };
 use crate::errors::{IndexError, IndexResult};
 use crate::hp_alphabets::HpAlphabet;
-use crate::hp_alphabets::HpAlphabet;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
