@@ -108,3 +108,67 @@ pub fn weighted_fraction_target_in_query(
 
     f_weighted_target_in_query
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const EPS: f64 = 1e-9;
+
+    #[test]
+    fn test_ani_non_positive_containment() {
+        // Both the zero and negative branches return 0.0.
+        assert_eq!(ani(0.0, 100), 0.0);
+        assert_eq!(ani(-0.25, 100), 0.0);
+    }
+
+    #[test]
+    fn test_ani_clamps_and_computes_exact() {
+        // For containment in (0, 1] the raw value 1 - exp(-ln c) is <= 0, so it clamps to 0.0.
+        assert_eq!(ani(0.5, 100), 0.0); // raw = 1 - exp(ln 2) = -1.0, clamped
+        assert_eq!(ani(1.0, 100), 0.0); // raw = 1 - exp(0) = 0.0
+        // For containment > 1 the value lands in (0, 1): 1 - exp(-ln 2) = 0.5.
+        assert!((ani(2.0, 100) - 0.5).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_abundance_stats_empty_intersection_returns_defaults() {
+        let empty: HashSet<u64> = HashSet::new();
+        let out = abundance_stats(&empty, &[1, 2], &[3, 4], &[1, 2], &[5, 6]);
+        assert_eq!(out, (1.0, 1.0, 0.0));
+    }
+
+    #[test]
+    fn test_abundance_stats_odd_count() {
+        // Per-hash averaged abundances: 10->(2+4)/2=3, 20->(4+4)/2=4, 30->(6+4)/2=5.
+        let inter: HashSet<u64> = [10, 20, 30].into_iter().collect();
+        let (avg, med, sd) =
+            abundance_stats(&inter, &[10, 20, 30], &[2, 4, 6], &[30, 20, 10], &[4, 4, 4]);
+        assert!((avg - 4.0).abs() < EPS);
+        assert!((med - 4.0).abs() < EPS);
+        // variance of {3,4,5} = 2/3
+        assert!((sd - (2.0f64 / 3.0).sqrt()).abs() < EPS);
+    }
+
+    #[test]
+    fn test_abundance_stats_even_count_median_is_midpoint() {
+        // 10->(2+4)/2=3, 20->(4+8)/2=6; median = (3+6)/2 = 4.5.
+        let inter: HashSet<u64> = [10, 20].into_iter().collect();
+        let (avg, med, _sd) =
+            abundance_stats(&inter, &[10, 20], &[2, 4], &[10, 20], &[4, 8]);
+        assert!((avg - 4.5).abs() < EPS);
+        assert!((med - 4.5).abs() < EPS);
+    }
+
+    #[test]
+    fn test_weighted_fraction_target_in_query() {
+        // Both present, positive query weight: target/query = 4/6.
+        let f = weighted_fraction_target_in_query(Some(&[1, 2, 3]), Some(&[2, 2]));
+        assert!((f - 4.0 / 6.0).abs() < EPS);
+        // Zero query weight -> 0.0.
+        assert_eq!(weighted_fraction_target_in_query(Some(&[0, 0]), Some(&[2, 2])), 0.0);
+        // Missing abundances -> 1.0 (either side).
+        assert_eq!(weighted_fraction_target_in_query(None, Some(&[2, 2])), 1.0);
+        assert_eq!(weighted_fraction_target_in_query(Some(&[1, 2]), None), 1.0);
+    }
+}
