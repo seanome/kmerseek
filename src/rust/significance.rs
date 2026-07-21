@@ -127,7 +127,7 @@ mod tests {
         // For containment in (0, 1] the raw value 1 - exp(-ln c) is <= 0, so it clamps to 0.0.
         assert_eq!(ani(0.5, 100), 0.0); // raw = 1 - exp(ln 2) = -1.0, clamped
         assert_eq!(ani(1.0, 100), 0.0); // raw = 1 - exp(0) = 0.0
-        // For containment > 1 the value lands in (0, 1): 1 - exp(-ln 2) = 0.5.
+                                        // For containment > 1 the value lands in (0, 1): 1 - exp(-ln 2) = 0.5.
         assert!((ani(2.0, 100) - 0.5).abs() < 1e-12);
     }
 
@@ -154,8 +154,7 @@ mod tests {
     fn test_abundance_stats_even_count_median_is_midpoint() {
         // 10->(2+4)/2=3, 20->(4+8)/2=6; median = (3+6)/2 = 4.5.
         let inter: HashSet<u64> = [10, 20].into_iter().collect();
-        let (avg, med, _sd) =
-            abundance_stats(&inter, &[10, 20], &[2, 4], &[10, 20], &[4, 8]);
+        let (avg, med, _sd) = abundance_stats(&inter, &[10, 20], &[2, 4], &[10, 20], &[4, 8]);
         assert!((avg - 4.5).abs() < EPS);
         assert!((med - 4.5).abs() < EPS);
     }

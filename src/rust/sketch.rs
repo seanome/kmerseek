@@ -599,7 +599,8 @@ mod tests {
     fn test_set_and_get_efficient_data() {
         let mut s = ProteinSketch::new("n", 5, 1, "protein").unwrap();
         assert!(!s.has_efficient_data());
-        let store = ProteinSketchStore::new("n".into(), vec![1, 2], None, HashMap::new(), None, None);
+        let store =
+            ProteinSketchStore::new("n".into(), vec![1, 2], None, HashMap::new(), None, None);
         s.set_efficient_data(store);
         assert!(s.has_efficient_data());
         assert!(s.get_efficient_data().is_some());
@@ -636,15 +637,25 @@ mod tests {
 
     #[test]
     fn test_store_with_sequence_capacity_enables_raw_storage() {
-        let mut store =
-            ProteinSketchStore::with_sequence_capacity("n".into(), vec![9], None, HashMap::new(), 16);
+        let mut store = ProteinSketchStore::with_sequence_capacity(
+            "n".into(),
+            vec![9],
+            None,
+            HashMap::new(),
+            16,
+        );
         assert!(store.has_raw_sequence_storage());
         store.set_raw_sequence("HELLO".into());
         assert_eq!(store.get_raw_sequence(), Some("HELLO"));
 
         // Zero capacity leaves raw storage unallocated.
-        let store0 =
-            ProteinSketchStore::with_sequence_capacity("n".into(), vec![9], None, HashMap::new(), 0);
+        let store0 = ProteinSketchStore::with_sequence_capacity(
+            "n".into(),
+            vec![9],
+            None,
+            HashMap::new(),
+            0,
+        );
         assert!(!store0.has_raw_sequence_storage());
     }
 }
