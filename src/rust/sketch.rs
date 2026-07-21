@@ -553,3 +553,151 @@ impl ProteinSketchStore {
         size
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const SEQ: &str =
+        "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR";
+
+    // Exact outputs for SEQ (78 residues) at protein k=5, scaled=1: all 74 k-mers
+    // hash distinctly, so both the minhash and the position map hold 74 entries.
+    const SEQ_MINS: usize = 74;
+    // HP-encoding of SEQ (each residue -> h/p), stored for non-protein moltypes.
+    const SEQ_HP_ENCODED: &str =
+        "hpphhhhpppphphhppphppphppphhhhphphhhhpphhphpppphphhpphhphphphhhphphphhpphhphpp";
+
+    fn protein_sketch() -> ProteinSketch {
+        ProteinSketch::from_protein_sequence("p1", SEQ, 5, 1, "protein").unwrap()
+    }
+
+    #[test]
+    fn test_new_empty_sketch_accessors() {
+        let s = ProteinSketch::new("n", 5, 1, "hp").unwrap();
+        assert_eq!(s.protein_ksize(), 5);
+        assert_eq!(s.scaled(), 1);
+        assert_eq!(s.minhash_ksize(), 15); // 5 * PROTEIN_TO_MINHASH_RATIO
+        assert_eq!(s.moltype().to_string(), "hp");
+        assert_eq!(s.signature().minhash.mins().len(), 0);
+        assert!(!s.has_efficient_data());
+        assert!(s.get_efficient_data().is_none());
+        assert_eq!(s.get_raw_sequence(), None);
+        assert_eq!(s.get_moltype_sequence(), None);
+    }
+
+    #[test]
+    fn test_from_protein_sequence_builds_minhash_positions_and_raw_seq() {
+        let s = protein_sketch();
+        assert_eq!(s.signature().minhash.mins().len(), SEQ_MINS);
+        assert_eq!(s.kmer_positions().len(), SEQ_MINS);
+        assert!(s.has_efficient_data());
+        // store_sequences=true keeps the raw sequence; protein moltype stores no encoding.
+        assert_eq!(s.get_raw_sequence(), Some(SEQ));
+        assert_eq!(s.get_moltype_sequence(), None);
+    }
+
+    #[test]
+    fn test_non_protein_moltype_stores_encoded_sequence() {
+        let s = ProteinSketch::from_protein_sequence("p", SEQ, 5, 1, "hp").unwrap();
+        assert_eq!(s.get_moltype_sequence(), Some(SEQ_HP_ENCODED));
+    }
+
+    #[test]
+    fn test_efficient_data_roundtrip() {
+        let s = protein_sketch();
+        let store = s.to_efficient_data(true);
+        assert_eq!(store.name, "p1");
+        assert_eq!(store.kmer_count(), SEQ_MINS);
+        assert_eq!(store.get_raw_sequence(), Some(SEQ));
+        // name(2) + 74 mins*8 + 74 abunds*8 + 74 pos entries*(8 + 1*8) + raw seq(78) = 2448.
+        assert_eq!(store.estimated_size(), 2448);
+
+        let restored =
+            ProteinSketch::from_efficient_data(store, "protein".to_string(), 5, 1).unwrap();
+        assert_eq!(restored.signature().minhash.mins(), s.signature().minhash.mins());
+        assert_eq!(restored.kmer_positions(), s.kmer_positions());
+        assert!(restored.has_efficient_data());
+    }
+
+    #[test]
+    fn test_serde_json_roundtrip() {
+        let s = protein_sketch();
+        let json = serde_json::to_string(&s).unwrap();
+        let back: ProteinSketch = serde_json::from_str(&json).unwrap();
+        assert_eq!(back.protein_ksize(), s.protein_ksize());
+        assert_eq!(back.scaled(), s.scaled());
+        assert_eq!(back.moltype(), s.moltype());
+        assert_eq!(back.signature().minhash.mins(), s.signature().minhash.mins());
+        assert_eq!(back.kmer_positions(), s.kmer_positions());
+        // efficient_data is not part of the serialized form.
+        assert!(!back.has_efficient_data());
+    }
+
+    #[test]
+    fn test_compatibility_and_set_ops() {
+        let a = protein_sketch();
+        let b = protein_sketch();
+        assert!(a.is_compatible(&b));
+        assert!(!a.is_compatible(&ProteinSketch::new("c", 6, 1, "protein").unwrap()));
+        assert!(!a.is_compatible(&ProteinSketch::new("d", 5, 1, "hp").unwrap()));
+
+        let mins = a.mins_as_set();
+        assert_eq!(mins.len(), SEQ_MINS);
+        // Identical sketches intersect fully.
+        assert_eq!(a.intersect(&b).len(), SEQ_MINS);
+    }
+
+    #[test]
+    fn test_set_and_get_efficient_data() {
+        let mut s = ProteinSketch::new("n", 5, 1, "protein").unwrap();
+        assert!(!s.has_efficient_data());
+        let store = ProteinSketchStore::new("n".into(), vec![1, 2], None, HashMap::new(), None, None);
+        s.set_efficient_data(store);
+        assert!(s.has_efficient_data());
+        assert!(s.get_efficient_data().is_some());
+    }
+
+    #[test]
+    fn test_into_signature() {
+        let s = protein_sketch();
+        let mins = s.signature().minhash.mins();
+        assert_eq!(s.into_signature().minhash.mins(), mins);
+    }
+
+    #[test]
+    fn test_store_new_getters_and_estimated_size() {
+        let mut store = ProteinSketchStore::new(
+            "n".into(),
+            vec![1, 2, 3],
+            Some(vec![1, 1, 1]),
+            HashMap::new(),
+            None,
+            None,
+        );
+        assert_eq!(store.kmer_count(), 3);
+        assert!(!store.has_raw_sequence_storage());
+        assert!(store.get_raw_sequence().is_none());
+        // set_raw_sequence is a no-op when raw storage was not allocated.
+        store.set_raw_sequence("IGNORED".into());
+        assert!(store.get_raw_sequence().is_none());
+        store.set_encoded_sequence("ENCODED".into());
+        assert_eq!(store.get_encoded_sequence(), Some("ENCODED"));
+        // name "n"(1) + 3 mins*8 + 3 abunds*8, no positions/raw seq = 49.
+        assert_eq!(store.estimated_size(), 49);
+    }
+
+    #[test]
+    fn test_store_with_sequence_capacity_enables_raw_storage() {
+        let mut store =
+            ProteinSketchStore::with_sequence_capacity("n".into(), vec![9], None, HashMap::new(), 16);
+        assert!(store.has_raw_sequence_storage());
+        store.set_raw_sequence("HELLO".into());
+        assert_eq!(store.get_raw_sequence(), Some("HELLO"));
+
+        // Zero capacity leaves raw storage unallocated.
+        let store0 =
+            ProteinSketchStore::with_sequence_capacity("n".into(), vec![9], None, HashMap::new(), 0);
+        assert!(!store0.has_raw_sequence_storage());
+    }
+}
