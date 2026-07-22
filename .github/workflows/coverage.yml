@@ -61,11 +61,6 @@ jobs:
           CARGO_BUILD_JOBS=1 cargo build --bins --no-default-features
           echo "CARGO_BIN_EXE_kmerseek=$(pwd)/target/debug/kmerseek" >> $GITHUB_ENV
 
-      - name: Build binary (required for CLI tests via assert_cmd)
-        run: |
-          export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo build --bins --no-default-features
-
       - name: Generate Rust coverage report
         run: |
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
