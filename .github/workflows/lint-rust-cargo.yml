@@ -6,12 +6,26 @@ jobs:
   fmt:
     name: Check Rust Formatting
     runs-on: ubuntu-latest
+    env:
+      PYO3_PYTHON: python3
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt
+          components: rustfmt, clippy
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install Python development headers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y python3-dev
+          PYTHON_LIB_DIR=$(python3 -c "import sysconfig; print(sysconfig.get_config_var('LIBDIR'))")
+          echo "LD_LIBRARY_PATH=${PYTHON_LIB_DIR}:${LD_LIBRARY_PATH}" >> $GITHUB_ENV
+
       - name: Check formatting
-        run: cargo fmt --all -- --check --verbose 
+        run: cargo fmt --all -- --check --verbose
+
       - name: Check clippy
         run: cargo clippy --all -- --deny warnings

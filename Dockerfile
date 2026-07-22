@@ -32,5 +32,3 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY --from=builder /build/target/release/kmerseek /usr/local/bin/kmerseek
 
 WORKDIR /data
-
-ENTRYPOINT ["kmerseek"]

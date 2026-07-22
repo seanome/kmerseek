@@ -756,6 +756,33 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
     group.finish();
 }
 
+/// Benchmark rebuild_combined_minhash() in isolation at different k-mer sizes.
+///
+/// Builds the index once (not timed), then repeatedly times only the rebuild step.
+/// Tests k=10, 20, 30 to show that the O(N log N) sort+add scales well as the
+/// number of unique k-mers grows with larger k.
+fn benchmark_rebuild_combined_minhash(c: &mut Criterion) {
+    let target_fasta =
+        "tests/testdata/fasta/uniprotkb_protein_name_Uncharacterized_2025_04_15.fasta.gz";
+
+    let mut group = c.benchmark_group("rebuild_combined_minhash");
+    group.sample_size(20);
+
+    for ksize in [10u32, 20, 30] {
+        let temp_dir = tempdir().unwrap();
+        let db_path = temp_dir.path().join(format!("bench_rebuild_k{ksize}"));
+
+        // Build index once so signatures are in memory (not timed)
+        let index = ProteomeIndex::new(db_path, ksize, 1, "hp", false).unwrap();
+        index.process_fasta(target_fasta, 0, 1000).unwrap();
+
+        let n_unique = index.combined_minhash_size();
+        let bench_name = format!("rebuild_hp_k{ksize}_{n_unique}_unique_kmers");
+        group.bench_function(&bench_name, |b| b.iter(|| index.rebuild_combined_minhash().unwrap()));
+    }
+    group.finish();
+}
+
 criterion_group!(
     benches,
     benchmark_create_protein_signature,
@@ -768,5 +795,6 @@ criterion_group!(
     benchmark_search_throughput,
     benchmark_index_hp_large_k,
     benchmark_kmer_storage_approaches,
+    benchmark_rebuild_combined_minhash,
 );
 criterion_main!(benches);

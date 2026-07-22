@@ -15,6 +15,9 @@ clean:
 test: clean
 	cargo test --no-default-features --lib -- --test-threads=2
 
+install: build
+	cargo install --path . --no-default-features
+
 docker-build:
 	docker build -t $(IMAGE):$(VERSION) -t $(IMAGE):latest .
 

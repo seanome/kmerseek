@@ -1138,15 +1138,10 @@ pub fn find_matched_regions(
         let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
         let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
 
-        // Validate that moltype sequences match (they should since they share the same k-mers)
+        // Validate that moltype sequences match (they should since they share the same k-mers).
         if query_moltype_seq != target_moltype_seq {
-            // WHY: We use a simpler panic message format to avoid potential double-panic issues.
-            // The detailed information is still provided, but in a format that's less likely to
-            // cause issues during panic handling.
-            panic!(
-                "Moltype sequences do not match for query '{}' and target '{}' at positions query {}-{} target {}-{}",
-                query_name, target_name, query_start_pos, query_end_pos, target_start_pos, target_end_pos
-            )
+            i = j;
+            continue;
         }
 
         consecutive_regions.push(MatchedRegion {

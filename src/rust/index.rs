@@ -20,6 +20,7 @@ use crate::encoding::{
     encode_with_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
 };
 use crate::errors::{IndexError, IndexResult};
+use crate::hp_alphabets::HpAlphabet;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
@@ -354,17 +355,41 @@ impl ProteomeIndex {
     ///
     /// This method stores signatures in chunks to avoid RocksDB value size limits.
     /// Each chunk contains a maximum number of signatures to keep serialized data manageable.
+    /// Build combined minhash from all signatures in one O(N log N) pass.
+    ///
+    /// WHY: Incremental add_many_with_abund per batch is O(M*N) due to Vec::insert shifting.
+    /// With millions of hashes this becomes hours. One sort + add in sorted order is O(N log N)
+    /// (each add_hash becomes O(1) push because hashes arrive in ascending order).
+    pub fn rebuild_combined_minhash(&self) -> IndexResult<()> {
+        let mut all_hashes: Vec<u64> =
+            self.signatures.iter().flat_map(|e| e.value().signature().minhash.mins()).collect();
+        all_hashes.sort_unstable();
+        all_hashes.dedup();
+        let hash_function = get_hash_function_from_moltype(&self.moltype)?;
+        let mut new_combined =
+            KmerMinHash::new(self.scaled, self.ksize * 3, hash_function, SEED, true, 0);
+        for &h in &all_hashes {
+            new_combined.add_hash(h);
+        }
+        let mut combined_minhash = self.combined_minhash.lock();
+        *combined_minhash = new_combined;
+        Ok(())
+    }
+
     pub fn save_state(&self) -> IndexResult<()> {
         let t_start = Instant::now();
         eprintln!("[save] save_state() started ({} signatures in memory)", self.signatures.len());
 
-        // DashMap is already thread-safe, no need to lock
-        eprintln!("[save] Acquiring combined_minhash lock...");
+        eprintln!("[save] Building combined minhash from all signatures...");
+        let t_cm = Instant::now();
+        self.rebuild_combined_minhash()?;
         let combined_minhash = self.combined_minhash.lock();
         eprintln!(
-            "[save] Lock acquired. combined_minhash has {} mins.",
-            combined_minhash.mins().len()
+            "[save] Combined minhash built: {} unique k-mers in {:.1}s",
+            combined_minhash.mins().len(),
+            t_cm.elapsed().as_secs_f32()
         );
+        drop(combined_minhash);
 
         // Convert signatures to efficient storage format
         eprintln!("[save] Converting signatures to storage format...");
@@ -407,6 +432,7 @@ impl ProteomeIndex {
         eprintln!("[save] All chunks written in {:.1}s", t2.elapsed().as_secs_f32());
 
         // Store metadata separately
+        let combined_minhash = self.combined_minhash.lock();
         eprintln!(
             "[save] Writing metadata (combined_minhash has {} mins)...",
             combined_minhash.mins().len()
@@ -737,7 +763,9 @@ impl ProteomeIndex {
     /// Call `load_search_cache()` after opening to retrieve the pre-built inverted index.
     pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let opts = Self::create_rocksdb_options(false);
-        let db = DB::open(&opts, path)?;
+        // WHY: open_for_read_only avoids acquiring the exclusive LOCK file, allowing
+        // multiple search processes to query the same index concurrently.
+        let db = DB::open_for_read_only(&opts, path, false)?;
 
         let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
         let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
@@ -1056,12 +1084,31 @@ impl ProteomeIndex {
         let hashvals: HashSet<u64> =
             protein_signature.signature().get_minhash().to_vec().into_iter().collect();
 
+        let custom_hp = HpAlphabet::from_moltype(&self.moltype);
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            if let Ok(encoded_kmer) = encode_with_fn(&sequence[i..i + ksize], self.encoding_fn) {
-                let hashval = _hash_murmur(encoded_kmer.as_bytes(), SEED);
-                if hashvals.contains(&hashval) {
-                    protein_signature.kmer_positions_mut().entry(hashval).or_default().push(i);
+            let kmer = &sequence[i..i + ksize];
+            // WHY: sourmash's ReadingFrame::new_protein uppercases before hashing.
+            let hashval = if let Some(ref alpha) = custom_hp {
+                let encoded: Vec<u8> = kmer
+                    .bytes()
+                    .map(|b| {
+                        alpha
+                            .table()
+                            .get(&b.to_ascii_uppercase())
+                            .copied()
+                            .unwrap_or(b)
+                            .to_ascii_uppercase()
+                    })
+                    .collect();
+                _hash_murmur(&encoded, SEED)
+            } else {
+                match encode_with_fn(kmer, self.encoding_fn) {
+                    Ok(enc) => _hash_murmur(enc.to_ascii_uppercase().as_bytes(), SEED),
+                    Err(_) => continue,
                 }
+            };
+            if hashvals.contains(&hashval) {
+                protein_signature.kmer_positions_mut().entry(hashval).or_default().push(i);
             }
         }
 
@@ -1081,34 +1128,10 @@ impl ProteomeIndex {
     ///
     /// Returns `Ok(())` on success, or an error if the operation fails.
     pub fn store_signatures(&self, protein_signatures: Vec<ProteinSketch>) -> IndexResult<()> {
-        // Collect the minhash data from new signatures before storing them
-        let new_hashes_and_abunds: Vec<(u64, u64)> = protein_signatures
-            .iter()
-            .flat_map(|sig| {
-                let minhash = sig.signature().get_minhash();
-                // If abundance is tracked, use to_vec_abunds, else use mins with abundance 1
-                if let Some(abunds) = minhash.abunds() {
-                    minhash.mins().into_iter().zip(abunds).collect::<Vec<_>>()
-                } else {
-                    minhash.mins().into_iter().map(|h| (h, 1)).collect::<Vec<_>>()
-                }
-            })
-            .collect();
-
-        // Store all signatures in the signatures map
-        {
-            for protein_signature in protein_signatures {
-                let md5sum = protein_signature.signature().md5sum.clone();
-                self.signatures.insert(md5sum.to_string(), protein_signature);
-            }
+        for protein_signature in protein_signatures {
+            let md5sum = protein_signature.signature().md5sum.clone();
+            self.signatures.insert(md5sum.to_string(), protein_signature);
         }
-
-        // Update the combined minhash with only the new signatures
-        let mut combined_minhash = self.combined_minhash.lock();
-        combined_minhash
-            .add_many_with_abund(&new_hashes_and_abunds)
-            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-
         Ok(())
     }
 
@@ -1362,9 +1385,17 @@ impl ProteomeIndex {
             self.process_batch_parallel(&current_batch, progress_interval, record_count)?;
         }
 
-        // Save the index state to RocksDB
-        eprintln!("Done reading FASTA ({} sequences total). Saving index...", record_count);
-        self.save_state()?;
+        eprintln!(
+            "Done reading FASTA ({} sequences total). Building combined minhash...",
+            record_count
+        );
+        let t_cm = Instant::now();
+        self.rebuild_combined_minhash()?;
+        eprintln!(
+            "Combined minhash built ({} unique k-mers) in {:.1}s",
+            self.combined_minhash.lock().mins().len(),
+            t_cm.elapsed().as_secs_f32()
+        );
 
         if let Some(pb) = progress {
             pb.finish_with_message(format!("Successfully indexed {} sequences", record_count));
@@ -1689,6 +1720,7 @@ mod tests {
 
         // Store the signature in the index
         index.store_signatures(vec![signature])?;
+        index.rebuild_combined_minhash()?;
 
         // Verify the signature was added to the signatures map
         {
@@ -1740,6 +1772,7 @@ mod tests {
 
         // Store the signature in the index
         index.store_signatures(vec![signature])?;
+        index.rebuild_combined_minhash()?;
 
         // Verify the signature was added to the signatures map
         {
@@ -1791,6 +1824,7 @@ mod tests {
 
         // Store the signature in the index
         index.store_signatures(vec![signature])?;
+        index.rebuild_combined_minhash()?;
 
         // Verify the signature was added to the signatures map
         {
@@ -2573,10 +2607,12 @@ mod tests {
         let sig1_1 = index1.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
         let sig2_1 = index1.create_protein_signature("PLANTANDANIMALGENQMES", "test2").unwrap();
         index1.store_signatures(vec![sig1_1, sig2_1]).unwrap();
+        index1.rebuild_combined_minhash().unwrap();
 
         let sig1_2 = index2.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
         let sig2_2 = index2.create_protein_signature("PLANTANDANIMALGENQMES", "test2").unwrap();
         index2.store_signatures(vec![sig1_2, sig2_2]).unwrap();
+        index2.rebuild_combined_minhash().unwrap();
 
         // Test equivalence
         assert!(index1.is_equivalent_to(&index2).unwrap());
@@ -2603,6 +2639,7 @@ mod tests {
         // Add a test signature
         let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test").unwrap();
         index.store_signatures(vec![sig]).unwrap();
+        index.rebuild_combined_minhash().unwrap();
 
         // Print stats (this should not panic)
         index.print_stats();

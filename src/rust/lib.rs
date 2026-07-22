@@ -2,6 +2,7 @@ pub mod aminoacid;
 pub mod config;
 pub mod encoding;
 pub mod errors;
+pub mod hp_alphabets;
 pub mod index;
 pub mod io;
 pub mod iterators;
