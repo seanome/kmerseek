@@ -78,6 +78,14 @@ enum Commands {
         #[arg(long, default_value = "0.0")]
         threshold: f64,
 
+        /// Minimum number of shared k-mers required to report a match
+        #[arg(long, default_value = "2")]
+        min_shared_kmers: usize,
+
+        /// Maximum uncorrected Poisson p-value required to report a match
+        #[arg(long, default_value = "0.05")]
+        max_pvalue: f64,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -237,6 +245,8 @@ fn main() -> IndexResult<()> {
             encoding,
             shuffled_seed: _,
             threshold,
+            min_shared_kmers,
+            max_pvalue,
             verbose,
             query_is_index,
             batch_size,
@@ -269,6 +279,8 @@ fn main() -> IndexResult<()> {
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
             eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
             eprintln!("  Threshold: {}", threshold);
+            eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
+            eprintln!("  Maximum p-value: {}", max_pvalue);
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
@@ -407,7 +419,10 @@ fn main() -> IndexResult<()> {
                     // Write results sequentially (preserves per-query ordering within batch)
                     for results in &batch_results {
                         for result in results {
-                            if result.containment >= threshold {
+                            if result.containment >= threshold
+                                && result.n_intersecting_hashes >= min_shared_kmers
+                                && result.poisson_pvalue < max_pvalue
+                            {
                                 *match_count += 1;
                                 for region in &result.matched_regions {
                                     let csv_row =
@@ -477,10 +492,20 @@ fn main() -> IndexResult<()> {
             // Filter results by threshold (for query-is-index and all-vs-all paths)
             let filtered_results: Vec<_> = search_results
                 .into_iter()
-                .filter(|result| result.containment >= threshold)
+                .filter(|result| {
+                    result.containment >= threshold
+                        && result.n_intersecting_hashes >= min_shared_kmers
+                        && result.poisson_pvalue < max_pvalue
+                })
                 .collect();
 
-            eprintln!("Found {} matches above threshold {}", filtered_results.len(), threshold);
+            eprintln!(
+                "Found {} matches above threshold {} with at least {} shared k-mers and p-value < {}",
+                filtered_results.len(),
+                threshold,
+                min_shared_kmers,
+                max_pvalue
+            );
 
             use kmerseek::search::SearchResultCsv;
             if let Some(output_path) = output {
