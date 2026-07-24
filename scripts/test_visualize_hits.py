@@ -74,6 +74,33 @@ def test_safe_filename_no_pipes_uses_first_word():
     assert vh.safe_filename("weird!!@@## name") == "weird"
 
 
+# --- resolve_query_names -----------------------------------------------------
+
+def test_resolve_query_names_none_returns_all_sorted():
+    names = {SEPT4_NAME, B2L11_NAME}
+    assert vh.resolve_query_names(None, names) == sorted(names)
+
+
+def test_resolve_query_names_exact_header_match():
+    names = {CED9_NAME, BCL2_NAME}
+    assert vh.resolve_query_names(CED9_NAME, names) == [CED9_NAME]
+
+
+def test_resolve_query_names_short_gene_symbol_matches():
+    names = {CED9_NAME, BCL2_NAME}
+    assert vh.resolve_query_names("CED9", names) == [CED9_NAME]
+
+
+def test_resolve_query_names_is_case_insensitive():
+    names = {CED9_NAME, BCL2_NAME}
+    assert vh.resolve_query_names("ced9_caeel", names) == [CED9_NAME]
+
+
+def test_resolve_query_names_no_match_returns_empty():
+    names = {CED9_NAME, BCL2_NAME}
+    assert vh.resolve_query_names("NOT_A_GENE", names) == []
+
+
 # --- merge_regions_by_target / _build_hit -----------------------------------
 
 def _row(target_name="tgt", query_start=0, query_end=10, region_length=10,
@@ -363,3 +390,34 @@ def test_main_query_name_filters_to_single_gene(tmp_path):
 
     assert (out_dir / "SEPT4_HUMAN.hits.png").exists()
     assert not (out_dir / "B2L11_HUMAN.hits.png").exists()
+
+
+def test_main_query_name_accepts_short_gene_symbol(tmp_path):
+    csv_path = tmp_path / "results.csv"
+    _write_csv(csv_path, [
+        _row(query_name=SEPT4_NAME, query_start=0, query_end=10),
+        _row(query_name=B2L11_NAME, query_start=0, query_end=10),
+    ])
+
+    out_dir = tmp_path / "out"
+    sys.argv = ["visualize_hits.py", "--csv", str(csv_path), "--query-fasta", MULTI_FASTA,
+                "--output-dir", str(out_dir), "--query-name", "SEPT4"]
+    vh.main()
+
+    assert (out_dir / "SEPT4_HUMAN.hits.png").exists()
+    assert not (out_dir / "B2L11_HUMAN.hits.png").exists()
+
+
+def test_main_query_name_no_match_prints_available_genes(tmp_path, capsys):
+    csv_path = tmp_path / "results.csv"
+    _write_csv(csv_path, [_row(query_name=SEPT4_NAME, query_start=0, query_end=10)])
+
+    out_dir = tmp_path / "out"
+    sys.argv = ["visualize_hits.py", "--csv", str(csv_path), "--query-fasta", MULTI_FASTA,
+                "--output-dir", str(out_dir), "--query-name", "NOT_A_GENE"]
+    vh.main()
+
+    assert list(out_dir.glob("*.png")) == []
+    out = capsys.readouterr().out
+    assert "No query matching 'NOT_A_GENE' found" in out
+    assert "SEPT4_HUMAN" in out

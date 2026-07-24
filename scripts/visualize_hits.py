@@ -16,8 +16,7 @@ Usage:
     python visualize_hits.py --csv results.csv --query-fasta query.fasta \
         --output-dir hits_png/
     python visualize_hits.py --csv results.csv --query-fasta query.fasta \
-        --query-name "sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 ..." \
-        --output-dir hits_png/
+        --output-dir hits_png/ --query-name CED9
 """
 
 import argparse
@@ -99,6 +98,26 @@ def short_label(name, max_len=28):
 
 def safe_filename(name):
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", short_label(name, max_len=60)).strip("_")
+
+
+def resolve_query_names(query_name_arg, all_query_names):
+    """Match --query-name against the full FASTA headers found in the CSV.
+
+    Accepts the exact header (backward compatible), but also a short,
+    case-insensitive substring like "CED9" or "ced9_caeel" matched against
+    either the full header or its short_label() -- typing the whole
+    'sp|P41958|CED9_CAEEL Apoptosis regulator...' header is not required.
+    """
+    if query_name_arg is None:
+        return sorted(all_query_names)
+    if query_name_arg in all_query_names:
+        return [query_name_arg]
+    needle = query_name_arg.lower()
+    matches = [
+        name for name in all_query_names
+        if needle in name.lower() or needle in short_label(name, max_len=len(name)).lower()
+    ]
+    return sorted(set(matches))
 
 
 def load_rows(csv_path):
@@ -379,7 +398,9 @@ def main():
     parser.add_argument("--csv", required=True, help="kmerseek search results CSV")
     parser.add_argument("--query-fasta", required=True, help="Query FASTA (for full-length protein bars)")
     parser.add_argument("--query-name", default=None,
-                         help="Exact query header to plot (default: plot every query found in the CSV)")
+                         help="Gene to plot -- a short case-insensitive substring like 'CED9' matched against "
+                              "the FASTA header (the exact full header also works). Default: plot every query "
+                              "found in the CSV.")
     parser.add_argument("--output-dir", required=True, help="Directory to write one PNG+SVG pair per gene into")
     parser.add_argument("--gap-merge", type=int, default=10,
                          help="Merge same-target regions within this many residues into one hit (default: 10)")
@@ -400,7 +421,13 @@ def main():
     if args.min_containment > 0.0:
         rows = [r for r in rows if float(r["containment"]) >= args.min_containment]
 
-    query_names = [args.query_name] if args.query_name else sorted({r["query_name"] for r in rows})
+    all_query_names = {r["query_name"] for r in rows}
+    query_names = resolve_query_names(args.query_name, all_query_names)
+    if args.query_name is not None and not query_names:
+        available = ", ".join(sorted(short_label(n) for n in all_query_names))
+        print(f"No query matching '{args.query_name}' found in {args.csv}. "
+              f"Available: {available}")
+        return
 
     for query_name in query_names:
         if query_name not in lengths:
