@@ -28,10 +28,6 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         ksize: u32,
 
-        /// Scaled factor for minhash (1 = capture all k-mers)
-        #[arg(short, long, default_value = "1")]
-        scaled: u32,
-
         /// Protein encoding method
         #[arg(short, long, default_value = "protein")]
         encoding: ProteinEncoding,
@@ -61,10 +57,6 @@ enum Commands {
         /// K-mer size (must match the database; if not provided, will use database value)
         #[arg(short, long)]
         ksize: Option<u32>,
-
-        /// Scaled factor (must match the database; if not provided, will use database value)
-        #[arg(short, long)]
-        scaled: Option<u32>,
 
         /// Protein encoding method (must match the database)
         #[arg(short, long, default_value = "protein")]
@@ -148,16 +140,11 @@ fn main() -> IndexResult<()> {
     eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
 
     match cli.command {
-        Commands::Index {
-            input,
-            output,
-            ksize,
-            scaled,
-            encoding,
-            shuffled_seed,
-            progress_interval,
-        } => {
+        Commands::Index { input, output, ksize, encoding, shuffled_seed, progress_interval } => {
             eprintln!("Indexing FASTA file: {}", input.display());
+
+            // Scaled factor is always 1 (captures all k-mers)
+            let scaled: u32 = 1;
 
             // Resolve effective moltype: seeded shuffled control -> "hp_shuffled_control_N".
             let effective_moltype: String = match (encoding, shuffled_seed) {
@@ -233,7 +220,6 @@ fn main() -> IndexResult<()> {
             target,
             output,
             ksize,
-            scaled,
             encoding,
             shuffled_seed: _,
             threshold,
@@ -257,7 +243,6 @@ fn main() -> IndexResult<()> {
             // Rust - we extract complex logic into well-named methods for clarity.
             let (final_ksize, final_scaled, final_encoding) = validate_and_assign_parameters(
                 ksize,
-                scaled,
                 encoding,
                 detected_ksize,
                 detected_scaled,
@@ -597,7 +582,6 @@ fn assign_encoding(
 ///
 /// # Arguments
 /// * `user_ksize` - User-provided ksize (None if not specified)
-/// * `user_scaled` - User-provided scaled (None if not specified)
 /// * `user_encoding` - User-provided encoding (may be default value)
 /// * `detected_ksize` - Ksize detected from database
 /// * `detected_scaled` - Scaled detected from database
@@ -607,7 +591,6 @@ fn assign_encoding(
 /// Tuple of (final_ksize, final_scaled, final_encoding) or ValidationError if mismatch
 fn validate_and_assign_parameters(
     user_ksize: Option<u32>,
-    user_scaled: Option<u32>,
     user_encoding: ProteinEncoding,
     detected_ksize: u32,
     detected_scaled: u32,
@@ -642,31 +625,17 @@ fn validate_and_assign_parameters(
         }
     };
 
-    // Validate and assign scaled: use detected if not provided, error if mismatch
-    // WHY: Same logic as ksize - database parameters are authoritative.
-    let final_scaled = match user_scaled {
-        Some(scaled) if scaled != detected_scaled => {
-            return Err(kmerseek::errors::IndexError::ValidationError {
-                message: format!(
-                    "Scaled factor mismatch: database has scaled={}, but you specified --scaled={}.\n\
-                    The scaled factor must match the database. Remove --scaled to use the database value ({}).",
-                    detected_scaled, scaled, detected_scaled
-                ),
-            });
-        }
-        Some(scaled) => {
-            // User provided scaled and it matches - use it
-            scaled
-        }
-        None => {
-            // User didn't provide scaled - use detected value
-            eprintln!(
-                "Using detected scaled: {} (not specified, using database value)",
+    // Scaled is always 1 (captures all k-mers). The database is authoritative, so
+    // error out if it was built with a different scaled factor.
+    if detected_scaled != 1 {
+        return Err(kmerseek::errors::IndexError::ValidationError {
+            message: format!(
+                "Scaled factor mismatch: database has scaled={}, but kmerseek only supports scaled=1.",
                 detected_scaled
-            );
-            detected_scaled
-        }
-    };
+            ),
+        });
+    }
+    let final_scaled = 1;
 
     // Validate and assign encoding
     let final_encoding = assign_encoding(user_encoding, detected_moltype)?;

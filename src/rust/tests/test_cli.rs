@@ -159,8 +159,6 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         target_index_path.to_str().unwrap(),
         "--ksize",
         "12",
-        "--scaled",
-        "1",
         "--encoding",
         "hp",
     ]);
@@ -184,8 +182,6 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         output_csv.to_str().unwrap(),
         "--ksize",
         "12",
-        "--scaled",
-        "1",
         "--encoding",
         "hp",
     ]);
