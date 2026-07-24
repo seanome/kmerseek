@@ -198,9 +198,11 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Verify CSV file is not empty
     let csv_content = std::fs::read_to_string(&output_csv)?;
     assert!(!csv_content.is_empty(), "CSV file should not be empty");
+    // WHY: 364 (pre-filtering) dropped to 128 once `search` defaulted to
+    // --min-shared-kmers 2 --max-pvalue 0.05, which this command doesn't override.
     assert!(
-        csv_content.lines().count() == 364,
-        "CSV should have 364 rows, found {} rows",
+        csv_content.lines().count() == 128,
+        "CSV should have 128 rows, found {} rows",
         csv_content.lines().count()
     );
 
