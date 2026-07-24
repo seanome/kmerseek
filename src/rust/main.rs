@@ -284,6 +284,9 @@ fn main() -> IndexResult<()> {
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
+            use kmerseek::search::SearchFilters;
+            let filters = SearchFilters { threshold, min_shared_kmers, max_pvalue };
+
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
             // When doing an all-vs-all search (query == target), we need to reuse the same database
@@ -311,7 +314,7 @@ fn main() -> IndexResult<()> {
                     "Detected all-vs-all search (query == target), using optimized search method..."
                 );
                 eprintln!("Skipping self-matches (comparing MD5 sums)...");
-                searcher.search_all_vs_all()?
+                searcher.search_all_vs_all(&filters)?
             } else if query_is_index {
                 // Load pre-indexed query database
                 eprintln!("Loading pre-indexed query database...");
@@ -329,7 +332,7 @@ fn main() -> IndexResult<()> {
 
                 eprintln!("Found {} query signatures", query_signatures.len());
                 eprintln!("Performing comprehensive search...");
-                searcher.search(&query_signatures)?
+                searcher.search(&query_signatures, &filters)?
             } else {
                 // Stream queries from FASTA, writing CSV results as we go
                 eprintln!("Streaming query sequences from FASTA...");
@@ -412,24 +415,20 @@ fn main() -> IndexResult<()> {
                                      match_count: &mut u64,
                                      row_count: &mut u64|
                  -> anyhow::Result<()> {
-                    // Search all queries in this batch in parallel
+                    // Search all queries in this batch in parallel. Results failing `filters`
+                    // are never included (see SearchFilters), so no post-hoc filtering needed here.
                     let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
-                        batch.par_iter().map(|q| searcher.search_one(q)).collect();
+                        batch.par_iter().map(|q| searcher.search_one(q, &filters)).collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
                     for results in &batch_results {
                         for result in results {
-                            if result.containment >= threshold
-                                && result.n_intersecting_hashes >= min_shared_kmers
-                                && result.poisson_pvalue < max_pvalue
-                            {
-                                *match_count += 1;
-                                for region in &result.matched_regions {
-                                    let csv_row =
-                                        SearchResultCsv::from_result_and_region(result, region);
-                                    writer.serialize(&csv_row)?;
-                                    *row_count += 1;
-                                }
+                            *match_count += 1;
+                            for region in &result.matched_regions {
+                                let csv_row =
+                                    SearchResultCsv::from_result_and_region(result, region);
+                                writer.serialize(&csv_row)?;
+                                *row_count += 1;
                             }
                         }
                     }
@@ -489,15 +488,9 @@ fn main() -> IndexResult<()> {
                 return Ok(());
             };
 
-            // Filter results by threshold (for query-is-index and all-vs-all paths)
-            let filtered_results: Vec<_> = search_results
-                .into_iter()
-                .filter(|result| {
-                    result.containment >= threshold
-                        && result.n_intersecting_hashes >= min_shared_kmers
-                        && result.poisson_pvalue < max_pvalue
-                })
-                .collect();
+            // search() / search_all_vs_all() already applied `filters` internally, so
+            // search_results only contains matches that passed threshold/min_shared_kmers/max_pvalue.
+            let filtered_results = search_results;
 
             eprintln!(
                 "Found {} matches above threshold {} with at least {} shared k-mers and p-value < {}",
