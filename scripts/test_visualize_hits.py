@@ -8,6 +8,7 @@ import os
 import sys
 
 import matplotlib
+import pytest
 
 sys.path.insert(0, os.path.dirname(__file__))
 import visualize_hits as vh
@@ -104,7 +105,8 @@ def test_resolve_query_names_no_match_returns_empty():
 # --- merge_regions_by_target / _build_hit -----------------------------------
 
 def _row(target_name="tgt", query_start=0, query_end=10, region_length=10,
-         containment=0.5, moltype="hp", query_subseq="MKVLLLKKKK",
+         containment=0.5, jaccard=0.1, enrichment=1.0, poisson_pvalue=0.05,
+         moltype="hp", query_subseq="MKVLLLKKKK",
          moltype_seq="hpphhhpppp", target_subseq="TTTTTTTTTT", query_name=CED9_NAME):
     return {
         "query_name": query_name,
@@ -113,6 +115,9 @@ def _row(target_name="tgt", query_start=0, query_end=10, region_length=10,
         "query_end": str(query_end),
         "region_length": str(region_length),
         "containment": str(containment),
+        "jaccard": str(jaccard),
+        "enrichment": str(enrichment),
+        "poisson_pvalue": str(poisson_pvalue),
         "moltype": moltype,
         "query_subseq": query_subseq,
         "moltype_seq": moltype_seq,
@@ -173,6 +178,44 @@ def test_build_hit_containment_is_max_across_cluster():
     rows = [_row(containment=0.2), _row(containment=0.7), _row(containment=0.4)]
     hit = vh._build_hit("tgt", rows)
     assert hit["containment"] == 0.7
+
+
+def test_build_hit_carries_jaccard_enrichment_pvalue():
+    # These are query-target *result* stats (same value on every region row of
+    # a hit, since it's the same query-target pair), not per-region stats.
+    rows = [_row(jaccard=0.123, enrichment=4.5, poisson_pvalue=1e-06)]
+    hit = vh._build_hit("tgt", rows)
+    assert hit["jaccard"] == 0.123
+    assert hit["enrichment"] == 4.5
+    assert hit["poisson_pvalue"] == 1e-06
+
+
+# --- benjamini_hochberg / _target_pvalues -------------------------------------
+
+def test_target_pvalues_one_entry_per_distinct_target():
+    rows = [_row(target_name="A", poisson_pvalue=0.01), _row(target_name="A", poisson_pvalue=0.01),
+            _row(target_name="B", poisson_pvalue=0.02)]
+    assert vh._target_pvalues(rows) == {"A": 0.01, "B": 0.02}
+
+
+def test_benjamini_hochberg_single_pvalue_is_unchanged():
+    assert vh.benjamini_hochberg({"x": 0.5}) == {"x": 0.5}
+
+
+def test_benjamini_hochberg_known_example():
+    # p.adjust(c(d=0.005, a=0.01, c=0.03, b=0.04), method="BH") in R gives
+    # d=0.02, a=0.02, c=0.04, b=0.04.
+    pvalues = {"a": 0.01, "b": 0.04, "c": 0.03, "d": 0.005}
+    q = vh.benjamini_hochberg(pvalues)
+    assert q["d"] == pytest.approx(0.02)
+    assert q["a"] == pytest.approx(0.02)
+    assert q["c"] == pytest.approx(0.04)
+    assert q["b"] == pytest.approx(0.04)
+
+
+def test_benjamini_hochberg_never_exceeds_one():
+    q = vh.benjamini_hochberg({"x": 0.9, "y": 0.95})
+    assert all(v <= 1.0 for v in q.values())
 
 
 # --- _union_coverage ------------------------------------------------------
@@ -293,12 +336,36 @@ def test_plot_gene_svg_text_is_selectable_not_outlined_paths():
     assert matplotlib.rcParams["svg.fonttype"] == "none"
 
 
+def test_hit_stats_text_includes_containment_jaccard_enrichment_pvalue():
+    hit = vh._build_hit("tgt", [_row(containment=0.5, jaccard=0.123, enrichment=4.5, poisson_pvalue=1e-06)])
+    stats = vh.GenePlot._hit_stats_text(hit)
+    assert "containment=0.50" in stats
+    assert "jaccard=0.123" in stats
+    assert "enrichment=4.50" in stats
+    assert "p-value=1e-06" in stats
+
+
+def test_plot_gene_svg_contains_stats_line(tmp_path):
+    hits = vh.merge_regions_by_target(
+        [_row(target_name="TGT_A", query_start=10, query_end=40, region_length=30,
+              containment=0.5, jaccard=0.123, enrichment=4.5, poisson_pvalue=1e-06)],
+        gap_merge=10,
+    )
+    svg_path = tmp_path / "gene.hits.svg"
+    vh.plot_gene(CED9_NAME, CED9_LEN, hits, [str(svg_path)])
+    svg_text = svg_path.read_text()
+    assert "jaccard=0.123" in svg_text
+    assert "enrichment=4.50" in svg_text
+    assert "p-value=1e-06" in svg_text
+
+
 # --- main() end-to-end CLI ----------------------------------------------------
 
 def _write_csv(path, rows):
-    fieldnames = ["query_name", "target_name", "containment", "query_start", "query_end",
-                  "query_subseq", "target_start", "target_end", "target_subseq",
-                  "moltype_seq", "moltype", "region_length"]
+    fieldnames = ["query_name", "target_name", "containment", "jaccard", "enrichment",
+                  "poisson_pvalue", "query_start", "query_end", "query_subseq",
+                  "target_start", "target_end", "target_subseq", "moltype_seq",
+                  "moltype", "region_length"]
     with open(path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)
         writer.writeheader()
@@ -374,6 +441,29 @@ def test_main_max_hits_caps_by_distinct_target_not_by_fragment_count(tmp_path, c
 
     out = capsys.readouterr().out
     assert "1 targets, 3 hits, 4 regions" in out
+
+
+def test_main_corrects_pvalue_across_all_targets_not_just_displayed_ones(tmp_path):
+    # "hidden" is a real target for this query but gets filtered out by
+    # --min-containment; its p-value must still count toward the correction
+    # denominator for the targets that *are* displayed, or the q-value would
+    # understate how many comparisons were actually made.
+    csv_path = tmp_path / "results.csv"
+    _write_csv(csv_path, [
+        _row(query_name=CED9_NAME, target_name="shown", containment=0.9, poisson_pvalue=0.01,
+             query_start=0, query_end=10),
+        _row(query_name=CED9_NAME, target_name="hidden", containment=0.01, poisson_pvalue=0.02,
+             query_start=50, query_end=60),
+    ])
+
+    out_dir = tmp_path / "out"
+    sys.argv = ["visualize_hits.py", "--csv", str(csv_path), "--query-fasta", CED9_FASTA,
+                "--output-dir", str(out_dir), "--min-containment", "0.5"]
+    vh.main()
+
+    svg_text = (out_dir / f"{vh.safe_filename(CED9_NAME)}.hits.svg").read_text()
+    expected_q = vh.benjamini_hochberg({"shown": 0.01, "hidden": 0.02})["shown"]
+    assert f"q-value={expected_q:.2g}" in svg_text
 
 
 def test_main_query_name_filters_to_single_gene(tmp_path):

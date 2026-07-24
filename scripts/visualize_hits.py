@@ -164,6 +164,27 @@ def _union_coverage(regions):
     return covered
 
 
+def _target_pvalues(rows):
+    """{target_name: poisson_pvalue}, one entry per distinct target -- every row
+    for a target carries the same query-target result-level p-value."""
+    return {r["target_name"]: float(r["poisson_pvalue"]) for r in rows}
+
+
+def benjamini_hochberg(pvalues):
+    """Benjamini-Hochberg FDR-corrected p-values (q-values) for multiple-testing
+    correction across every target tested for one query. pvalues: {key: p}.
+    Returns {key: q}, monotonic non-decreasing as p increases, capped at 1.0."""
+    m = len(pvalues)
+    ranked = sorted(pvalues.items(), key=lambda kv: kv[1])
+    corrected = {}
+    min_so_far = 1.0
+    for rank in range(m, 0, -1):
+        key, p = ranked[rank - 1]
+        min_so_far = min(min_so_far, p * m / rank, 1.0)
+        corrected[key] = min_so_far
+    return corrected
+
+
 def _build_hit(target_name, cluster):
     region_rows = sorted(cluster, key=lambda r: int(r["query_start"]))
     regions = [(int(r["query_start"]), int(r["query_end"])) for r in region_rows]
@@ -175,7 +196,13 @@ def _build_hit(target_name, cluster):
         "region_rows": region_rows,
         "coverage": _union_coverage(regions),
         "n_regions": len(cluster),
+        # containment/jaccard/enrichment/poisson_pvalue are query-target *result*
+        # stats, not per-region -- every row in the cluster carries the same
+        # value (it's the same query-target pair); max() is just a safe pick.
         "containment": max(float(r["containment"]) for r in cluster),
+        "jaccard": max(float(r["jaccard"]) for r in cluster),
+        "enrichment": max(float(r["enrichment"]) for r in cluster),
+        "poisson_pvalue": max(float(r["poisson_pvalue"]) for r in cluster),
         "moltype": region_rows[0]["moltype"],
     }
 
@@ -223,7 +250,7 @@ class GenePlot:
     LINE_H = 0.16  # height of one line of sequence/label text in the alignment blocks
     LABEL_X_OFFSET = 0.022  # left indent of a header/region-label/group-label line
     SEQ_X_OFFSET = 0.09  # left indent of sequence text, past the "query:"/"hp:"/"target:" label
-    HEADER_H = 0.30  # space for a hit's header line + padding before its first region
+    HEADER_H = 0.46  # space for a hit's name/span line + stats line + padding before its first region
     GROUP_GAP = 0.20  # extra gap (in LINE_H units) after each query/moltype/target group
     HIT_GAP = 0.15  # gap after a hit's last region, before the next hit's header
 
@@ -380,11 +407,14 @@ class GenePlot:
             y_cursor -= self._hit_text_height(hit)
 
     def _draw_hit_alignment_block(self, index, hit, color, y_top):
-        """Draw one hit's header, then every region's alignment (not just one
-        representative) -- e.g. a 2-region hit like BAK_HUMAN shows both."""
+        """Draw one hit's header (name/span line + a stats line), then every
+        region's alignment (not just one representative) -- e.g. a 2-region hit
+        like BAK_HUMAN shows both."""
         self.ax_text.text(self.LABEL_X_OFFSET, y_top, self._hit_header_text(index, hit),
                            ha="left", va="top", fontsize=8, color=color,
                            fontweight="bold", family="sans-serif")
+        self.ax_text.text(self.LABEL_X_OFFSET, y_top - self.LINE_H, self._hit_stats_text(hit),
+                           ha="left", va="top", fontsize=7, color=MUTED, family="sans-serif")
         y = y_top - self.HEADER_H
         show_region_labels = hit["n_regions"] > 1
         for r_idx, row in enumerate(hit["region_rows"], start=1):
@@ -399,8 +429,17 @@ class GenePlot:
         span = hit["end"] - hit["start"]
         extra = f", {hit['n_regions']} regions" if hit["n_regions"] > 1 else ""
         return (f"{index}. {short_label(hit['target_name'])}  "
-                f"(covers {hit['coverage']}/{span}aa span at {hit['start'] + 1}-{hit['end']}aa, "
-                f"containment={hit['containment']:.2f}{extra})")
+                f"(covers {hit['coverage']}/{span}aa span at {hit['start'] + 1}-{hit['end']}aa{extra})")
+
+    @staticmethod
+    def _hit_stats_text(hit):
+        # corrected_pvalue is attached by _render_query (a BH-FDR q-value across
+        # every target tested for this query); absent when a hit is built and
+        # plotted directly, e.g. in tests, without going through that pipeline.
+        q_value = hit.get("corrected_pvalue")
+        q_part = f"   q-value={q_value:.2g}" if q_value is not None else ""
+        return (f"containment={hit['containment']:.2f}   jaccard={hit['jaccard']:.3f}   "
+                f"enrichment={hit['enrichment']:.2f}   p-value={hit['poisson_pvalue']:.2g}{q_part}")
 
     @staticmethod
     def _region_label_text(r_idx, hit, row):
@@ -465,12 +504,27 @@ def _cap_to_top_targets(hits, max_hits):
 
 
 def _render_query(query_name, query_rows, query_length, args):
-    """Build one gene's hits from its CSV rows and render its PNG+SVG pair."""
-    hits = _cap_to_top_targets(merge_regions_by_target(query_rows, args.gap_merge), args.max_hits)
+    """Build one gene's hits from its CSV rows and render its PNG+SVG pair.
+
+    query_rows is every row for this query in the CSV, unfiltered by
+    --min-containment -- the BH-FDR q-value must be corrected across every
+    target actually tested, not just the ones that end up displayed, or it
+    would understate how many comparisons were made.
+    """
+    corrected_pvalues = benjamini_hochberg(_target_pvalues(query_rows))
+    display_rows = [r for r in query_rows if float(r["containment"]) >= args.min_containment]
+    if not display_rows:
+        print(f"Skipping '{query_name}': no hits above --min-containment {args.min_containment}")
+        return
+
+    hits = _cap_to_top_targets(merge_regions_by_target(display_rows, args.gap_merge), args.max_hits)
+    for hit in hits:
+        hit["corrected_pvalue"] = corrected_pvalues[hit["target_name"]]
+
     base = os.path.join(args.output_dir, f"{safe_filename(query_name)}.hits")
     plot_gene(query_name, query_length, hits, [f"{base}.png", f"{base}.svg"], dpi=args.dpi)
     n_targets = len({h["target_name"] for h in hits})
-    print(f"Wrote {base}.png / .svg ({n_targets} targets, {len(hits)} hits, {len(query_rows)} regions)")
+    print(f"Wrote {base}.png / .svg ({n_targets} targets, {len(hits)} hits, {len(display_rows)} regions)")
 
 
 def main():
@@ -479,8 +533,6 @@ def main():
 
     lengths = read_fasta_lengths(args.query_fasta)
     rows = load_rows(args.csv)
-    if args.min_containment > 0.0:
-        rows = [r for r in rows if float(r["containment"]) >= args.min_containment]
 
     all_query_names = {r["query_name"] for r in rows}
     query_names = resolve_query_names(args.query_name, all_query_names)

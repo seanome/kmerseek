@@ -42,7 +42,10 @@ matched regions positioned to scale (stacked into lanes when hits overlap, numbe
 inside each box -- never floating text that can collide with a neighbor), and the
 query / encoded-alphabet / target alignment printed beneath each hit, with every
 region of a multi-region hit shown individually (not just one representative).
-Categorical colors always come from a built-in matplotlib qualitative colormap,
+Each hit's containment, Jaccard, fold-enrichment, Poisson p-value, and a
+Benjamini-Hochberg FDR-corrected q-value (corrected across every target actually
+tested for that query, not just the ones kept after `--min-containment` filtering)
+are printed alongside it. Categorical colors always come from a built-in matplotlib qualitative colormap,
 sized to how many distinct targets there are (Set2 for up to 8, tab10 up to 10,
 Set3 up to 12, tab20 beyond that) -- the alignment block's title is colored to
 match its box. Example, `ced9.fasta` searched against a 25-protein BCL2-family
