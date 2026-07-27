@@ -20,13 +20,13 @@ Usage:
 """
 
 import argparse
-import csv
 import os
 import re
 import textwrap
 from collections import defaultdict
 
 import matplotlib
+import polars as pl
 
 matplotlib.use("Agg")
 # Keep SVG text as real <text> elements (selectable/copyable), not vector outlines.
@@ -120,9 +120,40 @@ def resolve_query_names(query_name_arg, all_query_names):
     return sorted(set(matches))
 
 
-def load_rows(csv_path):
-    with open(csv_path, newline="") as fh:
-        return list(csv.DictReader(fh))
+def scan_csv(csv_path):
+    """Open the results CSV lazily -- nothing is read off disk until a query
+    is `.collect()`-ed, so the whole file never has to fit in memory at once.
+    infer_schema_length=None scans every row for dtypes up front, since a
+    poisson_pvalue column of mostly-0 values with rare 1e-300-style outliers
+    further down the file could otherwise get mis-inferred as a narrower type."""
+    return pl.scan_csv(csv_path, infer_schema_length=None)
+
+
+def load_query_names(lazy_rows):
+    """Every distinct query_name in the CSV. Only the query_name column is
+    read to compute this, not the whole (much wider) row."""
+    return set(lazy_rows.select("query_name").unique().collect().get_column("query_name"))
+
+
+def load_rows_for_queries(lazy_rows, query_names):
+    """Collect only the rows belonging to query_names, in one pass. Filtering
+    happens before collecting, so the common `--query-name` case (a small
+    subset) never materializes the rest of the CSV."""
+    return lazy_rows.filter(pl.col("query_name").is_in(list(query_names))).collect()
+
+
+def iter_query_rows(df):
+    """Yield (query_name, rows) one query at a time -- rows as plain dicts,
+    matching the shape the rest of this module already expects from
+    csv.DictReader. A single grouped pass over the collected DataFrame, so
+    only one query's rows are ever converted to Python dicts at a time,
+    instead of the whole result up front (partition_by(as_dict=True) does
+    that eagerly, roughly doubling peak memory for a "plot every query" run).
+    Re-filtering the DataFrame once per query instead of grouping would avoid
+    that too, but stays O(queries x rows) -- no better than the old
+    pure-Python approach once more than a handful of queries are requested."""
+    for (query_name,), group in df.group_by("query_name", maintain_order=True):
+        yield query_name, group.to_dicts()
 
 
 def merge_regions_by_target(rows, gap_merge):
@@ -532,22 +563,19 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
 
     lengths = read_fasta_lengths(args.query_fasta)
-    rows = load_rows(args.csv)
+    lazy_rows = scan_csv(args.csv)
 
-    all_query_names = {r["query_name"] for r in rows}
+    all_query_names = load_query_names(lazy_rows)
     query_names = resolve_query_names(args.query_name, all_query_names)
     if args.query_name is not None and not query_names:
         available = ", ".join(sorted(short_label(n) for n in all_query_names))
         print(f"No query matching '{args.query_name}' found in {args.csv}. Available: {available}")
         return
 
-    for query_name in query_names:
+    df = load_rows_for_queries(lazy_rows, query_names)
+    for query_name, query_rows in iter_query_rows(df):
         if query_name not in lengths:
             print(f"Skipping '{query_name}': not found in {args.query_fasta}")
-            continue
-        query_rows = [r for r in rows if r["query_name"] == query_name]
-        if not query_rows:
-            print(f"Skipping '{query_name}': no hits in {args.csv}")
             continue
         _render_query(query_name, query_rows, lengths[query_name], args)
 
