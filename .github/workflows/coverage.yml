@@ -58,7 +58,12 @@ jobs:
       - name: Build binary for CLI tests
         run: |
           export RUSTFLAGS="-C link-arg=-fuse-ld=bfd"
-          CARGO_BUILD_JOBS=1 cargo build --bins --no-default-features
+          # WHY: was CARGO_BUILD_JOBS=1 to avoid OOM on the runner; now that
+          # cargo-tarpaulin is no longer a dev-dependency (it doubled the dependency
+          # tree for no reason - the CLI binary is downloaded separately, above),
+          # there's less peak memory pressure, so try a small amount of parallelism.
+          # Revert to 1 if this OOMs again.
+          CARGO_BUILD_JOBS=2 cargo build --bins --no-default-features
           echo "CARGO_BIN_EXE_kmerseek=$(pwd)/target/debug/kmerseek" >> $GITHUB_ENV
 
       - name: Generate Rust coverage report
@@ -70,7 +75,7 @@ jobs:
           # pyo3 FFI code, but tarpaulin defaults to -C link-dead-code which keeps it,
           # leaving PyGen_Type/PyCapsule_Import unresolved. --no-dead-code turns that off
           # so the coverage build links like a normal build.
-          CARGO_BUILD_JOBS=1 cargo tarpaulin --no-dead-code \
+          CARGO_BUILD_JOBS=2 cargo tarpaulin --no-dead-code \
             --out Xml --output-dir coverage/ \
             --timeout 120 --skip-clean --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true
