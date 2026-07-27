@@ -174,6 +174,14 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Step 2: Run search with CED9 as query
     let output_csv = temp_dir.path().join("search_results.csv");
     let mut search_cmd = Command::cargo_bin("kmerseek")?;
+    // WHY: This test validates known ground-truth values for the BCL2/CED9 match (see
+    // n_intersecting_hashes/containment/etc. assertions below). The search command's default
+    // p-value cutoff (0.05) doesn't work here: this fixture database is only 25 sequences, all
+    // BCL2-family, so most k-mers are common across the DB and expected_shared_kmers is
+    // inflated - the real poisson_pvalue for BCL2_HUMAN vs CED9 is 0.636 (n_intersecting_hashes
+    // 24 vs expected_shared_kmers 25.4, i.e. at-or-below chance in this curated set). p < 0.7
+    // is loose enough to keep that match on this specific database without disabling the
+    // p-value filter outright.
     search_cmd.args([
         "search",
         "--query",
@@ -188,6 +196,10 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         "1",
         "--encoding",
         "hp",
+        "--min-shared-kmers",
+        "0",
+        "--max-pvalue",
+        "0.7",
     ]);
 
     search_cmd.assert().success().stderr(predicate::str::contains("Total matches"));
@@ -198,11 +210,11 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Verify CSV file is not empty
     let csv_content = std::fs::read_to_string(&output_csv)?;
     assert!(!csv_content.is_empty(), "CSV file should not be empty");
-    // WHY: 364 (pre-filtering) dropped to 128 once `search` defaulted to
-    // --min-shared-kmers 2 --max-pvalue 0.05, which this command doesn't override.
+    // WHY: 364 (fully unfiltered) drops to 243 once --max-pvalue 0.7 excludes matches that
+    // aren't enriched above chance in this small, BCL2-heavy fixture database (see comment above).
     assert!(
-        csv_content.lines().count() == 128,
-        "CSV should have 128 rows, found {} rows",
+        csv_content.lines().count() == 243,
+        "CSV should have 243 rows, found {} rows",
         csv_content.lines().count()
     );
 
