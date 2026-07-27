@@ -1549,14 +1549,21 @@ mod tests {
         let temp_path = temp_dir.path();
 
         let target_index_path = temp_path.join("target_index");
-        let target_index =
-            ProteomeIndex::new(&target_index_path, 15, 1, "hp", false)?;
-        target_index.process_fasta(TEST_CED9_FASTA, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", false)?;
+        target_index.process_fasta(
+            TEST_CED9_FASTA,
+            DEFAULT_PROGRESS_INTERVAL,
+            DEFAULT_BATCH_SIZE,
+        )?;
         let searcher = ProteinSearcher::new(target_index);
 
         let query_index_path = temp_path.join("query_index");
         let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", false)?;
-        query_index.process_fasta(TEST_BLC2_FASTA, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        query_index.process_fasta(
+            TEST_BLC2_FASTA,
+            DEFAULT_PROGRESS_INTERVAL,
+            DEFAULT_BATCH_SIZE,
+        )?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -1574,7 +1581,11 @@ mod tests {
         // No real match shares more k-mers than usize::MAX.
         let min_shared_kmers_filtered = searcher.search(
             &query_signatures,
-            &SearchFilters { threshold: 0.0, min_shared_kmers: usize::MAX, max_pvalue: f64::INFINITY },
+            &SearchFilters {
+                threshold: 0.0,
+                min_shared_kmers: usize::MAX,
+                max_pvalue: f64::INFINITY,
+            },
         )?;
         assert!(
             min_shared_kmers_filtered.is_empty(),
