@@ -1539,6 +1539,59 @@ mod tests {
         Ok(())
     }
 
+    /// Each `SearchFilters` field, exercised on its own, rejects an otherwise-real BCL2/CED9
+    /// match. WHY: `compare()` checks all three conditions with `||`, which short-circuits -
+    /// a permissive default on the other two fields is required so the field under test is
+    /// the one actually deciding the rejection, not skipped by short-circuit evaluation.
+    #[test]
+    fn test_search_filters_reject_candidates() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let temp_path = temp_dir.path();
+
+        let target_index_path = temp_path.join("target_index");
+        let target_index =
+            ProteomeIndex::new(&target_index_path, 15, 1, "hp", false)?;
+        target_index.process_fasta(TEST_CED9_FASTA, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index_path = temp_path.join("query_index");
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", false)?;
+        query_index.process_fasta(TEST_BLC2_FASTA, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        // Sanity check: with permissive filters, this pair does match.
+        let unfiltered = searcher.search(&query_signatures, &SearchFilters::default())?;
+        assert!(!unfiltered.is_empty(), "BCL2 vs CED9 should match with no filtering");
+
+        // containment is always <= 1.0, so this threshold rejects every candidate.
+        let threshold_filtered = searcher.search(
+            &query_signatures,
+            &SearchFilters { threshold: 1.1, min_shared_kmers: 0, max_pvalue: f64::INFINITY },
+        )?;
+        assert!(threshold_filtered.is_empty(), "threshold: 1.1 should reject every candidate");
+
+        // No real match shares more k-mers than usize::MAX.
+        let min_shared_kmers_filtered = searcher.search(
+            &query_signatures,
+            &SearchFilters { threshold: 0.0, min_shared_kmers: usize::MAX, max_pvalue: f64::INFINITY },
+        )?;
+        assert!(
+            min_shared_kmers_filtered.is_empty(),
+            "min_shared_kmers: usize::MAX should reject every candidate"
+        );
+
+        // poisson_pvalue is always in [0.0, 1.0], so max_pvalue: 0.0 rejects every candidate
+        // (compare() rejects on poisson_pvalue >= max_pvalue).
+        let max_pvalue_filtered = searcher.search(
+            &query_signatures,
+            &SearchFilters { threshold: 0.0, min_shared_kmers: 0, max_pvalue: 0.0 },
+        )?;
+        assert!(max_pvalue_filtered.is_empty(), "max_pvalue: 0.0 should reject every candidate");
+
+        Ok(())
+    }
+
     /// Tests if the correct k-mer overlap region for a query-target pair is found
     // # BCL2 & Ced9 `hp` k-mer match via **`pphhphhphhhhhphhhhh`, yay!**
     //
