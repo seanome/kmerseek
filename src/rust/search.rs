@@ -1603,6 +1603,51 @@ mod tests {
         Ok(())
     }
 
+    /// `ProteinSearcher::new()` (used by most tests) keeps signatures in an in-memory DashMap,
+    /// so `search_one()` always takes its "Path 1" branch. Only `ProteinSearcher::load()` (the
+    /// fast path used by the real CLI, backed by an on-demand `sig_cache`) exercises Path 3
+    /// (first RocksDB load of a target) and Path 2 (sig_cache hit on a later query that shares
+    /// that target). Two queries against the same small target database, both known to match
+    /// entries in it, should touch at least one common target twice.
+    #[rstest]
+    fn test_search_one_sig_cache_paths(
+        bcl2_sketch_k12: ProteinSketch,
+        ced9_sketch_k12: ProteinSketch,
+    ) -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, 12, 1, "hp", false)?;
+        target_index.process_fasta(TEST_FASTA_GZ, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        target_index.save_state()?;
+        drop(target_index);
+
+        // ProteinSearcher::load() takes the fast path: no signatures loaded up front, so
+        // search_one() must go through sig_cache (Path 2/3), never Path 1.
+        let searcher = ProteinSearcher::load(&target_index_path)?;
+        let query_signatures = vec![bcl2_sketch_k12, ced9_sketch_k12];
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
+        assert!(!results.is_empty(), "BCL2/CED9 queries should match this BCL2-family database");
+
+        // At least one target must be shared by both queries' candidate sets - otherwise Path 2
+        // (sig_cache hit) is never exercised, and this test would pass without covering it.
+        let bcl2_targets: std::collections::HashSet<_> = results
+            .iter()
+            .filter(|r| r.query_name.contains("BCL2"))
+            .map(|r| r.target_md5.clone())
+            .collect();
+        let ced9_targets: std::collections::HashSet<_> = results
+            .iter()
+            .filter(|r| r.query_name.contains("CED9"))
+            .map(|r| r.target_md5.clone())
+            .collect();
+        assert!(
+            bcl2_targets.intersection(&ced9_targets).next().is_some(),
+            "BCL2 and CED9 queries should share at least one matched target in this database"
+        );
+
+        Ok(())
+    }
+
     /// Tests if the correct k-mer overlap region for a query-target pair is found
     // # BCL2 & Ced9 `hp` k-mer match via **`pphhphhphhhhhphhhhh`, yay!**
     //
