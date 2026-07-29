@@ -512,25 +512,30 @@ def _build_arg_parser():
     parser.add_argument("--min-containment", type=float, default=0.0,
                          help="Drop matched regions below this containment before plotting (default: 0.0, keep all)")
     parser.add_argument("--max-hits", type=int, default=None,
-                         help="Keep only the top N distinct targets per gene, ranked by each target's best "
-                              "containment (default: unlimited); all of a kept target's hit spans are still shown. "
-                              "Proteome-scale searches can produce dozens of targets per gene, making the default "
-                              "unlimited figure very tall -- use this to cap it.")
+                         help="Keep only the top N distinct targets per gene, ranked by each target's "
+                              "BH-corrected q-value, most significant first (default: unlimited); all of a kept "
+                              "target's hit spans are still shown. Proteome-scale searches can produce dozens of "
+                              "targets per gene, making the default unlimited figure very tall -- use this to cap it.")
     parser.add_argument("--dpi", type=int, default=200)
     return parser
 
 
-def _cap_to_top_targets(hits, max_hits):
+def _cap_to_top_targets(hits, max_hits, corrected_pvalues):
     """Keep only hits belonging to the top max_hits distinct targets, ranked by
-    each target's best containment -- capping by hit-span count instead would
-    let one heavily-fragmented target crowd out every other target."""
-    if max_hits is None or len({h["target_name"] for h in hits}) <= max_hits:
+    each target's BH-corrected q-value (most significant first, ties broken by
+    containment) -- capping by hit-span count instead would let one
+    heavily-fragmented target crowd out every other target."""
+    target_names = {h["target_name"] for h in hits}
+    if max_hits is None or len(target_names) <= max_hits:
         return hits
     best_containment = {}
     for h in hits:
         best_containment[h["target_name"]] = max(
             best_containment.get(h["target_name"], 0.0), h["containment"])
-    top_targets = set(sorted(best_containment, key=best_containment.get, reverse=True)[:max_hits])
+    top_targets = set(sorted(
+        target_names,
+        key=lambda t: (corrected_pvalues[t], -best_containment[t]),
+    )[:max_hits])
     return [h for h in hits if h["target_name"] in top_targets]
 
 
@@ -548,7 +553,8 @@ def _render_query(query_name, query_rows, query_length, args):
         print(f"Skipping '{query_name}': no hits above --min-containment {args.min_containment}")
         return
 
-    hits = _cap_to_top_targets(merge_regions_by_target(display_rows, args.gap_merge), args.max_hits)
+    hits = _cap_to_top_targets(
+        merge_regions_by_target(display_rows, args.gap_merge), args.max_hits, corrected_pvalues)
     for hit in hits:
         hit["corrected_pvalue"] = corrected_pvalues[hit["target_name"]]
 
