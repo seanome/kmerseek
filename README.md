@@ -80,6 +80,38 @@ still shown, so one heavily-fragmented target can't crowd out the others) -- use
 to tame proteome-scale searches where a gene can have dozens of distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
 
+## HP Alphabet Variants
+
+`--encoding hp` collapses the 20 canonical amino acids down to hydrophobic (`h`)
+/ polar (`p`) before k-mer extraction. The alphabets below (see
+`src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
+the five borderline ones -- **C, G, P, W, Y** (bolded). Lehninger is the current
+default (`hp` moltype); the others are selectable via `hp_<name>` moltypes
+(e.g. `hp_thomas_dill`) for the alphabet robustness sweep.
+
+| AA | Lehninger (current) | Thomas-Dill/PBotC 2nd | Kyte-Doolittle | TD−C | Leh+C | PBotC 1st |
+|----|:---:|:---:|:---:|:---:|:---:|:---:|
+| A | h | h | h | h | h | h |
+| **C** | p | h | h | p | h | h |
+| D | p | p | p | p | p | p |
+| E | p | p | p | p | p | p |
+| F | h | h | h | h | h | h |
+| **G** | h | p | p | p | h | p |
+| H | p | p | p | p | p | p |
+| I | h | h | h | h | h | h |
+| K | p | p | p | p | p | p |
+| L | h | h | h | h | h | h |
+| M | h | h | h | h | h | h |
+| N | p | p | p | p | p | p |
+| **P** | h | p | p | p | h | h |
+| Q | p | p | p | p | p | p |
+| R | p | p | p | p | p | p |
+| S | p | p | p | p | p | p |
+| T | p | p | p | p | p | p |
+| V | h | h | h | h | h | h |
+| **W** | h | h | p | h | h | h |
+| **Y** | h | h | p | h | h | h |
+
 ## Using the Builder Pattern
 
 The `ProteomeIndex` now supports a fluent Builder pattern:
