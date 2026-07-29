@@ -75,9 +75,10 @@ matches that the hit track becomes an unreadable wall of fragments.
 same FASTA used as the search query. Omit `--query-name` to render one PNG+SVG pair
 per query found in the CSV. `--min-containment` and `--max-hits` are off by default
 (every hit, for every target, is drawn); `--max-hits N` caps the figure to the top N
-*distinct targets* by their best containment (all of a kept target's hit spans are
-still shown, so one heavily-fragmented target can't crowd out the others) -- use it
-to tame proteome-scale searches where a gene can have dozens of distinct hits. See
+*distinct targets* by BH-corrected q-value, most significant first (all of a kept
+target's hit spans are still shown, so one heavily-fragmented target can't crowd out
+the others) -- use it to tame proteome-scale searches where a gene can have dozens of
+distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
 
 ## Using the Builder Pattern
