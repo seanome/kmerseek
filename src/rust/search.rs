@@ -22,6 +22,30 @@ pub const DEFAULT_PROGRESS_INTERVAL: u32 = 1000;
 /// Default batch size for FASTA processing (process N sequences per batch)
 pub const DEFAULT_BATCH_SIZE: usize = 1000;
 
+/// Result-level filters applied while a search is running, so that results failing the
+/// filters are never allocated into the results `Vec` in the first place (as opposed to
+/// building the full unfiltered `Vec` and then filtering it down afterward).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct SearchFilters {
+    /// Minimum containment score (query-side) required to keep a match.
+    pub threshold: f64,
+    /// Minimum number of shared k-mers required to keep a match.
+    pub min_shared_kmers: usize,
+    /// Maximum uncorrected Poisson p-value required to keep a match.
+    pub max_pvalue: f64,
+}
+
+impl Default for SearchFilters {
+    /// Accepts every result `compare()` produces. Note max_pvalue must be `f64::INFINITY`,
+    /// not 1.0: `poisson_pvalue` is exactly 1.0 whenever there's no database frequency
+    /// context (e.g. `set_query_frequencies` was never called), which is common, so a cap
+    /// of 1.0 combined with `compare()`'s `poisson_pvalue >= max_pvalue` rejection check
+    /// would wrongly reject those results.
+    fn default() -> Self {
+        Self { threshold: 0.0, min_shared_kmers: 0, max_pvalue: f64::INFINITY }
+    }
+}
+
 /// CSV-friendly version of SearchResult with matched region information
 /// WHY: Each matched region gets its own row in the CSV, with all SearchResult similarity
 /// metrics repeated for each region. This makes it easy to analyze individual matched regions
@@ -453,11 +477,17 @@ impl ProteinSearcher {
     ///
     /// # Arguments
     /// * `queries` - Slice of query signatures to search against the database
+    /// * `filters` - Result-level filters applied while searching; failing results are never
+    ///   allocated into the returned `Vec` (see `SearchFilters`)
     ///
     /// # Returns
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
     #[must_use = "search results should be used to process query matches"]
-    pub fn search(&self, queries: &[ProteinSketch]) -> Result<Vec<SearchResult>> {
+    pub fn search(
+        &self,
+        queries: &[ProteinSketch],
+        filters: &SearchFilters,
+    ) -> Result<Vec<SearchResult>> {
         // Create progress bar for tracking query processing
         let progress = ProgressBar::new(queries.len() as u64);
         progress.set_style(
@@ -474,7 +504,7 @@ impl ProteinSearcher {
             .par_iter()
             .flat_map(|query| {
                 // search_one uses the inverted index to find candidates
-                let results = self.search_one(query);
+                let results = self.search_one(query, filters);
 
                 // Update progress after processing each query
                 progress.inc(1);
@@ -504,7 +534,10 @@ impl ProteinSearcher {
     /// Uses the inverted k-mer index to find candidate targets (those sharing ≥1 k-mer
     /// with the query) before doing full pairwise comparison. This skips the vast majority
     /// of targets with no k-mer overlap, reducing work from O(all_targets) to O(candidates).
-    pub fn search_one(&self, query: &ProteinSketch) -> Vec<SearchResult> {
+    ///
+    /// `filters` is applied inline as each candidate is compared: results that fail are never
+    /// pushed into the returned `Vec`, rather than being built up and filtered out afterward.
+    pub fn search_one(&self, query: &ProteinSketch, filters: &SearchFilters) -> Vec<SearchResult> {
         let prepared = self.prepare_query(query);
 
         // Find candidate targets via inverted index: only compare against targets
@@ -531,17 +564,17 @@ impl ProteinSearcher {
 
                 // Path 1: in-memory signatures (slow path for old DBs without search cache)
                 if let Some(entry) = sigs.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value());
+                    return self.compare(&prepared, entry.value(), filters);
                 }
 
                 // Path 2: sig_cache hit (target was loaded by an earlier query)
                 if let Some(entry) = self.sig_cache.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value());
+                    return self.compare(&prepared, entry.value(), filters);
                 }
 
                 // Path 3: first-time load from RocksDB; store in cache for future queries
                 let target = self.index.get_signature_by_md5(md5).ok()??;
-                let result = self.compare(&prepared, &target);
+                let result = self.compare(&prepared, &target, filters);
                 self.sig_cache.insert(md5.clone(), target);
                 result
             })
@@ -557,10 +590,13 @@ impl ProteinSearcher {
     /// This avoids cloning the large ProteinSketch objects while still enabling parallel processing.
     /// The method also automatically skips self-matches by comparing MD5 sums in compare().
     ///
+    /// `filters` is forwarded to `search_one`, so failing results are never allocated into the
+    /// returned `Vec` (see `SearchFilters`).
+    ///
     /// # Returns
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
     #[must_use = "search results should be used to process query matches"]
-    pub fn search_all_vs_all(&self) -> Result<Vec<SearchResult>> {
+    pub fn search_all_vs_all(&self, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
         // Collect all signatures as owned ProteinSketch values to use as queries.
         // Two paths: in-memory DashMap (slow path / old DBs) or on-demand RocksDB (fast path).
         let all_queries: Vec<ProteinSketch> = {
@@ -599,7 +635,7 @@ impl ProteinSearcher {
         let all_results: Vec<SearchResult> = all_queries
             .par_iter()
             .flat_map(|query| {
-                let results = self.search_one(query);
+                let results = self.search_one(query, filters);
                 progress.inc(1);
                 results
             })
@@ -643,6 +679,7 @@ impl ProteinSearcher {
         &self,
         query: &PreparedQuery<'_>,
         target: &ProteinSketch,
+        filters: &SearchFilters,
     ) -> Option<SearchResult> {
         // Skip self-matches by comparing MD5 sums
         // WHY: In all-vs-all searches, we don't want to compare a signature against itself.
@@ -666,10 +703,36 @@ impl ProteinSearcher {
             return None;
         }
 
+        // Containment, n_intersecting_hashes, and poisson_pvalue only need the intersection
+        // size and DB-wide k-mer frequencies - all cheap. Check `filters` against them here,
+        // before doing the expensive per-pair work below (find_matched_regions walks both
+        // sequences to locate matched regions; abundance_stats sorts the intersection). This
+        // way, candidates that fail the filter never pay for that work.
+        let n_intersecting_hashes = intersection.len();
+        let containment = n_intersecting_hashes as f64 / query.mins.len() as f64;
+        let expected_shared_kmers = self.calculate_expected_shared_kmers(query.sketch, target);
+        // P(X >= k | lambda) where k = observed intersecting hashes, lambda = expected by chance.
+        // Uses the Poisson survival function: 1 - CDF(k-1). n_intersecting_hashes >= 1 here
+        // since the empty-intersection case already returned above.
+        let poisson_pvalue = if expected_shared_kmers > 0.0 {
+            match Poisson::new(expected_shared_kmers) {
+                Ok(dist) => (1.0 - dist.cdf((n_intersecting_hashes - 1) as u64)).max(0.0),
+                Err(_) => 1.0,
+            }
+        } else {
+            1.0
+        };
+
+        if containment < filters.threshold
+            || n_intersecting_hashes < filters.min_shared_kmers
+            || poisson_pvalue >= filters.max_pvalue
+        {
+            return None;
+        }
+
         // Calculate database-specific overlap metrics
         let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&intersection);
         let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&intersection);
-        let expected_shared_kmers = self.calculate_expected_shared_kmers(query.sketch, target);
 
         // Build the similarity result using the pre-computed intersection and mins sets
         let mut result = calculate_similarity_from_precomputed(
@@ -681,7 +744,7 @@ impl ProteinSearcher {
         )?;
 
         let enrichment = if expected_shared_kmers > 0.0 {
-            result.n_intersecting_hashes as f64 / expected_shared_kmers
+            n_intersecting_hashes as f64 / expected_shared_kmers
         } else {
             0.0
         };
@@ -703,18 +766,6 @@ impl ProteinSearcher {
                 .sum()
         } else {
             0.0
-        };
-
-        // P(X >= k | lambda) where k = observed intersecting hashes, lambda = expected by chance.
-        // Uses the Poisson survival function: 1 - CDF(k-1).
-        let k = result.n_intersecting_hashes;
-        let poisson_pvalue = if expected_shared_kmers > 0.0 && k > 0 {
-            match Poisson::new(expected_shared_kmers) {
-                Ok(dist) => (1.0 - dist.cdf((k - 1) as u64)).max(0.0),
-                Err(_) => 1.0,
-            }
-        } else {
-            1.0
         };
 
         result.query_tfidf = query.tfidf;
@@ -1461,7 +1512,7 @@ mod tests {
         assert!(!query_signatures.is_empty(), "Should have at least one query signature");
 
         // Perform search
-        let results = searcher.search(&query_signatures)?;
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
 
         // Should find at least one match (BCL2 vs CED9 via HP encoding)
         assert!(!results.is_empty(), "Should find at least one match between BCL2 and CED9");
@@ -1484,6 +1535,115 @@ mod tests {
         assert!(first_result.containment > 0.0, "Should have positive containment");
         assert!(first_result.jaccard > 0.0, "Should have positive jaccard");
         assert!(first_result.n_intersecting_hashes > 0, "Should have intersecting hashes");
+
+        Ok(())
+    }
+
+    /// Each `SearchFilters` field, exercised on its own, rejects an otherwise-real BCL2/CED9
+    /// match. WHY: `compare()` checks all three conditions with `||`, which short-circuits -
+    /// a permissive default on the other two fields is required so the field under test is
+    /// the one actually deciding the rejection, not skipped by short-circuit evaluation.
+    #[test]
+    fn test_search_filters_reject_candidates() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let temp_path = temp_dir.path();
+
+        let target_index_path = temp_path.join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", false)?;
+        target_index.process_fasta(
+            TEST_CED9_FASTA,
+            DEFAULT_PROGRESS_INTERVAL,
+            DEFAULT_BATCH_SIZE,
+        )?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index_path = temp_path.join("query_index");
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", false)?;
+        query_index.process_fasta(
+            TEST_BLC2_FASTA,
+            DEFAULT_PROGRESS_INTERVAL,
+            DEFAULT_BATCH_SIZE,
+        )?;
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        // Sanity check: with permissive filters, this pair does match.
+        let unfiltered = searcher.search(&query_signatures, &SearchFilters::default())?;
+        assert!(!unfiltered.is_empty(), "BCL2 vs CED9 should match with no filtering");
+
+        // containment is always <= 1.0, so this threshold rejects every candidate.
+        let threshold_filtered = searcher.search(
+            &query_signatures,
+            &SearchFilters { threshold: 1.1, min_shared_kmers: 0, max_pvalue: f64::INFINITY },
+        )?;
+        assert!(threshold_filtered.is_empty(), "threshold: 1.1 should reject every candidate");
+
+        // No real match shares more k-mers than usize::MAX.
+        let min_shared_kmers_filtered = searcher.search(
+            &query_signatures,
+            &SearchFilters {
+                threshold: 0.0,
+                min_shared_kmers: usize::MAX,
+                max_pvalue: f64::INFINITY,
+            },
+        )?;
+        assert!(
+            min_shared_kmers_filtered.is_empty(),
+            "min_shared_kmers: usize::MAX should reject every candidate"
+        );
+
+        // poisson_pvalue is always in [0.0, 1.0], so max_pvalue: 0.0 rejects every candidate
+        // (compare() rejects on poisson_pvalue >= max_pvalue).
+        let max_pvalue_filtered = searcher.search(
+            &query_signatures,
+            &SearchFilters { threshold: 0.0, min_shared_kmers: 0, max_pvalue: 0.0 },
+        )?;
+        assert!(max_pvalue_filtered.is_empty(), "max_pvalue: 0.0 should reject every candidate");
+
+        Ok(())
+    }
+
+    /// `ProteinSearcher::new()` (used by most tests) keeps signatures in an in-memory DashMap,
+    /// so `search_one()` always takes its "Path 1" branch. Only `ProteinSearcher::load()` (the
+    /// fast path used by the real CLI, backed by an on-demand `sig_cache`) exercises Path 3
+    /// (first RocksDB load of a target) and Path 2 (sig_cache hit on a later query that shares
+    /// that target). Two queries against the same small target database, both known to match
+    /// entries in it, should touch at least one common target twice.
+    #[rstest]
+    fn test_search_one_sig_cache_paths(
+        bcl2_sketch_k12: ProteinSketch,
+        ced9_sketch_k12: ProteinSketch,
+    ) -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, 12, 1, "hp", false)?;
+        target_index.process_fasta(TEST_FASTA_GZ, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
+        target_index.save_state()?;
+        drop(target_index);
+
+        // ProteinSearcher::load() takes the fast path: no signatures loaded up front, so
+        // search_one() must go through sig_cache (Path 2/3), never Path 1.
+        let searcher = ProteinSearcher::load(&target_index_path)?;
+        let query_signatures = vec![bcl2_sketch_k12, ced9_sketch_k12];
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
+        assert!(!results.is_empty(), "BCL2/CED9 queries should match this BCL2-family database");
+
+        // At least one target must be shared by both queries' candidate sets - otherwise Path 2
+        // (sig_cache hit) is never exercised, and this test would pass without covering it.
+        let bcl2_targets: std::collections::HashSet<_> = results
+            .iter()
+            .filter(|r| r.query_name.contains("BCL2"))
+            .map(|r| r.target_md5.clone())
+            .collect();
+        let ced9_targets: std::collections::HashSet<_> = results
+            .iter()
+            .filter(|r| r.query_name.contains("CED9"))
+            .map(|r| r.target_md5.clone())
+            .collect();
+        assert!(
+            bcl2_targets.intersection(&ced9_targets).next().is_some(),
+            "BCL2 and CED9 queries should share at least one matched target in this database"
+        );
 
         Ok(())
     }
@@ -1713,7 +1873,7 @@ mod tests {
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-        let results = searcher.search(&query_signatures)?;
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
 
         if !results.is_empty() {
             let result = &results[0];
@@ -1773,7 +1933,7 @@ mod tests {
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
-        let results = searcher.search(&query_signatures)?;
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
 
         // Results should be sorted by containment (descending)
         for i in 1..results.len() {
@@ -2046,7 +2206,7 @@ mod tests {
         assert_eq!(query_signatures.len(), 1, "Should have exactly one query signature (CED9)");
 
         // Perform search using the public search() method
-        let results = searcher.search(&query_signatures)?;
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
 
         // Should find at least one match (CED9 should match BCL2 and potentially other BCL2 family members)
         assert_eq!(
@@ -2175,7 +2335,7 @@ mod tests {
         let total_queries = 1;
         searcher.set_query_frequencies(qfreqs, total_queries);
 
-        let results = searcher.search_one(&query_sig);
+        let results = searcher.search_one(&query_sig, &SearchFilters::default());
 
         // Find bcl2 result
         let bcl2_result = results

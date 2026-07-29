@@ -1,0 +1,15 @@
+#!/bin/sh
+# Blocks commits that would fail the "Check Rust Formatting" CI job
+# (.github/workflows/lint-rust-cargo.yml). Kept to `cargo fmt` only - clippy needs a
+# full compile of the dependency tree (rocksdb, sourmash, ...), which is too slow to
+# run on every commit; clippy is still enforced in CI.
+#
+# Activated repo-wide via: git config core.hooksPath .githooks
+
+set -e
+
+if ! cargo fmt --all -- --check --quiet; then
+    echo ""
+    echo "cargo fmt found unformatted code. Run 'cargo fmt --all' and re-commit."
+    exit 1
+fi

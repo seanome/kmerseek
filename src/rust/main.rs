@@ -70,6 +70,14 @@ enum Commands {
         #[arg(long, default_value = "0.0")]
         threshold: f64,
 
+        /// Minimum number of shared k-mers required to report a match
+        #[arg(long, default_value = "2")]
+        min_shared_kmers: usize,
+
+        /// Maximum uncorrected Poisson p-value required to report a match
+        #[arg(long, default_value = "0.05")]
+        max_pvalue: f64,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -223,6 +231,8 @@ fn main() -> IndexResult<()> {
             encoding,
             shuffled_seed: _,
             threshold,
+            min_shared_kmers,
+            max_pvalue,
             verbose,
             query_is_index,
             batch_size,
@@ -254,8 +264,13 @@ fn main() -> IndexResult<()> {
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
             eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
             eprintln!("  Threshold: {}", threshold);
+            eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
+            eprintln!("  Maximum p-value: {}", max_pvalue);
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
+
+            use kmerseek::search::SearchFilters;
+            let filters = SearchFilters { threshold, min_shared_kmers, max_pvalue };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -284,7 +299,7 @@ fn main() -> IndexResult<()> {
                     "Detected all-vs-all search (query == target), using optimized search method..."
                 );
                 eprintln!("Skipping self-matches (comparing MD5 sums)...");
-                searcher.search_all_vs_all()?
+                searcher.search_all_vs_all(&filters)?
             } else if query_is_index {
                 // Load pre-indexed query database
                 eprintln!("Loading pre-indexed query database...");
@@ -302,7 +317,7 @@ fn main() -> IndexResult<()> {
 
                 eprintln!("Found {} query signatures", query_signatures.len());
                 eprintln!("Performing comprehensive search...");
-                searcher.search(&query_signatures)?
+                searcher.search(&query_signatures, &filters)?
             } else {
                 // Stream queries from FASTA, writing CSV results as we go
                 eprintln!("Streaming query sequences from FASTA...");
@@ -385,21 +400,20 @@ fn main() -> IndexResult<()> {
                                      match_count: &mut u64,
                                      row_count: &mut u64|
                  -> anyhow::Result<()> {
-                    // Search all queries in this batch in parallel
+                    // Search all queries in this batch in parallel. Results failing `filters`
+                    // are never included (see SearchFilters), so no post-hoc filtering needed here.
                     let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
-                        batch.par_iter().map(|q| searcher.search_one(q)).collect();
+                        batch.par_iter().map(|q| searcher.search_one(q, &filters)).collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
                     for results in &batch_results {
                         for result in results {
-                            if result.containment >= threshold {
-                                *match_count += 1;
-                                for region in &result.matched_regions {
-                                    let csv_row =
-                                        SearchResultCsv::from_result_and_region(result, region);
-                                    writer.serialize(&csv_row)?;
-                                    *row_count += 1;
-                                }
+                            *match_count += 1;
+                            for region in &result.matched_regions {
+                                let csv_row =
+                                    SearchResultCsv::from_result_and_region(result, region);
+                                writer.serialize(&csv_row)?;
+                                *row_count += 1;
                             }
                         }
                     }
@@ -459,13 +473,17 @@ fn main() -> IndexResult<()> {
                 return Ok(());
             };
 
-            // Filter results by threshold (for query-is-index and all-vs-all paths)
-            let filtered_results: Vec<_> = search_results
-                .into_iter()
-                .filter(|result| result.containment >= threshold)
-                .collect();
+            // search() / search_all_vs_all() already applied `filters` internally, so
+            // search_results only contains matches that passed threshold/min_shared_kmers/max_pvalue.
+            let filtered_results = search_results;
 
-            eprintln!("Found {} matches above threshold {}", filtered_results.len(), threshold);
+            eprintln!(
+                "Found {} matches above threshold {} with at least {} shared k-mers and p-value < {}",
+                filtered_results.len(),
+                threshold,
+                min_shared_kmers,
+                max_pvalue
+            );
 
             use kmerseek::search::SearchResultCsv;
             if let Some(output_path) = output {
