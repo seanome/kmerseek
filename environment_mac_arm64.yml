@@ -58,6 +58,7 @@ dependencies:
   - pillow
   - pip
   - pluggy
+  - polars
   - pthread-stubs
   - pycparser
   - pyparsing

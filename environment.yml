@@ -66,6 +66,7 @@ dependencies:
   - pillow=11.1.0=py312h80c1187_0
   - pip=25.0=pyh8b19718_0
   - pluggy=1.5.0=pyhd8ed1ab_1
+  - polars=1.34.0
   - pthread-stubs=0.4=hb9d3cd8_1002
   - pycparser=2.22=pyh29332c3_1
   - pyparsing=3.2.1=pyhd8ed1ab_0
