@@ -104,10 +104,13 @@ def test_resolve_query_names_no_match_returns_empty():
 
 # --- merge_regions_by_target / _build_hit -----------------------------------
 
+# query_subseq/target_subseq below are real residues 1-10 of CED9 and BCL2
+# (true Bcl-2-family homologs), and moltype_seq is their actual thomas_dill
+# HP encoding (h: A,C,F,I,L,M,V,W,Y; p: D,E,G,H,K,N,P,Q,R,S,T) -- not a made-up motif.
 def _row(target_name="tgt", query_start=0, query_end=10, region_length=10,
          containment=0.5, jaccard=0.1, enrichment=1.0, poisson_pvalue=0.05,
-         moltype="hp", query_subseq="MKVLLLKKKK",
-         moltype_seq="hpphhhpppp", target_subseq="TTTTTTTTTT", query_name=CED9_NAME):
+         moltype="hp_thomas_dill", query_subseq="MTRCTADNSL",
+         moltype_seq="hpphphppph", target_subseq="MAHAGRTGYD", query_name=CED9_NAME):
     return {
         "query_name": query_name,
         "target_name": target_name,
@@ -161,16 +164,18 @@ def test_merge_regions_groups_by_target_independently():
 def test_build_hit_region_rows_keeps_every_region_sorted_by_start():
     # Every region must stay visible (not just one "representative" pick) so a
     # multi-region hit like BAK_HUMAN's two separate matches both get shown.
+    # CED9 residues 21-25 ("ATGEM") and 1-20 ("MTRCTADNSLTNPAYRRRTM"), aligned
+    # against the corresponding BCL2 residues -- two real, disjoint matches.
     second_region = _row(query_start=20, query_end=25, region_length=5,
-                          query_subseq="MKVLL", moltype_seq="hpphh",
-                          target_subseq="AAAAA", containment=0.9)
+                          query_subseq="ATGEM", moltype_seq="hppph",
+                          target_subseq="YKLSQ", containment=0.9)
     first_region = _row(query_start=0, query_end=20, region_length=20,
-                         query_subseq="MKVLLLKKKKMKVLLLKKKK",
-                         moltype_seq="hpphhhppppphhhhhppppp"[:20],
-                         target_subseq="TTTTTTTTTTTTTTTTTTTT", containment=0.3)
+                         query_subseq="MTRCTADNSLTNPAYRRRTM",
+                         moltype_seq="hpphphppphppphhpppph",
+                         target_subseq="NREIVMKYIHYKLSQRGYEW", containment=0.3)
     hit = vh._build_hit("tgt", [second_region, first_region])
     assert [row["query_subseq"] for row in hit["region_rows"]] == [
-        "MKVLLLKKKKMKVLLLKKKK", "MKVLL",
+        "MTRCTADNSLTNPAYRRRTM", "ATGEM",
     ]
 
 
