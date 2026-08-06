@@ -330,7 +330,7 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
-        Self::log_kmer_frequency_stats(&kmer_frequencies);
+        self.log_kmer_frequency_stats(&kmer_frequencies, &inverted_index, &target_list);
 
         // Serialize and store the search cache
         eprintln!(
@@ -357,7 +357,14 @@ impl ProteomeIndex {
     ///
     /// Bins are power-of-two ranges (1, 2-3, 4-7, ...) since k-mer frequency distributions
     /// are typically heavily right-skewed (most k-mers occur once, a few occur very often).
-    fn log_kmer_frequency_stats(kmer_frequencies: &HashMap<u64, usize>) {
+    /// The top/bottom lists show the actual encoded k-mer string (not the hash), resolved by
+    /// looking up one signature that contains each hash via the inverted index.
+    fn log_kmer_frequency_stats(
+        &self,
+        kmer_frequencies: &HashMap<u64, usize>,
+        inverted_index: &HashMap<u64, Vec<u32>>,
+        target_list: &[String],
+    ) {
         if kmer_frequencies.is_empty() {
             return;
         }
@@ -383,15 +390,41 @@ impl ProteomeIndex {
         let mut by_frequency: Vec<(&u64, &usize)> = kmer_frequencies.iter().collect();
         by_frequency.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
 
-        eprintln!("[save] Top 10 most common k-mers (hash: occurrences):");
+        eprintln!("[save] Top 10 most common k-mers (encoded k-mer: occurrences):");
         for (hash, count) in by_frequency.iter().take(10) {
-            eprintln!("[save]   {hash}: {count}");
+            let kmer = self.resolve_kmer_string(**hash, inverted_index, target_list);
+            eprintln!("[save]   {kmer}: {count}");
         }
 
-        eprintln!("[save] Bottom 10 least common k-mers (hash: occurrences):");
+        eprintln!("[save] Bottom 10 least common k-mers (encoded k-mer: occurrences):");
         for (hash, count) in by_frequency.iter().rev().take(10) {
-            eprintln!("[save]   {hash}: {count}");
+            let kmer = self.resolve_kmer_string(**hash, inverted_index, target_list);
+            eprintln!("[save]   {kmer}: {count}");
         }
+    }
+
+    /// Resolve one k-mer hash back to the actual encoded k-mer string it was hashed from,
+    /// by finding a signature that contains it (via the inverted index) and slicing that
+    /// signature's stored sequence at the recorded position.
+    ///
+    /// WHY: hashes are one-way (murmur), so the only way to recover the k-mer text is to
+    /// look up where it occurred in a sequence we already have in memory.
+    fn resolve_kmer_string(
+        &self,
+        hash: u64,
+        inverted_index: &HashMap<u64, Vec<u32>>,
+        target_list: &[String],
+    ) -> String {
+        let ksize = self.ksize as usize;
+        (|| {
+            let target_idx = *inverted_index.get(&hash)?.first()?;
+            let md5 = target_list.get(target_idx as usize)?;
+            let sig = self.signatures.get(md5)?;
+            let position = *sig.kmer_positions().get(&hash)?.first()?;
+            let seq = sig.get_moltype_sequence().or_else(|| sig.get_raw_sequence())?;
+            seq.get(position..position + ksize).map(str::to_string)
+        })()
+        .unwrap_or_else(|| format!("<sequence unavailable, hash {hash}>"))
     }
 
     /// Save the current index state to RocksDB using chunked storage format
