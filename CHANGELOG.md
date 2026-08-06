@@ -8,3 +8,4 @@
 - Added a table of HP encodings to the README ([#33](https://github.com/seanome/kmerseek/pull/33))
 - Removed the `--scaled` option since we always use `--scaled 1` anyway ([#30](https://github.com/seanome/kmerseek/pull/30))
 - Sorted top hits in the visualization by Benjamini-Hochberg corrected p-value (q-value) instead of containment ([#32](https://github.com/seanome/kmerseek/pull/32))
+- Replaced invented placeholder motifs with real CED9/BCL2 residues and their actual Thomas-Dill HP encoding in `visualize_hits` tests ([#35](https://github.com/seanome/kmerseek/pull/35))
