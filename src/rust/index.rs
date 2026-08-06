@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -330,6 +330,8 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
+        Self::log_kmer_frequency_stats(&kmer_frequencies);
+
         // Serialize and store the search cache
         eprintln!(
             "[save] Serializing SearchCache ({} targets, {} unique kmers)...",
@@ -349,6 +351,47 @@ impl ProteomeIndex {
         eprintln!("[save] search_cache written in {:.1}s", t2.elapsed().as_secs_f32());
 
         Ok(())
+    }
+
+    /// Log a k-mer frequency histogram and the top/bottom 10 k-mers by frequency to stderr.
+    ///
+    /// Bins are power-of-two ranges (1, 2-3, 4-7, ...) since k-mer frequency distributions
+    /// are typically heavily right-skewed (most k-mers occur once, a few occur very often).
+    fn log_kmer_frequency_stats(kmer_frequencies: &HashMap<u64, usize>) {
+        if kmer_frequencies.is_empty() {
+            return;
+        }
+
+        let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
+        for &freq in kmer_frequencies.values() {
+            let bin = usize::BITS - freq.leading_zeros() - 1;
+            *bins.entry(bin).or_insert(0) += 1;
+        }
+
+        eprintln!("[save] K-mer frequency histogram ({} unique k-mers):", kmer_frequencies.len());
+        let max_count = *bins.values().max().unwrap();
+        const BAR_WIDTH: usize = 40;
+        for (bin, count) in &bins {
+            let lo = 1u64 << bin;
+            let hi = (1u64 << (bin + 1)) - 1;
+            let label = if lo == hi { format!("{lo}") } else { format!("{lo}-{hi}") };
+            let bar_len = (count * BAR_WIDTH) / max_count;
+            let bar = "#".repeat(bar_len.max(1));
+            eprintln!("[save]   {label:>12} occurrences: {count:>10} k-mers  {bar}");
+        }
+
+        let mut by_frequency: Vec<(&u64, &usize)> = kmer_frequencies.iter().collect();
+        by_frequency.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+
+        eprintln!("[save] Top 10 most common k-mers (hash: occurrences):");
+        for (hash, count) in by_frequency.iter().take(10) {
+            eprintln!("[save]   {hash}: {count}");
+        }
+
+        eprintln!("[save] Bottom 10 least common k-mers (hash: occurrences):");
+        for (hash, count) in by_frequency.iter().rev().take(10) {
+            eprintln!("[save]   {hash}: {count}");
+        }
     }
 
     /// Save the current index state to RocksDB using chunked storage format
