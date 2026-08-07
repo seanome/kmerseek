@@ -12,7 +12,6 @@ use flate2::write::GzEncoder;
 use flate2::Compression;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
-use sourmash::_hash_murmur;
 use sourmash::collection::Collection;
 use sourmash::manifest::Manifest;
 use sourmash::signature::SigsTrait;
@@ -20,11 +19,8 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage};
 
 use crate::aminoacid::AminoAcidAmbiguity;
-use crate::encoding::{
-    encode_with_fn, get_encoding_fn_from_moltype, get_hash_function_from_moltype,
-};
+use crate::encoding::get_hash_function_from_moltype;
 use crate::errors::{IndexError, IndexResult};
-use crate::hp_alphabets::HpAlphabet;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 
@@ -97,9 +93,6 @@ pub struct ProteomeIndex {
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
 
-    // Protein encoding function
-    encoding_fn: fn(u8) -> u8,
-
     // Statistics for k-mer frequencies and IDF
     // Not currently used, but will be used in the future
     #[allow(dead_code)]
@@ -123,6 +116,12 @@ pub struct ProteomeIndex {
 
     // Configuration for raw sequence storage
     store_raw_sequences: bool,
+
+    // Whether to drop low-complexity (homopolymer) k-mers when building protein
+    // signatures: raw amino-acid runs for any moltype, plus all-h/all-p runs for
+    // HP-family moltypes. Defaults to false. Persisted separately from the
+    // metadata blob; see save_state and read_remove_low_complexity.
+    remove_low_complexity: bool,
 }
 
 impl Drop for ProteomeIndex {
@@ -217,9 +216,6 @@ impl ProteomeIndex {
         let hash_function = get_hash_function_from_moltype(moltype)
             .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
-        let encoding_fn = get_encoding_fn_from_moltype(moltype)
-            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-
         let minhash_ksize = ksize * 3;
         // Create the minhash sketch
         let minhash = KmerMinHash::new(
@@ -242,14 +238,51 @@ impl ProteomeIndex {
             signatures: DashMap::new(),
             combined_minhash: Arc::new(Mutex::new(minhash)),
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-            encoding_fn,
             moltype: moltype.to_string(),
             ksize,
             minhash_ksize,
             scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             store_raw_sequences,
+            remove_low_complexity: false,
         })
+    }
+
+    /// Enable or disable dropping low-complexity (homopolymer) k-mers when
+    /// building protein signatures. Defaults to `false`.
+    pub fn set_remove_low_complexity(&mut self, remove_low_complexity: bool) {
+        self.remove_low_complexity = remove_low_complexity;
+    }
+
+    /// Whether this index drops low-complexity (homopolymer) k-mers.
+    ///
+    /// Search reads this to build query sketches the same way the targets were
+    /// built; see `save_state` for why a mismatch skews containment.
+    pub fn remove_low_complexity(&self) -> bool {
+        self.remove_low_complexity
+    }
+
+    /// Total k-mer windows examined across all in-memory signatures, and how many
+    /// were removed as low-complexity. Returns `(0, 0)` when removal is off.
+    ///
+    /// Only meaningful right after indexing: the counts live on the in-memory
+    /// sketches and are not persisted.
+    pub fn low_complexity_counts(&self) -> (usize, usize) {
+        self.signatures.iter().fold((0, 0), |(examined, skipped), entry| {
+            let (e, s) = entry.value().low_complexity_counts();
+            (examined + e, skipped + s)
+        })
+    }
+
+    /// Read the persisted low-complexity removal setting from an open database.
+    ///
+    /// Indexes built before this flag existed have no such key, and were by
+    /// definition kept every k-mer, so a missing key reads as `false`.
+    fn read_remove_low_complexity(db: &DB) -> IndexResult<bool> {
+        match db.get(b"remove_low_complexity")? {
+            Some(data) => Ok(bincode::deserialize(&data)?),
+            None => Ok(false),
+        }
     }
 
     /// Get a reference to the signatures map (for testing)
@@ -743,8 +776,17 @@ impl ProteomeIndex {
         // deserializing the full metadata (and without breaking old bincode layouts).
         let serialized_version = bincode::serialize(&SCHEMA_VERSION)?;
         self.db.put(b"schema_version", serialized_version)?;
+
+        // Store the low-complexity removal setting as its own key, for the same reason:
+        // adding a field to ProteomeIndexMetadata would break bincode reads of indexes
+        // built before this flag existed. Absent key means "kept everything" (see
+        // read_remove_low_complexity), which is exactly right for those older indexes.
+        // WHY persist at all: search must build query sketches the same way, or
+        // retained low-complexity query k-mers inflate the containment denominator.
+        let serialized_filter = bincode::serialize(&self.remove_low_complexity)?;
+        self.db.put(b"remove_low_complexity", serialized_filter)?;
         eprintln!(
-            "[save] Metadata + schema_version written in {:.1}s total",
+            "[save] Metadata + schema_version + remove_low_complexity written in {:.1}s total",
             t3.elapsed().as_secs_f32()
         );
 
@@ -951,8 +993,6 @@ impl ProteomeIndex {
 
             let _hash_function = get_hash_function_from_moltype(&metadata.moltype)
                 .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            let encoding_fn = get_encoding_fn_from_moltype(&metadata.moltype)
-                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
 
             // Reconstruct the combined minhash from raw data
             let hash_function = get_hash_function_from_moltype(&metadata.moltype)
@@ -998,6 +1038,7 @@ impl ProteomeIndex {
             let moltype = &metadata.moltype;
             let ksize = metadata.ksize;
             let scaled = metadata.scaled;
+            let remove_low_complexity = Self::read_remove_low_complexity(&db)?;
 
             let signatures: DashMap<String, ProteinSketch> = DashMap::new();
             raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
@@ -1020,13 +1061,13 @@ impl ProteomeIndex {
                 signatures,
                 combined_minhash: Arc::new(Mutex::new(combined_minhash)),
                 aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-                encoding_fn,
                 moltype: metadata.moltype,
                 ksize: metadata.ksize,
                 minhash_ksize: metadata.ksize * 3,
                 scaled: metadata.scaled,
                 stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
                 store_raw_sequences: metadata.store_raw_sequences,
+                remove_low_complexity,
             };
 
             Ok(index)
@@ -1052,8 +1093,6 @@ impl ProteomeIndex {
         let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
         let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
 
-        let encoding_fn = get_encoding_fn_from_moltype(&metadata.moltype)
-            .map_err(|e| IndexError::SourmashError(e.to_string()))?;
         let hash_function = get_hash_function_from_moltype(&metadata.moltype)
             .map_err(|e| IndexError::SourmashError(e.to_string()))?;
         let minhash_ksize = metadata.ksize * 3;
@@ -1062,18 +1101,20 @@ impl ProteomeIndex {
         let combined_minhash =
             KmerMinHash::new(metadata.scaled, minhash_ksize, hash_function, SEED, true, 0);
 
+        let remove_low_complexity = Self::read_remove_low_complexity(&db)?;
+
         Ok(Self {
             db,
             signatures: DashMap::new(), // Empty - signatures loaded on demand by get_signature_by_md5()
             combined_minhash: Arc::new(Mutex::new(combined_minhash)),
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-            encoding_fn,
             moltype: metadata.moltype,
             ksize: metadata.ksize,
             minhash_ksize,
             scaled: metadata.scaled,
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             store_raw_sequences: metadata.store_raw_sequences,
+            remove_low_complexity,
         })
     }
 
@@ -1262,10 +1303,16 @@ impl ProteomeIndex {
     }
 
     /// Generate a filename based on the index parameters
+    ///
+    /// WHY the `.nolowcomplexity` segment: the whole point of the flag is A/B
+    /// comparison, so indexing the same FASTA with and without it must not
+    /// resolve to the same path — otherwise the second run silently clobbers the
+    /// first. Indexes that keep every k-mer retain their historical filename.
     pub fn generate_filename(&self, base_name: &str) -> String {
+        let suffix = if self.remove_low_complexity { ".nolowcomplexity" } else { "" };
         format!(
-            "{}.{}.k{}.scaled{}.kmerseek.rocksdb",
-            base_name, self.moltype, self.ksize, self.scaled
+            "{}.{}.k{}.scaled{}{}.kmerseek.rocksdb",
+            base_name, self.moltype, self.ksize, self.scaled, suffix
         )
     }
 
@@ -1344,6 +1391,7 @@ impl ProteomeIndex {
 
         // Create a new protein signature
         let mut protein_sig = ProteinSketch::new(name, self.ksize, self.scaled, &self.moltype)?;
+        protein_sig.set_remove_low_complexity(self.remove_low_complexity);
 
         // Add the protein sequence to the signature
         // WHY: add_protein now handles all processing: minhash, kmer_infos, and sequence storage.
@@ -1355,46 +1403,6 @@ impl ProteomeIndex {
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)
-    }
-
-    pub fn process_kmers(
-        &self,
-        sequence: &str,
-        protein_signature: &mut ProteinSketch,
-    ) -> IndexResult<()> {
-        let ksize = self.ksize as usize;
-        let hashvals: HashSet<u64> =
-            protein_signature.signature().get_minhash().to_vec().into_iter().collect();
-
-        let custom_hp = HpAlphabet::from_moltype(&self.moltype);
-        for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            let kmer = &sequence[i..i + ksize];
-            // WHY: sourmash's ReadingFrame::new_protein uppercases before hashing.
-            let hashval = if let Some(ref alpha) = custom_hp {
-                let encoded: Vec<u8> = kmer
-                    .bytes()
-                    .map(|b| {
-                        alpha
-                            .table()
-                            .get(&b.to_ascii_uppercase())
-                            .copied()
-                            .unwrap_or(b)
-                            .to_ascii_uppercase()
-                    })
-                    .collect();
-                _hash_murmur(&encoded, SEED)
-            } else {
-                match encode_with_fn(kmer, self.encoding_fn) {
-                    Ok(enc) => _hash_murmur(enc.to_ascii_uppercase().as_bytes(), SEED),
-                    Err(_) => continue,
-                }
-            };
-            if hashvals.contains(&hashval) {
-                protein_signature.kmer_positions_mut().entry(hashval).or_default().push(i);
-            }
-        }
-
-        Ok(())
     }
 
     /// Store a collection of protein signatures in the index
@@ -1764,7 +1772,7 @@ mod tests {
     /// than unit tests with all the moltype testing. Also, it's a lot of tests!
 
     #[test]
-    fn test_process_kmers_moltype_protein() -> Result<()> {
+    fn test_add_protein_moltype_protein() -> Result<()> {
         let _dir = tempdir()?;
 
         let protein_ksize = 5;
@@ -1833,7 +1841,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_kmers_moltype_dayhoff() -> Result<()> {
+    fn test_add_protein_moltype_dayhoff() -> Result<()> {
         let _dir = tempdir()?;
 
         let protein_ksize = 5;
@@ -1902,7 +1910,7 @@ mod tests {
     }
 
     #[test]
-    fn test_process_kmers_moltype_hp() -> Result<()> {
+    fn test_add_protein_moltype_hp() -> Result<()> {
         let _dir = tempdir()?;
 
         let protein_ksize = 5;
@@ -2120,6 +2128,96 @@ mod tests {
             let combined_minhash = index.get_combined_minhash().lock();
             assert!(combined_minhash.size() == 14, "Combined minhash should contain 14 hashes");
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_remove_low_complexity_toggle_on_index() -> Result<()> {
+        let dir = tempdir()?;
+
+        let protein_ksize = 5;
+        let moltype = "hp";
+        let sequence = TEST_PROTEIN;
+        let name = "test_protein";
+
+        // TEST_PROTEIN = "PLANTANDANIMALGENQMES"; window 10, "IMALG", is
+        // all-hydrophobic ("hhhhh") under the HP (Lehninger) alphabet.
+        const IMALG_HASH: u64 = 8541583772724823208;
+
+        // Default: removal is off, so the low-complexity k-mer is kept.
+        let index_off = ProteomeIndex::new(
+            dir.path().join("removal_off.db"),
+            protein_ksize,
+            1,
+            moltype,
+            false,
+        )?;
+        let sig_off = index_off.create_protein_signature(sequence, name)?;
+        assert_eq!(sig_off.kmer_positions().len(), 14);
+        assert!(sig_off.kmer_positions().contains_key(&IMALG_HASH));
+
+        // Opted in via set_remove_low_complexity: the low-complexity k-mer is dropped.
+        let mut index_on =
+            ProteomeIndex::new(dir.path().join("removal_on.db"), protein_ksize, 1, moltype, false)?;
+        index_on.set_remove_low_complexity(true);
+        let sig_on = index_on.create_protein_signature(sequence, name)?;
+        assert_eq!(sig_on.kmer_positions().len(), 13);
+        assert!(!sig_on.kmer_positions().contains_key(&IMALG_HASH));
+
+        Ok(())
+    }
+
+    /// The setting must survive save_state -> open_for_search, since search
+    /// relies on it to build query sketches the same way the targets were built.
+    #[test]
+    fn test_remove_low_complexity_persists_across_save_and_reopen() -> Result<()> {
+        let dir = tempdir()?;
+
+        for flag in [true, false] {
+            let db_path = dir.path().join(format!("persist_{}.db", flag));
+            {
+                let mut index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+                index.set_remove_low_complexity(flag);
+                let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
+                index.store_signatures(vec![sig])?;
+                index.save_state()?;
+            }
+
+            let reopened = ProteomeIndex::open_for_search(&db_path)?;
+            assert_eq!(
+                reopened.remove_low_complexity(),
+                flag,
+                "remove_low_complexity should round-trip through the database"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Indexes written before this flag existed have no such key; they were
+    /// kept every k-mer by definition, so a missing key must read as false rather
+    /// than erroring out.
+    #[test]
+    fn test_missing_remove_low_complexity_key_reads_as_false() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("legacy.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
+            index.store_signatures(vec![sig])?;
+            index.save_state()?;
+        }
+
+        // Simulate a pre-flag index by deleting the key save_state wrote.
+        {
+            use rocksdb::{Options, DB};
+            let db = DB::open(&Options::default(), &db_path)?;
+            db.delete(b"remove_low_complexity")?;
+        }
+
+        let reopened = ProteomeIndex::open_for_search(&db_path)?;
+        assert!(!reopened.remove_low_complexity());
 
         Ok(())
     }
@@ -3570,6 +3668,7 @@ pub struct ProteomeIndexBuilder {
     scaled: Option<u32>,
     moltype: Option<String>,
     store_raw_sequences: bool,
+    remove_low_complexity: bool,
 }
 
 impl ProteomeIndexBuilder {
@@ -3608,6 +3707,12 @@ impl ProteomeIndexBuilder {
         self
     }
 
+    /// Set whether to drop low-complexity (homopolymer) k-mers (defaults to false)
+    pub fn remove_low_complexity(mut self, remove_low_complexity: bool) -> Self {
+        self.remove_low_complexity = remove_low_complexity;
+        self
+    }
+
     /// Build the ProteomeIndex
     pub fn build(self) -> IndexResult<ProteomeIndex> {
         let path = self
@@ -3623,7 +3728,10 @@ impl ProteomeIndexBuilder {
             .moltype
             .ok_or_else(|| IndexError::BuilderError("Molecular type is required".to_string()))?;
 
-        ProteomeIndex::new(path, ksize, scaled, &moltype, self.store_raw_sequences)
+        let mut index =
+            ProteomeIndex::new(path, ksize, scaled, &moltype, self.store_raw_sequences)?;
+        index.set_remove_low_complexity(self.remove_low_complexity);
+        Ok(index)
     }
 
     /// Build the ProteomeIndex with automatic filename generation
@@ -3641,12 +3749,14 @@ impl ProteomeIndexBuilder {
             .moltype
             .ok_or_else(|| IndexError::BuilderError("Molecular type is required".to_string()))?;
 
-        ProteomeIndex::new_with_auto_filename(
+        let mut index = ProteomeIndex::new_with_auto_filename(
             base_path,
             ksize,
             scaled,
             &moltype,
             self.store_raw_sequences,
-        )
+        )?;
+        index.set_remove_low_complexity(self.remove_low_complexity);
+        Ok(index)
     }
 }

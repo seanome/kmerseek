@@ -109,6 +109,86 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+/// Low-complexity removal must round-trip: `index --remove-low-complexity`
+/// persists the setting, and `search` picks it up from the index without the
+/// user restating it. A mismatch would silently skew containment, so this
+/// asserts on the reported value rather than just on exit status.
+#[test]
+fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp_dir = tempdir()?;
+
+    for (flag, expected) in [(true, "true"), (false, "false")] {
+        let index_path = temp_dir.path().join(format!("lc_{}.db", flag));
+
+        let mut index_cmd = Command::cargo_bin("kmerseek")?;
+        index_cmd.args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--encoding",
+            "hp",
+        ]);
+        if flag {
+            index_cmd.arg("--remove-low-complexity");
+        }
+        index_cmd
+            .assert()
+            .success()
+            .stderr(predicate::str::contains("Indexing completed successfully!"));
+
+        // Search must recover the setting from the index, with no flag passed here.
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--encoding",
+            "hp",
+        ]);
+        search_cmd.assert().success().stderr(predicate::str::contains(format!(
+            "Remove low-complexity k-mers: {} (from index)",
+            expected
+        )));
+    }
+
+    Ok(())
+}
+
+/// Auto-generated names must differ with and without removal, or indexing the
+/// same FASTA both ways would silently clobber the first database.
+#[test]
+fn test_cli_remove_low_complexity_auto_filename_does_not_collide(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let fasta = temp_dir.path().join("ced9.fasta");
+    std::fs::copy(TEST_CED9_FASTA, &fasta)?;
+
+    for flag in [false, true] {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args(["index", "--input", fasta.to_str().unwrap(), "--ksize", "8", "--encoding", "hp"]);
+        if flag {
+            cmd.arg("--remove-low-complexity");
+        }
+        cmd.assert().success();
+    }
+
+    let kept_all = temp_dir.path().join("ced9.fasta.hp.k8.scaled1.kmerseek.rocksdb");
+    let removed = temp_dir.path().join("ced9.fasta.hp.k8.scaled1.nolowcomplexity.kmerseek.rocksdb");
+    assert!(kept_all.exists(), "index keeping every k-mer should keep its historical name");
+    assert!(removed.exists(), "index with removal should get its own name");
+
+    Ok(())
+}
+
 #[test]
 fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
