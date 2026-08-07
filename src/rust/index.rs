@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
@@ -353,12 +353,13 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Log a k-mer frequency histogram and the top/bottom 10 k-mers by frequency to stderr.
+    /// Number of k-mers listed in the "most common" / "least common" summaries.
+    const KMER_EXAMPLES: usize = 10;
+
+    /// Log a k-mer frequency histogram and the most/least common k-mers to stderr.
     ///
-    /// Bins are power-of-two ranges (1, 2-3, 4-7, ...) since k-mer frequency distributions
-    /// are typically heavily right-skewed (most k-mers occur once, a few occur very often).
-    /// The top/bottom lists show the actual encoded k-mer string (not the hash), resolved by
-    /// looking up one signature that contains each hash via the inverted index.
+    /// The lists show the actual encoded k-mer string (not the hash), resolved by looking up
+    /// one signature that contains each hash via the inverted index.
     fn log_kmer_frequency_stats(
         &self,
         kmer_frequencies: &HashMap<u64, usize>,
@@ -368,39 +369,123 @@ impl ProteomeIndex {
         if kmer_frequencies.is_empty() {
             return;
         }
+        Self::print_frequency_histogram(kmer_frequencies);
 
+        // Resolving a hash back to text needs the sequence it came from, which is only in
+        // memory when the index was built with store_raw_sequences.
+        if !self.has_stored_sequences() {
+            eprintln!("[save] (k-mer sequences not stored, skipping most/least common k-mers)");
+            return;
+        }
+
+        let n = Self::KMER_EXAMPLES;
+        let most = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| {
+            (std::cmp::Reverse(count), hash)
+        });
+        let least = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| (count, hash));
+
+        self.print_kmer_examples(
+            "most common",
+            &most,
+            kmer_frequencies,
+            inverted_index,
+            target_list,
+        );
+        self.print_kmer_examples(
+            "least common",
+            &least,
+            kmer_frequencies,
+            inverted_index,
+            target_list,
+        );
+    }
+
+    /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
+    ///
+    /// WHY power-of-two: k-mer frequency distributions are heavily right-skewed (most k-mers
+    /// occur once, a few occur thousands of times), so linear bins would be nearly unreadable.
+    fn frequency_bins(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<u32, usize> {
         let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
         for &freq in kmer_frequencies.values() {
             let bin = usize::BITS - freq.leading_zeros() - 1;
             *bins.entry(bin).or_insert(0) += 1;
         }
+        bins
+    }
+
+    /// Print the binned frequency distribution as an ASCII bar chart.
+    ///
+    /// Empty bins between the smallest and largest populated bin are printed with a zero count
+    /// so that gaps in the distribution are explicit rather than silently skipped.
+    fn print_frequency_histogram(kmer_frequencies: &HashMap<u64, usize>) {
+        const BAR_WIDTH: usize = 40;
+        let bins = Self::frequency_bins(kmer_frequencies);
+        let (&first, &last) = (bins.keys().next().unwrap(), bins.keys().next_back().unwrap());
+        let max_count = *bins.values().max().unwrap();
 
         eprintln!("[save] K-mer frequency histogram ({} unique k-mers):", kmer_frequencies.len());
-        let max_count = *bins.values().max().unwrap();
-        const BAR_WIDTH: usize = 40;
-        for (bin, count) in &bins {
-            let lo = 1u64 << bin;
-            let hi = (1u64 << (bin + 1)) - 1;
+        for bin in first..=last {
+            let count = bins.get(&bin).copied().unwrap_or(0);
+            let (lo, hi) = (1u64 << bin, (1u64 << (bin + 1)) - 1);
             let label = if lo == hi { format!("{lo}") } else { format!("{lo}-{hi}") };
-            let bar_len = (count * BAR_WIDTH) / max_count;
-            let bar = "#".repeat(bar_len.max(1));
+            let bar = "#".repeat((count * BAR_WIDTH / max_count).max(usize::from(count > 0)));
             eprintln!("[save]   {label:>12} occurrences: {count:>10} k-mers  {bar}");
         }
+    }
 
-        let mut by_frequency: Vec<(&u64, &usize)> = kmer_frequencies.iter().collect();
-        by_frequency.sort_by(|a, b| b.1.cmp(a.1).then(a.0.cmp(b.0)));
+    /// Return the `n` (hash, count) pairs with the smallest `key`, in ascending key order.
+    ///
+    /// WHY a bounded heap instead of sorting: real proteome indexes hold tens of millions of
+    /// unique k-mers, so materializing and sorting the whole list just to read off 10 entries
+    /// would cost seconds and hundreds of MB. This is O(N log n) time and O(n) memory.
+    fn n_smallest_by_key<K: Ord>(
+        kmer_frequencies: &HashMap<u64, usize>,
+        n: usize,
+        key: impl Fn(u64, usize) -> K,
+    ) -> Vec<(u64, usize)> {
+        let mut heap: BinaryHeap<(K, u64, usize)> = BinaryHeap::with_capacity(n + 1);
+        for (&hash, &count) in kmer_frequencies {
+            heap.push((key(hash, count), hash, count));
+            if heap.len() > n {
+                heap.pop();
+            }
+        }
+        let mut selected = heap.into_vec();
+        selected.sort();
+        selected.into_iter().map(|(_, hash, count)| (hash, count)).collect()
+    }
 
-        eprintln!("[save] Top 10 most common k-mers (encoded k-mer: occurrences):");
-        for (hash, count) in by_frequency.iter().take(10) {
-            let kmer = self.resolve_kmer_string(**hash, inverted_index, target_list);
+    /// Print one labelled list of example k-mers, noting how many share the boundary frequency.
+    ///
+    /// WHY the tie note: when hundreds of thousands of k-mers all occur once, listing ten of
+    /// them looks like a ranking but is really an arbitrary sample. Saying how many tie makes
+    /// that explicit.
+    fn print_kmer_examples(
+        &self,
+        label: &str,
+        examples: &[(u64, usize)],
+        kmer_frequencies: &HashMap<u64, usize>,
+        inverted_index: &HashMap<u64, Vec<u32>>,
+        target_list: &[String],
+    ) {
+        let Some(&(_, boundary)) = examples.last() else { return };
+        let tied = kmer_frequencies.values().filter(|&&c| c == boundary).count();
+        eprintln!("[save] {} {} k-mers (encoded k-mer: occurrences):", examples.len(), label);
+        for &(hash, count) in examples {
+            let kmer = self.resolve_kmer_string(hash, inverted_index, target_list);
             eprintln!("[save]   {kmer}: {count}");
         }
-
-        eprintln!("[save] Bottom 10 least common k-mers (encoded k-mer: occurrences):");
-        for (hash, count) in by_frequency.iter().rev().take(10) {
-            let kmer = self.resolve_kmer_string(**hash, inverted_index, target_list);
-            eprintln!("[save]   {kmer}: {count}");
+        if tied > examples.len() {
+            eprintln!("[save]   ({tied} k-mers occur {boundary}x; showing an arbitrary sample)");
         }
+    }
+
+    /// Whether signatures kept their sequence text, which `resolve_kmer_string` needs.
+    fn has_stored_sequences(&self) -> bool {
+        self.signatures
+            .iter()
+            .next()
+            .is_some_and(|s| s.get_moltype_sequence().is_some() || s.get_raw_sequence().is_some())
     }
 
     /// Resolve one k-mer hash back to the actual encoded k-mer string it was hashed from,
@@ -1550,7 +1635,7 @@ mod tests {
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };
     use crate::tests::test_utils::{self, print_kmer_positions};
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
     use std::path::PathBuf;
 
     /// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
@@ -2702,6 +2787,95 @@ mod tests {
         let index3 =
             ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
+    }
+
+    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958), from
+    /// tests/testdata/fasta/ced9.fasta.
+    const CED9_PREFIX: &str = "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM";
+
+    #[test]
+    fn test_frequency_bins_groups_counts_into_powers_of_two() {
+        // Bin b holds counts in [2^b, 2^(b+1)): 1 | 2-3 | 4-7 | 8-15 | ... | 256-511
+        let frequencies: HashMap<u64, usize> =
+            [(10, 1), (11, 1), (12, 1), (20, 2), (21, 3), (30, 4), (31, 7), (40, 8), (50, 300)]
+                .into_iter()
+                .collect();
+
+        let bins = ProteomeIndex::frequency_bins(&frequencies);
+
+        let expected: BTreeMap<u32, usize> =
+            [(0, 3), (1, 2), (2, 2), (3, 1), (8, 1)].into_iter().collect();
+        assert_eq!(bins, expected);
+    }
+
+    #[test]
+    fn test_n_smallest_by_key_selects_most_and_least_common() {
+        let frequencies: HashMap<u64, usize> =
+            [(100, 5), (200, 9), (300, 1), (400, 9), (500, 3)].into_iter().collect();
+
+        // Most common: highest count first, ties broken by ascending hash (200 before 400).
+        let most = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| {
+            (std::cmp::Reverse(count), hash)
+        });
+        assert_eq!(most, vec![(200, 9), (400, 9), (100, 5)]);
+
+        // Least common: lowest count first.
+        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| (count, hash));
+        assert_eq!(least, vec![(300, 1), (500, 3), (100, 5)]);
+    }
+
+    #[test]
+    fn test_n_smallest_by_key_returns_all_when_n_exceeds_len() {
+        let frequencies: HashMap<u64, usize> = [(100, 2), (200, 1)].into_iter().collect();
+
+        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 10, |hash, count| (count, hash));
+
+        assert_eq!(least, vec![(200, 1), (100, 2)]);
+    }
+
+    #[test]
+    fn test_resolve_kmer_string_recovers_kmer_text_from_hash() {
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("ced9.db"), 10, 1, "protein", true).unwrap();
+        let sig = index.create_protein_signature(CED9_PREFIX, "ced9").unwrap();
+        let md5 = sig.signature().md5sum.clone();
+        index.store_signatures(vec![sig]).unwrap();
+
+        // The k-mer starting at position 0 is the first 10 residues of CED-9.
+        let stored = index.signatures.get(&md5).unwrap();
+        let (&hash, _) =
+            stored.kmer_positions().iter().find(|(_, positions)| positions.contains(&0)).unwrap();
+        drop(stored);
+
+        let inverted_index: HashMap<u64, Vec<u32>> = [(hash, vec![0])].into_iter().collect();
+        let resolved = index.resolve_kmer_string(hash, &inverted_index, std::slice::from_ref(&md5));
+
+        assert_eq!(resolved, "MTRCTADNSL");
+    }
+
+    #[test]
+    fn test_resolve_kmer_string_reports_unknown_hash() {
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("ced9.db"), 10, 1, "protein", true).unwrap();
+
+        let resolved = index.resolve_kmer_string(42, &HashMap::new(), &[]);
+
+        assert_eq!(resolved, "<sequence unavailable, hash 42>");
+    }
+
+    #[test]
+    fn test_has_stored_sequences_follows_store_raw_sequences() {
+        let temp_dir = tempdir().unwrap();
+        for (store_raw, expected) in [(true, true), (false, false)] {
+            let path = temp_dir.path().join(format!("ced9-{store_raw}.db"));
+            let index = ProteomeIndex::new(path, 10, 1, "protein", store_raw).unwrap();
+            let sig = index.create_protein_signature(CED9_PREFIX, "ced9").unwrap();
+            index.store_signatures(vec![sig]).unwrap();
+
+            assert_eq!(index.has_stored_sequences(), expected, "store_raw={store_raw}");
+        }
     }
 
     #[test]
