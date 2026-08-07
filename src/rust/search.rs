@@ -37,9 +37,9 @@ pub struct SearchFilters {
 
 impl Default for SearchFilters {
     /// Accepts every result `compare()` produces. Note max_pvalue must be `f64::INFINITY`,
-    /// not 1.0: `poisson_pvalue` is exactly 1.0 whenever there's no database frequency
+    /// not 1.0: `query_poisson_pvalue` is exactly 1.0 whenever there's no database frequency
     /// context (e.g. `set_query_frequencies` was never called), which is common, so a cap
-    /// of 1.0 combined with `compare()`'s `poisson_pvalue >= max_pvalue` rejection check
+    /// of 1.0 combined with `compare()`'s `query_poisson_pvalue >= max_pvalue` rejection check
     /// would wrongly reject those results.
     fn default() -> Self {
         Self { threshold: 0.0, min_shared_kmers: 0, max_pvalue: f64::INFINITY }
@@ -73,24 +73,29 @@ pub struct SearchResultCsv {
     pub query_tfidf: f64,
     pub mean_matched_kmer_freq: f64,
     pub sum_matched_kmer_freq: f64,
-    pub expected_shared_kmers: f64,
-    pub enrichment: f64,
+    pub query_expected_shared_kmers: f64,
+    pub query_enrichment: f64,
     /// Joint k-mer frequency: Σ freq_query[h] * freq_target[h] for h in intersection.
     /// Dot product of query and target frequency vectors over shared k-mers.
     /// 0.0 when query frequencies are not available (one-pass mode).
     pub joint_kmer_freq: f64,
-    /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = expected_shared_kmers).
-    /// 1.0 when expected_shared_kmers is unavailable (no database context).
-    pub poisson_pvalue: f64,
+    /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = query_expected_shared_kmers).
+    /// 1.0 when query_expected_shared_kmers is unavailable (no database context).
+    pub query_poisson_pvalue: f64,
     // MatchedRegion fields (always present - every CSV row has a matched region)
-    pub query_start: u32,
-    pub query_end: u32,
-    pub query_subseq: String,
+    pub region_start: u32,
+    pub region_end: u32,
+    pub region_subseq: String,
     pub target_start: u32,
     pub target_end: u32,
     pub target_subseq: String,
     pub moltype_seq: String,
     pub region_length: u32,
+    pub region_n_shared_kmers: u32,
+    pub region_expected_shared_kmers: f64,
+    pub region_poisson_pvalue: f64,
+    pub region_enrichment: f64,
+    pub region_bonferroni_n: usize,
 }
 
 impl SearchResultCsv {
@@ -120,18 +125,23 @@ impl SearchResultCsv {
             query_tfidf: result.query_tfidf,
             mean_matched_kmer_freq: result.mean_matched_kmer_freq,
             sum_matched_kmer_freq: result.sum_matched_kmer_freq,
-            expected_shared_kmers: result.expected_shared_kmers,
-            enrichment: result.enrichment,
+            query_expected_shared_kmers: result.query_expected_shared_kmers,
+            query_enrichment: result.query_enrichment,
             joint_kmer_freq: result.joint_kmer_freq,
-            poisson_pvalue: result.poisson_pvalue,
-            query_start: region.query_start,
-            query_end: region.query_end,
-            query_subseq: region.query_subseq.clone(),
+            query_poisson_pvalue: result.query_poisson_pvalue,
+            region_start: region.start,
+            region_end: region.end,
+            region_subseq: region.subseq.clone(),
             target_start: region.target_start,
             target_end: region.target_end,
             target_subseq: region.target_subseq.clone(),
             moltype_seq: region.moltype_seq.clone(),
             region_length: region.length,
+            region_n_shared_kmers: region.length.saturating_sub(result.ksize) + 1,
+            region_expected_shared_kmers: region.expected_shared_kmers,
+            region_poisson_pvalue: region.poisson_pvalue,
+            region_enrichment: region.enrichment,
+            region_bonferroni_n: region.bonferroni_n,
         }
     }
 }
@@ -200,20 +210,20 @@ pub struct SearchResult {
 
     /// Expected number of shared k-mers by chance: Σ freq_target[h]/N over ALL query k-mers.
     /// Uses this query's specific k-mers, so it is query-dependent.
-    pub expected_shared_kmers: f64,
+    pub query_expected_shared_kmers: f64,
 
-    /// Fold-enrichment: n_intersecting_hashes / expected_shared_kmers.
+    /// Fold-enrichment: n_intersecting_hashes / query_expected_shared_kmers.
     /// Higher = more k-mers matched than expected by chance given target DB composition.
-    pub enrichment: f64,
+    pub query_enrichment: f64,
 
     /// Joint k-mer frequency: Σ freq_query[h] * freq_target[h] for h in intersection.
     /// Dot product of query and target frequency vectors over shared k-mers (two-pass;
     /// 0.0 if query frequencies not provided via set_query_frequencies()).
     pub joint_kmer_freq: f64,
 
-    /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = expected_shared_kmers).
-    /// 1.0 when expected_shared_kmers is unavailable (no database context).
-    pub poisson_pvalue: f64,
+    /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = query_expected_shared_kmers).
+    /// 1.0 when query_expected_shared_kmers is unavailable (no database context).
+    pub query_poisson_pvalue: f64,
 
     /// 1 or more regions of 1+ k-mers overlapping between query and target
     pub matched_regions: Vec<MatchedRegion>,
@@ -228,14 +238,14 @@ pub struct MatchedRegion {
     /// Query sequence name
     pub query_name: String,
 
-    /// Query sequence start position
-    pub query_start: u32,
+    /// Start position of this region in the query sequence
+    pub start: u32,
 
-    /// Query sequence end position
-    pub query_end: u32,
+    /// End position of this region in the query sequence
+    pub end: u32,
 
     /// Query subsequence (stitched k-mers)
-    pub query_subseq: String,
+    pub subseq: String,
 
     /// Target sequence name
     pub target_name: String,
@@ -257,13 +267,29 @@ pub struct MatchedRegion {
 
     /// Length of the match
     pub length: u32,
+
+    /// Expected number of shared k-mers by chance within this region: Σ freq_target[h]/N over
+    /// the query k-mers whose start position falls inside this region. 0.0 without DB context.
+    pub expected_shared_kmers: f64,
+
+    /// Poisson p-value scoped to this region: P(X ≥ n_shared | λ = expected_shared_kmers), using
+    /// the region's own k-mer count instead of the whole protein's. 1.0 without DB context.
+    pub poisson_pvalue: f64,
+
+    /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
+    /// context or when expected_shared_kmers is 0.
+    pub enrichment: f64,
+
+    /// Number of queries in the search run this region was found in — the Bonferroni correction
+    /// family for poisson_pvalue. 1 without DB context.
+    pub bonferroni_n: usize,
 }
 
 impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Query Name: {}", self.query_name)?;
         writeln!(f, "Match Name: {}", self.target_name)?;
-        writeln!(f, "query: {} ({}-{})", self.query_subseq, self.query_start, self.query_end)?;
+        writeln!(f, "query: {} ({}-{})", self.subseq, self.start, self.end)?;
         writeln!(f, "alpha: {}", self.moltype_seq)?;
         write!(f, "match: {} ({}-{})", self.target_subseq, self.target_start, self.target_end)
     }
@@ -499,12 +525,14 @@ impl ProteinSearcher {
         );
         progress.set_message("Searching...");
 
+        let total_queries = queries.len();
+
         // Perform parallel search across all queries using the inverted index
         let all_results: Vec<SearchResult> = queries
             .par_iter()
             .flat_map(|query| {
                 // search_one uses the inverted index to find candidates
-                let results = self.search_one(query, filters);
+                let results = self.search_one(query, filters, total_queries);
 
                 // Update progress after processing each query
                 progress.inc(1);
@@ -537,7 +565,12 @@ impl ProteinSearcher {
     ///
     /// `filters` is applied inline as each candidate is compared: results that fail are never
     /// pushed into the returned `Vec`, rather than being built up and filtered out afterward.
-    pub fn search_one(&self, query: &ProteinSketch, filters: &SearchFilters) -> Vec<SearchResult> {
+    pub fn search_one(
+        &self,
+        query: &ProteinSketch,
+        filters: &SearchFilters,
+        total_queries: usize,
+    ) -> Vec<SearchResult> {
         let prepared = self.prepare_query(query);
 
         // Find candidate targets via inverted index: only compare against targets
@@ -564,17 +597,17 @@ impl ProteinSearcher {
 
                 // Path 1: in-memory signatures (slow path for old DBs without search cache)
                 if let Some(entry) = sigs.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value(), filters);
+                    return self.compare(&prepared, entry.value(), filters, total_queries);
                 }
 
                 // Path 2: sig_cache hit (target was loaded by an earlier query)
                 if let Some(entry) = self.sig_cache.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value(), filters);
+                    return self.compare(&prepared, entry.value(), filters, total_queries);
                 }
 
                 // Path 3: first-time load from RocksDB; store in cache for future queries
                 let target = self.index.get_signature_by_md5(md5).ok()??;
-                let result = self.compare(&prepared, &target, filters);
+                let result = self.compare(&prepared, &target, filters, total_queries);
                 self.sig_cache.insert(md5.clone(), target);
                 result
             })
@@ -631,11 +664,13 @@ impl ProteinSearcher {
         );
         progress.set_message("Searching all-vs-all...");
 
+        let total_queries = all_queries.len();
+
         // Use search_one (inverted index) for each query instead of exhaustive O(N²) iteration
         let all_results: Vec<SearchResult> = all_queries
             .par_iter()
             .flat_map(|query| {
-                let results = self.search_one(query, filters);
+                let results = self.search_one(query, filters, total_queries);
                 progress.inc(1);
                 results
             })
@@ -680,6 +715,7 @@ impl ProteinSearcher {
         query: &PreparedQuery<'_>,
         target: &ProteinSketch,
         filters: &SearchFilters,
+        total_queries: usize,
     ) -> Option<SearchResult> {
         // Skip self-matches by comparing MD5 sums
         // WHY: In all-vs-all searches, we don't want to compare a signature against itself.
@@ -703,19 +739,20 @@ impl ProteinSearcher {
             return None;
         }
 
-        // Containment, n_intersecting_hashes, and poisson_pvalue only need the intersection
+        // Containment, n_intersecting_hashes, and query_poisson_pvalue only need the intersection
         // size and DB-wide k-mer frequencies - all cheap. Check `filters` against them here,
         // before doing the expensive per-pair work below (find_matched_regions walks both
         // sequences to locate matched regions; abundance_stats sorts the intersection). This
         // way, candidates that fail the filter never pay for that work.
         let n_intersecting_hashes = intersection.len();
         let containment = n_intersecting_hashes as f64 / query.mins.len() as f64;
-        let expected_shared_kmers = self.calculate_expected_shared_kmers(query.sketch, target);
+        let query_expected_shared_kmers =
+            self.calculate_expected_shared_kmers(query.sketch, target);
         // P(X >= k | lambda) where k = observed intersecting hashes, lambda = expected by chance.
         // Uses the Poisson survival function: 1 - CDF(k-1). n_intersecting_hashes >= 1 here
         // since the empty-intersection case already returned above.
-        let poisson_pvalue = if expected_shared_kmers > 0.0 {
-            match Poisson::new(expected_shared_kmers) {
+        let query_poisson_pvalue = if query_expected_shared_kmers > 0.0 {
+            match Poisson::new(query_expected_shared_kmers) {
                 Ok(dist) => (1.0 - dist.cdf((n_intersecting_hashes - 1) as u64)).max(0.0),
                 Err(_) => 1.0,
             }
@@ -725,7 +762,7 @@ impl ProteinSearcher {
 
         if containment < filters.threshold
             || n_intersecting_hashes < filters.min_shared_kmers
-            || poisson_pvalue >= filters.max_pvalue
+            || query_poisson_pvalue >= filters.max_pvalue
         {
             return None;
         }
@@ -743,11 +780,53 @@ impl ProteinSearcher {
             &intersection,
         )?;
 
-        let enrichment = if expected_shared_kmers > 0.0 {
-            n_intersecting_hashes as f64 / expected_shared_kmers
+        let query_enrichment = if query_expected_shared_kmers > 0.0 {
+            n_intersecting_hashes as f64 / query_expected_shared_kmers
         } else {
             0.0
         };
+
+        // Rescope the same Poisson test to each matched region individually, so a tight local
+        // match doesn't get diluted by the whole protein's k-mer count. The null is recomputed
+        // from only the k-mers whose start position falls inside this region's own span (using
+        // the fully-contained bound, not the full [start, end) range - see MatchedRegion docs).
+        let ksize = query.sketch.protein_ksize() as usize;
+        for region in result.matched_regions.iter_mut() {
+            let region_start = region.start as usize;
+            let region_window_end = (region.end as usize).saturating_sub(ksize) + 1;
+            let region_expected_shared_kmers: f64 = query
+                .sketch
+                .kmer_positions()
+                .iter()
+                .map(|(hashval, positions)| {
+                    let freq = self.stats.kmer_frequencies.get(hashval).copied().unwrap_or(1)
+                        as f64
+                        / self.stats.total_signatures as f64;
+                    let n_in_region = positions
+                        .iter()
+                        .filter(|&&p| p >= region_start && p < region_window_end)
+                        .count();
+                    freq * n_in_region as f64
+                })
+                .sum();
+            let region_n_shared_kmers = region.length.saturating_sub(ksize as u32) + 1;
+
+            region.expected_shared_kmers = region_expected_shared_kmers;
+            region.poisson_pvalue = if region_expected_shared_kmers > 0.0 {
+                match Poisson::new(region_expected_shared_kmers) {
+                    Ok(dist) => (1.0 - dist.cdf((region_n_shared_kmers - 1) as u64)).max(0.0),
+                    Err(_) => 1.0,
+                }
+            } else {
+                1.0
+            };
+            region.enrichment = if region_expected_shared_kmers > 0.0 {
+                region_n_shared_kmers as f64 / region_expected_shared_kmers
+            } else {
+                0.0
+            };
+            region.bonferroni_n = total_queries;
+        }
 
         // Fill in database-specific metrics
         // joint_kmer_freq = Σ freq_query[h] * freq_target[h] for h in intersection.
@@ -771,10 +850,10 @@ impl ProteinSearcher {
         result.query_tfidf = query.tfidf;
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
-        result.expected_shared_kmers = expected_shared_kmers;
-        result.enrichment = enrichment;
+        result.query_expected_shared_kmers = query_expected_shared_kmers;
+        result.query_enrichment = query_enrichment;
         result.joint_kmer_freq = joint_kmer_freq;
-        result.poisson_pvalue = poisson_pvalue;
+        result.query_poisson_pvalue = query_poisson_pvalue;
 
         Some(result)
     }
@@ -974,13 +1053,13 @@ fn calculate_similarity_from_precomputed(
         std_abund,
         containment_target_in_query,
         f_weighted_target_in_query,
-        query_tfidf: 0.0,            // requires database context
-        mean_matched_kmer_freq: 0.0, // requires database context
-        sum_matched_kmer_freq: 0.0,  // requires database context
-        expected_shared_kmers: 0.0,  // requires database context
-        enrichment: 0.0,             // requires database context
-        joint_kmer_freq: 0.0,        // requires two-pass query frequencies
-        poisson_pvalue: 1.0,         // requires database context (expected_shared_kmers)
+        query_tfidf: 0.0,                 // requires database context
+        mean_matched_kmer_freq: 0.0,      // requires database context
+        sum_matched_kmer_freq: 0.0,       // requires database context
+        query_expected_shared_kmers: 0.0, // requires database context
+        query_enrichment: 0.0,            // requires database context
+        joint_kmer_freq: 0.0,             // requires two-pass query frequencies
+        query_poisson_pvalue: 1.0,        // requires database context
         matched_regions,
     })
 }
@@ -1160,9 +1239,9 @@ pub fn find_matched_regions(
 
                     consecutive_regions.push(MatchedRegion {
                         query_name: query_name.clone(),
-                        query_start: query_start_pos as u32,
-                        query_end: query_end_pos as u32,
-                        query_subseq: query_subseq.to_string(),
+                        start: query_start_pos as u32,
+                        end: query_end_pos as u32,
+                        subseq: query_subseq.to_string(),
                         target_name: target_name.clone(),
                         target_start: target_start_pos as u32,
                         target_end: target_end_pos as u32,
@@ -1170,6 +1249,10 @@ pub fn find_matched_regions(
                         moltype: moltype.clone(),
                         moltype_seq: String::new(), // Empty since we don't have encoded sequence
                         length: (query_end_pos - query_start_pos) as u32,
+                        expected_shared_kmers: 0.0,
+                        poisson_pvalue: 1.0,
+                        enrichment: 0.0,
+                        bonferroni_n: 1,
                     });
 
                     i = j;
@@ -1197,9 +1280,9 @@ pub fn find_matched_regions(
 
         consecutive_regions.push(MatchedRegion {
             query_name: query_name.clone(),
-            query_start: query_start_pos as u32,
-            query_end: query_end_pos as u32,
-            query_subseq: query_subseq.to_string(),
+            start: query_start_pos as u32,
+            end: query_end_pos as u32,
+            subseq: query_subseq.to_string(),
             target_name: target_name.clone(),
             target_start: target_start_pos as u32,
             target_end: target_end_pos as u32,
@@ -1207,6 +1290,10 @@ pub fn find_matched_regions(
             moltype: moltype.clone(),
             moltype_seq: target_moltype_seq.to_string(),
             length: (query_end_pos - query_start_pos) as u32,
+            expected_shared_kmers: 0.0,
+            poisson_pvalue: 1.0,
+            enrichment: 0.0,
+            bonferroni_n: 1,
         });
 
         i = j;
@@ -1221,7 +1308,7 @@ pub fn find_matched_regions(
     // target positions differ. For example, a 12-mer match at query 170:182 and target 81:93 is
     // distinct from a 19-mer match at query 162:181 and target 138:157, even though the query
     // positions overlap. All matches are reported because they represent different alignments.
-    consecutive_regions.sort_by_key(|a| a.query_start);
+    consecutive_regions.sort_by_key(|a| a.start);
 
     consecutive_regions
 }
@@ -1248,9 +1335,9 @@ mod tests {
 
         let region = MatchedRegion {
             query_name: "q".to_string(),
-            query_start: 3,
-            query_end: 9,
-            query_subseq: "QSUBSEQ".to_string(),
+            start: 3,
+            end: 9,
+            subseq: "QSUBSEQ".to_string(),
             target_name: "t".to_string(),
             target_start: 11,
             target_end: 17,
@@ -1258,6 +1345,10 @@ mod tests {
             moltype_seq: "hphph".to_string(),
             moltype: MolType::new("hp").unwrap(),
             length: 6,
+            expected_shared_kmers: 2.0,
+            poisson_pvalue: 0.05,
+            enrichment: 1.5,
+            bonferroni_n: 10,
         };
 
         let result = SearchResult {
@@ -1280,10 +1371,10 @@ mod tests {
             query_tfidf: 1.5,
             mean_matched_kmer_freq: 0.1,
             sum_matched_kmer_freq: 0.7,
-            expected_shared_kmers: 3.0,
-            enrichment: 2.33,
+            query_expected_shared_kmers: 3.0,
+            query_enrichment: 2.33,
             joint_kmer_freq: 0.05,
-            poisson_pvalue: 0.01,
+            query_poisson_pvalue: 0.01,
             matched_regions: vec![],
         };
 
@@ -1295,15 +1386,21 @@ mod tests {
         assert_eq!(row.n_intersecting_hashes, 7);
         assert_eq!(row.ksize, 5);
         assert_eq!(row.containment, 0.5);
-        assert_eq!(row.poisson_pvalue, 0.01);
+        assert_eq!(row.query_poisson_pvalue, 0.01);
         // Fields carried from the MatchedRegion.
-        assert_eq!(row.query_start, 3);
-        assert_eq!(row.query_end, 9);
-        assert_eq!(row.query_subseq, "QSUBSEQ");
+        assert_eq!(row.region_start, 3);
+        assert_eq!(row.region_end, 9);
+        assert_eq!(row.region_subseq, "QSUBSEQ");
         assert_eq!(row.target_start, 11);
         assert_eq!(row.target_subseq, "TSUBSEQ");
         assert_eq!(row.moltype_seq, "hphph");
         assert_eq!(row.region_length, 6);
+        // Region-scoped stat columns: length 6, ksize 5 -> 6 - 5 + 1 = 2 shared k-mers.
+        assert_eq!(row.region_n_shared_kmers, 2);
+        assert_eq!(row.region_expected_shared_kmers, 2.0);
+        assert_eq!(row.region_poisson_pvalue, 0.05);
+        assert_eq!(row.region_enrichment, 1.5);
+        assert_eq!(row.region_bonferroni_n, 10);
     }
 
     #[allow(dead_code)] // Test data structure - fields may be used for comparison
@@ -1322,11 +1419,11 @@ mod tests {
 
     /// Expected matched region structure for testing
     struct ExpectedMatchedRegion {
-        query_subseq: &'static str,
+        subseq: &'static str,
         moltype_seq: &'static str,
         target_subseq: &'static str,
-        query_start: u32,
-        query_end: u32,
+        start: u32,
+        end: u32,
         target_start: u32,
         target_end: u32,
     }
@@ -1339,7 +1436,7 @@ mod tests {
         // Just check first, last, and any specific "landmark" regions
         first: ExpectedMatchedRegion,
         last: ExpectedMatchedRegion,
-        // Optional: a specific region to find by query_subseq
+        // Optional: a specific region to find by subseq
         landmark: Option<ExpectedMatchedRegion>,
     }
 
@@ -1347,29 +1444,29 @@ mod tests {
         ksize: 12,
         total_regions: 13,
         first: ExpectedMatchedRegion {
-            query_subseq: "FTHRIRQNGMEW",
+            subseq: "FTHRIRQNGMEW",
             moltype_seq: "hppphppphhph",
             target_subseq: "FSRRYRRDFAEM",
-            query_start: 87,
-            query_end: 99,
+            start: 87,
+            end: 99,
             target_start: 103,
             target_end: 115,
         },
         last: ExpectedMatchedRegion {
-            query_subseq: "GVVVCGRMMFSLK",
+            subseq: "GVVVCGRMMFSLK",
             moltype_seq: "hhhhphphhhphp",
             target_subseq: "LYGPSMRPLFDFS",
-            query_start: 267,
-            query_end: 280,
+            start: 267,
+            end: 280,
             target_start: 200,
             target_end: 213,
         },
         landmark: Some(ExpectedMatchedRegion {
-            query_subseq: "QCPMSYGRLIGLISFGGFV",
+            subseq: "QCPMSYGRLIGLISFGGFV",
             moltype_seq: "pphhphhphhhhhphhhhh",
             target_subseq: "RDGVNWGRIVAFFEFGGVM",
-            query_start: 162,
-            query_end: 181,
+            start: 162,
+            end: 181,
             target_start: 138,
             target_end: 157,
         }),
@@ -1379,20 +1476,20 @@ mod tests {
         ksize: 15,
         total_regions: 1,
         first: ExpectedMatchedRegion {
-            query_subseq: "QCPMSYGRLIGLISFGGFV",
+            subseq: "QCPMSYGRLIGLISFGGFV",
             moltype_seq: "pphhphhphhhhhphhhhh",
             target_subseq: "RDGVNWGRIVAFFEFGGVM",
-            query_start: 162,
-            query_end: 181,
+            start: 162,
+            end: 181,
             target_start: 138,
             target_end: 157,
         },
         last: ExpectedMatchedRegion {
-            query_subseq: "QCPMSYGRLIGLISFGGFV",
+            subseq: "QCPMSYGRLIGLISFGGFV",
             moltype_seq: "pphhphhphhhhhphhhhh",
             target_subseq: "RDGVNWGRIVAFFEFGGVM",
-            query_start: 162,
-            query_end: 181,
+            start: 162,
+            end: 181,
             target_start: 138,
             target_end: 157,
         },
@@ -1592,8 +1689,8 @@ mod tests {
             "min_shared_kmers: usize::MAX should reject every candidate"
         );
 
-        // poisson_pvalue is always in [0.0, 1.0], so max_pvalue: 0.0 rejects every candidate
-        // (compare() rejects on poisson_pvalue >= max_pvalue).
+        // query_poisson_pvalue is always in [0.0, 1.0], so max_pvalue: 0.0 rejects every candidate
+        // (compare() rejects on query_poisson_pvalue >= max_pvalue).
         let max_pvalue_filtered = searcher.search(
             &query_signatures,
             &SearchFilters { threshold: 0.0, min_shared_kmers: 0, max_pvalue: 0.0 },
@@ -1670,11 +1767,11 @@ mod tests {
     /// WHY: This helper function eliminates code duplication in tests and makes assertions
     /// more readable. It's idiomatic Rust to extract common assertion logic into helper functions.
     fn assert_region_matches(region: &MatchedRegion, expected: &ExpectedMatchedRegion) {
-        assert_eq!(region.query_subseq, expected.query_subseq);
+        assert_eq!(region.subseq, expected.subseq);
         assert_eq!(region.moltype_seq, expected.moltype_seq);
         assert_eq!(region.target_subseq, expected.target_subseq);
-        assert_eq!(region.query_start, expected.query_start);
-        assert_eq!(region.query_end, expected.query_end);
+        assert_eq!(region.start, expected.start);
+        assert_eq!(region.end, expected.end);
         assert_eq!(region.target_start, expected.target_start);
         assert_eq!(region.target_end, expected.target_end);
     }
@@ -1714,7 +1811,7 @@ mod tests {
         if let Some(landmark) = &expected.landmark {
             let found = matched_regions
                 .iter()
-                .find(|r| r.query_subseq == landmark.query_subseq)
+                .find(|r| r.subseq == landmark.subseq)
                 .expect("Should find landmark region");
             assert_region_matches(found, landmark);
         }
@@ -1771,21 +1868,21 @@ mod tests {
 
         let first_match = &matched_regions[0];
         // Positions 87-99 in CED9 (query) and 103-115 in BCL2 (target)
-        assert_eq!(first_match.query_subseq, "FTHRIRQNGMEW");
+        assert_eq!(first_match.subseq, "FTHRIRQNGMEW");
         assert_eq!(first_match.moltype_seq, "hppphppphhph");
         assert_eq!(first_match.target_subseq, "FSRRYRRDFAEM");
-        assert_eq!(first_match.query_start, 87, "First match query start should be 87");
-        assert_eq!(first_match.query_end, 99, "First match query end should be 99");
+        assert_eq!(first_match.start, 87, "First match query start should be 87");
+        assert_eq!(first_match.end, 99, "First match query end should be 99");
         assert_eq!(first_match.target_start, 103, "First match target start should be 103");
         assert_eq!(first_match.target_end, 115, "First match target end should be 115");
 
         let last_match = &matched_regions[matched_regions.len() - 1];
         // Positions 267-280 in CED9 (query) and 200-213 in BCL2 (target)
-        assert_eq!(last_match.query_subseq, "GVVVCGRMMFSLK");
+        assert_eq!(last_match.subseq, "GVVVCGRMMFSLK");
         assert_eq!(last_match.moltype_seq, "hhhhphphhhphp");
         assert_eq!(last_match.target_subseq, "LYGPSMRPLFDFS");
-        assert_eq!(last_match.query_start, 267, "Last match query start should be 267");
-        assert_eq!(last_match.query_end, 280, "Last match query end should be 280");
+        assert_eq!(last_match.start, 267, "Last match query start should be 267");
+        assert_eq!(last_match.end, 280, "Last match query end should be 280");
         assert_eq!(last_match.target_start, 200, "Last match target start should be 200");
         assert_eq!(last_match.target_end, 213, "Last match target end should be 213");
 
@@ -1797,13 +1894,13 @@ mod tests {
         // the specific region by its subsequence rather than assuming it's at index 0.
         let largest_match = matched_regions
             .iter()
-            .find(|r| r.query_subseq == "QCPMSYGRLIGLISFGGFV")
+            .find(|r| r.subseq == "QCPMSYGRLIGLISFGGFV")
             .expect("Should find the expected match region");
-        assert_eq!(largest_match.query_subseq, "QCPMSYGRLIGLISFGGFV");
+        assert_eq!(largest_match.subseq, "QCPMSYGRLIGLISFGGFV");
         assert_eq!(largest_match.moltype_seq, "pphhphhphhhhhphhhhh");
         assert_eq!(largest_match.target_subseq, "RDGVNWGRIVAFFEFGGVM");
-        assert_eq!(largest_match.query_start, 162, "Largest match query start should be 162");
-        assert_eq!(largest_match.query_end, 181, "Largest match query end should be 181");
+        assert_eq!(largest_match.start, 162, "Largest match query start should be 162");
+        assert_eq!(largest_match.end, 181, "Largest match query end should be 181");
         assert_eq!(largest_match.target_start, 138, "Largest match target start should be 138");
         assert_eq!(largest_match.target_end, 157, "Largest match target end should be 157");
 
@@ -2138,10 +2235,13 @@ mod tests {
             "sum_matched_kmer_freq should be 0.0 for 1v1 comparisons"
         );
         assert_eq!(
-            result.expected_shared_kmers, 0.0,
-            "expected_shared_kmers should be 0.0 for 1v1 comparisons"
+            result.query_expected_shared_kmers, 0.0,
+            "query_expected_shared_kmers should be 0.0 for 1v1 comparisons"
         );
-        assert_eq!(result.enrichment, 0.0, "enrichment should be 0.0 for 1v1 comparisons");
+        assert_eq!(
+            result.query_enrichment, 0.0,
+            "query_enrichment should be 0.0 for 1v1 comparisons"
+        );
         assert_eq!(
             result.joint_kmer_freq, 0.0,
             "joint_kmer_freq should be 0.0 without query frequencies"
@@ -2335,7 +2435,7 @@ mod tests {
         let total_queries = 1;
         searcher.set_query_frequencies(qfreqs, total_queries);
 
-        let results = searcher.search_one(&query_sig, &SearchFilters::default());
+        let results = searcher.search_one(&query_sig, &SearchFilters::default(), total_queries);
 
         // Find bcl2 result
         let bcl2_result = results
@@ -2358,6 +2458,189 @@ mod tests {
             "joint_kmer_freq should be > 0.0, got {}",
             bcl2_result.joint_kmer_freq
         );
+
+        Ok(())
+    }
+
+    /// At scaled=1 every k-mer in the sequence survives FracMinHash (no downsampling), so every
+    /// position inside a matched region's span is a shared k-mer. Independently recounts from
+    /// kmer_positions (not just re-deriving the same length - ksize + 1 formula the production
+    /// code uses) to actually exercise the position-tracking mechanism, for every named HP
+    /// alphabet including hp_thomas_dill_no_c.
+    #[test]
+    fn test_region_shared_kmer_count_exact_at_scaled_one_all_alphabets() {
+        use crate::hp_alphabets::HpAlphabet;
+
+        // Real sequence (already used elsewhere in this codebase for HP-alphabet regression
+        // tests, see test_hp_encoding.rs) - self-hit so every alphabet reliably finds a region.
+        let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQADTFMGPTLCEVFAEMG";
+        let ksize = 8;
+
+        for alpha in HpAlphabet::all_named() {
+            let moltype = alpha.to_moltype();
+            let sketch = ProteinSketch::from_protein_sequence("self", seq, ksize, 1, &moltype)
+                .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
+
+            let shared = sketch.mins_as_set();
+            let regions = find_matched_regions(&sketch, &sketch, &shared);
+            assert!(!regions.is_empty(), "{moltype}: self-hit should find at least one region");
+
+            let kmer_positions = sketch.kmer_positions();
+            for region in &regions {
+                let window_end = (region.end as usize).saturating_sub(ksize as usize) + 1;
+                let n_in_region = kmer_positions
+                    .values()
+                    .flatten()
+                    .filter(|&&p| p >= region.start as usize && p < window_end)
+                    .count();
+                assert_eq!(
+                    n_in_region as u32,
+                    region.length - ksize + 1,
+                    "{moltype}: region {:?} shared k-mer count mismatch",
+                    region.subseq
+                );
+            }
+        }
+    }
+
+    /// The same 5 shared k-mers that read as a weak whole-protein match (containment ~0.019
+    /// against CED9's 266 k-mers) are the entire signal inside their own 19aa region. Runs a
+    /// real database search (needed for region.poisson_pvalue's DB context) and checks the
+    /// region-scoped Poisson test independently: recomputes lambda by hand from the searcher's
+    /// own background frequencies, restricted to the region's span, and checks it against
+    /// region.expected_shared_kmers/region.poisson_pvalue rather than trusting the same code
+    /// path that produced them.
+    #[test]
+    fn test_region_poisson_pvalue_independently_recomputed() -> Result<()> {
+        let ksize = 15;
+        let scaled = 1;
+        let moltype = "hp";
+
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index_path = temp_dir.path().join("query_index");
+        let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
+        let bcl2_result = results
+            .iter()
+            .find(|r| r.target_name.contains("BCL2_HUMAN"))
+            .expect("Should find BCL2_HUMAN in results");
+
+        // Matches the sourmash-verified BCL2_CED9_K15 constants (see BCL2_CED9_K15 above):
+        // 5 shared k-mers, whole-protein containment ~0.019 - a real, weak-looking match.
+        assert_eq!(bcl2_result.n_intersecting_hashes, 5);
+        assert_relative_eq!(bcl2_result.containment, 0.018796992481203006, epsilon = 1e-9);
+
+        let region = bcl2_result
+            .matched_regions
+            .iter()
+            .find(|r| r.subseq == "QCPMSYGRLIGLISFGGFV")
+            .expect("Should find the landmark region");
+        assert_eq!(region.length - ksize + 1, 5, "region should account for all 5 shared k-mers");
+
+        // Recompute expected_shared_kmers by hand: sum db_frequency[h]/total_signatures over
+        // every retained query k-mer position inside the region's own span - independent of
+        // compare()'s implementation, using only the searcher's public stats().
+        let stats = searcher.stats();
+        let query_sketch = &query_signatures[0];
+        let window_end = (region.end as usize).saturating_sub(ksize as usize) + 1;
+        let expected_by_hand: f64 = query_sketch
+            .kmer_positions()
+            .iter()
+            .map(|(hashval, positions)| {
+                let freq = stats.kmer_frequencies.get(hashval).copied().unwrap_or(1) as f64
+                    / stats.total_signatures as f64;
+                let n_in_region = positions
+                    .iter()
+                    .filter(|&&p| p >= region.start as usize && p < window_end)
+                    .count();
+                freq * n_in_region as f64
+            })
+            .sum();
+        assert_relative_eq!(region.expected_shared_kmers, expected_by_hand, epsilon = 1e-12);
+
+        let pvalue_by_hand = if expected_by_hand > 0.0 {
+            Poisson::new(expected_by_hand)
+                .map(|dist| (1.0 - dist.cdf(4)).max(0.0)) // k - 1 = 5 - 1 = 4
+                .unwrap_or(1.0)
+        } else {
+            1.0
+        };
+        assert_relative_eq!(region.poisson_pvalue, pvalue_by_hand, epsilon = 1e-12);
+
+        // The region-scoped null (over ~5 background-frequency k-mers) is a much smaller number
+        // than the whole-protein null (over all 266 of CED9's k-mers), so the two p-values are
+        // computed from different lambdas and shouldn't coincide.
+        assert_ne!(region.poisson_pvalue, bcl2_result.query_poisson_pvalue);
+
+        Ok(())
+    }
+
+    /// region.bonferroni_n is the total query count for the search run: queries.len() when
+    /// going through search(), and the DB-independent sentinel (1) for calculate_similarity(),
+    /// which has no search run to count queries over.
+    #[test]
+    fn test_region_bonferroni_n_reflects_total_queries() -> Result<()> {
+        let ksize = 12;
+        let scaled = 1;
+        let moltype = "hp";
+
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        // Two queries in this search run (CED9 + BCL2 itself), so bonferroni_n should be 2.
+        let query_index_path = temp_dir.path().join("query_index");
+        let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.process_fasta(TEST_BLC2_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+        assert_eq!(query_signatures.len(), 2);
+
+        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
+        let result_with_regions = results
+            .iter()
+            .find(|r| !r.matched_regions.is_empty())
+            .expect("At least one result should have matched regions");
+        for region in &result_with_regions.matched_regions {
+            assert_eq!(region.bonferroni_n, 2);
+        }
+
+        // calculate_similarity() has no search run behind it, so bonferroni_n stays at its
+        // DB-independent sentinel of 1.
+        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let query_sketch = ProteinSketch::from_protein_sequence(
+            &ced9_name,
+            &ced9_sequence,
+            ksize,
+            scaled,
+            moltype,
+        )?;
+        let target_sketch = ProteinSketch::from_protein_sequence(
+            &bcl2_name,
+            &bcl2_sequence,
+            ksize,
+            scaled,
+            moltype,
+        )?;
+        let one_off = calculate_similarity(&query_sketch, &target_sketch)
+            .expect("CED9/BCL2 should share k-mers at k=12");
+        assert!(!one_off.matched_regions.is_empty());
+        for region in &one_off.matched_regions {
+            assert_eq!(region.bonferroni_n, 1);
+        }
 
         Ok(())
     }

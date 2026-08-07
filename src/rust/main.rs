@@ -325,12 +325,14 @@ fn main() -> IndexResult<()> {
                 use kmerseek::sketch::ProteinSketch;
                 use needletail::parse_fastx_file;
 
-                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq.
+                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq. Also
+                // gives us the total query count up front, needed below as the Bonferroni
+                // correction family for each region's p-value.
                 eprintln!("First pass: scanning query proteome for k-mer frequencies...");
+                let mut total_queries: usize = 0;
                 {
                     use std::collections::HashMap;
                     let mut qfreqs: HashMap<u64, usize> = HashMap::new();
-                    let mut total_queries: usize = 0;
                     let mut freq_reader = parse_fastx_file(&query)
                         .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
                     while let Some(record) = freq_reader.next() {
@@ -402,8 +404,10 @@ fn main() -> IndexResult<()> {
                  -> anyhow::Result<()> {
                     // Search all queries in this batch in parallel. Results failing `filters`
                     // are never included (see SearchFilters), so no post-hoc filtering needed here.
-                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
-                        batch.par_iter().map(|q| searcher.search_one(q, &filters)).collect();
+                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> = batch
+                        .par_iter()
+                        .map(|q| searcher.search_one(q, &filters, total_queries))
+                        .collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
                     for results in &batch_results {
