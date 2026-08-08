@@ -31,18 +31,40 @@ pub struct SearchFilters {
     pub threshold: f64,
     /// Minimum number of shared k-mers required to keep a match.
     pub min_shared_kmers: usize,
-    /// Maximum uncorrected Poisson p-value required to keep a match.
-    pub max_pvalue: f64,
+    /// Maximum whole-query Poisson p-value required to keep a match.
+    pub max_query_pvalue: f64,
+    /// Maximum region-scoped Poisson p-value required to keep a match, applied to the best
+    /// region in the pair.
+    pub max_region_pvalue: f64,
 }
 
 impl Default for SearchFilters {
-    /// Accepts every result `compare()` produces. Note max_pvalue must be `f64::INFINITY`,
+    /// Accepts every result `compare()` produces. Note the p-value caps must be `f64::INFINITY`,
     /// not 1.0: `query_poisson_pvalue` is exactly 1.0 whenever there's no database frequency
     /// context (e.g. `set_query_frequencies` was never called), which is common, so a cap
-    /// of 1.0 combined with `compare()`'s `query_poisson_pvalue >= max_pvalue` rejection check
-    /// would wrongly reject those results.
+    /// of 1.0 combined with `compare()`'s strict-less-than keep check would wrongly reject
+    /// those results.
     fn default() -> Self {
-        Self { threshold: 0.0, min_shared_kmers: 0, max_pvalue: f64::INFINITY }
+        Self {
+            threshold: 0.0,
+            min_shared_kmers: 0,
+            max_query_pvalue: f64::INFINITY,
+            max_region_pvalue: f64::INFINITY,
+        }
+    }
+}
+
+impl SearchFilters {
+    /// A pair is kept when *either* scope clears its cap, not both.
+    ///
+    /// AND would reintroduce whole-protein dilution through the back door: BCL2/CED9 at k=15
+    /// has a whole-query p of 0.99 and a region p of 0.0007, so requiring both to pass discards
+    /// exactly the sub-protein domain calls region scoring exists to surface.
+    fn pvalues_pass(&self, query_pvalue: f64, best_region_pvalue: Option<f64>) -> bool {
+        let query_passes = query_pvalue < self.max_query_pvalue;
+        let region_passes =
+            best_region_pvalue.is_some_and(|pvalue| pvalue < self.max_region_pvalue);
+        query_passes || region_passes
     }
 }
 
@@ -82,6 +104,12 @@ pub struct SearchResultCsv {
     /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = query_expected_shared_kmers).
     /// 1.0 when query_expected_shared_kmers is unavailable (no database context).
     pub query_poisson_pvalue: f64,
+    // Multiplicity components, emitted separately so no reported statistic depends on batch
+    // composition. See SearchResult for what each one counts and how to combine them.
+    pub region_search_space: usize,
+    pub db_n_targets: usize,
+    pub db_n_kmers: usize,
+    pub run_n_queries: usize,
     // MatchedRegion fields (always present - every CSV row has a matched region)
     pub region_start: u32,
     pub region_end: u32,
@@ -95,7 +123,7 @@ pub struct SearchResultCsv {
     pub region_expected_shared_kmers: f64,
     pub region_poisson_pvalue: f64,
     pub region_enrichment: f64,
-    pub region_bonferroni_n: usize,
+    pub region_minority_fraction: Option<f64>,
 }
 
 impl SearchResultCsv {
@@ -129,6 +157,10 @@ impl SearchResultCsv {
             query_enrichment: result.query_enrichment,
             joint_kmer_freq: result.joint_kmer_freq,
             query_poisson_pvalue: result.query_poisson_pvalue,
+            region_search_space: result.region_search_space,
+            db_n_targets: result.db_n_targets,
+            db_n_kmers: result.db_n_kmers,
+            run_n_queries: result.run_n_queries,
             region_start: region.start,
             region_end: region.end,
             region_subseq: region.subseq.clone(),
@@ -141,7 +173,7 @@ impl SearchResultCsv {
             region_expected_shared_kmers: region.expected_shared_kmers,
             region_poisson_pvalue: region.poisson_pvalue,
             region_enrichment: region.enrichment,
-            region_bonferroni_n: region.bonferroni_n,
+            region_minority_fraction: region.minority_fraction,
         }
     }
 }
@@ -225,6 +257,25 @@ pub struct SearchResult {
     /// 1.0 when query_expected_shared_kmers is unavailable (no database context).
     pub query_poisson_pvalue: f64,
 
+    /// Number of candidate region start positions in this query: `query_length - ksize + 1`.
+    /// Regions are maximal gapless runs, i.e. chosen because they scored well, so a p-value
+    /// evaluated on one is anticonservative unless corrected by how many placements it was
+    /// selected from. 0 when raw sequences are not stored.
+    pub region_search_space: usize,
+
+    /// Number of target signatures searched.
+    pub db_n_targets: usize,
+
+    /// Total k-mer occurrences across the database (Σ over hashes of the number of signatures
+    /// containing that hash) — the k-mer-space analogue of a residue count, which the index
+    /// does not currently store.
+    pub db_n_kmers: usize,
+
+    /// Number of queries in this search run. Emitted for anyone wanting study-wide FWER; it is
+    /// deliberately NOT folded into any p-value, so a hit's reported significance never depends
+    /// on what else happened to be in the same invocation.
+    pub run_n_queries: usize,
+
     /// 1 or more regions of 1+ k-mers overlapping between query and target
     pub matched_regions: Vec<MatchedRegion>,
 }
@@ -270,19 +321,49 @@ pub struct MatchedRegion {
 
     /// Expected number of shared k-mers by chance within this region: Σ freq_target[h]/N over
     /// the query k-mers whose start position falls inside this region. 0.0 without DB context.
+    ///
+    /// The frequencies are database-wide, not conditioned on this region's own composition, so
+    /// a region sitting in a compositionally atypical stretch will show inflated enrichment for
+    /// reasons unrelated to homology. Check `minority_fraction` before trusting a large value.
     pub expected_shared_kmers: f64,
 
     /// Poisson p-value scoped to this region: P(X ≥ n_shared | λ = expected_shared_kmers), using
     /// the region's own k-mer count instead of the whole protein's. 1.0 without DB context.
+    ///
+    /// This is a nominal, uncorrected tail probability. Regions are maximal gapless runs —
+    /// selected for being good — so this is anticonservative as a standalone significance
+    /// claim: the null assumes an interval fixed in advance. Combine with `region_search_space`
+    /// and `db_n_targets` for an E-value, and prefer empirical calibration against a decoy
+    /// database over reading this number directly.
     pub poisson_pvalue: f64,
 
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
     /// context or when expected_shared_kmers is 0.
     pub enrichment: f64,
 
-    /// Number of queries in the search run this region was found in — the Bonferroni correction
-    /// family for poisson_pvalue. 1 without DB context.
-    pub bonferroni_n: usize,
+    /// Fraction of this region's encoded sequence that is *not* its most common character —
+    /// 0.5 is maximally mixed for a 2-letter alphabet, 0.0 is a homopolymer run.
+    ///
+    /// Emitted so low-complexity regions stay auditable: short regions inside compositionally
+    /// biased stretches are exactly where region enrichment looks most spectacular and means
+    /// least. `None` when no encoded sequence is available (e.g. protein moltype).
+    pub minority_fraction: Option<f64>,
+}
+
+/// Fraction of `encoded` that is not its most common character.
+///
+/// Generalizes minority fraction to any alphabet: for 2-letter HP it is exactly
+/// `min(count_h, count_p) / len`, and for dayhoff it reads as the non-modal fraction.
+fn non_modal_fraction(encoded: &str) -> Option<f64> {
+    if encoded.is_empty() {
+        return None;
+    }
+    let mut counts: HashMap<char, usize> = HashMap::new();
+    for character in encoded.chars() {
+        *counts.entry(character).or_insert(0) += 1;
+    }
+    let modal = counts.values().copied().max()?;
+    Some(1.0 - modal as f64 / encoded.chars().count() as f64)
 }
 
 impl Display for MatchedRegion {
@@ -375,6 +456,10 @@ pub struct ProteinSearcher {
     query_kmer_frequencies: Option<HashMap<u64, usize>>,
     /// Total number of query sequences used to build query_kmer_frequencies.
     total_queries: usize,
+    /// Σ over hashes of the number of signatures containing that hash — the database's size in
+    /// k-mer space, reported per result. Summed once here because doing it per comparison would
+    /// be O(unique k-mers) on every candidate.
+    db_n_kmers: usize,
 }
 
 impl ProteinSearcher {
@@ -382,6 +467,7 @@ impl ProteinSearcher {
     pub fn new(index: ProteomeIndex) -> Self {
         let stats = SearchStats::from_index(&index);
         let (target_list, inverted_index) = Self::build_search_structures(&index);
+        let db_n_kmers = stats.kmer_frequencies.values().sum();
         Self {
             index,
             stats,
@@ -390,6 +476,7 @@ impl ProteinSearcher {
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
+            db_n_kmers,
         }
     }
 
@@ -418,6 +505,7 @@ impl ProteinSearcher {
                 .collect();
             let stats =
                 SearchStats { total_signatures, idf, kmer_frequencies: cache.kmer_frequencies };
+            let db_n_kmers = stats.kmer_frequencies.values().sum();
             eprintln!(
                 "Loaded search cache: {} targets, {} k-mers indexed",
                 total_signatures,
@@ -431,6 +519,7 @@ impl ProteinSearcher {
                 sig_cache: DashMap::new(),
                 query_kmer_frequencies: None,
                 total_queries: 0,
+                db_n_kmers,
             });
         }
 
@@ -441,6 +530,7 @@ impl ProteinSearcher {
         index.load_state()?;
         let stats = SearchStats::from_index(&index);
         let (target_list, inverted_index) = Self::build_search_structures(&index);
+        let db_n_kmers = stats.kmer_frequencies.values().sum();
         Ok(Self {
             index,
             stats,
@@ -449,6 +539,7 @@ impl ProteinSearcher {
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
+            db_n_kmers,
         })
     }
 
@@ -739,13 +830,21 @@ impl ProteinSearcher {
             return None;
         }
 
-        // Containment, n_intersecting_hashes, and query_poisson_pvalue only need the intersection
-        // size and DB-wide k-mer frequencies - all cheap. Check `filters` against them here,
-        // before doing the expensive per-pair work below (find_matched_regions walks both
-        // sequences to locate matched regions; abundance_stats sorts the intersection). This
-        // way, candidates that fail the filter never pay for that work.
+        // Containment and n_intersecting_hashes are cheap - just the intersection size - so
+        // check them before the expensive per-pair work below (find_matched_regions walks both
+        // sequences; abundance_stats sorts the intersection). Candidates failing these never
+        // pay for that work.
+        //
+        // The p-value checks can NOT be hoisted up here: a pair is kept when either scope
+        // clears, and the region scope isn't known until the regions exist. So p-value
+        // filtering happens after the result is built, and pairs that fail the query scope now
+        // pay for region-finding before being rejected.
         let n_intersecting_hashes = intersection.len();
         let containment = n_intersecting_hashes as f64 / query.mins.len() as f64;
+        if containment < filters.threshold || n_intersecting_hashes < filters.min_shared_kmers {
+            return None;
+        }
+
         let query_expected_shared_kmers =
             self.calculate_expected_shared_kmers(query.sketch, target);
         // P(X >= k | lambda) where k = observed intersecting hashes, lambda = expected by chance.
@@ -759,13 +858,6 @@ impl ProteinSearcher {
         } else {
             1.0
         };
-
-        if containment < filters.threshold
-            || n_intersecting_hashes < filters.min_shared_kmers
-            || query_poisson_pvalue >= filters.max_pvalue
-        {
-            return None;
-        }
 
         // Calculate database-specific overlap metrics
         let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&intersection);
@@ -825,7 +917,16 @@ impl ProteinSearcher {
             } else {
                 0.0
             };
-            region.bonferroni_n = total_queries;
+        }
+
+        // Either scope clearing its cap keeps the pair - see SearchFilters::pvalues_pass.
+        let best_region_pvalue = result
+            .matched_regions
+            .iter()
+            .map(|region| region.poisson_pvalue)
+            .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
+        if !filters.pvalues_pass(query_poisson_pvalue, best_region_pvalue) {
+            return None;
         }
 
         // Fill in database-specific metrics
@@ -854,6 +955,9 @@ impl ProteinSearcher {
         result.query_enrichment = query_enrichment;
         result.joint_kmer_freq = joint_kmer_freq;
         result.query_poisson_pvalue = query_poisson_pvalue;
+        result.db_n_targets = self.stats.total_signatures;
+        result.db_n_kmers = self.db_n_kmers;
+        result.run_n_queries = total_queries;
 
         Some(result)
     }
@@ -1036,6 +1140,14 @@ fn calculate_similarity_from_precomputed(
 
     let matched_regions = find_matched_regions(query, target, intersection);
 
+    // Number of distinct positions a region could have started at in this query. Regions are
+    // selected by maximization over these placements, so this is the multiplicity that a
+    // per-region p-value has to be corrected against.
+    let region_search_space = query
+        .get_raw_sequence()
+        .map(|seq| seq.len().saturating_sub(query.protein_ksize() as usize) + 1)
+        .unwrap_or(0);
+
     Some(SearchResult {
         query_name: query.signature().name.clone(),
         query_md5: query.signature().md5sum.clone(),
@@ -1060,6 +1172,10 @@ fn calculate_similarity_from_precomputed(
         query_enrichment: 0.0,            // requires database context
         joint_kmer_freq: 0.0,             // requires two-pass query frequencies
         query_poisson_pvalue: 1.0,        // requires database context
+        region_search_space,
+        db_n_targets: 0,  // requires database context
+        db_n_kmers: 0,    // requires database context
+        run_n_queries: 0, // requires a search run
         matched_regions,
     })
 }
@@ -1252,7 +1368,7 @@ pub fn find_matched_regions(
                         expected_shared_kmers: 0.0,
                         poisson_pvalue: 1.0,
                         enrichment: 0.0,
-                        bonferroni_n: 1,
+                        minority_fraction: None,
                     });
 
                     i = j;
@@ -1293,7 +1409,7 @@ pub fn find_matched_regions(
             expected_shared_kmers: 0.0,
             poisson_pvalue: 1.0,
             enrichment: 0.0,
-            bonferroni_n: 1,
+            minority_fraction: non_modal_fraction(target_moltype_seq),
         });
 
         i = j;
@@ -1348,7 +1464,7 @@ mod tests {
             expected_shared_kmers: 2.0,
             poisson_pvalue: 0.05,
             enrichment: 1.5,
-            bonferroni_n: 10,
+            minority_fraction: Some(0.4),
         };
 
         let result = SearchResult {
@@ -1375,6 +1491,10 @@ mod tests {
             query_enrichment: 2.33,
             joint_kmer_freq: 0.05,
             query_poisson_pvalue: 0.01,
+            region_search_space: 300,
+            db_n_targets: 25,
+            db_n_kmers: 7629,
+            run_n_queries: 4,
             matched_regions: vec![],
         };
 
@@ -1400,7 +1520,12 @@ mod tests {
         assert_eq!(row.region_expected_shared_kmers, 2.0);
         assert_eq!(row.region_poisson_pvalue, 0.05);
         assert_eq!(row.region_enrichment, 1.5);
-        assert_eq!(row.region_bonferroni_n, 10);
+        assert_eq!(row.region_minority_fraction, Some(0.4));
+        // Multiplicity components travel as separate columns, never folded into a p-value.
+        assert_eq!(row.region_search_space, 300);
+        assert_eq!(row.db_n_targets, 25);
+        assert_eq!(row.db_n_kmers, 7629);
+        assert_eq!(row.run_n_queries, 4);
     }
 
     #[allow(dead_code)] // Test data structure - fields may be used for comparison
@@ -1671,31 +1796,87 @@ mod tests {
         // containment is always <= 1.0, so this threshold rejects every candidate.
         let threshold_filtered = searcher.search(
             &query_signatures,
-            &SearchFilters { threshold: 1.1, min_shared_kmers: 0, max_pvalue: f64::INFINITY },
+            &SearchFilters { threshold: 1.1, ..SearchFilters::default() },
         )?;
         assert!(threshold_filtered.is_empty(), "threshold: 1.1 should reject every candidate");
 
         // No real match shares more k-mers than usize::MAX.
         let min_shared_kmers_filtered = searcher.search(
             &query_signatures,
-            &SearchFilters {
-                threshold: 0.0,
-                min_shared_kmers: usize::MAX,
-                max_pvalue: f64::INFINITY,
-            },
+            &SearchFilters { min_shared_kmers: usize::MAX, ..SearchFilters::default() },
         )?;
         assert!(
             min_shared_kmers_filtered.is_empty(),
             "min_shared_kmers: usize::MAX should reject every candidate"
         );
 
-        // query_poisson_pvalue is always in [0.0, 1.0], so max_pvalue: 0.0 rejects every candidate
-        // (compare() rejects on query_poisson_pvalue >= max_pvalue).
-        let max_pvalue_filtered = searcher.search(
+        // Both p-values are in [0.0, 1.0] and the checks are strict <, so capping both scopes at
+        // 0.0 rejects everything. Both must be capped: either one passing keeps the pair.
+        let pvalue_filtered = searcher.search(
             &query_signatures,
-            &SearchFilters { threshold: 0.0, min_shared_kmers: 0, max_pvalue: 0.0 },
+            &SearchFilters {
+                max_query_pvalue: 0.0,
+                max_region_pvalue: 0.0,
+                ..SearchFilters::default()
+            },
         )?;
-        assert!(max_pvalue_filtered.is_empty(), "max_pvalue: 0.0 should reject every candidate");
+        assert!(pvalue_filtered.is_empty(), "capping both p-value scopes at 0.0 rejects all");
+
+        Ok(())
+    }
+
+    /// The two p-value scopes combine with OR, which is the whole point: BCL2/CED9 at k=15 is a
+    /// weak whole-query match (p ~ 0.99) carrying one strong region (p ~ 0.0007). Capping only
+    /// the query scope must not discard it, and capping only the region scope must keep it.
+    #[test]
+    fn test_pvalue_scopes_combine_with_or() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index_path = temp_dir.path().join("query_index");
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        let find_bcl2 =
+            |results: &[SearchResult]| results.iter().any(|r| r.target_name.contains("BCL2_HUMAN"));
+
+        // Whole-query scope alone rejects it: its query p-value is ~0.99, far above 0.05.
+        let query_only = searcher.search(
+            &query_signatures,
+            &SearchFilters {
+                max_query_pvalue: 0.05,
+                max_region_pvalue: 0.0,
+                ..SearchFilters::default()
+            },
+        )?;
+        assert!(!find_bcl2(&query_only), "query scope alone should reject the diluted BCL2 match");
+
+        // Region scope alone keeps it, on the strength of the one significant region.
+        let region_only = searcher.search(
+            &query_signatures,
+            &SearchFilters {
+                max_query_pvalue: 0.0,
+                max_region_pvalue: 0.05,
+                ..SearchFilters::default()
+            },
+        )?;
+        assert!(find_bcl2(&region_only), "region scope should keep the sub-protein domain hit");
+
+        // Both at the CLI default: OR means the region rescues it.
+        let both = searcher.search(
+            &query_signatures,
+            &SearchFilters {
+                max_query_pvalue: 0.05,
+                max_region_pvalue: 0.05,
+                ..SearchFilters::default()
+            },
+        )?;
+        assert!(find_bcl2(&both), "default OR semantics should surface the hit");
 
         Ok(())
     }
@@ -2083,6 +2264,7 @@ mod tests {
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
+            db_n_kmers: 0,
         };
 
         let tfidf = searcher.calculate_tfidf(&query);
@@ -2584,11 +2766,13 @@ mod tests {
         Ok(())
     }
 
-    /// region.bonferroni_n is the total query count for the search run: queries.len() when
-    /// going through search(), and the DB-independent sentinel (1) for calculate_similarity(),
-    /// which has no search run to count queries over.
+    /// The multiplicity components are reported separately rather than pre-multiplied into the
+    /// p-value, so a hit's significance never shifts with batch composition. Checks each
+    /// component counts what it claims, and — the property that motivates the split — that
+    /// searching the same query alone leaves its p-values and region_search_space untouched
+    /// while only run_n_queries moves.
     #[test]
-    fn test_region_bonferroni_n_reflects_total_queries() -> Result<()> {
+    fn test_multiplicity_components_are_reported_separately() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
         let moltype = "hp";
@@ -2599,49 +2783,81 @@ mod tests {
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(target_index);
 
-        // Two queries in this search run (CED9 + BCL2 itself), so bonferroni_n should be 2.
-        let query_index_path = temp_dir.path().join("query_index");
-        let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
-        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
-        query_index.process_fasta(TEST_BLC2_FASTA, 0, DEFAULT_BATCH_SIZE)?;
-        let query_signatures: Vec<_> =
-            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
-        assert_eq!(query_signatures.len(), 2);
-
-        let results = searcher.search(&query_signatures, &SearchFilters::default())?;
-        let result_with_regions = results
-            .iter()
-            .find(|r| !r.matched_regions.is_empty())
-            .expect("At least one result should have matched regions");
-        for region in &result_with_regions.matched_regions {
-            assert_eq!(region.bonferroni_n, 2);
-        }
-
-        // calculate_similarity() has no search run behind it, so bonferroni_n stays at its
-        // DB-independent sentinel of 1.
         let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
         let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
-        let query_sketch = ProteinSketch::from_protein_sequence(
+        let ced9 = ProteinSketch::from_protein_sequence(
             &ced9_name,
             &ced9_sequence,
             ksize,
             scaled,
             moltype,
         )?;
-        let target_sketch = ProteinSketch::from_protein_sequence(
+        let bcl2 = ProteinSketch::from_protein_sequence(
             &bcl2_name,
             &bcl2_sequence,
             ksize,
             scaled,
             moltype,
         )?;
-        let one_off = calculate_similarity(&query_sketch, &target_sketch)
-            .expect("CED9/BCL2 should share k-mers at k=12");
-        assert!(!one_off.matched_regions.is_empty());
-        for region in &one_off.matched_regions {
-            assert_eq!(region.bonferroni_n, 1);
+
+        let two_query_run = searcher.search(&[ced9.clone(), bcl2], &SearchFilters::default())?;
+        let paired = two_query_run
+            .iter()
+            .find(|r| r.query_name.contains("CED9") && r.target_name.contains("BCL2_HUMAN"))
+            .expect("CED9 query should match BCL2 target");
+
+        // TEST_FASTA_GZ holds 25 signatures, and every k-mer occurrence across them is counted.
+        assert_eq!(paired.db_n_targets, 25);
+        assert_eq!(paired.db_n_kmers, searcher.stats().kmer_frequencies.values().sum::<usize>());
+        assert_eq!(paired.run_n_queries, 2);
+        // Candidate region start positions in CED9: len - k + 1.
+        assert_eq!(paired.region_search_space, ced9_sequence.len() - ksize as usize + 1);
+
+        // Rerunning the same query on its own must not change what the hit itself means.
+        let solo_run = searcher.search(&[ced9], &SearchFilters::default())?;
+        let solo = solo_run
+            .iter()
+            .find(|r| r.query_name.contains("CED9") && r.target_name.contains("BCL2_HUMAN"))
+            .expect("CED9 query should match BCL2 target when run alone");
+
+        assert_eq!(solo.run_n_queries, 1, "only the run-level count should move");
+        assert_eq!(solo.region_search_space, paired.region_search_space);
+        assert_eq!(solo.db_n_targets, paired.db_n_targets);
+        assert_relative_eq!(
+            solo.query_poisson_pvalue,
+            paired.query_poisson_pvalue,
+            epsilon = 1e-12
+        );
+        assert_eq!(solo.matched_regions.len(), paired.matched_regions.len());
+        for (solo_region, paired_region) in
+            solo.matched_regions.iter().zip(paired.matched_regions.iter())
+        {
+            assert_relative_eq!(
+                solo_region.poisson_pvalue,
+                paired_region.poisson_pvalue,
+                epsilon = 1e-12
+            );
         }
 
         Ok(())
+    }
+
+    /// minority_fraction flags regions whose encoded sequence is compositionally skewed, where
+    /// region enrichment looks most impressive and means least. It is the non-modal fraction, so
+    /// a homopolymer run is 0.0 and an evenly mixed HP region approaches 0.5.
+    #[test]
+    fn test_non_modal_fraction_flags_low_complexity() {
+        assert_eq!(non_modal_fraction(""), None, "no encoded sequence means nothing to report");
+        assert_eq!(non_modal_fraction("hhhhhhhh"), Some(0.0), "homopolymer run");
+        assert_eq!(non_modal_fraction("hhhh"), Some(0.0));
+        assert_eq!(non_modal_fraction("hhhp"), Some(0.25));
+        assert_eq!(non_modal_fraction("hphp"), Some(0.5), "evenly mixed is the HP maximum");
+        // Real BCL2/CED9 landmark region: 14 h to 5 p, so 5/19 are non-modal - hydrophobic-
+        // skewed, which is exactly the kind of region whose enrichment deserves a second look.
+        assert_relative_eq!(
+            non_modal_fraction("pphhphhphhhhhphhhhh").unwrap(),
+            5.0 / 19.0,
+            epsilon = 1e-12
+        );
     }
 }

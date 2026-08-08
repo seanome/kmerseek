@@ -74,9 +74,22 @@ enum Commands {
         #[arg(long, default_value = "2")]
         min_shared_kmers: usize,
 
-        /// Maximum uncorrected Poisson p-value required to report a match
+        /// Maximum uncorrected whole-query Poisson p-value required to report a match.
+        /// A match is reported if EITHER this or --max-region-pvalue passes.
         #[arg(long, default_value = "0.05")]
-        max_pvalue: f64,
+        max_query_pvalue: f64,
+
+        /// Maximum uncorrected region-scoped Poisson p-value required to report a match,
+        /// applied to the best-scoring region. A match is reported if EITHER this or
+        /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
+        /// the whole-query p-value is unimpressive.
+        #[arg(long, default_value = "0.05")]
+        max_region_pvalue: f64,
+
+        /// Deprecated: use --max-query-pvalue (whole protein) or --max-region-pvalue (per
+        /// matched region). Kept as an alias that applies whole-query filtering only.
+        #[arg(long)]
+        max_pvalue: Option<f64>,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
@@ -232,6 +245,8 @@ fn main() -> IndexResult<()> {
             shuffled_seed: _,
             threshold,
             min_shared_kmers,
+            max_query_pvalue,
+            max_region_pvalue,
             max_pvalue,
             verbose,
             query_is_index,
@@ -263,14 +278,32 @@ fn main() -> IndexResult<()> {
             eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
             eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            // --max-pvalue predates region scoring, so honour it as whole-query filtering only:
+            // a region cap of 0.0 can never be cleared (the check is a strict <), leaving the
+            // query scope as the sole decider, exactly as before.
+            let (max_query_pvalue, max_region_pvalue) = match max_pvalue {
+                Some(deprecated) => {
+                    eprintln!(
+                        "WARNING: --max-pvalue is deprecated; it now applies whole-query \
+                         filtering only.\n         Use --max-query-pvalue {deprecated} for the \
+                         same behaviour, or --max-region-pvalue to\n         keep sub-protein \
+                         domain hits whose whole-query p-value is unimpressive."
+                    );
+                    (deprecated, 0.0)
+                }
+                None => (max_query_pvalue, max_region_pvalue),
+            };
+
             eprintln!("  Threshold: {}", threshold);
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
-            eprintln!("  Maximum p-value: {}", max_pvalue);
+            eprintln!("  Maximum query p-value: {}", max_query_pvalue);
+            eprintln!("  Maximum region p-value: {}", max_region_pvalue);
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters = SearchFilters { threshold, min_shared_kmers, max_pvalue };
+            let filters =
+                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, max_region_pvalue };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -478,15 +511,18 @@ fn main() -> IndexResult<()> {
             };
 
             // search() / search_all_vs_all() already applied `filters` internally, so
-            // search_results only contains matches that passed threshold/min_shared_kmers/max_pvalue.
+            // search_results only contains matches that passed threshold/min_shared_kmers and
+            // cleared at least one of the two p-value scopes.
             let filtered_results = search_results;
 
             eprintln!(
-                "Found {} matches above threshold {} with at least {} shared k-mers and p-value < {}",
+                "Found {} matches above threshold {} with at least {} shared k-mers and \
+                 query p-value < {} or region p-value < {}",
                 filtered_results.len(),
                 threshold,
                 min_shared_kmers,
-                max_pvalue
+                max_query_pvalue,
+                max_region_pvalue
             );
 
             use kmerseek::search::SearchResultCsv;

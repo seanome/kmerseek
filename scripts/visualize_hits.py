@@ -8,7 +8,7 @@ beneath each hit. Hits are numbered instead of connected to their alignment
 block with leader lines, since lines cross when hits interleave.
 
 Input is the CSV produced by `kmerseek search -o results.csv` (one row per
-matched region: query_start, query_end, query_subseq, target_start, target_end,
+matched region: region_start, region_end, region_subseq, target_start, target_end,
 target_subseq, moltype_seq, ...) plus the query FASTA, used to draw the full-length
 protein bar and to get the exact query names to plot.
 
@@ -124,7 +124,7 @@ def scan_csv(csv_path):
     """Open the results CSV lazily -- nothing is read off disk until a query
     is `.collect()`-ed, so the whole file never has to fit in memory at once.
     infer_schema_length=None scans every row for dtypes up front, since a
-    poisson_pvalue column of mostly-0 values with rare 1e-300-style outliers
+    p-value column of mostly-0 values with rare 1e-300-style outliers
     further down the file could otherwise get mis-inferred as a narrower type."""
     return pl.scan_csv(csv_path, infer_schema_length=None)
 
@@ -168,10 +168,10 @@ def merge_regions_by_target(rows, gap_merge):
 
     hits = []
     for target_name, target_rows in by_target.items():
-        target_rows.sort(key=lambda r: int(r["query_start"]))
+        target_rows.sort(key=lambda r: int(r["region_start"]))
         cluster = [target_rows[0]]
         for row in target_rows[1:]:
-            if int(row["query_start"]) - int(cluster[-1]["query_end"]) <= gap_merge:
+            if int(row["region_start"]) - int(cluster[-1]["region_end"]) <= gap_merge:
                 cluster.append(row)
             else:
                 hits.append(_build_hit(target_name, cluster))
@@ -196,9 +196,23 @@ def _union_coverage(regions):
 
 
 def _target_pvalues(rows):
-    """{target_name: poisson_pvalue}, one entry per distinct target -- every row
-    for a target carries the same query-target result-level p-value."""
-    return {r["target_name"]: float(r["poisson_pvalue"]) for r in rows}
+    """{target_name: best region p-value}, one entry per distinct target.
+
+    Corrects over the region scope, not the whole-query one. This plot draws
+    regions, and `kmerseek search` now reports a hit when *either* scope clears,
+    so a real sub-protein domain call routinely carries an unimpressive
+    whole-query p-value (BCL2/CED9: 0.99 whole-query, 0.0007 for its region).
+    Correcting the whole-query number would push exactly those hits to q~1 and
+    let --max-hits cut them, hiding what the region scoring exists to surface.
+
+    Unlike the query-level stats, region p-values differ row to row, so take the
+    strongest region as the target's evidence."""
+    best = {}
+    for row in rows:
+        pvalue = float(row["region_poisson_pvalue"])
+        name = row["target_name"]
+        best[name] = min(best[name], pvalue) if name in best else pvalue
+    return best
 
 
 def benjamini_hochberg(pvalues):
@@ -217,8 +231,8 @@ def benjamini_hochberg(pvalues):
 
 
 def _build_hit(target_name, cluster):
-    region_rows = sorted(cluster, key=lambda r: int(r["query_start"]))
-    regions = [(int(r["query_start"]), int(r["query_end"])) for r in region_rows]
+    region_rows = sorted(cluster, key=lambda r: int(r["region_start"]))
+    regions = [(int(r["region_start"]), int(r["region_end"])) for r in region_rows]
     return {
         "target_name": target_name,
         "start": min(r[0] for r in regions),
@@ -227,13 +241,16 @@ def _build_hit(target_name, cluster):
         "region_rows": region_rows,
         "coverage": _union_coverage(regions),
         "n_regions": len(cluster),
-        # containment/jaccard/enrichment/poisson_pvalue are query-target *result*
-        # stats, not per-region -- every row in the cluster carries the same
-        # value (it's the same query-target pair); max() is just a safe pick.
+        # containment/jaccard/query_* are query-target *result* stats, not
+        # per-region -- every row in the cluster carries the same value (it's the
+        # same query-target pair); max() is just a safe pick.
         "containment": max(float(r["containment"]) for r in cluster),
         "jaccard": max(float(r["jaccard"]) for r in cluster),
-        "enrichment": max(float(r["enrichment"]) for r in cluster),
-        "poisson_pvalue": max(float(r["poisson_pvalue"]) for r in cluster),
+        "query_enrichment": max(float(r["query_enrichment"]) for r in cluster),
+        "query_poisson_pvalue": max(float(r["query_poisson_pvalue"]) for r in cluster),
+        # Region stats do vary per row; the strongest region is the hit's evidence.
+        "region_poisson_pvalue": min(float(r["region_poisson_pvalue"]) for r in cluster),
+        "region_enrichment": max(float(r["region_enrichment"]) for r in cluster),
         "moltype": region_rows[0]["moltype"],
     }
 
@@ -327,7 +344,7 @@ class GenePlot:
         for row in hit["region_rows"]:
             if show_region_labels:
                 height += self.LINE_H
-            for key in ("query_subseq", "moltype_seq", "target_subseq"):
+            for key in ("region_subseq", "moltype_seq", "target_subseq"):
                 height += len(wrap_seq(row[key])) * self.LINE_H + self.LINE_H * self.GROUP_GAP
         return height + self.HIT_GAP
 
@@ -468,19 +485,29 @@ class GenePlot:
         # every target tested for this query); absent when a hit is built and
         # plotted directly, e.g. in tests, without going through that pipeline.
         q_value = hit.get("corrected_pvalue")
-        q_part = f"   q-value={q_value:.2g}" if q_value is not None else ""
+        q_part = f"   region q={q_value:.2g}" if q_value is not None else ""
+        # Both scopes are shown: either one can be what got this hit reported, and
+        # seeing them side by side is how you tell a whole-protein match from a
+        # localized domain call.
         return (f"containment={hit['containment']:.2f}   jaccard={hit['jaccard']:.3f}   "
-                f"enrichment={hit['enrichment']:.2f}   p-value={hit['poisson_pvalue']:.2g}{q_part}")
+                f"region enrich={hit['region_enrichment']:.2f}   "
+                f"region p={hit['region_poisson_pvalue']:.2g}{q_part}   "
+                f"query p={hit['query_poisson_pvalue']:.2g}")
 
     @staticmethod
     def _region_label_text(r_idx, hit, row):
-        r_start, r_end = int(row["query_start"]), int(row["query_end"])
+        r_start, r_end = int(row["region_start"]), int(row["region_end"])
+        # minority_fraction is blank for moltypes with no encoded sequence (protein).
+        # A low value means a compositionally skewed region, where enrichment looks
+        # impressive for reasons that need not be homology -- worth showing inline.
+        skew = row.get("region_minority_fraction")
+        skew_part = f", minority={float(skew):.2f}" if skew not in (None, "") else ""
         return (f"region {r_idx}/{hit['n_regions']}:  {r_start + 1}-{r_end}aa, "
-                f"containment={float(row['containment']):.2f}")
+                f"p={float(row['region_poisson_pvalue']):.2g}{skew_part}")
 
     def _draw_region_alignment(self, row, y):
         """Draw one region's query/moltype/target lines; return the y cursor after it."""
-        groups = (("query", row["query_subseq"]), (row["moltype"], row["moltype_seq"]),
+        groups = (("query", row["region_subseq"]), (row["moltype"], row["moltype_seq"]),
                   ("target", row["target_subseq"]))
         for label, seq in groups:
             self.ax_text.text(self.LABEL_X_OFFSET, y, f"{label}:", ha="left", va="top",
