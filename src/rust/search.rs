@@ -2971,6 +2971,42 @@ mod tests {
         assert!(pvalue.is_finite() && enrichment.is_finite());
     }
 
+    /// all-vs-all searches the database against itself. It had no test at all, and it is one of
+    /// the three entry points that has to supply its own query count, so it is the place a
+    /// wrong `total_queries` would go unnoticed.
+    #[test]
+    fn test_search_all_vs_all_skips_self_and_counts_its_own_queries() -> Result<()> {
+        let ksize = 12;
+        let temp_dir = TempDir::new()?;
+        let index_path = temp_dir.path().join("index");
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        assert_eq!(index.signature_count(), 25);
+
+        let searcher = ProteinSearcher::new(index);
+        let results = searcher.search_all_vs_all(&SearchFilters::default())?;
+        assert!(!results.is_empty(), "a family database should match itself across members");
+
+        for result in &results {
+            // compare() drops self-matches by md5, so no protein may match itself.
+            assert_ne!(
+                result.query_md5, result.target_md5,
+                "self-match leaked into all-vs-all: {}",
+                result.query_name
+            );
+            // Every query is also a target here, so the run count is the database size.
+            assert_eq!(result.run_n_queries, 25);
+            assert_eq!(result.db_n_targets, 25);
+        }
+
+        // Sorted by containment descending, same contract as search().
+        for pair in results.windows(2) {
+            assert!(pair[0].containment >= pair[1].containment, "results must stay sorted");
+        }
+
+        Ok(())
+    }
+
     /// minority_fraction flags regions whose encoded sequence is compositionally skewed, where
     /// region enrichment looks most impressive and means least. It is the non-modal fraction, so
     /// a homopolymer run is 0.0 and an evenly mixed HP region approaches 0.5.
