@@ -39,6 +39,12 @@ enum Commands {
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
         progress_interval: u32,
+
+        /// Write the k-mer frequency spectrum to this CSV path for plotting across alphabets
+        /// and k-sizes. Gzip-compressed when the path ends in .gz. Columns:
+        /// moltype, ksize, occurrences, n_kmers.
+        #[arg(long, value_name = "PATH")]
+        kmer_stats_out: Option<PathBuf>,
     },
     /// Search query sequences against a protein database
     Search {
@@ -148,7 +154,15 @@ fn main() -> IndexResult<()> {
     eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
 
     match cli.command {
-        Commands::Index { input, output, ksize, encoding, shuffled_seed, progress_interval } => {
+        Commands::Index {
+            input,
+            output,
+            ksize,
+            encoding,
+            shuffled_seed,
+            progress_interval,
+            kmer_stats_out,
+        } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
             // Scaled factor is always 1 (captures all k-mers)
@@ -218,7 +232,7 @@ fn main() -> IndexResult<()> {
             index.enable_compactions()?;
 
             // Save the index state for loading
-            index.save_state()?;
+            index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
             eprintln!("Indexing completed successfully!");
             eprintln!("Database saved to: {}", output_path.display());

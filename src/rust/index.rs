@@ -2,10 +2,14 @@ use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
 use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sourmash::_hash_murmur;
@@ -29,7 +33,7 @@ use crate::sketch::{ProteinSketch, ProteinSketchStore};
 /// (e.g. new fields in SearchCache, renamed fields in ProteinSketchStore, etc.).
 /// Indices that predate versioning (schema_version key absent) are treated as version 0
 /// and will be rejected with a clear error message asking the user to rebuild.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,7 +288,7 @@ impl ProteomeIndex {
     /// (every time) avoids the need to load all 200k+ signatures into memory before searching.
     /// During search, only candidate signatures (those sharing ≥1 k-mer with the query) are
     /// loaded on-demand from RocksDB, reducing startup time from minutes to seconds.
-    fn save_inverted_index(&self) -> IndexResult<()> {
+    fn save_inverted_index(&self, kmer_stats_out: Option<&Path>) -> IndexResult<()> {
         let t0 = Instant::now();
         let total_sigs = self.signatures.len();
         eprintln!("[save] Building inverted index for {} signatures...", total_sigs);
@@ -330,7 +334,12 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
-        self.log_kmer_frequency_stats(&kmer_frequencies, &inverted_index, &target_list);
+        self.log_kmer_frequency_stats(
+            &kmer_frequencies,
+            &inverted_index,
+            &target_list,
+            kmer_stats_out,
+        )?;
 
         // Serialize and store the search cache
         eprintln!(
@@ -365,17 +374,21 @@ impl ProteomeIndex {
         kmer_frequencies: &HashMap<u64, usize>,
         inverted_index: &HashMap<u64, Vec<u32>>,
         target_list: &[String],
-    ) {
+        kmer_stats_out: Option<&Path>,
+    ) -> IndexResult<()> {
         if kmer_frequencies.is_empty() {
-            return;
+            return Ok(());
         }
         Self::print_frequency_histogram(kmer_frequencies);
+        if let Some(path) = kmer_stats_out {
+            self.write_kmer_frequency_spectrum(path, kmer_frequencies)?;
+        }
 
         // Resolving a hash back to text needs the sequence it came from, which is only in
         // memory when the index was built with store_raw_sequences.
         if !self.has_stored_sequences() {
             eprintln!("[save] (k-mer sequences not stored, skipping most/least common k-mers)");
-            return;
+            return Ok(());
         }
 
         let n = Self::KMER_EXAMPLES;
@@ -398,6 +411,50 @@ impl ProteomeIndex {
             inverted_index,
             target_list,
         );
+        Ok(())
+    }
+
+    /// Write the k-mer frequency spectrum (occurrences -> how many k-mers had that many)
+    /// as CSV, gzip-compressed when the path ends in `.gz`.
+    ///
+    /// WHY the spectrum rather than one row per k-mer: this is the distribution you plot, and
+    /// it is a few thousand rows instead of tens of millions, so a sweep over alphabets and
+    /// k-sizes stays small. `moltype` and `ksize` are repeated on every row so that files from
+    /// different runs concatenate directly into one frame.
+    fn write_kmer_frequency_spectrum(
+        &self,
+        path: &Path,
+        kmer_frequencies: &HashMap<u64, usize>,
+    ) -> IndexResult<()> {
+        let mut spectrum: BTreeMap<usize, usize> = BTreeMap::new();
+        for &count in kmer_frequencies.values() {
+            *spectrum.entry(count).or_insert(0) += 1;
+        }
+
+        let file = File::create(path)?;
+        let sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
+            Box::new(GzEncoder::new(file, Compression::default()))
+        } else {
+            Box::new(file)
+        };
+        let mut writer = csv::Writer::from_writer(sink);
+        writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
+        let ksize = self.ksize.to_string();
+        for (occurrences, n_kmers) in &spectrum {
+            writer.write_record([
+                &self.moltype,
+                &ksize,
+                &occurrences.to_string(),
+                &n_kmers.to_string(),
+            ])?;
+        }
+        writer.flush()?;
+        eprintln!(
+            "[save] Wrote k-mer frequency spectrum ({} rows) to {}",
+            spectrum.len(),
+            path.display()
+        );
+        Ok(())
     }
 
     /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
@@ -538,6 +595,12 @@ impl ProteomeIndex {
     }
 
     pub fn save_state(&self) -> IndexResult<()> {
+        self.save_state_with_kmer_stats(None)
+    }
+
+    /// Like [`save_state`], but also writes the k-mer frequency spectrum to `kmer_stats_out`
+    /// as CSV (gzipped when the path ends in `.gz`) for plotting across alphabets and k-sizes.
+    pub fn save_state_with_kmer_stats(&self, kmer_stats_out: Option<&Path>) -> IndexResult<()> {
         let t_start = Instant::now();
         eprintln!("[save] save_state() started ({} signatures in memory)", self.signatures.len());
 
@@ -630,7 +693,7 @@ impl ProteomeIndex {
         // Build and persist search cache + individual signatures for fast search startup
         eprintln!("[save] Building search cache...");
         let t4 = Instant::now();
-        self.save_inverted_index()?;
+        self.save_inverted_index(kmer_stats_out)?;
         eprintln!("[save] Search cache saved in {:.1}s", t4.elapsed().as_secs_f32());
 
         // Flush to ensure data is written to disk
