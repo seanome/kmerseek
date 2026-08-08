@@ -350,6 +350,31 @@ pub struct MatchedRegion {
     pub minority_fraction: Option<f64>,
 }
 
+/// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
+///
+/// Returns 1.0 (no evidence) rather than erroring when there is no usable null: a lambda of
+/// zero or an observation of zero leaves nothing to be surprised by, and `Poisson::new` rejects
+/// non-positive or non-finite rates.
+fn poisson_survival(observed: u32, lambda: f64) -> f64 {
+    if observed == 0 || lambda <= 0.0 {
+        return 1.0;
+    }
+    match Poisson::new(lambda) {
+        Ok(dist) => (1.0 - dist.cdf((observed - 1) as u64)).max(0.0),
+        Err(_) => 1.0,
+    }
+}
+
+/// Observed over expected. 0.0 when there is no expectation to divide by, which reads as
+/// "not computable" rather than the +inf the division would produce.
+fn fold_enrichment(observed: u32, expected: f64) -> f64 {
+    if expected > 0.0 {
+        observed as f64 / expected
+    } else {
+        0.0
+    }
+}
+
 /// Fraction of `encoded` that is not its most common character.
 ///
 /// Generalizes minority fraction to any alphabet: for 2-letter HP it is exactly
@@ -847,17 +872,8 @@ impl ProteinSearcher {
 
         let query_expected_shared_kmers =
             self.calculate_expected_shared_kmers(query.sketch, target);
-        // P(X >= k | lambda) where k = observed intersecting hashes, lambda = expected by chance.
-        // Uses the Poisson survival function: 1 - CDF(k-1). n_intersecting_hashes >= 1 here
-        // since the empty-intersection case already returned above.
-        let query_poisson_pvalue = if query_expected_shared_kmers > 0.0 {
-            match Poisson::new(query_expected_shared_kmers) {
-                Ok(dist) => (1.0 - dist.cdf((n_intersecting_hashes - 1) as u64)).max(0.0),
-                Err(_) => 1.0,
-            }
-        } else {
-            1.0
-        };
+        let query_poisson_pvalue =
+            poisson_survival(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
         // Calculate database-specific overlap metrics
         let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&intersection);
@@ -872,51 +888,19 @@ impl ProteinSearcher {
             &intersection,
         )?;
 
-        let query_enrichment = if query_expected_shared_kmers > 0.0 {
-            n_intersecting_hashes as f64 / query_expected_shared_kmers
-        } else {
-            0.0
-        };
+        let query_enrichment =
+            fold_enrichment(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
         // Rescope the same Poisson test to each matched region individually, so a tight local
-        // match doesn't get diluted by the whole protein's k-mer count. The null is recomputed
-        // from only the k-mers whose start position falls inside this region's own span (using
-        // the fully-contained bound, not the full [start, end) range - see MatchedRegion docs).
+        // match doesn't get diluted by the whole protein's k-mer count.
         let ksize = query.sketch.protein_ksize() as usize;
         for region in result.matched_regions.iter_mut() {
-            let region_start = region.start as usize;
-            let region_window_end = (region.end as usize).saturating_sub(ksize) + 1;
-            let region_expected_shared_kmers: f64 = query
-                .sketch
-                .kmer_positions()
-                .iter()
-                .map(|(hashval, positions)| {
-                    let freq = self.stats.kmer_frequencies.get(hashval).copied().unwrap_or(1)
-                        as f64
-                        / self.stats.total_signatures as f64;
-                    let n_in_region = positions
-                        .iter()
-                        .filter(|&&p| p >= region_start && p < region_window_end)
-                        .count();
-                    freq * n_in_region as f64
-                })
-                .sum();
-            let region_n_shared_kmers = region.length.saturating_sub(ksize as u32) + 1;
+            let lambda = self.region_expectation(query.sketch, region.start, region.end, ksize);
+            let n_shared = region.length.saturating_sub(ksize as u32) + 1;
 
-            region.expected_shared_kmers = region_expected_shared_kmers;
-            region.poisson_pvalue = if region_expected_shared_kmers > 0.0 {
-                match Poisson::new(region_expected_shared_kmers) {
-                    Ok(dist) => (1.0 - dist.cdf((region_n_shared_kmers - 1) as u64)).max(0.0),
-                    Err(_) => 1.0,
-                }
-            } else {
-                1.0
-            };
-            region.enrichment = if region_expected_shared_kmers > 0.0 {
-                region_n_shared_kmers as f64 / region_expected_shared_kmers
-            } else {
-                0.0
-            };
+            region.expected_shared_kmers = lambda;
+            region.poisson_pvalue = poisson_survival(n_shared, lambda);
+            region.enrichment = fold_enrichment(n_shared, lambda);
         }
 
         // Either scope clearing its cap keeps the pair - see SearchFilters::pvalues_pass.
@@ -960,6 +944,34 @@ impl ProteinSearcher {
         result.run_n_queries = total_queries;
 
         Some(result)
+    }
+
+    /// Expected shared k-mers by chance within one region: Σ freq_target[h]/N over the query
+    /// k-mers whose start position falls inside it.
+    ///
+    /// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to
+    /// the region only if it fits entirely inside, which is what makes the count come out to
+    /// exactly `length - ksize + 1` at scaled=1.
+    fn region_expectation(&self, query: &ProteinSketch, start: u32, end: u32, ksize: usize) -> f64 {
+        let window_start = start as usize;
+        // A k-mer at p covers [p, p + ksize), so it fits inside [start, end) only when
+        // p <= end - ksize. A span shorter than ksize holds no whole k-mer at all - saturating
+        // here would wrongly admit position 0.
+        let window_end = match (end as usize).checked_sub(ksize) {
+            Some(last_start) => last_start + 1,
+            None => window_start,
+        };
+        query
+            .kmer_positions()
+            .iter()
+            .map(|(hashval, positions)| {
+                let freq = self.stats.kmer_frequencies.get(hashval).copied().unwrap_or(1) as f64
+                    / self.stats.total_signatures as f64;
+                let n_in_window =
+                    positions.iter().filter(|&&p| p >= window_start && p < window_end).count();
+                freq * n_in_window as f64
+            })
+            .sum()
     }
 
     /// Set query-proteome k-mer frequencies for two-pass joint_kmer_freq computation.
@@ -2840,6 +2852,123 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    /// The two p-value scopes are combined with OR, so the full truth table matters: a single
+    /// scope clearing is enough, and only both failing rejects. Exercised directly here because
+    /// through `search()` the degenerate caps are hard to reach.
+    #[rstest]
+    // query passes, region fails -> kept on the query scope
+    #[case(0.001, Some(0.9), 0.05, 0.05, true)]
+    // query fails, region passes -> kept on the region scope (the BCL2/CED9 shape)
+    #[case(0.99, Some(0.0007), 0.05, 0.05, true)]
+    // both pass
+    #[case(0.001, Some(0.0007), 0.05, 0.05, true)]
+    // both fail -> rejected
+    #[case(0.99, Some(0.9), 0.05, 0.05, false)]
+    // no regions at all: the region disjunct is vacuously false, query alone decides
+    #[case(0.001, None, 0.05, 0.05, true)]
+    #[case(0.99, None, 0.05, 0.05, false)]
+    // a cap of 0.0 can never be cleared (the check is a strict <), which is how the deprecated
+    // --max-pvalue alias reduces to whole-query filtering
+    #[case(0.001, Some(0.0), 0.05, 0.0, true)]
+    #[case(0.99, Some(0.0007), 0.05, 0.0, false)]
+    // infinite caps accept anything, including the p = 1.0 of a no-DB-context result
+    #[case(1.0, Some(1.0), f64::INFINITY, f64::INFINITY, true)]
+    fn test_pvalues_pass_truth_table(
+        #[case] query_pvalue: f64,
+        #[case] best_region_pvalue: Option<f64>,
+        #[case] max_query_pvalue: f64,
+        #[case] max_region_pvalue: f64,
+        #[case] expected: bool,
+    ) {
+        let filters =
+            SearchFilters { max_query_pvalue, max_region_pvalue, ..SearchFilters::default() };
+        assert_eq!(filters.pvalues_pass(query_pvalue, best_region_pvalue), expected);
+    }
+
+    /// The Poisson survival function is the shared engine behind both p-value scopes. The
+    /// degenerate inputs return 1.0 (no evidence) instead of erroring or producing NaN, which
+    /// a real search cannot reach but a caller can.
+    #[test]
+    fn test_poisson_survival_degenerate_inputs_yield_no_evidence() {
+        assert_eq!(poisson_survival(0, 2.0), 1.0, "nothing observed is not surprising");
+        assert_eq!(poisson_survival(5, 0.0), 1.0, "no null to be surprised against");
+        assert_eq!(poisson_survival(5, -1.0), 1.0, "negative rate is not a distribution");
+        assert_eq!(poisson_survival(5, f64::NAN), 1.0, "NaN rate is rejected by Poisson::new");
+    }
+
+    /// Observing exactly what is expected is unsurprising; observing far more is not. Values are
+    /// checked against the closed form of the survival function rather than restated constants.
+    #[test]
+    fn test_poisson_survival_matches_closed_form() {
+        // P(X >= 1 | lambda) = 1 - e^-lambda
+        assert_relative_eq!(poisson_survival(1, 0.5), 1.0 - (-0.5f64).exp(), epsilon = 1e-12);
+        // P(X >= 2 | lambda) = 1 - e^-lambda(1 + lambda)
+        assert_relative_eq!(poisson_survival(2, 0.5), 1.0 - (-0.5f64).exp() * 1.5, epsilon = 1e-12);
+        // Strongly enriched observations get vanishing p-values, and p is monotonically
+        // decreasing in the observed count for a fixed null.
+        assert!(poisson_survival(20, 0.5) < poisson_survival(10, 0.5));
+        assert!(poisson_survival(10, 0.5) < poisson_survival(2, 0.5));
+        // Every value stays a probability.
+        for observed in [1u32, 3, 10] {
+            for lambda in [0.1f64, 1.0, 7.5] {
+                let pvalue = poisson_survival(observed, lambda);
+                assert!((0.0..=1.0).contains(&pvalue), "p={pvalue} out of range");
+            }
+        }
+    }
+
+    /// Enrichment reports 0.0 rather than +inf when there is no expectation to divide by, so
+    /// downstream sorting and serialization never see an infinity.
+    #[test]
+    fn test_fold_enrichment_guards_zero_expectation() {
+        assert_eq!(fold_enrichment(5, 0.0), 0.0);
+        assert_eq!(fold_enrichment(0, 0.0), 0.0);
+        assert_eq!(fold_enrichment(5, 2.0), 2.5);
+        assert_eq!(fold_enrichment(0, 2.0), 0.0);
+    }
+
+    /// region_expectation only counts k-mers that fit entirely inside the region, which is what
+    /// makes the shared-k-mer count exact at scaled=1. Checked against a hand-computed sum: with
+    /// one signature in the database every k-mer has frequency 1/1, so lambda is just the number
+    /// of query k-mer positions inside the window.
+    #[test]
+    fn test_region_expectation_counts_only_fully_contained_kmers() -> Result<()> {
+        let ksize = 12;
+        let temp_dir = TempDir::new()?;
+        let index_path = temp_dir.path().join("index");
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp", true)?;
+        index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index);
+
+        let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let sketch = ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp")?;
+
+        // A window of exactly one k-mer: [0, 0 + 1) after the ksize adjustment.
+        let single = searcher.region_expectation(&sketch, 0, ksize, ksize as usize);
+        assert_relative_eq!(single, 1.0, epsilon = 1e-12);
+
+        // Widening the region by one residue admits exactly one more k-mer start.
+        let double = searcher.region_expectation(&sketch, 0, ksize + 1, ksize as usize);
+        assert_relative_eq!(double, 2.0, epsilon = 1e-12);
+
+        // A span shorter than k contains no whole k-mer, so there is nothing to expect.
+        let too_short = searcher.region_expectation(&sketch, 0, ksize - 1, ksize as usize);
+        assert_eq!(too_short, 0.0);
+
+        Ok(())
+    }
+
+    /// A region whose expectation is zero must not produce NaN or infinity downstream. This is
+    /// the pairing the guards in poisson_survival/fold_enrichment exist for.
+    #[test]
+    fn test_zero_expectation_region_stays_finite() {
+        let pvalue = poisson_survival(5, 0.0);
+        let enrichment = fold_enrichment(5, 0.0);
+        assert_eq!(pvalue, 1.0);
+        assert_eq!(enrichment, 0.0);
+        assert!(pvalue.is_finite() && enrichment.is_finite());
     }
 
     /// minority_fraction flags regions whose encoded sequence is compositionally skewed, where
