@@ -1058,7 +1058,7 @@ impl ProteomeIndex {
         name: &str,
     ) -> IndexResult<ProteinSketch> {
         // Validate and resolve ambiguity if needed
-        let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence)?;
+        let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence, &self.moltype)?;
 
         // Create a new protein signature
         let mut protein_sig = ProteinSketch::new(name, self.ksize, self.scaled, &self.moltype)?;
@@ -2626,6 +2626,63 @@ mod tests {
         let index3 =
             ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
+    }
+
+    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958) with three residues
+    /// rewritten to the ambiguity codes that stand for them: Asn->B (Asx), Glu->Z (Glx),
+    /// Ile->J (Xle). Also carries U (Sec) and O (Pyl).
+    const CED9_WITH_AMBIGUITY_CODES: &str =
+        "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGJKGTEPTDFGZNSDAQDLPSPSRQASTRRUO";
+
+    /// Indexing the same sequence twice must produce byte-identical sketches.
+    ///
+    /// WHY: ambiguity codes were previously resolved by drawing at random from the
+    /// alternatives, so B became Asp on one run and Asn on the next. That changed the k-mers,
+    /// the hashes and the stored index every time the same FASTA was indexed.
+    #[test]
+    fn test_ambiguity_codes_index_deterministically() {
+        let temp_dir = tempdir().unwrap();
+
+        for (i, moltype) in ["protein", "dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+            let index =
+                ProteomeIndex::new(temp_dir.path().join(format!("d{i}.db")), 5, 1, moltype, true)
+                    .unwrap();
+
+            let first = index
+                .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                .unwrap()
+                .mins_as_set();
+            assert!(!first.is_empty(), "{moltype}: no k-mers produced");
+
+            for attempt in 0..5 {
+                let again = index
+                    .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                    .unwrap()
+                    .mins_as_set();
+                assert_eq!(again, first, "{moltype}: sketch differed on attempt {attempt}");
+            }
+        }
+    }
+
+    /// Under a reduced alphabet, an ambiguity code must sketch identically to *both* residues
+    /// it stands for — that is what makes substituting a representative lossless.
+    #[test]
+    fn test_ambiguity_code_sketches_match_both_alternatives() {
+        let temp_dir = tempdir().unwrap();
+        // Same fragment written three ways: with B, and with each residue B stands for.
+        let with_b = "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGIK";
+        let with_d = "MTRCTADNSLTNPAYRRRTMDTGEMKEFLGIK";
+        let with_n = "MTRCTADNSLTNPAYRRRTMNTGEMKEFLGIK";
+
+        for (i, moltype) in ["dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+            let index =
+                ProteomeIndex::new(temp_dir.path().join(format!("a{i}.db")), 5, 1, moltype, true)
+                    .unwrap();
+            let sketch = |seq| index.create_protein_signature(seq, "x").unwrap().mins_as_set();
+
+            assert_eq!(sketch(with_b), sketch(with_d), "{moltype}: B should sketch like D");
+            assert_eq!(sketch(with_b), sketch(with_n), "{moltype}: B should sketch like N");
+        }
     }
 
     #[test]
