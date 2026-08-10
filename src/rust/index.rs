@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -30,6 +31,13 @@ use crate::sketch::{ProteinSketch, ProteinSketchStore};
 /// Indices that predate versioning (schema_version key absent) are treated as version 0
 /// and will be rejected with a clear error message asking the user to rebuild.
 pub const SCHEMA_VERSION: u32 = 2;
+
+/// RocksDB key holding the kmerseek version that wrote the index, e.g. "0.4.0".
+///
+/// Doubles as the marker for the current metadata layout: an index carrying this
+/// key has a `remove_low_complexity` field in its metadata, one without it does
+/// not. See `read_metadata`.
+const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -63,6 +71,44 @@ struct ProteomeIndexMetadata {
     ksize: u32,
     scaled: u32,
     store_raw_sequences: bool,
+    /// Whether low-complexity k-mers were removed when this index was built.
+    /// Appended after the fields above, so only indexes carrying a
+    /// `kmerseek_version` key have it; see `read_metadata`.
+    remove_low_complexity: bool,
+}
+
+/// The metadata layout used before `kmerseek_version` was stamped into indexes.
+///
+/// bincode is not self-describing, so an older blob cannot be deserialized into
+/// the current `ProteomeIndexMetadata` -- it would run out of bytes on the
+/// trailing field. Indexes without a version key are read through this instead.
+#[derive(Serialize, Deserialize)]
+struct LegacyProteomeIndexMetadata {
+    total_signatures: usize,
+    chunk_count: usize,
+    combined_mins: Vec<u64>,
+    combined_abunds: Option<Vec<u64>>,
+    moltype: String,
+    ksize: u32,
+    scaled: u32,
+    store_raw_sequences: bool,
+}
+
+impl From<LegacyProteomeIndexMetadata> for ProteomeIndexMetadata {
+    fn from(legacy: LegacyProteomeIndexMetadata) -> Self {
+        Self {
+            total_signatures: legacy.total_signatures,
+            chunk_count: legacy.chunk_count,
+            combined_mins: legacy.combined_mins,
+            combined_abunds: legacy.combined_abunds,
+            moltype: legacy.moltype,
+            ksize: legacy.ksize,
+            scaled: legacy.scaled,
+            store_raw_sequences: legacy.store_raw_sequences,
+            // Predates the flag, so by definition every k-mer was kept.
+            remove_low_complexity: false,
+        }
+    }
 }
 
 /// Serializable search cache built at index time for fast search startup.
@@ -122,6 +168,12 @@ pub struct ProteomeIndex {
     // HP-family moltypes. Defaults to false. Persisted separately from the
     // metadata blob; see save_state and read_remove_low_complexity.
     remove_low_complexity: bool,
+
+    // Running totals accumulated as signatures are built, rather than by walking
+    // every signature afterwards. Atomic because create_protein_signature takes
+    // &self and process_fasta drives it from a par_iter.
+    kmer_windows_examined: AtomicUsize,
+    low_complexity_kmers_removed: AtomicUsize,
 }
 
 impl Drop for ProteomeIndex {
@@ -245,6 +297,8 @@ impl ProteomeIndex {
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             store_raw_sequences,
             remove_low_complexity: false,
+            kmer_windows_examined: AtomicUsize::new(0),
+            low_complexity_kmers_removed: AtomicUsize::new(0),
         })
     }
 
@@ -262,26 +316,41 @@ impl ProteomeIndex {
         self.remove_low_complexity
     }
 
-    /// Total k-mer windows examined across all in-memory signatures, and how many
-    /// were removed as low-complexity. Returns `(0, 0)` when removal is off.
+    /// Total k-mer windows examined while building signatures, and how many were
+    /// removed as low-complexity. Returns `(0, 0)` when removal is off.
     ///
-    /// Only meaningful right after indexing: the counts live on the in-memory
-    /// sketches and are not persisted.
+    /// Accumulated as each signature is built rather than by walking the whole
+    /// signature map afterwards, so reading this is O(1) and adds no extra pass
+    /// over the data. Not persisted; meaningful only for the current process.
     pub fn low_complexity_counts(&self) -> (usize, usize) {
-        self.signatures.iter().fold((0, 0), |(examined, skipped), entry| {
-            let (e, s) = entry.value().low_complexity_counts();
-            (examined + e, skipped + s)
-        })
+        (
+            self.kmer_windows_examined.load(Ordering::Relaxed),
+            self.low_complexity_kmers_removed.load(Ordering::Relaxed),
+        )
     }
 
-    /// Read the persisted low-complexity removal setting from an open database.
+    /// The kmerseek version that wrote an index, if it was stamped.
     ///
-    /// Indexes built before this flag existed have no such key, and were by
-    /// definition kept every k-mer, so a missing key reads as `false`.
-    fn read_remove_low_complexity(db: &DB) -> IndexResult<bool> {
-        match db.get(b"remove_low_complexity")? {
-            Some(data) => Ok(bincode::deserialize(&data)?),
-            None => Ok(false),
+    /// `None` for indexes built before version stamping was added.
+    pub fn read_kmerseek_version(db: &DB) -> IndexResult<Option<String>> {
+        match db.get(KMERSEEK_VERSION_KEY)? {
+            Some(data) => Ok(Some(bincode::deserialize(&data)?)),
+            None => Ok(None),
+        }
+    }
+
+    /// Deserialize index metadata, picking the layout by whether the index was
+    /// stamped with a kmerseek version.
+    ///
+    /// Versioned indexes use the current layout. Unversioned ones predate the
+    /// `remove_low_complexity` field and are read through the legacy struct, which
+    /// defaults it to `false` -- correct, since they kept every k-mer.
+    fn read_metadata(db: &DB, raw: &[u8]) -> IndexResult<ProteomeIndexMetadata> {
+        if Self::read_kmerseek_version(db)?.is_some() {
+            Ok(bincode::deserialize(raw)?)
+        } else {
+            let legacy: LegacyProteomeIndexMetadata = bincode::deserialize(raw)?;
+            Ok(legacy.into())
         }
     }
 
@@ -762,6 +831,7 @@ impl ProteomeIndex {
             ksize: self.ksize,
             scaled: self.scaled,
             store_raw_sequences: self.store_raw_sequences,
+            remove_low_complexity: self.remove_low_complexity,
         };
 
         let serialized_metadata = bincode::serialize(&metadata)?;
@@ -777,16 +847,11 @@ impl ProteomeIndex {
         let serialized_version = bincode::serialize(&SCHEMA_VERSION)?;
         self.db.put(b"schema_version", serialized_version)?;
 
-        // Store the low-complexity removal setting as its own key, for the same reason:
-        // adding a field to ProteomeIndexMetadata would break bincode reads of indexes
-        // built before this flag existed. Absent key means "kept everything" (see
-        // read_remove_low_complexity), which is exactly right for those older indexes.
-        // WHY persist at all: search must build query sketches the same way, or
-        // retained low-complexity query k-mers inflate the containment denominator.
-        let serialized_filter = bincode::serialize(&self.remove_low_complexity)?;
-        self.db.put(b"remove_low_complexity", serialized_filter)?;
+        // Stamp the writing kmerseek version. Besides being useful provenance, its
+        // presence tells readers the metadata carries a remove_low_complexity field.
+        self.db.put(KMERSEEK_VERSION_KEY, bincode::serialize(env!("CARGO_PKG_VERSION"))?)?;
         eprintln!(
-            "[save] Metadata + schema_version + remove_low_complexity written in {:.1}s total",
+            "[save] Metadata + schema_version + kmerseek_version written in {:.1}s total",
             t3.elapsed().as_secs_f32()
         );
 
@@ -829,7 +894,7 @@ impl ProteomeIndex {
         // Try to load from new chunked format first
         let metadata_serialized = self.db.get(b"index_metadata")?;
         if let Some(metadata_data) = metadata_serialized {
-            let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
+            let metadata = Self::read_metadata(&self.db, &metadata_data)?;
 
             // Load all chunk data from RocksDB (sequential)
             let mut raw_chunks: Vec<Vec<u8>> = Vec::with_capacity(metadata.chunk_count);
@@ -989,7 +1054,7 @@ impl ProteomeIndex {
         // Try to load state to get configuration
         let serialized = db.get(b"index_metadata")?;
         if let Some(data) = serialized {
-            let metadata: ProteomeIndexMetadata = bincode::deserialize(&data)?;
+            let metadata = Self::read_metadata(&db, &data)?;
 
             let _hash_function = get_hash_function_from_moltype(&metadata.moltype)
                 .map_err(|e| IndexError::SourmashError(e.to_string()))?;
@@ -1038,7 +1103,7 @@ impl ProteomeIndex {
             let moltype = &metadata.moltype;
             let ksize = metadata.ksize;
             let scaled = metadata.scaled;
-            let remove_low_complexity = Self::read_remove_low_complexity(&db)?;
+            let remove_low_complexity = metadata.remove_low_complexity;
 
             let signatures: DashMap<String, ProteinSketch> = DashMap::new();
             raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
@@ -1068,6 +1133,8 @@ impl ProteomeIndex {
                 stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
                 store_raw_sequences: metadata.store_raw_sequences,
                 remove_low_complexity,
+                kmer_windows_examined: AtomicUsize::new(0),
+                low_complexity_kmers_removed: AtomicUsize::new(0),
             };
 
             Ok(index)
@@ -1091,7 +1158,7 @@ impl ProteomeIndex {
         let db = DB::open_for_read_only(&opts, path, false)?;
 
         let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
-        let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
+        let metadata = Self::read_metadata(&db, &metadata_data)?;
 
         let hash_function = get_hash_function_from_moltype(&metadata.moltype)
             .map_err(|e| IndexError::SourmashError(e.to_string()))?;
@@ -1101,7 +1168,7 @@ impl ProteomeIndex {
         let combined_minhash =
             KmerMinHash::new(metadata.scaled, minhash_ksize, hash_function, SEED, true, 0);
 
-        let remove_low_complexity = Self::read_remove_low_complexity(&db)?;
+        let remove_low_complexity = metadata.remove_low_complexity;
 
         Ok(Self {
             db,
@@ -1115,6 +1182,8 @@ impl ProteomeIndex {
             stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             store_raw_sequences: metadata.store_raw_sequences,
             remove_low_complexity,
+            kmer_windows_examined: AtomicUsize::new(0),
+            low_complexity_kmers_removed: AtomicUsize::new(0),
         })
     }
 
@@ -1198,7 +1267,7 @@ impl ProteomeIndex {
         // Try to load metadata from new chunked format first
         let metadata_serialized = db.get(b"index_metadata")?;
         if let Some(metadata_data) = metadata_serialized {
-            let metadata: ProteomeIndexMetadata = bincode::deserialize(&metadata_data)?;
+            let metadata = Self::read_metadata(&db, &metadata_data)?;
             return Ok((metadata.ksize, metadata.scaled, metadata.moltype));
         }
 
@@ -1400,6 +1469,14 @@ impl ProteomeIndex {
         // only stored in memory if they will be saved to disk, preventing memory waste and
         // ensuring search operations work correctly.
         protein_sig.add_protein(&processed_sequence, self.store_raw_sequences)?;
+
+        // Fold this sequence's tallies in now, while the sketch is already in
+        // hand, so no later pass over the signature map is needed.
+        let (examined, removed) = protein_sig.low_complexity_counts();
+        if examined > 0 {
+            self.kmer_windows_examined.fetch_add(examined, Ordering::Relaxed);
+            self.low_complexity_kmers_removed.fetch_add(removed, Ordering::Relaxed);
+        }
 
         // Return the processed signature (don't store it yet)
         Ok(protein_sig)
@@ -1759,6 +1836,9 @@ mod tests {
     use tempfile::tempdir;
 
     use crate::index::ProteomeIndex;
+    // Private to the module; needed to forge a pre-versioning index in
+    // test_unversioned_index_reads_through_legacy_metadata_layout.
+    use super::{LegacyProteomeIndexMetadata, ProteomeIndexMetadata, KMERSEEK_VERSION_KEY};
     use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
@@ -2168,6 +2248,65 @@ mod tests {
         Ok(())
     }
 
+    // Residues 26-55 of human FKBP8 (UniProt Q14318): a genuine 11-residue
+    // poly-glutamate tract, real low-complexity sequence rather than an
+    // invented motif.
+    const FKBP8_POLY_E: &str = "VLDGVEDAEGEEEEEEEEEEEDDLSELPPL";
+
+    /// The index-level counts aggregate across every stored signature; main.rs
+    /// prints them after indexing.
+    #[test]
+    fn test_index_low_complexity_counts_aggregate_across_signatures() -> Result<()> {
+        let dir = tempdir()?;
+
+        // Two distinct sequences -- storing the same one twice would collapse to a
+        // single md5 key and prove nothing about aggregation.
+        // TEST_PROTEIN: 17 windows, 1 removed ("IMALG", all-hydrophobic).
+        // FKBP8_POLY_E: 26 windows, 9 removed (7 raw "EEEEE" + 2 encoded "ppppp").
+        let mut index = ProteomeIndex::new(dir.path().join("counts.db"), 5, 1, "hp", false)?;
+        index.set_remove_low_complexity(true);
+        for (name, seq) in [("p1", TEST_PROTEIN), ("p2", FKBP8_POLY_E)] {
+            let sig = index.create_protein_signature(seq, name)?;
+            index.store_signatures(vec![sig])?;
+        }
+        assert_eq!(index.get_signatures().len(), 2, "both sequences should be stored");
+        assert_eq!(index.low_complexity_counts(), (43, 10));
+
+        // With removal off nothing walks windows itself, so both stay zero.
+        let index_off = ProteomeIndex::new(dir.path().join("counts_off.db"), 5, 1, "hp", false)?;
+        let sig = index_off.create_protein_signature(TEST_PROTEIN, "p1")?;
+        index_off.store_signatures(vec![sig])?;
+        assert_eq!(index_off.low_complexity_counts(), (0, 0));
+
+        Ok(())
+    }
+
+    /// The builder must carry the flag through to the constructed index.
+    #[test]
+    fn test_builder_sets_remove_low_complexity() -> Result<()> {
+        let dir = tempdir()?;
+
+        let on = ProteomeIndex::builder()
+            .path(dir.path().join("builder_on.db"))
+            .ksize(5)
+            .scaled(1)
+            .moltype("hp")
+            .remove_low_complexity(true)
+            .build()?;
+        assert!(on.remove_low_complexity());
+
+        // Defaults to false when the builder method is not called.
+        let off = ProteomeIndex::builder()
+            .path(dir.path().join("builder_off.db"))
+            .ksize(5)
+            .scaled(1)
+            .moltype("hp")
+            .build()?;
+        assert!(!off.remove_low_complexity());
+
+        Ok(())
+    }
+
     /// The setting must survive save_state -> open_for_search, since search
     /// relies on it to build query sketches the same way the targets were built.
     #[test]
@@ -2199,7 +2338,7 @@ mod tests {
     /// kept every k-mer by definition, so a missing key must read as false rather
     /// than erroring out.
     #[test]
-    fn test_missing_remove_low_complexity_key_reads_as_false() -> Result<()> {
+    fn test_unversioned_index_reads_through_legacy_metadata_layout() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("legacy.db");
         {
@@ -2209,15 +2348,55 @@ mod tests {
             index.save_state()?;
         }
 
-        // Simulate a pre-flag index by deleting the key save_state wrote.
+        // Rewrite the index as a pre-versioning one: metadata in the old 8-field
+        // layout, and no kmerseek_version key.
         {
             use rocksdb::{Options, DB};
             let db = DB::open(&Options::default(), &db_path)?;
-            db.delete(b"remove_low_complexity")?;
+            let current: ProteomeIndexMetadata =
+                bincode::deserialize(&db.get(b"index_metadata")?.unwrap())?;
+            let legacy = LegacyProteomeIndexMetadata {
+                total_signatures: current.total_signatures,
+                chunk_count: current.chunk_count,
+                combined_mins: current.combined_mins,
+                combined_abunds: current.combined_abunds,
+                moltype: current.moltype,
+                ksize: current.ksize,
+                scaled: current.scaled,
+                store_raw_sequences: current.store_raw_sequences,
+            };
+            db.put(b"index_metadata", bincode::serialize(&legacy)?)?;
+            db.delete(KMERSEEK_VERSION_KEY)?;
         }
 
+        // The legacy layout still loads, and defaults the flag to false.
         let reopened = ProteomeIndex::open_for_search(&db_path)?;
         assert!(!reopened.remove_low_complexity());
+        assert_eq!(reopened.ksize(), 5);
+        assert_eq!(reopened.moltype(), "hp");
+
+        Ok(())
+    }
+
+    /// Indexes written now carry the kmerseek version, both as provenance and as
+    /// the marker for the current metadata layout.
+    #[test]
+    fn test_save_state_stamps_kmerseek_version() -> Result<()> {
+        use rocksdb::{Options, DB};
+        let dir = tempdir()?;
+        let db_path = dir.path().join("versioned.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
+            index.store_signatures(vec![sig])?;
+            index.save_state()?;
+        }
+
+        let db = DB::open(&Options::default(), &db_path)?;
+        assert_eq!(
+            ProteomeIndex::read_kmerseek_version(&db)?,
+            Some(env!("CARGO_PKG_VERSION").to_string())
+        );
 
         Ok(())
     }

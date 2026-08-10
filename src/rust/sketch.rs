@@ -742,6 +742,51 @@ mod tests {
         assert_eq!(on.kmer_positions().len(), 19);
     }
 
+    /// Custom `hp_*` alphabets take a separate encode-and-check path from the
+    /// sourmash built-in `hp` (they pre-encode to uppercase H/P via their own
+    /// table), so removal has to be exercised there too.
+    #[test]
+    fn test_remove_low_complexity_custom_hp_alphabet() {
+        use crate::tests::test_fixtures::TEST_PROTEIN;
+
+        // "IMALG" (position 10 of TEST_PROTEIN) is all-hydrophobic under the
+        // Lehninger partition, which places G in the h class. It is not a raw
+        // amino-acid homopolymer, so only the HP-encoded check can catch it --
+        // exactly the branch this test covers.
+        let mut off = ProteinSketch::new("off", 5, 1, "hp_lehninger").unwrap();
+        off.add_protein(TEST_PROTEIN, false).unwrap();
+        assert_eq!(off.kmer_positions().len(), 14);
+        assert_eq!(off.low_complexity_counts(), (0, 0), "counters stay 0 when removal is off");
+
+        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger").unwrap();
+        on.set_remove_low_complexity(true);
+        on.add_protein(TEST_PROTEIN, false).unwrap();
+        assert_eq!(on.kmer_positions().len(), 13);
+
+        // 21 residues at k=5 gives 17 windows; exactly one ("IMALG") is removed.
+        assert_eq!(on.low_complexity_counts(), (17, 1));
+    }
+
+    /// Both checks contribute on the same sequence: the raw check fires first and
+    /// short-circuits, so a window only reaches the encoded check when it is not
+    /// already a raw homopolymer.
+    #[test]
+    fn test_remove_low_complexity_counts_raw_and_encoded_together() {
+        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger").unwrap();
+        on.set_remove_low_complexity(true);
+        on.add_protein(FKBP8_POLY_E, false).unwrap();
+
+        // FKBP8_POLY_E is 30 residues -> 26 windows at k=5. Its HP (Lehninger)
+        // encoding is:
+        //   VLDGVEDAEGEEEEEEEEEEEDDLSELPPL
+        //   hhphhpphphppppppppppppphpphhhh
+        // The 11-residue E tract yields 7 fully-inside "EEEEE" windows, caught by
+        // the raw check. Two further windows ("EEEED", "EEEDD") are not raw
+        // homopolymers but still encode to "ppppp", so only the encoded check
+        // catches them. 7 + 2 = 9.
+        assert_eq!(on.low_complexity_counts(), (26, 9));
+    }
+
     #[test]
     fn test_efficient_data_roundtrip() {
         let s = protein_sketch();
