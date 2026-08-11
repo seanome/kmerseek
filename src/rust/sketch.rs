@@ -379,6 +379,14 @@ impl ProteinSketch {
         // inserts unconditionally. `remove_low_complexity` defaults to false,
         // preserving the original keep-everything behavior below.
         if self.remove_low_complexity {
+            // Hoisted out of the loop: both are loop-invariant, and resolving the
+            // encoding function per window showed up as pure overhead.
+            let table = custom_hp.as_ref().map(|alpha| alpha.table());
+            let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
+            // Reused across windows so the custom-HP path allocates once, not once
+            // per k-mer.
+            let mut encoded: Vec<u8> = Vec::with_capacity(ksize);
+
             self.kmer_windows_examined = 0;
             self.low_complexity_kmers_removed = 0;
             for i in 0..sequence.len().saturating_sub(ksize - 1) {
@@ -388,35 +396,32 @@ impl ProteinSketch {
                     self.low_complexity_kmers_removed += 1;
                     continue;
                 }
-                let hashval = if let Some(ref alpha) = custom_hp {
-                    let table = alpha.table();
-                    let encoded: Vec<u8> = kmer
-                        .bytes()
-                        .map(|b| {
-                            table
-                                .get(&b.to_ascii_uppercase())
-                                .copied()
-                                .unwrap_or(b)
-                                .to_ascii_uppercase()
-                        })
-                        .collect();
+                let hashval = if let Some(table) = table {
+                    encoded.clear();
+                    encoded.extend(kmer.bytes().map(|b| {
+                        table
+                            .get(&b.to_ascii_uppercase())
+                            .copied()
+                            .unwrap_or(b)
+                            .to_ascii_uppercase()
+                    }));
                     if is_homopolymer_kmer(&encoded) {
                         self.low_complexity_kmers_removed += 1;
                         continue;
                     }
                     _hash_murmur(&encoded, SEED)
                 } else {
-                    let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
-                    match encode_with_fn(kmer, encoding_fn) {
-                        Ok(encoded_kmer) => {
-                            if is_hp_moltype && is_homopolymer_kmer(encoded_kmer.as_bytes()) {
-                                self.low_complexity_kmers_removed += 1;
-                                continue;
-                            }
-                            _hash_murmur(encoded_kmer.as_bytes(), SEED)
-                        }
-                        Err(_) => continue,
+                    // WHY still encode_with_fn here rather than mapping bytes: the
+                    // position-tracking loop below hashes its String's bytes, and for
+                    // any non-ASCII byte `char`-conversion re-encodes as multi-byte
+                    // UTF-8. Going through the same function keeps both loops hashing
+                    // identical bytes.
+                    let encoded_kmer = encode_with_fn(kmer, encoding_fn)?;
+                    if is_hp_moltype && is_homopolymer_kmer(encoded_kmer.as_bytes()) {
+                        self.low_complexity_kmers_removed += 1;
+                        continue;
                     }
+                    _hash_murmur(encoded_kmer.as_bytes(), SEED)
                 };
                 self.signature.minhash.add_hash(hashval);
             }
