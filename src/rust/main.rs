@@ -336,6 +336,10 @@ fn main() -> IndexResult<()> {
             // that contain low-complexity regions.
             let remove_low_complexity = searcher.index().remove_low_complexity();
             eprintln!("  Remove low-complexity k-mers: {} (from index)", remove_low_complexity);
+            eprintln!(
+                "  Index built by kmerseek: {}",
+                searcher.index().kmerseek_version().unwrap_or("unknown (pre-versioning index)")
+            );
 
             // Perform search - use optimized all-vs-all method if query == target
             let search_results = if is_all_vs_all {

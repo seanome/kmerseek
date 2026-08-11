@@ -33,11 +33,12 @@ use crate::sketch::{ProteinSketch, ProteinSketchStore};
 pub const SCHEMA_VERSION: u32 = 2;
 
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. "0.4.0".
-///
-/// Doubles as the marker for the current metadata layout: an index carrying this
-/// key has a `remove_low_complexity` field in its metadata, one without it does
-/// not. See `read_metadata`.
+/// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
+
+/// First schema version whose metadata carries `remove_low_complexity`.
+/// Indexes older than this are read through `LegacyProteomeIndexMetadata`.
+const SCHEMA_VERSION_WITH_REMOVE_LOW_COMPLEXITY: u32 = 2;
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -174,6 +175,11 @@ pub struct ProteomeIndex {
     // &self and process_fasta drives it from a par_iter.
     kmer_windows_examined: AtomicUsize,
     low_complexity_kmers_removed: AtomicUsize,
+
+    // kmerseek version that wrote this index on disk, if it was stamped.
+    // None for a freshly constructed index (nothing saved yet) and for indexes
+    // built before version stamping existed.
+    kmerseek_version: Option<String>,
 }
 
 impl Drop for ProteomeIndex {
@@ -299,6 +305,7 @@ impl ProteomeIndex {
             remove_low_complexity: false,
             kmer_windows_examined: AtomicUsize::new(0),
             low_complexity_kmers_removed: AtomicUsize::new(0),
+            kmerseek_version: None,
         })
     }
 
@@ -306,6 +313,15 @@ impl ProteomeIndex {
     /// building protein signatures. Defaults to `false`.
     pub fn set_remove_low_complexity(&mut self, remove_low_complexity: bool) {
         self.remove_low_complexity = remove_low_complexity;
+    }
+
+    /// The kmerseek version that wrote this index, e.g. `"0.4.0"`.
+    ///
+    /// `None` for an index built before version stamping, or one not yet saved.
+    /// Useful for diagnosing behavior differences between an index and the binary
+    /// querying it.
+    pub fn kmerseek_version(&self) -> Option<&str> {
+        self.kmerseek_version.as_deref()
     }
 
     /// Whether this index drops low-complexity (homopolymer) k-mers.
@@ -329,24 +345,34 @@ impl ProteomeIndex {
         )
     }
 
-    /// The kmerseek version that wrote an index, if it was stamped.
+    /// The kmerseek version that wrote an index, e.g. "0.4.0".
     ///
-    /// `None` for indexes built before version stamping was added.
-    pub fn read_kmerseek_version(db: &DB) -> IndexResult<Option<String>> {
+    /// `None` for indexes built before version stamping was added. Purely
+    /// provenance -- the on-disk layout is keyed off `schema_version`, not this,
+    /// because a semver string is not a usable layout discriminator.
+    fn read_kmerseek_version(db: &DB) -> IndexResult<Option<String>> {
         match db.get(KMERSEEK_VERSION_KEY)? {
             Some(data) => Ok(Some(bincode::deserialize(&data)?)),
             None => Ok(None),
         }
     }
 
-    /// Deserialize index metadata, picking the layout by whether the index was
-    /// stamped with a kmerseek version.
+    /// Schema version an index was written with. Absent means pre-versioning, i.e. 0.
+    fn read_schema_version(db: &DB) -> IndexResult<u32> {
+        match db.get(b"schema_version")? {
+            Some(data) => Ok(bincode::deserialize(&data)?),
+            None => Ok(0),
+        }
+    }
+
+    /// Deserialize index metadata, picking the layout by schema version.
     ///
-    /// Versioned indexes use the current layout. Unversioned ones predate the
-    /// `remove_low_complexity` field and are read through the legacy struct, which
-    /// defaults it to `false` -- correct, since they kept every k-mer.
+    /// bincode is not self-describing, so the layout has to be known up front.
+    /// Schema 2 added `remove_low_complexity` to the metadata; anything older is
+    /// read through the legacy struct, which defaults it to `false` -- correct,
+    /// since those indexes kept every k-mer.
     fn read_metadata(db: &DB, raw: &[u8]) -> IndexResult<ProteomeIndexMetadata> {
-        if Self::read_kmerseek_version(db)?.is_some() {
+        if Self::read_schema_version(db)? >= SCHEMA_VERSION_WITH_REMOVE_LOW_COMPLEXITY {
             Ok(bincode::deserialize(raw)?)
         } else {
             let legacy: LegacyProteomeIndexMetadata = bincode::deserialize(raw)?;
@@ -1104,6 +1130,8 @@ impl ProteomeIndex {
             let ksize = metadata.ksize;
             let scaled = metadata.scaled;
             let remove_low_complexity = metadata.remove_low_complexity;
+            // Read before `db` is moved into the struct below.
+            let kmerseek_version = Self::read_kmerseek_version(&db)?;
 
             let signatures: DashMap<String, ProteinSketch> = DashMap::new();
             raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
@@ -1135,6 +1163,7 @@ impl ProteomeIndex {
                 remove_low_complexity,
                 kmer_windows_examined: AtomicUsize::new(0),
                 low_complexity_kmers_removed: AtomicUsize::new(0),
+                kmerseek_version,
             };
 
             Ok(index)
@@ -1169,6 +1198,7 @@ impl ProteomeIndex {
             KmerMinHash::new(metadata.scaled, minhash_ksize, hash_function, SEED, true, 0);
 
         let remove_low_complexity = metadata.remove_low_complexity;
+        let kmerseek_version = Self::read_kmerseek_version(&db)?;
 
         Ok(Self {
             db,
@@ -1184,6 +1214,7 @@ impl ProteomeIndex {
             remove_low_complexity,
             kmer_windows_examined: AtomicUsize::new(0),
             low_complexity_kmers_removed: AtomicUsize::new(0),
+            kmerseek_version,
         })
     }
 
@@ -1249,10 +1280,7 @@ impl ProteomeIndex {
         // format and are fully compatible with schema version 1. We accept them here.
         // Only truly incompatible formats (e.g., pre-Feb-24 kmer_infos format) need rebuilding,
         // but those can't be detected by this key alone.
-        let stored_version: u32 = match db.get(b"schema_version")? {
-            Some(data) => bincode::deserialize(&data)?,
-            None => 0, // pre-versioning index
-        };
+        let stored_version = Self::read_schema_version(&db)?;
         if stored_version > SCHEMA_VERSION {
             return Err(IndexError::ValidationError {
                 message: format!(
@@ -2367,6 +2395,9 @@ mod tests {
             };
             db.put(b"index_metadata", bincode::serialize(&legacy)?)?;
             db.delete(KMERSEEK_VERSION_KEY)?;
+            // Layout is selected by schema_version, so roll that back too --
+            // deleting the provenance key alone would not make this a v1 index.
+            db.put(b"schema_version", bincode::serialize(&1u32)?)?;
         }
 
         // The legacy layout still loads, and defaults the flag to false.
@@ -2382,7 +2413,6 @@ mod tests {
     /// the marker for the current metadata layout.
     #[test]
     fn test_save_state_stamps_kmerseek_version() -> Result<()> {
-        use rocksdb::{Options, DB};
         let dir = tempdir()?;
         let db_path = dir.path().join("versioned.db");
         {
@@ -2392,11 +2422,8 @@ mod tests {
             index.save_state()?;
         }
 
-        let db = DB::open(&Options::default(), &db_path)?;
-        assert_eq!(
-            ProteomeIndex::read_kmerseek_version(&db)?,
-            Some(env!("CARGO_PKG_VERSION").to_string())
-        );
+        let reopened = ProteomeIndex::open_for_search(&db_path)?;
+        assert_eq!(reopened.kmerseek_version(), Some(env!("CARGO_PKG_VERSION")));
 
         Ok(())
     }
