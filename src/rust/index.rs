@@ -426,10 +426,7 @@ impl ProteomeIndex {
         path: &Path,
         kmer_frequencies: &HashMap<u64, usize>,
     ) -> IndexResult<()> {
-        let mut spectrum: BTreeMap<usize, usize> = BTreeMap::new();
-        for &count in kmer_frequencies.values() {
-            *spectrum.entry(count).or_insert(0) += 1;
-        }
+        let spectrum = Self::frequency_spectrum(kmer_frequencies);
 
         let file = File::create(path)?;
         let mut sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
@@ -442,10 +439,13 @@ impl ProteomeIndex {
         // for the whole file and would otherwise be repeated on every row. Readers skip it
         // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
         let total: usize = kmer_frequencies.values().sum();
+        let unique = kmer_frequencies.len();
         writeln!(
             sink,
-            "# total_kmers={total} unique_kmers={} moltype={} ksize={}",
-            kmer_frequencies.len(),
+            "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
+             median_seqs_per_kmer={:.1} moltype={} ksize={}",
+            total as f64 / unique as f64,
+            Self::median_occurrences(&spectrum, unique),
             self.moltype,
             self.ksize,
         )?;
@@ -483,6 +483,41 @@ impl ProteomeIndex {
         bins
     }
 
+    /// Exact frequency spectrum: occurrence count -> how many k-mers were seen that many times.
+    ///
+    /// Distinct from [`frequency_bins`], which buckets into powers of two for display. This
+    /// keeps every count so order statistics stay exact.
+    fn frequency_spectrum(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<usize, usize> {
+        let mut spectrum: BTreeMap<usize, usize> = BTreeMap::new();
+        for &count in kmer_frequencies.values() {
+            *spectrum.entry(count).or_insert(0) += 1;
+        }
+        spectrum
+    }
+
+    /// Median occurrences per k-mer, averaging the two middle values when the count is even.
+    ///
+    /// WHY alongside the mean: these distributions are heavily right-skewed, so a handful of
+    /// very common k-mers drag the mean well above what a typical k-mer looks like.
+    fn median_occurrences(spectrum: &BTreeMap<usize, usize>, unique: usize) -> f64 {
+        if unique == 0 {
+            return 0.0;
+        }
+        // Positions of the middle element(s) in the sorted list of per-k-mer counts.
+        let (lower_rank, upper_rank) = ((unique - 1) / 2, unique / 2);
+        let (mut seen, mut lower) = (0usize, None);
+        for (&occurrences, &n_kmers) in spectrum {
+            seen += n_kmers;
+            if lower.is_none() && seen > lower_rank {
+                lower = Some(occurrences);
+            }
+            if seen > upper_rank {
+                return (lower.unwrap_or(occurrences) + occurrences) as f64 / 2.0;
+            }
+        }
+        lower.unwrap_or(0) as f64
+    }
+
     /// Print the binned frequency distribution as an ASCII bar chart.
     ///
     /// Empty bins between the smallest and largest populated bin are printed with a zero count
@@ -497,10 +532,12 @@ impl ProteomeIndex {
         // of (sequence, k-mer) pairs the index holds rather than a count of k-mer positions.
         let total: usize = kmer_frequencies.values().sum();
         let unique = kmer_frequencies.len();
+        let median = Self::median_occurrences(&Self::frequency_spectrum(kmer_frequencies), unique);
         eprintln!(
             "[save] K-mer frequency histogram: {total} total k-mers found, {unique} unique \
-             (mean {:.2} sequences per k-mer)",
+             (mean {:.2}, median {:.1} sequences per k-mer)",
             total as f64 / unique as f64,
+            median,
         );
         for bin in first..=last {
             let count = bins.get(&bin).copied().unwrap_or(0);
@@ -2897,12 +2934,31 @@ mod tests {
 
         assert_eq!(
             contents,
-            "# total_kmers=8 unique_kmers=5 moltype=protein ksize=10\n\
+            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 moltype=protein ksize=10\n\
              moltype,ksize,occurrences,n_kmers\n\
              protein,10,1,3\n\
              protein,10,2,1\n\
              protein,10,3,1\n"
         );
+    }
+
+    #[test]
+    fn test_median_occurrences_exact() {
+        // Counts 1,1,1,2,3 -> odd length, middle element is 1.
+        let odd: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&odd, 5), 1.0);
+
+        // Counts 1,1,2,3 -> even length, middle two are 1 and 2.
+        let even: BTreeMap<usize, usize> = [(1, 2), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&even, 4), 1.5);
+
+        // Counts 4,4,9,9 -> both middles inside one bucket.
+        let flat: BTreeMap<usize, usize> = [(4, 2), (9, 2)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&flat, 4), 6.5);
+
+        // Single value and empty.
+        assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect(), 1), 7.0);
+        assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new(), 0), 0.0);
     }
 
     #[test]
