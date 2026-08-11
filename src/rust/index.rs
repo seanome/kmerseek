@@ -432,11 +432,24 @@ impl ProteomeIndex {
         }
 
         let file = File::create(path)?;
-        let sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
+        let mut sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
             Box::new(GzEncoder::new(file, Compression::default()))
         } else {
             Box::new(file)
         };
+
+        // Totals go in a leading `#` comment rather than a column, because they are constant
+        // for the whole file and would otherwise be repeated on every row. Readers skip it
+        // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
+        let total: usize = kmer_frequencies.values().sum();
+        writeln!(
+            sink,
+            "# total_kmers={total} unique_kmers={} moltype={} ksize={}",
+            kmer_frequencies.len(),
+            self.moltype,
+            self.ksize,
+        )?;
+
         let mut writer = csv::Writer::from_writer(sink);
         writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
         let ksize = self.ksize.to_string();
@@ -480,7 +493,15 @@ impl ProteomeIndex {
         let (&first, &last) = (bins.keys().next().unwrap(), bins.keys().next_back().unwrap());
         let max_count = *bins.values().max().unwrap();
 
-        eprintln!("[save] K-mer frequency histogram ({} unique k-mers):", kmer_frequencies.len());
+        // Each k-mer is counted once per sequence containing it, so this is the total number
+        // of (sequence, k-mer) pairs the index holds rather than a count of k-mer positions.
+        let total: usize = kmer_frequencies.values().sum();
+        let unique = kmer_frequencies.len();
+        eprintln!(
+            "[save] K-mer frequency histogram: {total} total k-mers found, {unique} unique \
+             (mean {:.2} sequences per k-mer)",
+            total as f64 / unique as f64,
+        );
         for bin in first..=last {
             let count = bins.get(&bin).copied().unwrap_or(0);
             let (lo, hi) = (1u64 << bin, (1u64 << (bin + 1)) - 1);
@@ -1699,6 +1720,7 @@ mod tests {
     };
     use crate::tests::test_utils::{self, print_kmer_positions};
     use std::collections::{BTreeMap, HashMap};
+    use std::fs::File;
     use std::path::PathBuf;
 
     /// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
@@ -2855,6 +2877,33 @@ mod tests {
     /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958), from
     /// tests/testdata/fasta/ced9.fasta.
     const CED9_PREFIX: &str = "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM";
+
+    #[test]
+    fn test_kmer_spectrum_csv_has_totals_comment_and_rows() {
+        use std::io::Read;
+
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein", true).unwrap();
+        // 3 k-mers seen once, 1 seen twice, 1 seen three times: 5 unique, 8 total.
+        let frequencies: HashMap<u64, usize> =
+            [(10, 1), (11, 1), (12, 1), (20, 2), (30, 3)].into_iter().collect();
+
+        let csv_path = temp_dir.path().join("spectrum.csv");
+        index.write_kmer_frequency_spectrum(&csv_path, &frequencies).unwrap();
+
+        let mut contents = String::new();
+        File::open(&csv_path).unwrap().read_to_string(&mut contents).unwrap();
+
+        assert_eq!(
+            contents,
+            "# total_kmers=8 unique_kmers=5 moltype=protein ksize=10\n\
+             moltype,ksize,occurrences,n_kmers\n\
+             protein,10,1,3\n\
+             protein,10,2,1\n\
+             protein,10,3,1\n"
+        );
+    }
 
     #[test]
     fn test_frequency_bins_groups_counts_into_powers_of_two() {
