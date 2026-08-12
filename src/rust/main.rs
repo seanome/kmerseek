@@ -82,9 +82,9 @@ enum Commands {
         /// Maximum uncorrected region-scoped Poisson p-value required to report a match,
         /// applied to the best-scoring region. A match is reported if EITHER this or
         /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
-        /// the whole-query p-value is unimpressive.
-        #[arg(long, default_value = "0.05")]
-        max_region_pvalue: f64,
+        /// the whole-query p-value is unimpressive. Defaults to 0.05.
+        #[arg(long)]
+        max_region_pvalue: Option<f64>,
 
         /// Deprecated: use --max-query-pvalue (whole protein) or --max-region-pvalue (per
         /// matched region). Kept as an alias that applies whole-query filtering only.
@@ -283,6 +283,13 @@ fn main() -> IndexResult<()> {
             // query scope as the sole decider, exactly as before.
             let (max_query_pvalue, max_region_pvalue) = match max_pvalue {
                 Some(deprecated) => {
+                    if let Some(ignored) = max_region_pvalue {
+                        eprintln!(
+                            "WARNING: --max-region-pvalue {ignored} is ignored because \
+                             --max-pvalue was also passed; the region scope is forced to 0.0 \
+                             (never passes) to reproduce pre-region-scoring behaviour."
+                        );
+                    }
                     eprintln!(
                         "WARNING: --max-pvalue is deprecated; it now applies whole-query \
                          filtering only.\n         Use --max-query-pvalue {deprecated} for the \
@@ -291,7 +298,7 @@ fn main() -> IndexResult<()> {
                     );
                     (deprecated, 0.0)
                 }
-                None => (max_query_pvalue, max_region_pvalue),
+                None => (max_query_pvalue, max_region_pvalue.unwrap_or(0.05)),
             };
 
             eprintln!("  Threshold: {}", threshold);
