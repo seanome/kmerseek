@@ -497,13 +497,8 @@ class GenePlot:
     @staticmethod
     def _region_label_text(r_idx, hit, row):
         r_start, r_end = int(row["region_start"]), int(row["region_end"])
-        # minority_fraction is blank for moltypes with no encoded sequence (protein).
-        # A low value means a compositionally skewed region, where enrichment looks
-        # impressive for reasons that need not be homology -- worth showing inline.
-        skew = row.get("region_minority_fraction")
-        skew_part = f", minority={float(skew):.2f}" if skew not in (None, "") else ""
         return (f"region {r_idx}/{hit['n_regions']}:  {r_start + 1}-{r_end}aa, "
-                f"p={float(row['region_poisson_pvalue']):.2g}{skew_part}")
+                f"p={float(row['region_poisson_pvalue']):.2g}")
 
     def _draw_region_alignment(self, row, y):
         """Draw one region's query/moltype/target lines; return the y cursor after it."""

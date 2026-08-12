@@ -123,7 +123,6 @@ pub struct SearchResultCsv {
     pub region_expected_shared_kmers: f64,
     pub region_poisson_pvalue: f64,
     pub region_enrichment: f64,
-    pub region_minority_fraction: Option<f64>,
 }
 
 impl SearchResultCsv {
@@ -173,7 +172,6 @@ impl SearchResultCsv {
             region_expected_shared_kmers: region.expected_shared_kmers,
             region_poisson_pvalue: region.poisson_pvalue,
             region_enrichment: region.enrichment,
-            region_minority_fraction: region.minority_fraction,
         }
     }
 }
@@ -324,7 +322,7 @@ pub struct MatchedRegion {
     ///
     /// The frequencies are database-wide, not conditioned on this region's own composition, so
     /// a region sitting in a compositionally atypical stretch will show inflated enrichment for
-    /// reasons unrelated to homology. Check `minority_fraction` before trusting a large value.
+    /// reasons unrelated to homology.
     pub expected_shared_kmers: f64,
 
     /// Poisson p-value scoped to this region: P(X ≥ n_shared | λ = expected_shared_kmers), using
@@ -340,14 +338,6 @@ pub struct MatchedRegion {
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
     /// context or when expected_shared_kmers is 0.
     pub enrichment: f64,
-
-    /// Fraction of this region's encoded sequence that is *not* its most common character —
-    /// 0.5 is maximally mixed for a 2-letter alphabet, 0.0 is a homopolymer run.
-    ///
-    /// Emitted so low-complexity regions stay auditable: short regions inside compositionally
-    /// biased stretches are exactly where region enrichment looks most spectacular and means
-    /// least. `None` when no encoded sequence is available (e.g. protein moltype).
-    pub minority_fraction: Option<f64>,
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -373,22 +363,6 @@ fn fold_enrichment(observed: u32, expected: f64) -> f64 {
     } else {
         0.0
     }
-}
-
-/// Fraction of `encoded` that is not its most common character.
-///
-/// Generalizes minority fraction to any alphabet: for 2-letter HP it is exactly
-/// `min(count_h, count_p) / len`, and for dayhoff it reads as the non-modal fraction.
-fn non_modal_fraction(encoded: &str) -> Option<f64> {
-    if encoded.is_empty() {
-        return None;
-    }
-    let mut counts: HashMap<char, usize> = HashMap::new();
-    for character in encoded.chars() {
-        *counts.entry(character).or_insert(0) += 1;
-    }
-    let modal = counts.values().copied().max()?;
-    Some(1.0 - modal as f64 / encoded.chars().count() as f64)
 }
 
 impl Display for MatchedRegion {
@@ -1155,6 +1129,13 @@ fn calculate_similarity_from_precomputed(
     // Number of distinct positions a region could have started at in this query. Regions are
     // selected by maximization over these placements, so this is the multiplicity that a
     // per-region p-value has to be corrected against.
+    //
+    // saturating_sub guards seq.len() - ksize from underflowing (both are usize; a plain `-`
+    // would panic in debug and wrap to a huge number in release) if seq is ever shorter than
+    // ksize. In practice that can't happen here: this function already returned above when
+    // the intersection is empty, and a non-empty intersection means query produced at least
+    // one k-mer, which means seq.len() >= ksize. The saturating form is a defensive floor for
+    // that invariant, not a case this code path actually exercises.
     let region_search_space = query
         .get_raw_sequence()
         .map(|seq| seq.len().saturating_sub(query.protein_ksize() as usize) + 1)
@@ -1380,7 +1361,6 @@ pub fn find_matched_regions(
                         expected_shared_kmers: 0.0,
                         poisson_pvalue: 1.0,
                         enrichment: 0.0,
-                        minority_fraction: None,
                     });
 
                     i = j;
@@ -1421,7 +1401,6 @@ pub fn find_matched_regions(
             expected_shared_kmers: 0.0,
             poisson_pvalue: 1.0,
             enrichment: 0.0,
-            minority_fraction: non_modal_fraction(target_moltype_seq),
         });
 
         i = j;
@@ -1476,7 +1455,6 @@ mod tests {
             expected_shared_kmers: 2.0,
             poisson_pvalue: 0.05,
             enrichment: 1.5,
-            minority_fraction: Some(0.4),
         };
 
         let result = SearchResult {
@@ -1532,7 +1510,6 @@ mod tests {
         assert_eq!(row.region_expected_shared_kmers, 2.0);
         assert_eq!(row.region_poisson_pvalue, 0.05);
         assert_eq!(row.region_enrichment, 1.5);
-        assert_eq!(row.region_minority_fraction, Some(0.4));
         // Multiplicity components travel as separate columns, never folded into a p-value.
         assert_eq!(row.region_search_space, 300);
         assert_eq!(row.db_n_targets, 25);
@@ -2656,11 +2633,18 @@ mod tests {
         Ok(())
     }
 
-    /// At scaled=1 every k-mer in the sequence survives FracMinHash (no downsampling), so every
-    /// position inside a matched region's span is a shared k-mer. Independently recounts from
-    /// kmer_positions (not just re-deriving the same length - ksize + 1 formula the production
-    /// code uses) to actually exercise the position-tracking mechanism, for every named HP
-    /// alphabet including hp_thomas_dill_no_c.
+    /// Checks the CSV's `region_n_shared_kmers` shortcut (`region.length - ksize + 1`, see
+    /// `SearchResultCsv::from_result_and_region`) against an independent count of real k-mer
+    /// positions, for every named HP alphabet.
+    ///
+    /// That formula is only correct because scaled=1 means FracMinHash keeps every k-mer (no
+    /// downsampling), so "how many k-mers are in this span" reduces to arithmetic on the span's
+    /// length. Rather than trusting that reasoning, this test recomputes the count a different
+    /// way: for each region, it walks `kmer_positions` (the sketch's own record of where each
+    /// retained k-mer starts) and counts how many positions actually fall inside the region's
+    /// span, then asserts that matches the formula's answer. Repeated for every named HP
+    /// alphabet (including hp_thomas_dill_no_c) since each partitions residues into H/P
+    /// differently, and the position bookkeeping has to hold for all of them, not just one.
     #[test]
     fn test_region_shared_kmer_count_exact_at_scaled_one_all_alphabets() {
         use crate::hp_alphabets::HpAlphabet;
@@ -3007,22 +2991,82 @@ mod tests {
         Ok(())
     }
 
-    /// minority_fraction flags regions whose encoded sequence is compositionally skewed, where
-    /// region enrichment looks most impressive and means least. It is the non-modal fraction, so
-    /// a homopolymer run is 0.0 and an evenly mixed HP region approaches 0.5.
+    /// Complements `test_pvalue_scopes_combine_with_or`'s BCL2/CED9 example (region scope
+    /// rescues a hit the query scope rejects) with a real case running the other way: BCL2A1
+    /// vs ASPP2/TP53BP2 at k=9, in the same 25-sequence fixture database, is an overwhelming
+    /// whole-protein match (115 shared k-mers scattered across 333 short regions) with no
+    /// single region concentrated enough to pass on its own — its strongest region only
+    /// reaches p=0.0956, above the 0.05 default cap. This is the pair the reviewer asked to
+    /// see: proof the OR only needs one scope to hold, in both directions, not just the
+    /// direction the rest of this file already demonstrates.
     #[test]
-    fn test_non_modal_fraction_flags_low_complexity() {
-        assert_eq!(non_modal_fraction(""), None, "no encoded sequence means nothing to report");
-        assert_eq!(non_modal_fraction("hhhhhhhh"), Some(0.0), "homopolymer run");
-        assert_eq!(non_modal_fraction("hhhh"), Some(0.0));
-        assert_eq!(non_modal_fraction("hhhp"), Some(0.25));
-        assert_eq!(non_modal_fraction("hphp"), Some(0.5), "evenly mixed is the HP maximum");
-        // Real BCL2/CED9 landmark region: 14 h to 5 p, so 5/19 are non-modal - hydrophobic-
-        // skewed, which is exactly the kind of region whose enrichment deserves a second look.
-        assert_relative_eq!(
-            non_modal_fraction("pphhphhphhhhhphhhhh").unwrap(),
-            5.0 / 19.0,
-            epsilon = 1e-12
+    fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
+        let ksize = 9;
+        let scaled = 1;
+        let moltype = "hp";
+
+        let temp_dir = TempDir::new()?;
+        let target_index_path = temp_dir.path().join("target_index");
+        let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index_path = temp_dir.path().join("query_index");
+        let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
+        query_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let query_signatures: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+
+        fn find_hit(results: &[SearchResult]) -> Option<&SearchResult> {
+            results
+                .iter()
+                .find(|r| r.query_name.contains("B2LA1") && r.target_name.contains("ASPP2"))
+        }
+
+        // Unfiltered, to inspect the pair's raw numbers.
+        let all_results = searcher.search(&query_signatures, &SearchFilters::default())?;
+        let hit = find_hit(&all_results).expect("BCL2A1 vs ASPP2/TP53BP2 should be found");
+
+        assert_eq!(hit.n_intersecting_hashes, 115);
+        assert_relative_eq!(hit.query_poisson_pvalue, 2.356_930_483e-7, epsilon = 1e-15);
+        assert!(hit.query_poisson_pvalue < 0.05, "whole-query scope should clearly pass");
+
+        let best_region_pvalue = hit
+            .matched_regions
+            .iter()
+            .map(|region| region.poisson_pvalue)
+            .fold(f64::INFINITY, f64::min);
+        assert_relative_eq!(best_region_pvalue, 0.095_589_196_102_397_8, epsilon = 1e-12);
+        assert!(best_region_pvalue >= 0.05, "no single region should clear the default cap");
+
+        // Region scope alone: nothing to rescue it, since no region is significant on its own.
+        let region_only = searcher.search(
+            &query_signatures,
+            &SearchFilters {
+                max_query_pvalue: 0.0,
+                max_region_pvalue: 0.05,
+                ..SearchFilters::default()
+            },
+        )?;
+        assert!(
+            find_hit(&region_only).is_none(),
+            "region scope alone should reject a match with no standout region"
         );
+
+        // Query scope alone: the diffuse whole-protein signal is sufficient by itself.
+        let query_only = searcher.search(
+            &query_signatures,
+            &SearchFilters {
+                max_query_pvalue: 0.05,
+                max_region_pvalue: 0.0,
+                ..SearchFilters::default()
+            },
+        )?;
+        assert!(
+            find_hit(&query_only).is_some(),
+            "query scope alone should keep this diffuse whole-protein match"
+        );
+
+        Ok(())
     }
 }
