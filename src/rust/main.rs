@@ -79,10 +79,12 @@ enum Commands {
         #[arg(long, default_value = "0.05")]
         max_query_pvalue: f64,
 
-        /// Maximum uncorrected region-scoped Poisson p-value required to report a match,
-        /// applied to the best-scoring region. A match is reported if either this or
-        /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
-        /// the whole-query p-value is unimpressive. Defaults to 0.05.
+        /// Maximum region-scoped Poisson p-value required to report a match, applied to the
+        /// best-scoring region. This is a heuristic ranking cutoff, not a statistically
+        /// calibrated significance threshold (see the region scoring notes in the docs). A
+        /// match is reported if either this or --max-query-pvalue passes, so a strong
+        /// sub-protein domain hit survives even when the whole-query p-value is unimpressive.
+        /// Defaults to 0.05.
         #[arg(long)]
         max_region_pvalue: Option<f64>,
 

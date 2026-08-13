@@ -34,7 +34,8 @@ pub struct SearchFilters {
     /// Maximum whole-query Poisson p-value required to keep a match.
     pub max_query_pvalue: f64,
     /// Maximum region-scoped Poisson p-value required to keep a match, applied to the best
-    /// region in the pair.
+    /// region in the pair. A heuristic cutoff on a ranking score, not a statistically
+    /// calibrated significance threshold; see `MatchedRegion::poisson_pvalue`.
     pub max_region_pvalue: f64,
 }
 
@@ -135,6 +136,15 @@ impl SearchResultCsv {
     /// will produce multiple CSV rows (one per matched region), with all similarity metrics
     /// repeated for each region.
     pub fn from_result_and_region(result: &SearchResult, region: &MatchedRegion) -> Self {
+        // See the matching debug_assert in ProteinSearcher::compare: a region shorter than
+        // ksize should never exist, and saturating_sub would otherwise hide that as a silent
+        // region_n_shared_kmers = 1 instead of a loud failure.
+        debug_assert!(
+            region.length >= result.ksize,
+            "region shorter than ksize: length={}, ksize={}",
+            region.length,
+            result.ksize
+        );
         Self {
             query_name: result.query_name.clone(),
             query_md5: result.query_md5.clone(),
@@ -338,18 +348,30 @@ pub struct MatchedRegion {
     /// Uses the region's own k-mer count instead of the whole protein's. 1.0 without DB
     /// context.
     ///
-    /// This number by itself makes the match look more significant than it is. Regions are
-    /// chosen after the fact: `find_matched_regions` keeps the best-looking gapless run of
-    /// shared k-mers, and only then is this p-value computed for that specific run. A p-value
-    /// formula assumes the region was fixed in advance, before looking at the data. Since it
-    /// was not, this p-value comes out smaller than is justified. Statisticians call a test
-    /// with this property anticonservative: it makes the result look more significant than it
-    /// is.
+    /// Treat this as a heuristic score for ranking candidate regions against each other, not
+    /// as a calibrated significance estimate. Two separate problems keep it from being a real
+    /// p-value:
     ///
-    /// To correct for this, combine with `region_search_space` (how many positions a region
-    /// could have started at) and `db_n_targets` (how many targets were searched) into an
-    /// E-value: `poisson_pvalue * region_search_space * db_n_targets`. Better still, calibrate
-    /// empirically against a decoy database instead of relying on this formula's assumptions.
+    /// 1. `n_shared` is not an independent observation. It is `region_length - ksize + 1`,
+    ///    arithmetic on the region's own length, and the region's length is exactly what
+    ///    `find_matched_regions` chose by keeping the longest gapless run of shared k-mers. The
+    ///    test is being applied to the same quantity that defined the region, which is close to
+    ///    circular. Multiplying by `region_search_space` (how many positions a region could
+    ///    have started at) and `db_n_targets` (how many targets were searched) into an E-value,
+    ///    `poisson_pvalue * region_search_space * db_n_targets`, corrects for having picked the
+    ///    best-looking window out of many candidate windows. It does not fix this problem.
+    ///
+    /// 2. The k-mers being counted overlap by `ksize - 1` residues, so they are not independent
+    ///    trials the way the Poisson model assumes. Five overlapping k-mers spanning a single
+    ///    19-residue stretch are closer to one piece of evidence, observed five times, than to
+    ///    five separate pieces of evidence. Treating them as independent understates how likely
+    ///    a run this long is to appear by chance.
+    ///
+    /// A properly calibrated version of this statistic would model the length of the longest
+    /// gapless run directly (an extreme-value distribution, the same kind of model behind
+    /// BLAST's E-values), account for the k-mer overlap, and be checked empirically against
+    /// a decoy database. None of that is implemented here. Use this p-value to prioritize which
+    /// regions to look at first, not to make a significance claim about any single region.
     pub poisson_pvalue: f64,
 
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
@@ -888,6 +910,15 @@ impl ProteinSearcher {
         let ksize = query.sketch.protein_ksize() as usize;
         for region in result.matched_regions.iter_mut() {
             let lambda = self.region_expectation(query.sketch, region.start, region.end, ksize);
+            // find_matched_regions never emits a region shorter than ksize (its length is
+            // consecutive_count + ksize - 1, and consecutive_count >= 1), so this can't
+            // actually underflow. debug_assert catches it loudly if that invariant is ever
+            // broken, instead of saturating_sub silently turning a bug into n_shared = 1.
+            debug_assert!(
+                region.length >= ksize as u32,
+                "region shorter than ksize: length={}, ksize={ksize}",
+                region.length
+            );
             let n_shared = region.length.saturating_sub(ksize as u32) + 1;
 
             region.expected_shared_kmers = lambda;
