@@ -2320,8 +2320,10 @@ mod tests {
             .scaled(1)
             .moltype("hp")
             .remove_low_complexity(true)
+            .store_raw_sequences(true)
             .build()?;
         assert!(on.remove_low_complexity());
+        assert!(on.store_raw_sequences());
 
         // Defaults to false when the builder method is not called.
         let off = ProteomeIndex::builder()
@@ -2367,44 +2369,131 @@ mod tests {
     /// than erroring out.
     #[test]
     fn test_unversioned_index_reads_through_legacy_metadata_layout() -> Result<()> {
+        // Two flavors of old index: one written at schema 1, and one predating
+        // schema versioning entirely (no key, which reads as version 0).
+        for rolled_back in [true, false] {
+            let dir = tempdir()?;
+            let db_path = dir.path().join("legacy.db");
+            {
+                let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+                let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
+                index.store_signatures(vec![sig])?;
+                index.save_state()?;
+            }
+
+            // Rewrite the index as a pre-versioning one: metadata in the old 8-field
+            // layout, and no kmerseek_version key.
+            {
+                use rocksdb::{Options, DB};
+                let db = DB::open(&Options::default(), &db_path)?;
+                let current: ProteomeIndexMetadata =
+                    bincode::deserialize(&db.get(b"index_metadata")?.unwrap())?;
+                let legacy = LegacyProteomeIndexMetadata {
+                    total_signatures: current.total_signatures,
+                    chunk_count: current.chunk_count,
+                    combined_mins: current.combined_mins,
+                    combined_abunds: current.combined_abunds,
+                    moltype: current.moltype,
+                    ksize: current.ksize,
+                    scaled: current.scaled,
+                    store_raw_sequences: current.store_raw_sequences,
+                };
+                db.put(b"index_metadata", bincode::serialize(&legacy)?)?;
+                db.delete(KMERSEEK_VERSION_KEY)?;
+                // Layout is selected by schema_version, so roll that back too --
+                // deleting the provenance key alone would not make this a v1 index.
+                if rolled_back {
+                    db.put(b"schema_version", bincode::serialize(&1u32)?)?;
+                } else {
+                    // Truly ancient: no schema_version key at all, which reads as 0.
+                    db.delete(b"schema_version")?;
+                }
+            }
+
+            // The legacy layout still loads, and defaults the flag to false.
+            let reopened = ProteomeIndex::open_for_search(&db_path)?;
+            assert!(!reopened.remove_low_complexity());
+            assert_eq!(reopened.ksize(), 5);
+            assert_eq!(reopened.moltype(), "hp");
+            // No version was ever stamped on these.
+            assert_eq!(reopened.kmerseek_version(), None);
+        }
+
+        Ok(())
+    }
+
+    /// `load_state` rehydrates signatures into an existing index handle, a
+    /// separate path from `load` (which builds a fresh index) -- search uses it.
+    #[test]
+    fn test_load_state_rehydrates_signatures_into_existing_index() -> Result<()> {
         let dir = tempdir()?;
-        let db_path = dir.path().join("legacy.db");
+        let db_path = dir.path().join("load_state.db");
         {
             let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            for (name, seq) in [("p1", TEST_PROTEIN), ("p2", FKBP8_POLY_E)] {
+                let sig = index.create_protein_signature(seq, name)?;
+                index.store_signatures(vec![sig])?;
+            }
+            index.save_state()?;
+        }
+
+        let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+        assert_eq!(index.signature_count(), 0, "a fresh handle starts empty");
+        index.load_state()?;
+        assert_eq!(index.signature_count(), 2, "load_state should pull both signatures back");
+
+        Ok(())
+    }
+
+    /// The full in-memory load path (as opposed to `open_for_search`) must also
+    /// recover the flag and the version, and bring the signatures back with it.
+    #[test]
+    fn test_load_round_trips_flag_version_and_signatures() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("full_load.db");
+        {
+            let mut index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            index.set_remove_low_complexity(true);
+            for (name, seq) in [("p1", TEST_PROTEIN), ("p2", FKBP8_POLY_E)] {
+                let sig = index.create_protein_signature(seq, name)?;
+                index.store_signatures(vec![sig])?;
+            }
+            index.save_state()?;
+        }
+        // Dropped above, so RocksDB's lock is released before reopening.
+
+        let loaded = ProteomeIndex::load(&db_path)?;
+        assert!(loaded.remove_low_complexity());
+        assert_eq!(loaded.kmerseek_version(), Some(env!("CARGO_PKG_VERSION")));
+        assert_eq!(loaded.signature_count(), 2);
+        assert_eq!(loaded.ksize(), 5);
+        assert_eq!(loaded.scaled(), 1);
+        assert_eq!(loaded.moltype(), "hp");
+
+        // Counts are per-process build state, not persisted, so a fresh load
+        // starts at zero rather than inheriting the writer's totals.
+        assert_eq!(loaded.low_complexity_counts(), (0, 0));
+
+        Ok(())
+    }
+
+    /// `get_index_parameters` is what the search CLI uses to autodetect settings
+    /// from a database, and it reads the schema version on the way through.
+    #[test]
+    fn test_get_index_parameters_reads_from_saved_index() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("params.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 7, 1, "dayhoff", true)?;
             let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
             index.store_signatures(vec![sig])?;
             index.save_state()?;
         }
 
-        // Rewrite the index as a pre-versioning one: metadata in the old 8-field
-        // layout, and no kmerseek_version key.
-        {
-            use rocksdb::{Options, DB};
-            let db = DB::open(&Options::default(), &db_path)?;
-            let current: ProteomeIndexMetadata =
-                bincode::deserialize(&db.get(b"index_metadata")?.unwrap())?;
-            let legacy = LegacyProteomeIndexMetadata {
-                total_signatures: current.total_signatures,
-                chunk_count: current.chunk_count,
-                combined_mins: current.combined_mins,
-                combined_abunds: current.combined_abunds,
-                moltype: current.moltype,
-                ksize: current.ksize,
-                scaled: current.scaled,
-                store_raw_sequences: current.store_raw_sequences,
-            };
-            db.put(b"index_metadata", bincode::serialize(&legacy)?)?;
-            db.delete(KMERSEEK_VERSION_KEY)?;
-            // Layout is selected by schema_version, so roll that back too --
-            // deleting the provenance key alone would not make this a v1 index.
-            db.put(b"schema_version", bincode::serialize(&1u32)?)?;
-        }
-
-        // The legacy layout still loads, and defaults the flag to false.
-        let reopened = ProteomeIndex::open_for_search(&db_path)?;
-        assert!(!reopened.remove_low_complexity());
-        assert_eq!(reopened.ksize(), 5);
-        assert_eq!(reopened.moltype(), "hp");
+        let (ksize, scaled, moltype) = ProteomeIndex::get_index_parameters(&db_path)?;
+        assert_eq!(ksize, 7);
+        assert_eq!(scaled, 1);
+        assert_eq!(moltype, "dayhoff");
 
         Ok(())
     }
