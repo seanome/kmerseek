@@ -40,10 +40,10 @@ pub struct SearchFilters {
 
 impl Default for SearchFilters {
     /// Accepts every result `compare()` produces. Note the p-value caps must be `f64::INFINITY`,
-    /// not 1.0: `query_poisson_pvalue` is exactly 1.0 whenever there's no database frequency
-    /// context (e.g. `set_query_frequencies` was never called), which is common, so a cap
-    /// of 1.0 combined with `compare()`'s strict-less-than keep check would wrongly reject
-    /// those results.
+    /// not 1.0: `query_poisson_pvalue` is 1.0 whenever there's no database frequency context
+    /// (e.g. `set_query_frequencies` was never called), which is common, so a cap of 1.0
+    /// combined with `compare()`'s strict-less-than keep check would wrongly reject those
+    /// results.
     fn default() -> Self {
         Self {
             threshold: 0.0,
@@ -55,11 +55,12 @@ impl Default for SearchFilters {
 }
 
 impl SearchFilters {
-    /// A pair is kept when *either* scope clears its cap, not both.
+    /// A pair is kept when either scope clears its cap. Both are not required.
     ///
-    /// AND would reintroduce whole-protein dilution through the back door: BCL2/CED9 at k=15
-    /// has a whole-query p of 0.99 and a region p of 0.0007, so requiring both to pass discards
-    /// exactly the sub-protein domain calls region scoring exists to surface.
+    /// Requiring both would bring back the problem this PR fixes: a real sub-protein domain
+    /// match diluted into insignificance by the rest of the protein. BCL2/CED9 at k=15 has a
+    /// whole-query p-value of 0.99 and a region p-value of 0.0007. Requiring both to pass
+    /// would discard the sub-protein domain match that region scoring exists to surface.
     fn pvalues_pass(&self, query_pvalue: f64, best_region_pvalue: Option<f64>) -> bool {
         let query_passes = query_pvalue < self.max_query_pvalue;
         let region_passes =
@@ -104,8 +105,10 @@ pub struct SearchResultCsv {
     /// Poisson p-value: P(X ≥ n_intersecting_hashes | λ = query_expected_shared_kmers).
     /// 1.0 when query_expected_shared_kmers is unavailable (no database context).
     pub query_poisson_pvalue: f64,
-    // Multiplicity components, emitted separately so no reported statistic depends on batch
-    // composition. See SearchResult for what each one counts and how to combine them.
+    // How many other things this result was tested alongside: candidate region placements,
+    // targets, k-mers, and queries. Reported as separate numbers rather than multiplied into
+    // a p-value, so no reported statistic changes depending on batch composition. See
+    // SearchResult for what each one counts and how to combine them.
     pub region_search_space: usize,
     pub db_n_targets: usize,
     pub db_n_kmers: usize,
@@ -255,23 +258,25 @@ pub struct SearchResult {
     /// 1.0 when query_expected_shared_kmers is unavailable (no database context).
     pub query_poisson_pvalue: f64,
 
-    /// Number of candidate region start positions in this query: `query_length - ksize + 1`.
-    /// Regions are maximal gapless runs, i.e. chosen because they scored well, so a p-value
-    /// evaluated on one is anticonservative unless corrected by how many placements it was
-    /// selected from. 0 when raw sequences are not stored.
+    /// Number of positions in this query where a region could have started:
+    /// `query_length - ksize + 1`. Regions are chosen after the fact (the best-looking
+    /// gapless run of shared k-mers is kept), so a p-value computed on one region looks better
+    /// than it should unless it is corrected by how many candidate positions it was chosen
+    /// from. This is that count. 0 when raw sequences are not stored.
     pub region_search_space: usize,
 
     /// Number of target signatures searched.
     pub db_n_targets: usize,
 
-    /// Total k-mer occurrences across the database (Σ over hashes of the number of signatures
-    /// containing that hash) — the k-mer-space analogue of a residue count, which the index
-    /// does not currently store.
+    /// Total k-mer occurrences across the database: the sum, over every distinct k-mer hash,
+    /// of how many signatures contain that hash. Used as a stand-in for total residue count,
+    /// which the index does not currently store.
     pub db_n_kmers: usize,
 
-    /// Number of queries in this search run. Emitted for anyone wanting study-wide FWER; it is
-    /// deliberately NOT folded into any p-value, so a hit's reported significance never depends
-    /// on what else happened to be in the same invocation.
+    /// Number of queries in this search run. Reported for anyone who wants to correct for
+    /// having tested many queries in one run (a family-wise error rate correction). Not
+    /// folded into any p-value here: a hit's reported significance must not change depending
+    /// on what other queries happened to run alongside it in the same invocation.
     pub run_n_queries: usize,
 
     /// 1 or more regions of 1+ k-mers overlapping between query and target
@@ -317,22 +322,34 @@ pub struct MatchedRegion {
     /// Length of the match
     pub length: u32,
 
-    /// Expected number of shared k-mers by chance within this region: Σ freq_target[h]/N over
-    /// the query k-mers whose start position falls inside this region. 0.0 without DB context.
+    /// Expected number of shared k-mers by chance within this region: for every query k-mer
+    /// whose start position falls inside this region, sum how often that k-mer's hash appears
+    /// across the database, divided by the number of signatures in the database. 0.0 without
+    /// DB context.
     ///
-    /// The frequencies are database-wide, not conditioned on this region's own composition, so
-    /// a region sitting in a compositionally atypical stretch will show inflated enrichment for
-    /// reasons unrelated to homology.
+    /// The frequencies used are averaged over the whole database, not this region's own local
+    /// composition. A region sitting in an unusual stretch of the protein (for example, an
+    /// unusually hydrophobic stretch) looks more enriched than it should, because it is
+    /// compared against the database average rather than against similar local sequence.
     pub expected_shared_kmers: f64,
 
-    /// Poisson p-value scoped to this region: P(X ≥ n_shared | λ = expected_shared_kmers), using
-    /// the region's own k-mer count instead of the whole protein's. 1.0 without DB context.
+    /// Poisson p-value scoped to this region: the probability of seeing at least `n_shared`
+    /// shared k-mers if matches happened at random, given the rate `expected_shared_kmers`.
+    /// Uses the region's own k-mer count instead of the whole protein's. 1.0 without DB
+    /// context.
     ///
-    /// This is a nominal, uncorrected tail probability. Regions are maximal gapless runs —
-    /// selected for being good — so this is anticonservative as a standalone significance
-    /// claim: the null assumes an interval fixed in advance. Combine with `region_search_space`
-    /// and `db_n_targets` for an E-value, and prefer empirical calibration against a decoy
-    /// database over reading this number directly.
+    /// This number by itself makes the match look more significant than it is. Regions are
+    /// chosen after the fact: `find_matched_regions` keeps the best-looking gapless run of
+    /// shared k-mers, and only then is this p-value computed for that specific run. A p-value
+    /// formula assumes the region was fixed in advance, before looking at the data. Since it
+    /// was not, this p-value comes out smaller than is justified. Statisticians call a test
+    /// with this property anticonservative: it makes the result look more significant than it
+    /// is.
+    ///
+    /// To correct for this, combine with `region_search_space` (how many positions a region
+    /// could have started at) and `db_n_targets` (how many targets were searched) into an
+    /// E-value: `poisson_pvalue * region_search_space * db_n_targets`. Better still, calibrate
+    /// empirically against a decoy database instead of relying on this formula's assumptions.
     pub poisson_pvalue: f64,
 
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
@@ -455,9 +472,10 @@ pub struct ProteinSearcher {
     query_kmer_frequencies: Option<HashMap<u64, usize>>,
     /// Total number of query sequences used to build query_kmer_frequencies.
     total_queries: usize,
-    /// Σ over hashes of the number of signatures containing that hash — the database's size in
-    /// k-mer space, reported per result. Summed once here because doing it per comparison would
-    /// be O(unique k-mers) on every candidate.
+    /// Total k-mer occurrences across the database: the sum, over every distinct k-mer hash,
+    /// of how many signatures contain that hash. Computed once here and reused for every
+    /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
+    /// on every candidate pair.
     db_n_kmers: usize,
 }
 
@@ -834,7 +852,7 @@ impl ProteinSearcher {
         // sequences; abundance_stats sorts the intersection). Candidates failing these never
         // pay for that work.
         //
-        // The p-value checks can NOT be hoisted up here: a pair is kept when either scope
+        // The p-value checks cannot be hoisted up here: a pair is kept when either scope
         // clears, and the region scope isn't known until the regions exist. So p-value
         // filtering happens after the result is built, and pairs that fail the query scope now
         // pay for region-finding before being rejected.
@@ -920,12 +938,13 @@ impl ProteinSearcher {
         Some(result)
     }
 
-    /// Expected shared k-mers by chance within one region: Σ freq_target[h]/N over the query
-    /// k-mers whose start position falls inside it.
+    /// Expected shared k-mers by chance within one region: for every query k-mer whose start
+    /// position falls inside the region, sum its database frequency (occurrences across the
+    /// database divided by the number of signatures).
     ///
     /// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to
-    /// the region only if it fits entirely inside, which is what makes the count come out to
-    /// exactly `length - ksize + 1` at scaled=1.
+    /// the region only if it fits entirely inside. That is what makes the count equal
+    /// `length - ksize + 1` at scaled=1.
     fn region_expectation(&self, query: &ProteinSketch, start: u32, end: u32, ksize: usize) -> f64 {
         let window_start = start as usize;
         // A k-mer at p covers [p, p + ksize), so it fits inside [start, end) only when
@@ -1127,15 +1146,16 @@ fn calculate_similarity_from_precomputed(
     let matched_regions = find_matched_regions(query, target, intersection);
 
     // Number of distinct positions a region could have started at in this query. Regions are
-    // selected by maximization over these placements, so this is the multiplicity that a
-    // per-region p-value has to be corrected against.
+    // chosen after the fact (the best-looking gapless run is kept), so a per-region p-value
+    // needs to be corrected by how many candidate positions it was chosen from. This is that
+    // count.
     //
     // saturating_sub guards seq.len() - ksize from underflowing (both are usize; a plain `-`
     // would panic in debug and wrap to a huge number in release) if seq is ever shorter than
-    // ksize. In practice that can't happen here: this function already returned above when
-    // the intersection is empty, and a non-empty intersection means query produced at least
-    // one k-mer, which means seq.len() >= ksize. The saturating form is a defensive floor for
-    // that invariant, not a case this code path actually exercises.
+    // ksize. In practice that cannot happen here: this function already returned above when
+    // the intersection is empty, and a non-empty intersection means the query produced at
+    // least one k-mer, which means seq.len() >= ksize. The saturating form is a defensive
+    // floor for that invariant, not a case this code path exercises.
     let region_search_space = query
         .get_raw_sequence()
         .map(|seq| seq.len().saturating_sub(query.protein_ksize() as usize) + 1)
@@ -1510,7 +1530,8 @@ mod tests {
         assert_eq!(row.region_expected_shared_kmers, 2.0);
         assert_eq!(row.region_poisson_pvalue, 0.05);
         assert_eq!(row.region_enrichment, 1.5);
-        // Multiplicity components travel as separate columns, never folded into a p-value.
+        // region_search_space, db_n_targets, db_n_kmers, and run_n_queries travel as
+        // separate columns, never folded into a p-value.
         assert_eq!(row.region_search_space, 300);
         assert_eq!(row.db_n_targets, 25);
         assert_eq!(row.db_n_kmers, 7629);
@@ -1750,10 +1771,11 @@ mod tests {
         Ok(())
     }
 
-    /// Each `SearchFilters` field, exercised on its own, rejects an otherwise-real BCL2/CED9
-    /// match. WHY: `compare()` checks all three conditions with `||`, which short-circuits -
-    /// a permissive default on the other two fields is required so the field under test is
-    /// the one actually deciding the rejection, not skipped by short-circuit evaluation.
+    /// Each of `SearchFilters`'s rejection checks, exercised on its own, rejects an
+    /// otherwise-real BCL2/CED9 match: threshold, min_shared_kmers, and (together, since
+    /// either alone passing keeps the pair) the two p-value scopes. Every other field is left
+    /// at its permissive default in each case, so the field under test is what causes the
+    /// rejection, not some other, stricter field.
     #[test]
     fn test_search_filters_reject_candidates() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -1814,9 +1836,10 @@ mod tests {
         Ok(())
     }
 
-    /// The two p-value scopes combine with OR, which is the whole point: BCL2/CED9 at k=15 is a
-    /// weak whole-query match (p ~ 0.99) carrying one strong region (p ~ 0.0007). Capping only
-    /// the query scope must not discard it, and capping only the region scope must keep it.
+    /// The two p-value scopes combine with OR: a match is kept if either one passes. BCL2/CED9
+    /// at k=15 is a weak whole-query match (p ~ 0.99) carrying one strong region (p ~ 0.0007).
+    /// Capping only the query scope must not discard it, and capping only the region scope
+    /// must keep it.
     #[test]
     fn test_pvalue_scopes_combine_with_or() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -2600,7 +2623,7 @@ mod tests {
         };
         query_sig.add_protein(&ced9_seq, true)?;
 
-        // Simulate a "query proteome" of exactly 1 sequence: every k-mer in ced9 has freq=1
+        // Simulate a "query proteome" of 1 sequence: every k-mer in ced9 has freq=1
         let qfreqs: HashMap<u64, usize> =
             query_sig.signature().minhash.mins().iter().map(|&h| (h, 1usize)).collect();
         let total_queries = 1;
@@ -2641,8 +2664,8 @@ mod tests {
     /// downsampling), so "how many k-mers are in this span" reduces to arithmetic on the span's
     /// length. Rather than trusting that reasoning, this test recomputes the count a different
     /// way: for each region, it walks `kmer_positions` (the sketch's own record of where each
-    /// retained k-mer starts) and counts how many positions actually fall inside the region's
-    /// span, then asserts that matches the formula's answer. Repeated for every named HP
+    /// retained k-mer starts) and counts how many positions fall inside the region's span,
+    /// then asserts that matches the formula's answer. Repeated for every named HP
     /// alphabet (including hp_thomas_dill_no_c) since each partitions residues into H/P
     /// differently, and the position bookkeeping has to hold for all of them, not just one.
     #[test]
@@ -2762,11 +2785,11 @@ mod tests {
         Ok(())
     }
 
-    /// The multiplicity components are reported separately rather than pre-multiplied into the
-    /// p-value, so a hit's significance never shifts with batch composition. Checks each
-    /// component counts what it claims, and — the property that motivates the split — that
-    /// searching the same query alone leaves its p-values and region_search_space untouched
-    /// while only run_n_queries moves.
+    /// region_search_space, db_n_targets, db_n_kmers, and run_n_queries are reported as
+    /// separate columns rather than multiplied into the p-value, so a hit's reported
+    /// significance never shifts depending on what else was in the same search run. Checks
+    /// that each column counts what it claims, and that running the same query alone leaves
+    /// its p-values and region_search_space unchanged: only run_n_queries moves.
     #[test]
     fn test_multiplicity_components_are_reported_separately() -> Result<()> {
         let ksize = 12;
@@ -2882,7 +2905,7 @@ mod tests {
         assert_eq!(poisson_survival(5, f64::NAN), 1.0, "NaN rate is rejected by Poisson::new");
     }
 
-    /// Observing exactly what is expected is unsurprising; observing far more is not. Values are
+    /// Observing what is expected is unsurprising; observing far more is not. Values are
     /// checked against the closed form of the survival function rather than restated constants.
     #[test]
     fn test_poisson_survival_matches_closed_form() {
@@ -2929,11 +2952,11 @@ mod tests {
         let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
         let sketch = ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp")?;
 
-        // A window of exactly one k-mer: [0, 0 + 1) after the ksize adjustment.
+        // A window holding one k-mer: [0, 0 + 1) after the ksize adjustment.
         let single = searcher.region_expectation(&sketch, 0, ksize, ksize as usize);
         assert_relative_eq!(single, 1.0, epsilon = 1e-12);
 
-        // Widening the region by one residue admits exactly one more k-mer start.
+        // Widening the region by one residue admits one more k-mer start.
         let double = searcher.region_expectation(&sketch, 0, ksize + 1, ksize as usize);
         assert_relative_eq!(double, 2.0, epsilon = 1e-12);
 
@@ -2991,14 +3014,13 @@ mod tests {
         Ok(())
     }
 
-    /// Complements `test_pvalue_scopes_combine_with_or`'s BCL2/CED9 example (region scope
-    /// rescues a hit the query scope rejects) with a real case running the other way: BCL2A1
-    /// vs ASPP2/TP53BP2 at k=9, in the same 25-sequence fixture database, is an overwhelming
-    /// whole-protein match (115 shared k-mers scattered across 333 short regions) with no
-    /// single region concentrated enough to pass on its own — its strongest region only
-    /// reaches p=0.0956, above the 0.05 default cap. This is the pair the reviewer asked to
-    /// see: proof the OR only needs one scope to hold, in both directions, not just the
-    /// direction the rest of this file already demonstrates.
+    /// Complements `test_pvalue_scopes_combine_with_or`'s BCL2/CED9 example, where the region
+    /// scope rescues a hit the query scope rejects, with a real case running the other
+    /// direction. BCL2A1 vs ASPP2/TP53BP2 at k=9, in the same 25-sequence fixture database, is
+    /// an overwhelming whole-protein match (115 shared k-mers scattered across 333 short
+    /// regions) with no single region concentrated enough to pass on its own. Its strongest
+    /// region only reaches p=0.0956, above the 0.05 default cap. This shows the OR only needs
+    /// one scope to hold, in either direction.
     #[test]
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
         let ksize = 9;

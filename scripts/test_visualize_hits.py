@@ -442,8 +442,8 @@ def test_plot_gene_svg_contains_stats_line(tmp_path):
 # --- main() end-to-end CLI ----------------------------------------------------
 
 def _write_csv(path, rows):
-    # Derived from _row() rather than listed again, so there is exactly one place
-    # in this file that has to track the CSV schema.
+    # Derived from _row() rather than listed again, so there is one place in this
+    # file that has to track the CSV schema.
     fieldnames = list(_row())
     with open(path, "w", newline="") as fh:
         writer = csv.DictWriter(fh, fieldnames=fieldnames)

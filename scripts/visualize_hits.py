@@ -199,11 +199,11 @@ def _target_pvalues(rows):
     """{target_name: best region p-value}, one entry per distinct target.
 
     Corrects over the region scope, not the whole-query one. This plot draws
-    regions, and `kmerseek search` now reports a hit when *either* scope clears,
+    regions, and `kmerseek search` now reports a hit when either scope clears,
     so a real sub-protein domain call routinely carries an unimpressive
     whole-query p-value (BCL2/CED9: 0.99 whole-query, 0.0007 for its region).
-    Correcting the whole-query number would push exactly those hits to q~1 and
-    let --max-hits cut them, hiding what the region scoring exists to surface.
+    Correcting the whole-query number would push those hits to q~1 and let
+    --max-hits cut them, hiding what the region scoring exists to surface.
 
     Unlike the query-level stats, region p-values differ row to row, so take the
     strongest region as the target's evidence."""

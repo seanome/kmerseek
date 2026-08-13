@@ -75,12 +75,12 @@ enum Commands {
         min_shared_kmers: usize,
 
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
-        /// A match is reported if EITHER this or --max-region-pvalue passes.
+        /// A match is reported if either this or --max-region-pvalue passes.
         #[arg(long, default_value = "0.05")]
         max_query_pvalue: f64,
 
         /// Maximum uncorrected region-scoped Poisson p-value required to report a match,
-        /// applied to the best-scoring region. A match is reported if EITHER this or
+        /// applied to the best-scoring region. A match is reported if either this or
         /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
         /// the whole-query p-value is unimpressive. Defaults to 0.05.
         #[arg(long)]
@@ -280,7 +280,7 @@ fn main() -> IndexResult<()> {
             eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
             // --max-pvalue predates region scoring, so honour it as whole-query filtering only:
             // a region cap of 0.0 can never be cleared (the check is a strict <), leaving the
-            // query scope as the sole decider, exactly as before.
+            // query scope as the only decider, the same as before region scoring existed.
             let (max_query_pvalue, max_region_pvalue) = match max_pvalue {
                 Some(deprecated) => {
                     if let Some(ignored) = max_region_pvalue {
@@ -366,8 +366,9 @@ fn main() -> IndexResult<()> {
                 use needletail::parse_fastx_file;
 
                 // First pass: build query-proteome k-mer frequencies for joint_kmer_freq. Also
-                // gives us the total query count up front, needed below as the Bonferroni
-                // correction family for each region's p-value.
+                // counts the total number of queries up front. That count is attached to each
+                // result as run_n_queries (see SearchResult::run_n_queries) and is not used in
+                // any correction.
                 eprintln!("First pass: scanning query proteome for k-mer frequencies...");
                 let mut total_queries: usize = 0;
                 {
