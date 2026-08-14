@@ -35,9 +35,11 @@ impl AsRef<str> for Kmer {
     }
 }
 
-/// True if every byte in a k-mer is the same, the lowest-complexity case for
-/// any alphabet: a raw amino-acid homopolymer (e.g. `"AAAAA"`), or a
-/// homopolymer run under a reduced alphabet like HP (e.g. `"hhhhh"`).
+/// True if every byte in a k-mer is the same.
+///
+/// This is the lowest-complexity case for any alphabet: a raw amino-acid
+/// homopolymer such as `"AAAAA"`, or a homopolymer run under a reduced
+/// alphabet like HP, such as `"hhhhh"`. Empty input is not a homopolymer.
 ///
 /// Case-insensitive, so it accepts both lowercase and uppercase encodings.
 pub fn is_homopolymer_kmer(kmer: &[u8]) -> bool {

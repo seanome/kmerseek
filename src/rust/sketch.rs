@@ -377,11 +377,11 @@ impl ProteinSketch {
         // like "LIVMA"). This means hashing one k-mer at a time instead of
         // delegating to sourmash's black-box `add_protein`, which windows and
         // inserts unconditionally. `remove_low_complexity` defaults to false,
-        // preserving the original keep-everything behavior below.
+        // and the branch below keeps every k-mer.
         if self.remove_low_complexity {
-            // Hoisted out of the loop: both are loop-invariant, and resolving the
-            // encoding function per window showed up as pure overhead.
-            let table = custom_hp.as_ref().map(|alpha| alpha.table());
+            // Hoisted: both are loop-invariant, so resolving them per window would
+            // be pure overhead.
+            let table = custom_hp.as_ref().map(HpAlphabet::table);
             let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
             // Reused across windows so the custom-HP path allocates once, not once
             // per k-mer.
