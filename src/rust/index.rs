@@ -32,7 +32,7 @@ use crate::sketch::{ProteinSketch, ProteinSketchStore};
 /// and will be rejected with a clear error message asking the user to rebuild.
 pub const SCHEMA_VERSION: u32 = 2;
 
-/// RocksDB key holding the kmerseek version that wrote the index, e.g. "0.4.0".
+/// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
 
@@ -73,8 +73,8 @@ struct ProteomeIndexMetadata {
     scaled: u32,
     store_raw_sequences: bool,
     /// Whether low-complexity k-mers were removed when this index was built.
-    /// Appended after the fields above, so only indexes carrying a
-    /// `kmerseek_version` key have it; see `read_metadata`.
+    /// Present from schema 2 onward; older layouts are read through
+    /// `LegacyProteomeIndexMetadata`. See `read_metadata`.
     remove_low_complexity: bool,
 }
 
@@ -173,6 +173,12 @@ pub struct ProteomeIndex {
     // Running totals accumulated as signatures are built, rather than by walking
     // every signature afterwards. Atomic because create_protein_signature takes
     // &self and process_fasta drives it from a par_iter.
+    //
+    // Relaxed ordering is sufficient and deliberate: these are counters only, and
+    // no other data is published through them. Callers read them after the
+    // par_iter has finished, and rayon's join already establishes happens-before
+    // between the workers and the caller, so every increment is visible by then.
+    // Reading mid-run would just yield a partial count, never a torn value.
     kmer_windows_examined: AtomicUsize,
     low_complexity_kmers_removed: AtomicUsize,
 
@@ -2364,9 +2370,9 @@ mod tests {
         Ok(())
     }
 
-    /// Indexes written before this flag existed have no such key; they were
-    /// kept every k-mer by definition, so a missing key must read as false rather
-    /// than erroring out.
+    /// An index older than schema 2 has no `remove_low_complexity` field in its
+    /// metadata. It must still load, with the flag reading `false`, since such an
+    /// index kept every k-mer by definition.
     #[test]
     fn test_unversioned_index_reads_through_legacy_metadata_layout() -> Result<()> {
         // Two flavors of old index: one written at schema 1, and one predating
@@ -2498,8 +2504,7 @@ mod tests {
         Ok(())
     }
 
-    /// Indexes written now carry the kmerseek version, both as provenance and as
-    /// the marker for the current metadata layout.
+    /// Saved indexes record which kmerseek version wrote them.
     #[test]
     fn test_save_state_stamps_kmerseek_version() -> Result<()> {
         let dir = tempdir()?;
