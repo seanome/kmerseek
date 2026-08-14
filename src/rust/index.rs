@@ -573,7 +573,7 @@ impl ProteomeIndex {
     /// Print one labelled list of example k-mers, noting how many share the boundary frequency.
     ///
     /// WHY the tie note: when hundreds of thousands of k-mers all occur once, listing ten of
-    /// them looks like a ranking but is really an arbitrary sample. Saying how many tie makes
+    /// them looks like a ranking but is an arbitrary sample. Saying how many tie makes
     /// that explicit.
     fn print_kmer_examples(
         &self,
