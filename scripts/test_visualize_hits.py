@@ -120,7 +120,7 @@ def test_resolve_query_names_no_match_returns_empty():
 # values, never the all-string rows a stdlib csv.DictReader would produce.
 def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
          containment=0.5, jaccard=0.1, query_enrichment=1.0, query_poisson_pvalue=0.05,
-         region_poisson_pvalue=0.01, region_enrichment=2.0,
+         region_poisson_score=0.01, region_enrichment=2.0,
          moltype="hp_thomas_dill", region_subseq="MTRCTADNSL",
          moltype_seq="hpphphppph", target_subseq="MAHAGRTGYD", query_name=CED9_NAME):
     return {
@@ -161,7 +161,7 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_length": region_length,
         "region_n_shared_kmers": 1,
         "region_expected_shared_kmers": 0.68,
-        "region_poisson_pvalue": region_poisson_pvalue,
+        "region_poisson_score": region_poisson_score,
         "region_enrichment": region_enrichment,
     }
 
@@ -249,29 +249,29 @@ def test_build_hit_carries_jaccard_enrichment_pvalue():
     assert hit["query_poisson_pvalue"] == 1e-06
 
 
-# --- benjamini_hochberg / _target_pvalues -------------------------------------
+# --- benjamini_hochberg / _target_scores -------------------------------------
 
-def test_target_pvalues_one_entry_per_distinct_target():
-    rows = [_row(target_name="A", region_poisson_pvalue=0.01),
-            _row(target_name="A", region_poisson_pvalue=0.01),
-            _row(target_name="B", region_poisson_pvalue=0.02)]
-    assert vh._target_pvalues(rows) == {"A": 0.01, "B": 0.02}
+def test_target_scores_one_entry_per_distinct_target():
+    rows = [_row(target_name="A", region_poisson_score=0.01),
+            _row(target_name="A", region_poisson_score=0.01),
+            _row(target_name="B", region_poisson_score=0.02)]
+    assert vh._target_scores(rows) == {"A": 0.01, "B": 0.02}
 
 
-def test_target_pvalues_keeps_strongest_region_per_target():
-    # Region p-values differ row to row (unlike the query-level stats), so a target
+def test_target_scores_keeps_strongest_region_per_target():
+    # Region scores differ row to row (unlike the query-level stats), so a target
     # is represented by its best region, not an arbitrary one.
-    rows = [_row(target_name="A", region_poisson_pvalue=0.4),
-            _row(target_name="A", region_poisson_pvalue=1e-08),
-            _row(target_name="A", region_poisson_pvalue=0.2)]
-    assert vh._target_pvalues(rows) == {"A": 1e-08}
+    rows = [_row(target_name="A", region_poisson_score=0.4),
+            _row(target_name="A", region_poisson_score=1e-08),
+            _row(target_name="A", region_poisson_score=0.2)]
+    assert vh._target_scores(rows) == {"A": 1e-08}
 
 
-def test_target_pvalues_corrects_region_scope_not_query_scope():
+def test_target_scores_corrects_region_scope_not_query_scope():
     # The case region scoring exists for: a diluted whole-query p-value next to a
     # strong region. Correcting the query scope would bury it at q~1.
-    rows = [_row(target_name="cryptic", query_poisson_pvalue=0.99, region_poisson_pvalue=0.0007)]
-    assert vh._target_pvalues(rows) == {"cryptic": 0.0007}
+    rows = [_row(target_name="cryptic", query_poisson_pvalue=0.99, region_poisson_score=0.0007)]
+    assert vh._target_scores(rows) == {"cryptic": 0.0007}
 
 
 def test_benjamini_hochberg_single_pvalue_is_unchanged():
@@ -415,12 +415,12 @@ def test_plot_gene_svg_text_is_selectable_not_outlined_paths():
 def test_hit_stats_text_includes_containment_jaccard_enrichment_pvalue():
     # Both scopes are shown: either one can be why the hit was reported at all.
     hit = vh._build_hit("tgt", [_row(containment=0.5, jaccard=0.123, region_enrichment=4.5,
-                                     region_poisson_pvalue=1e-06, query_poisson_pvalue=0.99)])
+                                     region_poisson_score=1e-06, query_poisson_pvalue=0.99)])
     stats = vh.GenePlot._hit_stats_text(hit)
     assert "containment=0.50" in stats
     assert "jaccard=0.123" in stats
     assert "region enrich=4.50" in stats
-    assert "region p=1e-06" in stats
+    assert "region score=1e-06" in stats
     assert "query p=0.99" in stats
 
 
@@ -428,7 +428,7 @@ def test_plot_gene_svg_contains_stats_line(tmp_path):
     hits = vh.merge_regions_by_target(
         [_row(target_name="TGT_A", region_start=10, region_end=40, region_length=30,
               containment=0.5, jaccard=0.123, region_enrichment=4.5,
-              region_poisson_pvalue=1e-06)],
+              region_poisson_score=1e-06)],
         gap_merge=10,
     )
     svg_path = tmp_path / "gene.hits.svg"
@@ -436,7 +436,7 @@ def test_plot_gene_svg_contains_stats_line(tmp_path):
     svg_text = svg_path.read_text()
     assert "jaccard=0.123" in svg_text
     assert "region enrich=4.50" in svg_text
-    assert "region p=1e-06" in svg_text
+    assert "region score=1e-06" in svg_text
 
 
 # --- main() end-to-end CLI ----------------------------------------------------
@@ -530,9 +530,9 @@ def test_main_corrects_pvalue_across_all_targets_not_just_displayed_ones(tmp_pat
     csv_path = tmp_path / "results.csv"
     _write_csv(csv_path, [
         _row(query_name=CED9_NAME, target_name="shown", containment=0.9,
-             region_poisson_pvalue=0.01, region_start=0, region_end=10),
+             region_poisson_score=0.01, region_start=0, region_end=10),
         _row(query_name=CED9_NAME, target_name="hidden", containment=0.01,
-             region_poisson_pvalue=0.02, region_start=50, region_end=60),
+             region_poisson_score=0.02, region_start=50, region_end=60),
     ])
 
     out_dir = tmp_path / "out"

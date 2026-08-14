@@ -33,10 +33,10 @@ pub struct SearchFilters {
     pub min_shared_kmers: usize,
     /// Maximum whole-query Poisson p-value required to keep a match.
     pub max_query_pvalue: f64,
-    /// Maximum region-scoped Poisson p-value required to keep a match, applied to the best
+    /// Maximum region-scoped Poisson score required to keep a match, applied to the best
     /// region in the pair. A heuristic cutoff on a ranking score, not a statistically
-    /// calibrated significance threshold; see `MatchedRegion::poisson_pvalue`.
-    pub max_region_pvalue: f64,
+    /// calibrated significance threshold; see `MatchedRegion::poisson_score`.
+    pub max_region_score: f64,
 }
 
 impl Default for SearchFilters {
@@ -50,7 +50,7 @@ impl Default for SearchFilters {
             threshold: 0.0,
             min_shared_kmers: 0,
             max_query_pvalue: f64::INFINITY,
-            max_region_pvalue: f64::INFINITY,
+            max_region_score: f64::INFINITY,
         }
     }
 }
@@ -60,12 +60,11 @@ impl SearchFilters {
     ///
     /// Requiring both would bring back the problem this PR fixes: a real sub-protein domain
     /// match diluted into insignificance by the rest of the protein. BCL2/CED9 at k=15 has a
-    /// whole-query p-value of 0.99 and a region p-value of 0.0007. Requiring both to pass
+    /// whole-query p-value of 0.99 and a region score of 0.0007. Requiring both to pass
     /// would discard the sub-protein domain match that region scoring exists to surface.
-    fn pvalues_pass(&self, query_pvalue: f64, best_region_pvalue: Option<f64>) -> bool {
+    fn scopes_pass(&self, query_pvalue: f64, best_region_score: Option<f64>) -> bool {
         let query_passes = query_pvalue < self.max_query_pvalue;
-        let region_passes =
-            best_region_pvalue.is_some_and(|pvalue| pvalue < self.max_region_pvalue);
+        let region_passes = best_region_score.is_some_and(|pvalue| pvalue < self.max_region_score);
         query_passes || region_passes
     }
 }
@@ -125,7 +124,7 @@ pub struct SearchResultCsv {
     pub region_length: u32,
     pub region_n_shared_kmers: u32,
     pub region_expected_shared_kmers: f64,
-    pub region_poisson_pvalue: f64,
+    pub region_poisson_score: f64,
     pub region_enrichment: f64,
 }
 
@@ -183,7 +182,7 @@ impl SearchResultCsv {
             region_length: region.length,
             region_n_shared_kmers: region.length.saturating_sub(result.ksize) + 1,
             region_expected_shared_kmers: region.expected_shared_kmers,
-            region_poisson_pvalue: region.poisson_pvalue,
+            region_poisson_score: region.poisson_score,
             region_enrichment: region.enrichment,
         }
     }
@@ -343,14 +342,14 @@ pub struct MatchedRegion {
     /// compared against the database average rather than against similar local sequence.
     pub expected_shared_kmers: f64,
 
-    /// Poisson p-value scoped to this region: the probability of seeing at least `n_shared`
-    /// shared k-mers if matches happened at random, given the rate `expected_shared_kmers`.
-    /// Uses the region's own k-mer count instead of the whole protein's. 1.0 without DB
-    /// context.
+    /// Poisson survival-function score for this region: the probability of seeing at least
+    /// `n_shared` shared k-mers if matches happened at random, given the rate
+    /// `expected_shared_kmers`. Uses the region's own k-mer count instead of the whole
+    /// protein's. 1.0 without DB context.
     ///
-    /// Treat this as a heuristic score for ranking candidate regions against each other, not
-    /// as a calibrated significance estimate. Two separate problems keep it from being a real
-    /// p-value:
+    /// This is named `poisson_score`, not `poisson_pvalue`, on purpose: treat it as a
+    /// heuristic score for ranking candidate regions against each other, not as a calibrated
+    /// probability. Two problems keep it from being a real p-value:
     ///
     /// 1. `n_shared` is not an independent observation. It is `region_length - ksize + 1`,
     ///    arithmetic on the region's own length, and the region's length is exactly what
@@ -358,7 +357,7 @@ pub struct MatchedRegion {
     ///    test is being applied to the same quantity that defined the region, which is close to
     ///    circular. Multiplying by `region_search_space` (how many positions a region could
     ///    have started at) and `db_n_targets` (how many targets were searched) into an E-value,
-    ///    `poisson_pvalue * region_search_space * db_n_targets`, corrects for having picked the
+    ///    `poisson_score * region_search_space * db_n_targets`, corrects for having picked the
     ///    best-looking window out of many candidate windows. It does not fix this problem.
     ///
     /// 2. The k-mers being counted overlap by `ksize - 1` residues, so they are not independent
@@ -370,9 +369,9 @@ pub struct MatchedRegion {
     /// A properly calibrated version of this statistic would model the length of the longest
     /// gapless run directly (an extreme-value distribution, the same kind of model behind
     /// BLAST's E-values), account for the k-mer overlap, and be checked empirically against
-    /// a decoy database. None of that is implemented here. Use this p-value to prioritize which
+    /// a decoy database. None of that is implemented here. Use this score to prioritize which
     /// regions to look at first, not to make a significance claim about any single region.
-    pub poisson_pvalue: f64,
+    pub poisson_score: f64,
 
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
     /// context or when expected_shared_kmers is 0.
@@ -874,10 +873,10 @@ impl ProteinSearcher {
         // sequences; abundance_stats sorts the intersection). Candidates failing these never
         // pay for that work.
         //
-        // The p-value checks cannot be hoisted up here: a pair is kept when either scope
-        // clears, and the region scope isn't known until the regions exist. So p-value
-        // filtering happens after the result is built, and pairs that fail the query scope now
-        // pay for region-finding before being rejected.
+        // The query p-value and region score checks cannot be hoisted up here: a pair is kept
+        // when either scope clears, and the region score isn't known until the regions exist.
+        // So this filtering happens after the result is built, and pairs that fail the query
+        // scope now pay for region-finding before being rejected.
         let n_intersecting_hashes = intersection.len();
         let containment = n_intersecting_hashes as f64 / query.mins.len() as f64;
         if containment < filters.threshold || n_intersecting_hashes < filters.min_shared_kmers {
@@ -909,6 +908,9 @@ impl ProteinSearcher {
         // match doesn't get diluted by the whole protein's k-mer count.
         let ksize = query.sketch.protein_ksize() as usize;
         for region in result.matched_regions.iter_mut() {
+            // lambda: for each query k-mer positioned inside this region, how many target
+            // signatures contain that k-mer's hash, divided by the total number of target
+            // signatures, summed. See region_expectation for the exact formula.
             let lambda = self.region_expectation(query.sketch, region.start, region.end, ksize);
             // find_matched_regions never emits a region shorter than ksize (its length is
             // consecutive_count + ksize - 1, and consecutive_count >= 1), so this can't
@@ -922,17 +924,17 @@ impl ProteinSearcher {
             let n_shared = region.length.saturating_sub(ksize as u32) + 1;
 
             region.expected_shared_kmers = lambda;
-            region.poisson_pvalue = poisson_survival(n_shared, lambda);
+            region.poisson_score = poisson_survival(n_shared, lambda);
             region.enrichment = fold_enrichment(n_shared, lambda);
         }
 
-        // Either scope clearing its cap keeps the pair - see SearchFilters::pvalues_pass.
-        let best_region_pvalue = result
+        // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
+        let best_region_score = result
             .matched_regions
             .iter()
-            .map(|region| region.poisson_pvalue)
+            .map(|region| region.poisson_score)
             .min_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
-        if !filters.pvalues_pass(query_poisson_pvalue, best_region_pvalue) {
+        if !filters.scopes_pass(query_poisson_pvalue, best_region_score) {
             return None;
         }
 
@@ -969,9 +971,19 @@ impl ProteinSearcher {
         Some(result)
     }
 
-    /// Expected shared k-mers by chance within one region: for every query k-mer whose start
-    /// position falls inside the region, sum its database frequency (occurrences across the
-    /// database divided by the number of signatures).
+    /// Expected shared k-mers by chance within one region:
+    ///
+    /// ```text
+    /// lambda = sum, over every query k-mer whose start position falls inside the region,
+    ///          of freq_target(h) / N
+    /// ```
+    ///
+    /// `freq_target(h)` is how many target signatures contain a k-mer with hash `h`, and `N`
+    /// is the total number of target signatures (`self.stats.total_signatures`). Note there is
+    /// no division by the region's length here: each term in the sum is already a per-k-mer
+    /// database frequency, and the sum has one term per k-mer position inside the region. This
+    /// is the same formula as `calculate_expected_shared_kmers`, restricted to k-mer positions
+    /// inside the region instead of the whole query.
     ///
     /// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to
     /// the region only if it fits entirely inside. That is what makes the count equal
@@ -1177,7 +1189,7 @@ fn calculate_similarity_from_precomputed(
     let matched_regions = find_matched_regions(query, target, intersection);
 
     // Number of distinct positions a region could have started at in this query. Regions are
-    // chosen after the fact (the best-looking gapless run is kept), so a per-region p-value
+    // chosen after the fact (the best-looking gapless run is kept), so a per-region score
     // needs to be corrected by how many candidate positions it was chosen from. This is that
     // count.
     //
@@ -1410,7 +1422,7 @@ pub fn find_matched_regions(
                         moltype_seq: String::new(), // Empty since we don't have encoded sequence
                         length: (query_end_pos - query_start_pos) as u32,
                         expected_shared_kmers: 0.0,
-                        poisson_pvalue: 1.0,
+                        poisson_score: 1.0,
                         enrichment: 0.0,
                     });
 
@@ -1450,7 +1462,7 @@ pub fn find_matched_regions(
             moltype_seq: target_moltype_seq.to_string(),
             length: (query_end_pos - query_start_pos) as u32,
             expected_shared_kmers: 0.0,
-            poisson_pvalue: 1.0,
+            poisson_score: 1.0,
             enrichment: 0.0,
         });
 
@@ -1504,7 +1516,7 @@ mod tests {
             moltype: MolType::new("hp").unwrap(),
             length: 6,
             expected_shared_kmers: 2.0,
-            poisson_pvalue: 0.05,
+            poisson_score: 0.05,
             enrichment: 1.5,
         };
 
@@ -1559,7 +1571,7 @@ mod tests {
         // Region-scoped stat columns: length 6, ksize 5 -> 6 - 5 + 1 = 2 shared k-mers.
         assert_eq!(row.region_n_shared_kmers, 2);
         assert_eq!(row.region_expected_shared_kmers, 2.0);
-        assert_eq!(row.region_poisson_pvalue, 0.05);
+        assert_eq!(row.region_poisson_score, 0.05);
         assert_eq!(row.region_enrichment, 1.5);
         // region_search_space, db_n_targets, db_n_kmers, and run_n_queries travel as
         // separate columns, never folded into a p-value.
@@ -1804,9 +1816,9 @@ mod tests {
 
     /// Each of `SearchFilters`'s rejection checks, exercised on its own, rejects an
     /// otherwise-real BCL2/CED9 match: threshold, min_shared_kmers, and (together, since
-    /// either alone passing keeps the pair) the two p-value scopes. Every other field is left
-    /// at its permissive default in each case, so the field under test is what causes the
-    /// rejection, not some other, stricter field.
+    /// either alone passing keeps the pair) the query p-value and region score. Every other
+    /// field is left at its permissive default in each case, so the field under test is what
+    /// causes the rejection, not some other, stricter field.
     #[test]
     fn test_search_filters_reject_candidates() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -1852,25 +1864,26 @@ mod tests {
             "min_shared_kmers: usize::MAX should reject every candidate"
         );
 
-        // Both p-values are in [0.0, 1.0] and the checks are strict <, so capping both scopes at
-        // 0.0 rejects everything. Both must be capped: either one passing keeps the pair.
+        // The query p-value and region score are both in [0.0, 1.0] and the checks are strict
+        // <, so capping both scopes at 0.0 rejects everything. Both must be capped: either one
+        // passing keeps the pair.
         let pvalue_filtered = searcher.search(
             &query_signatures,
             &SearchFilters {
                 max_query_pvalue: 0.0,
-                max_region_pvalue: 0.0,
+                max_region_score: 0.0,
                 ..SearchFilters::default()
             },
         )?;
-        assert!(pvalue_filtered.is_empty(), "capping both p-value scopes at 0.0 rejects all");
+        assert!(pvalue_filtered.is_empty(), "capping both scopes at 0.0 rejects all");
 
         Ok(())
     }
 
-    /// The two p-value scopes combine with OR: a match is kept if either one passes. BCL2/CED9
-    /// at k=15 is a weak whole-query match (p ~ 0.99) carrying one strong region (p ~ 0.0007).
-    /// Capping only the query scope must not discard it, and capping only the region scope
-    /// must keep it.
+    /// The query p-value and region score combine with OR: a match is kept if either one
+    /// passes. BCL2/CED9 at k=15 is a weak whole-query match (p ~ 0.99) carrying one strong
+    /// region (score ~ 0.0007). Capping only the query scope must not discard it, and capping
+    /// only the region scope must keep it.
     #[test]
     fn test_pvalue_scopes_combine_with_or() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -1893,7 +1906,7 @@ mod tests {
             &query_signatures,
             &SearchFilters {
                 max_query_pvalue: 0.05,
-                max_region_pvalue: 0.0,
+                max_region_score: 0.0,
                 ..SearchFilters::default()
             },
         )?;
@@ -1904,7 +1917,7 @@ mod tests {
             &query_signatures,
             &SearchFilters {
                 max_query_pvalue: 0.0,
-                max_region_pvalue: 0.05,
+                max_region_score: 0.05,
                 ..SearchFilters::default()
             },
         )?;
@@ -1915,7 +1928,7 @@ mod tests {
             &query_signatures,
             &SearchFilters {
                 max_query_pvalue: 0.05,
-                max_region_pvalue: 0.05,
+                max_region_score: 0.05,
                 ..SearchFilters::default()
             },
         )?;
@@ -2737,13 +2750,13 @@ mod tests {
 
     /// The same 5 shared k-mers that read as a weak whole-protein match (containment ~0.019
     /// against CED9's 266 k-mers) are the entire signal inside their own 19aa region. Runs a
-    /// real database search (needed for region.poisson_pvalue's DB context) and checks the
-    /// region-scoped Poisson test independently: recomputes lambda by hand from the searcher's
+    /// real database search (needed for region.poisson_score's DB context) and checks the
+    /// region-scoped Poisson score independently: recomputes lambda by hand from the searcher's
     /// own background frequencies, restricted to the region's span, and checks it against
-    /// region.expected_shared_kmers/region.poisson_pvalue rather than trusting the same code
+    /// region.expected_shared_kmers/region.poisson_score rather than trusting the same code
     /// path that produced them.
     #[test]
-    fn test_region_poisson_pvalue_independently_recomputed() -> Result<()> {
+    fn test_region_poisson_score_independently_recomputed() -> Result<()> {
         let ksize = 15;
         let scaled = 1;
         let moltype = "hp";
@@ -2799,19 +2812,19 @@ mod tests {
             .sum();
         assert_relative_eq!(region.expected_shared_kmers, expected_by_hand, epsilon = 1e-12);
 
-        let pvalue_by_hand = if expected_by_hand > 0.0 {
+        let score_by_hand = if expected_by_hand > 0.0 {
             Poisson::new(expected_by_hand)
                 .map(|dist| (1.0 - dist.cdf(4)).max(0.0)) // k - 1 = 5 - 1 = 4
                 .unwrap_or(1.0)
         } else {
             1.0
         };
-        assert_relative_eq!(region.poisson_pvalue, pvalue_by_hand, epsilon = 1e-12);
+        assert_relative_eq!(region.poisson_score, score_by_hand, epsilon = 1e-12);
 
         // The region-scoped null (over ~5 background-frequency k-mers) is a much smaller number
-        // than the whole-protein null (over all 266 of CED9's k-mers), so the two p-values are
+        // than the whole-protein null (over all 266 of CED9's k-mers), so the two numbers are
         // computed from different lambdas and shouldn't coincide.
-        assert_ne!(region.poisson_pvalue, bcl2_result.query_poisson_pvalue);
+        assert_ne!(region.poisson_score, bcl2_result.query_poisson_pvalue);
 
         Ok(())
     }
@@ -2883,8 +2896,8 @@ mod tests {
             solo.matched_regions.iter().zip(paired.matched_regions.iter())
         {
             assert_relative_eq!(
-                solo_region.poisson_pvalue,
-                paired_region.poisson_pvalue,
+                solo_region.poisson_score,
+                paired_region.poisson_score,
                 epsilon = 1e-12
             );
         }
@@ -2892,9 +2905,9 @@ mod tests {
         Ok(())
     }
 
-    /// The two p-value scopes are combined with OR, so the full truth table matters: a single
-    /// scope clearing is enough, and only both failing rejects. Exercised directly here because
-    /// through `search()` the degenerate caps are hard to reach.
+    /// The query p-value and region score are combined with OR, so the full truth table
+    /// matters: a single scope clearing is enough, and only both failing rejects. Exercised
+    /// directly here because through `search()` the degenerate caps are hard to reach.
     #[rstest]
     // query passes, region fails -> kept on the query scope
     #[case(0.001, Some(0.9), 0.05, 0.05, true)]
@@ -2913,21 +2926,21 @@ mod tests {
     #[case(0.99, Some(0.0007), 0.05, 0.0, false)]
     // infinite caps accept anything, including the p = 1.0 of a no-DB-context result
     #[case(1.0, Some(1.0), f64::INFINITY, f64::INFINITY, true)]
-    fn test_pvalues_pass_truth_table(
+    fn test_scopes_pass_truth_table(
         #[case] query_pvalue: f64,
-        #[case] best_region_pvalue: Option<f64>,
+        #[case] best_region_score: Option<f64>,
         #[case] max_query_pvalue: f64,
-        #[case] max_region_pvalue: f64,
+        #[case] max_region_score: f64,
         #[case] expected: bool,
     ) {
         let filters =
-            SearchFilters { max_query_pvalue, max_region_pvalue, ..SearchFilters::default() };
-        assert_eq!(filters.pvalues_pass(query_pvalue, best_region_pvalue), expected);
+            SearchFilters { max_query_pvalue, max_region_score, ..SearchFilters::default() };
+        assert_eq!(filters.scopes_pass(query_pvalue, best_region_score), expected);
     }
 
-    /// The Poisson survival function is the shared engine behind both p-value scopes. The
-    /// degenerate inputs return 1.0 (no evidence) instead of erroring or producing NaN, which
-    /// a real search cannot reach but a caller can.
+    /// The Poisson survival function is the shared engine behind both the query p-value and
+    /// the region score. The degenerate inputs return 1.0 (no evidence) instead of erroring or
+    /// producing NaN, which a real search cannot reach but a caller can.
     #[test]
     fn test_poisson_survival_degenerate_inputs_yield_no_evidence() {
         assert_eq!(poisson_survival(0, 2.0), 1.0, "nothing observed is not surprising");
@@ -3084,20 +3097,20 @@ mod tests {
         assert_relative_eq!(hit.query_poisson_pvalue, 2.356_930_483e-7, epsilon = 1e-15);
         assert!(hit.query_poisson_pvalue < 0.05, "whole-query scope should clearly pass");
 
-        let best_region_pvalue = hit
+        let best_region_score = hit
             .matched_regions
             .iter()
-            .map(|region| region.poisson_pvalue)
+            .map(|region| region.poisson_score)
             .fold(f64::INFINITY, f64::min);
-        assert_relative_eq!(best_region_pvalue, 0.095_589_196_102_397_8, epsilon = 1e-12);
-        assert!(best_region_pvalue >= 0.05, "no single region should clear the default cap");
+        assert_relative_eq!(best_region_score, 0.095_589_196_102_397_8, epsilon = 1e-12);
+        assert!(best_region_score >= 0.05, "no single region should clear the default cap");
 
         // Region scope alone: nothing to rescue it, since no region is significant on its own.
         let region_only = searcher.search(
             &query_signatures,
             &SearchFilters {
                 max_query_pvalue: 0.0,
-                max_region_pvalue: 0.05,
+                max_region_score: 0.05,
                 ..SearchFilters::default()
             },
         )?;
@@ -3111,7 +3124,7 @@ mod tests {
             &query_signatures,
             &SearchFilters {
                 max_query_pvalue: 0.05,
-                max_region_pvalue: 0.0,
+                max_region_score: 0.0,
                 ..SearchFilters::default()
             },
         )?;

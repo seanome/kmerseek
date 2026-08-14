@@ -87,10 +87,21 @@ def read_fasta_lengths(fasta_path):
 
 
 def short_label(name, max_len=28):
-    """Shorten a UniProt-style header ('sp|P10415|BCL2_HUMAN Apoptosis...')
-    to a display id ('BCL2_HUMAN'); falls back to the first word."""
+    """Shorten a pipe-delimited header to a display id; falls back to the
+    first word. Two header shapes are recognized:
+    - GENCODE ('ENSP...|ENST...|ENSG...|OTTHUMG...|OTTHUMT...|GENE-201|GENE|len'):
+      the gene symbol is field index 6, not 2 -- using index 2 would show the
+      ENSG accession instead of a readable gene name.
+    - UniProt-style ('sp|P10415|BCL2_HUMAN Apoptosis...'): the name is field
+      index 2.
+    """
     parts = name.split("|")
-    short = parts[2].split(" ")[0] if len(parts) >= 3 else name.split(" ")[0]
+    if len(parts) >= 8:
+        short = parts[6].split(" ")[0]
+    elif len(parts) >= 3:
+        short = parts[2].split(" ")[0]
+    else:
+        short = name.split(" ")[0]
     if len(short) > max_len:
         short = short[: max_len - 1] + "…"
     return short
@@ -195,23 +206,26 @@ def _union_coverage(regions):
     return covered
 
 
-def _target_pvalues(rows):
-    """{target_name: best region p-value}, one entry per distinct target.
+def _target_scores(rows):
+    """{target_name: best region score}, one entry per distinct target.
 
-    Corrects over the region scope, not the whole-query one. This plot draws
-    regions, and `kmerseek search` now reports a hit when either scope clears,
-    so a real sub-protein domain call routinely carries an unimpressive
-    whole-query p-value (BCL2/CED9: 0.99 whole-query, 0.0007 for its region).
-    Correcting the whole-query number would push those hits to q~1 and let
+    region_poisson_score is a ranking heuristic, not a calibrated p-value (see
+    MatchedRegion::poisson_score in src/rust/search.rs) -- but it is still the
+    number that decides which hits this plot surfaces, so it is what gets
+    corrected here, not the whole-query p-value. This plot draws regions, and
+    `kmerseek search` now reports a hit when either scope clears, so a real
+    sub-protein domain call routinely carries an unimpressive whole-query
+    p-value (BCL2/CED9: 0.99 whole-query, 0.0007 for its region). Correcting
+    the whole-query number instead would push those hits to q~1 and let
     --max-hits cut them, hiding what the region scoring exists to surface.
 
-    Unlike the query-level stats, region p-values differ row to row, so take the
+    Unlike the query-level stats, region scores differ row to row, so take the
     strongest region as the target's evidence."""
     best = {}
     for row in rows:
-        pvalue = float(row["region_poisson_pvalue"])
+        score = float(row["region_poisson_score"])
         name = row["target_name"]
-        best[name] = min(best[name], pvalue) if name in best else pvalue
+        best[name] = min(best[name], score) if name in best else score
     return best
 
 
@@ -249,7 +263,7 @@ def _build_hit(target_name, cluster):
         "query_enrichment": max(float(r["query_enrichment"]) for r in cluster),
         "query_poisson_pvalue": max(float(r["query_poisson_pvalue"]) for r in cluster),
         # Region stats do vary per row; the strongest region is the hit's evidence.
-        "region_poisson_pvalue": min(float(r["region_poisson_pvalue"]) for r in cluster),
+        "region_poisson_score": min(float(r["region_poisson_score"]) for r in cluster),
         "region_enrichment": max(float(r["region_enrichment"]) for r in cluster),
         "moltype": region_rows[0]["moltype"],
     }
@@ -491,14 +505,14 @@ class GenePlot:
         # localized domain call.
         return (f"containment={hit['containment']:.2f}   jaccard={hit['jaccard']:.3f}   "
                 f"region enrich={hit['region_enrichment']:.2f}   "
-                f"region p={hit['region_poisson_pvalue']:.2g}{q_part}   "
+                f"region score={hit['region_poisson_score']:.2g}{q_part}   "
                 f"query p={hit['query_poisson_pvalue']:.2g}")
 
     @staticmethod
     def _region_label_text(r_idx, hit, row):
         r_start, r_end = int(row["region_start"]), int(row["region_end"])
         return (f"region {r_idx}/{hit['n_regions']}:  {r_start + 1}-{r_end}aa, "
-                f"p={float(row['region_poisson_pvalue']):.2g}")
+                f"score={float(row['region_poisson_score']):.2g}")
 
     def _draw_region_alignment(self, row, y):
         """Draw one region's query/moltype/target lines; return the y cursor after it."""
@@ -569,7 +583,7 @@ def _render_query(query_name, query_rows, query_length, args):
     target actually tested, not just the ones that end up displayed, or it
     would understate how many comparisons were made.
     """
-    corrected_pvalues = benjamini_hochberg(_target_pvalues(query_rows))
+    corrected_pvalues = benjamini_hochberg(_target_scores(query_rows))
     display_rows = [r for r in query_rows if float(r["containment"]) >= args.min_containment]
     if not display_rows:
         print(f"Skipping '{query_name}': no hits above --min-containment {args.min_containment}")
