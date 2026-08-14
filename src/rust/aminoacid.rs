@@ -77,8 +77,8 @@ impl AminoAcidAmbiguity {
     ///
     /// WHY only for reduced alphabets: under Dayhoff or any HP table a code like B encodes
     /// identically whether it is read as Asp or Asn, so substituting a representative is
-    /// lossless. Under `protein` there is no such equivalence — picking Asp would assert a
-    /// residue the source never claimed — so the original code is kept and hashed as itself,
+    /// lossless. Under `protein` there is no such equivalence. Picking Asp would assert a
+    /// residue the source never claimed, so the original code is kept and hashed as itself,
     /// consistent with how X is already handled.
     pub fn validate_and_resolve<'a>(
         &self,
