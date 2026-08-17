@@ -109,6 +109,35 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
     Ok(())
 }
 
+/// `--ksize 0` used to abort with an integer-underflow panic partway through
+/// indexing. It should fail cleanly, with a message naming the problem.
+#[test]
+fn test_cli_index_rejects_zero_ksize() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let output_path = temp_dir.path().join("zero_ksize.db");
+
+    let mut cmd = Command::cargo_bin("kmerseek")?;
+    cmd.args([
+        "index",
+        "--input",
+        TEST_CED9_FASTA,
+        "--output",
+        output_path.to_str().unwrap(),
+        "--ksize",
+        "0",
+        "--encoding",
+        "hp",
+    ]);
+
+    cmd.assert()
+        .failure()
+        .stderr(predicate::str::contains("K-mer size must be greater than 0"))
+        .stderr(predicate::str::contains("panicked").not());
+    assert!(!output_path.exists(), "a rejected k-mer size should leave no database behind");
+
+    Ok(())
+}
+
 #[test]
 fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
