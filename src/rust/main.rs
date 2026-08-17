@@ -75,20 +75,22 @@ enum Commands {
         min_shared_kmers: usize,
 
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
-        /// A match is reported if either this or --max-region-score passes.
+        /// A match is reported if either this or --min-region-score passes.
         #[arg(long, default_value = "0.05")]
         max_query_pvalue: f64,
 
-        /// Maximum region-scoped Poisson score required to report a match, applied to the
-        /// best-scoring region. This is a heuristic ranking cutoff, not a statistically
-        /// calibrated significance threshold (see the region scoring notes in the docs). A
-        /// match is reported if either this or --max-query-pvalue passes, so a strong
-        /// sub-protein domain hit survives even when the whole-query p-value is unimpressive.
-        /// Defaults to 0.05.
+        /// Minimum region-scoped score required to report a match, applied to the
+        /// best-scoring region. Bigger means more surprising: the score is -log10 of the
+        /// region's Poisson tail probability, so a p-value of 0.05 is a score of about 1.3,
+        /// and a p-value of 0.0007 is a score of about 3.16. This is a heuristic ranking
+        /// cutoff, not a statistically calibrated significance threshold (see the region
+        /// scoring notes in the docs). A match is reported if either this or
+        /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
+        /// the whole-query p-value is unimpressive. Defaults to about 1.3 (p=0.05).
         #[arg(long)]
-        max_region_score: Option<f64>,
+        min_region_score: Option<f64>,
 
-        /// Deprecated: use --max-query-pvalue (whole protein) or --max-region-score (per
+        /// Deprecated: use --max-query-pvalue (whole protein) or --min-region-score (per
         /// matched region). Kept as an alias that applies whole-query filtering only.
         #[arg(long)]
         max_pvalue: Option<f64>,
@@ -248,7 +250,7 @@ fn main() -> IndexResult<()> {
             threshold,
             min_shared_kmers,
             max_query_pvalue,
-            max_region_score,
+            min_region_score,
             max_pvalue,
             verbose,
             query_is_index,
@@ -281,38 +283,42 @@ fn main() -> IndexResult<()> {
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
             eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
             // --max-pvalue predates region scoring, so honour it as whole-query filtering only:
-            // a region cap of 0.0 can never be cleared (the check is a strict <), leaving the
-            // query scope as the only decider, the same as before region scoring existed.
-            let (max_query_pvalue, max_region_score) = match max_pvalue {
+            // a region floor of infinity can never be cleared (the check is a strict >),
+            // leaving the query scope as the only decider, the same as before region scoring
+            // existed.
+            let (max_query_pvalue, min_region_score) = match max_pvalue {
                 Some(deprecated) => {
-                    if let Some(ignored) = max_region_score {
+                    if let Some(ignored) = min_region_score {
                         eprintln!(
-                            "WARNING: --max-region-score {ignored} is ignored because \
-                             --max-pvalue was also passed; the region scope is forced to 0.0 \
-                             (never passes) to reproduce pre-region-scoring behaviour."
+                            "WARNING: --min-region-score {ignored} is ignored because \
+                             --max-pvalue was also passed; the region scope is forced to \
+                             infinity (never passes) to reproduce pre-region-scoring \
+                             behaviour."
                         );
                     }
                     eprintln!(
                         "WARNING: --max-pvalue is deprecated; it now applies whole-query \
                          filtering only.\n         Use --max-query-pvalue {deprecated} for the \
-                         same behaviour, or --max-region-score to\n         keep sub-protein \
+                         same behaviour, or --min-region-score to\n         keep sub-protein \
                          domain hits whose whole-query p-value is unimpressive."
                     );
-                    (deprecated, 0.0)
+                    (deprecated, f64::INFINITY)
                 }
-                None => (max_query_pvalue, max_region_score.unwrap_or(0.05)),
+                // -log10(0.05): the score-scale equivalent of the same 0.05 default this flag
+                // used before the -log10 transform.
+                None => (max_query_pvalue, min_region_score.unwrap_or(-0.05_f64.log10())),
             };
 
             eprintln!("  Threshold: {}", threshold);
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
-            eprintln!("  Maximum region score: {}", max_region_score);
+            eprintln!("  Minimum region score: {}", min_region_score);
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
             let filters =
-                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, max_region_score };
+                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -527,12 +533,12 @@ fn main() -> IndexResult<()> {
 
             eprintln!(
                 "Found {} matches above threshold {} with at least {} shared k-mers and \
-                 query p-value < {} or region score < {}",
+                 query p-value < {} or region score > {}",
                 filtered_results.len(),
                 threshold,
                 min_shared_kmers,
                 max_query_pvalue,
-                max_region_score
+                min_region_score
             );
 
             use kmerseek::search::SearchResultCsv;

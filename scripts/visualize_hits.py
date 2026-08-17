@@ -207,25 +207,27 @@ def _union_coverage(regions):
 
 
 def _target_scores(rows):
-    """{target_name: best region score}, one entry per distinct target.
+    """{target_name: best (highest) region score}, one entry per distinct target.
 
-    region_poisson_score is a ranking heuristic, not a calibrated p-value (see
-    MatchedRegion::poisson_score in src/rust/search.rs) -- but it is still the
-    number that decides which hits this plot surfaces, so it is what gets
-    corrected here, not the whole-query p-value. This plot draws regions, and
-    `kmerseek search` now reports a hit when either scope clears, so a real
-    sub-protein domain call routinely carries an unimpressive whole-query
-    p-value (BCL2/CED9: 0.99 whole-query, 0.0007 for its region). Correcting
-    the whole-query number instead would push those hits to q~1 and let
-    --max-hits cut them, hiding what the region scoring exists to surface.
+    region_poisson_score is -log10 of the region's Poisson tail probability, so
+    bigger means more surprising (see MatchedRegion::poisson_score in
+    src/rust/search.rs). It's a ranking heuristic, not a calibrated p-value --
+    but it is still the number that decides which hits this plot surfaces, so
+    it is what gets corrected here, not the whole-query p-value. This plot
+    draws regions, and `kmerseek search` now reports a hit when either scope
+    clears, so a real sub-protein domain call routinely carries an unimpressive
+    whole-query p-value (BCL2/CED9: 0.99 whole-query, score ~3.16 i.e. p=0.0007
+    for its region). Correcting the whole-query number instead would push
+    those hits to q~1 and let --max-hits cut them, hiding what the region
+    scoring exists to surface.
 
     Unlike the query-level stats, region scores differ row to row, so take the
-    strongest region as the target's evidence."""
+    strongest (highest-scoring) region as the target's evidence."""
     best = {}
     for row in rows:
         score = float(row["region_poisson_score"])
         name = row["target_name"]
-        best[name] = min(best[name], score) if name in best else score
+        best[name] = max(best[name], score) if name in best else score
     return best
 
 
@@ -262,8 +264,9 @@ def _build_hit(target_name, cluster):
         "jaccard": max(float(r["jaccard"]) for r in cluster),
         "query_enrichment": max(float(r["query_enrichment"]) for r in cluster),
         "query_poisson_pvalue": max(float(r["query_poisson_pvalue"]) for r in cluster),
-        # Region stats do vary per row; the strongest region is the hit's evidence.
-        "region_poisson_score": min(float(r["region_poisson_score"]) for r in cluster),
+        # Region stats do vary per row; the strongest (highest-scoring) region is the hit's
+        # evidence.
+        "region_poisson_score": max(float(r["region_poisson_score"]) for r in cluster),
         "region_enrichment": max(float(r["region_enrichment"]) for r in cluster),
         "moltype": region_rows[0]["moltype"],
     }
@@ -583,7 +586,11 @@ def _render_query(query_name, query_rows, query_length, args):
     target actually tested, not just the ones that end up displayed, or it
     would understate how many comparisons were made.
     """
-    corrected_pvalues = benjamini_hochberg(_target_scores(query_rows))
+    # benjamini_hochberg expects p-values (smaller is more significant), but
+    # _target_scores returns -log10 scores (bigger is more significant), so
+    # convert back before correcting.
+    target_pvalues = {name: 10.0**-score for name, score in _target_scores(query_rows).items()}
+    corrected_pvalues = benjamini_hochberg(target_pvalues)
     display_rows = [r for r in query_rows if float(r["containment"]) >= args.min_containment]
     if not display_rows:
         print(f"Skipping '{query_name}': no hits above --min-containment {args.min_containment}")

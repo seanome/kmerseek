@@ -120,7 +120,7 @@ def test_resolve_query_names_no_match_returns_empty():
 # values, never the all-string rows a stdlib csv.DictReader would produce.
 def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
          containment=0.5, jaccard=0.1, query_enrichment=1.0, query_poisson_pvalue=0.05,
-         region_poisson_score=0.01, region_enrichment=2.0,
+         region_poisson_score=2.0, region_enrichment=2.0,
          moltype="hp_thomas_dill", region_subseq="MTRCTADNSL",
          moltype_seq="hpphphppph", target_subseq="MAHAGRTGYD", query_name=CED9_NAME):
     return {
@@ -260,18 +260,19 @@ def test_target_scores_one_entry_per_distinct_target():
 
 def test_target_scores_keeps_strongest_region_per_target():
     # Region scores differ row to row (unlike the query-level stats), so a target
-    # is represented by its best region, not an arbitrary one.
+    # is represented by its best (highest-scoring) region, not an arbitrary one.
     rows = [_row(target_name="A", region_poisson_score=0.4),
-            _row(target_name="A", region_poisson_score=1e-08),
+            _row(target_name="A", region_poisson_score=8.0),
             _row(target_name="A", region_poisson_score=0.2)]
-    assert vh._target_scores(rows) == {"A": 1e-08}
+    assert vh._target_scores(rows) == {"A": 8.0}
 
 
 def test_target_scores_corrects_region_scope_not_query_scope():
     # The case region scoring exists for: a diluted whole-query p-value next to a
-    # strong region. Correcting the query scope would bury it at q~1.
-    rows = [_row(target_name="cryptic", query_poisson_pvalue=0.99, region_poisson_score=0.0007)]
-    assert vh._target_scores(rows) == {"cryptic": 0.0007}
+    # strong region (score ~3.1549, i.e. p=0.0007). Correcting the query scope
+    # would bury it at q~1.
+    rows = [_row(target_name="cryptic", query_poisson_pvalue=0.99, region_poisson_score=3.1549)]
+    assert vh._target_scores(rows) == {"cryptic": 3.1549}
 
 
 def test_benjamini_hochberg_single_pvalue_is_unchanged():
@@ -541,7 +542,9 @@ def test_main_corrects_pvalue_across_all_targets_not_just_displayed_ones(tmp_pat
     vh.main()
 
     svg_text = (out_dir / f"{vh.safe_filename(CED9_NAME)}.hits.svg").read_text()
-    expected_q = vh.benjamini_hochberg({"shown": 0.01, "hidden": 0.02})["shown"]
+    # _render_query converts region_poisson_score (bigger is more significant) back to a
+    # p-value (10**-score) before benjamini_hochberg, which expects p-values.
+    expected_q = vh.benjamini_hochberg({"shown": 10.0**-0.01, "hidden": 10.0**-0.02})["shown"]
     assert f"region q={expected_q:.2g}" in svg_text
 
 
