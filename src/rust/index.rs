@@ -1,11 +1,15 @@
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::fs::File;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
+use flate2::write::GzEncoder;
+use flate2::Compression;
 use rocksdb::{Options, DB};
 use serde::{Deserialize, Serialize};
 use sourmash::_hash_murmur;
@@ -29,7 +33,7 @@ use crate::sketch::{ProteinSketch, ProteinSketchStore};
 /// (e.g. new fields in SearchCache, renamed fields in ProteinSketchStore, etc.).
 /// Indices that predate versioning (schema_version key absent) are treated as version 0
 /// and will be rejected with a clear error message asking the user to rebuild.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -284,7 +288,7 @@ impl ProteomeIndex {
     /// (every time) avoids the need to load all 200k+ signatures into memory before searching.
     /// During search, only candidate signatures (those sharing ≥1 k-mer with the query) are
     /// loaded on-demand from RocksDB, reducing startup time from minutes to seconds.
-    fn save_inverted_index(&self) -> IndexResult<()> {
+    fn save_inverted_index(&self, kmer_stats_out: Option<&Path>) -> IndexResult<()> {
         let t0 = Instant::now();
         let total_sigs = self.signatures.len();
         eprintln!("[save] Building inverted index for {} signatures...", total_sigs);
@@ -330,6 +334,13 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
+        self.log_kmer_frequency_stats(
+            &kmer_frequencies,
+            &inverted_index,
+            &target_list,
+            kmer_stats_out,
+        )?;
+
         // Serialize and store the search cache
         eprintln!(
             "[save] Serializing SearchCache ({} targets, {} unique kmers)...",
@@ -349,6 +360,271 @@ impl ProteomeIndex {
         eprintln!("[save] search_cache written in {:.1}s", t2.elapsed().as_secs_f32());
 
         Ok(())
+    }
+
+    /// Number of k-mers listed in the "most common" / "least common" summaries.
+    const KMER_EXAMPLES: usize = 10;
+
+    /// Log a k-mer frequency histogram and the most/least common k-mers to stderr.
+    ///
+    /// The lists show the actual encoded k-mer string (not the hash), resolved by looking up
+    /// one signature that contains each hash via the inverted index.
+    fn log_kmer_frequency_stats(
+        &self,
+        kmer_frequencies: &HashMap<u64, usize>,
+        inverted_index: &HashMap<u64, Vec<u32>>,
+        target_list: &[String],
+        kmer_stats_out: Option<&Path>,
+    ) -> IndexResult<()> {
+        if kmer_frequencies.is_empty() {
+            return Ok(());
+        }
+        Self::print_frequency_histogram(kmer_frequencies);
+        if let Some(path) = kmer_stats_out {
+            self.write_kmer_frequency_spectrum(path, kmer_frequencies)?;
+        }
+
+        // Resolving a hash back to text needs the sequence it came from, which is only in
+        // memory when the index was built with store_raw_sequences.
+        if !self.has_stored_sequences() {
+            eprintln!("[save] (k-mer sequences not stored, skipping most/least common k-mers)");
+            return Ok(());
+        }
+
+        let n = Self::KMER_EXAMPLES;
+        let most = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| {
+            (std::cmp::Reverse(count), hash)
+        });
+        let least = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| (count, hash));
+
+        self.print_kmer_examples(
+            "most common",
+            &most,
+            kmer_frequencies,
+            inverted_index,
+            target_list,
+        );
+        self.print_kmer_examples(
+            "least common",
+            &least,
+            kmer_frequencies,
+            inverted_index,
+            target_list,
+        );
+        Ok(())
+    }
+
+    /// Write the k-mer frequency spectrum (occurrences -> how many k-mers had that many)
+    /// as CSV, gzip-compressed when the path ends in `.gz`.
+    ///
+    /// WHY the spectrum rather than one row per k-mer: this is the distribution you plot, and
+    /// it is a few thousand rows instead of tens of millions, so a sweep over alphabets and
+    /// k-sizes stays small. `moltype` and `ksize` are repeated on every row so that files from
+    /// different runs concatenate directly into one frame.
+    fn write_kmer_frequency_spectrum(
+        &self,
+        path: &Path,
+        kmer_frequencies: &HashMap<u64, usize>,
+    ) -> IndexResult<()> {
+        let spectrum = Self::frequency_spectrum(kmer_frequencies);
+
+        let file = File::create(path)?;
+        let mut sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
+            Box::new(GzEncoder::new(file, Compression::default()))
+        } else {
+            Box::new(file)
+        };
+
+        // Totals go in a leading `#` comment rather than a column, because they are constant
+        // for the whole file and would otherwise be repeated on every row. Readers skip it
+        // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
+        let total: usize = kmer_frequencies.values().sum();
+        let unique = kmer_frequencies.len();
+        writeln!(
+            sink,
+            "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
+             median_seqs_per_kmer={:.1} moltype={} ksize={}",
+            total as f64 / unique as f64,
+            Self::median_occurrences(&spectrum, unique),
+            self.moltype,
+            self.ksize,
+        )?;
+
+        let mut writer = csv::Writer::from_writer(sink);
+        writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
+        let ksize = self.ksize.to_string();
+        for (occurrences, n_kmers) in &spectrum {
+            writer.write_record([
+                &self.moltype,
+                &ksize,
+                &occurrences.to_string(),
+                &n_kmers.to_string(),
+            ])?;
+        }
+        writer.flush()?;
+        eprintln!(
+            "[save] Wrote k-mer frequency spectrum ({} rows) to {}",
+            spectrum.len(),
+            path.display()
+        );
+        Ok(())
+    }
+
+    /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
+    ///
+    /// WHY power-of-two: k-mer frequency distributions are heavily right-skewed (most k-mers
+    /// occur once, a few occur thousands of times), so linear bins would be nearly unreadable.
+    fn frequency_bins(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<u32, usize> {
+        let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
+        for &freq in kmer_frequencies.values() {
+            let bin = usize::BITS - freq.leading_zeros() - 1;
+            *bins.entry(bin).or_insert(0) += 1;
+        }
+        bins
+    }
+
+    /// Exact frequency spectrum: occurrence count -> how many k-mers were seen that many times.
+    ///
+    /// Distinct from [`frequency_bins`], which buckets into powers of two for display. This
+    /// keeps every count so order statistics stay exact.
+    fn frequency_spectrum(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<usize, usize> {
+        let mut spectrum: BTreeMap<usize, usize> = BTreeMap::new();
+        for &count in kmer_frequencies.values() {
+            *spectrum.entry(count).or_insert(0) += 1;
+        }
+        spectrum
+    }
+
+    /// Median occurrences per k-mer, averaging the two middle values when the count is even.
+    ///
+    /// WHY alongside the mean: these distributions are heavily right-skewed, so a handful of
+    /// very common k-mers drag the mean well above what a typical k-mer looks like.
+    fn median_occurrences(spectrum: &BTreeMap<usize, usize>, unique: usize) -> f64 {
+        if unique == 0 {
+            return 0.0;
+        }
+        // Positions of the middle element(s) in the sorted list of per-k-mer counts.
+        let (lower_rank, upper_rank) = ((unique - 1) / 2, unique / 2);
+        let (mut seen, mut lower) = (0usize, None);
+        for (&occurrences, &n_kmers) in spectrum {
+            seen += n_kmers;
+            if lower.is_none() && seen > lower_rank {
+                lower = Some(occurrences);
+            }
+            if seen > upper_rank {
+                return (lower.unwrap_or(occurrences) + occurrences) as f64 / 2.0;
+            }
+        }
+        lower.unwrap_or(0) as f64
+    }
+
+    /// Print the binned frequency distribution as an ASCII bar chart.
+    ///
+    /// Empty bins between the smallest and largest populated bin are printed with a zero count
+    /// so that gaps in the distribution are explicit rather than silently skipped.
+    fn print_frequency_histogram(kmer_frequencies: &HashMap<u64, usize>) {
+        const BAR_WIDTH: usize = 40;
+        let bins = Self::frequency_bins(kmer_frequencies);
+        let (&first, &last) = (bins.keys().next().unwrap(), bins.keys().next_back().unwrap());
+        let max_count = *bins.values().max().unwrap();
+
+        // Each k-mer is counted once per sequence containing it, so this is the total number
+        // of (sequence, k-mer) pairs the index holds rather than a count of k-mer positions.
+        let total: usize = kmer_frequencies.values().sum();
+        let unique = kmer_frequencies.len();
+        let median = Self::median_occurrences(&Self::frequency_spectrum(kmer_frequencies), unique);
+        eprintln!(
+            "[save] K-mer frequency histogram: {total} total k-mers found, {unique} unique \
+             (mean {:.2}, median {:.1} sequences per k-mer)",
+            total as f64 / unique as f64,
+            median,
+        );
+        for bin in first..=last {
+            let count = bins.get(&bin).copied().unwrap_or(0);
+            let (lo, hi) = (1u64 << bin, (1u64 << (bin + 1)) - 1);
+            let label = if lo == hi { format!("{lo}") } else { format!("{lo}-{hi}") };
+            let bar = "#".repeat((count * BAR_WIDTH / max_count).max(usize::from(count > 0)));
+            eprintln!("[save]   {label:>12} occurrences: {count:>10} k-mers  {bar}");
+        }
+    }
+
+    /// Return the `n` (hash, count) pairs with the smallest `key`, in ascending key order.
+    ///
+    /// WHY a bounded heap instead of sorting: real proteome indexes hold tens of millions of
+    /// unique k-mers, so materializing and sorting the whole list just to read off 10 entries
+    /// would cost seconds and hundreds of MB. This is O(N log n) time and O(n) memory.
+    fn n_smallest_by_key<K: Ord>(
+        kmer_frequencies: &HashMap<u64, usize>,
+        n: usize,
+        key: impl Fn(u64, usize) -> K,
+    ) -> Vec<(u64, usize)> {
+        let mut heap: BinaryHeap<(K, u64, usize)> = BinaryHeap::with_capacity(n + 1);
+        for (&hash, &count) in kmer_frequencies {
+            heap.push((key(hash, count), hash, count));
+            if heap.len() > n {
+                heap.pop();
+            }
+        }
+        let mut selected = heap.into_vec();
+        selected.sort();
+        selected.into_iter().map(|(_, hash, count)| (hash, count)).collect()
+    }
+
+    /// Print one labelled list of example k-mers, noting how many share the boundary frequency.
+    ///
+    /// WHY the tie note: when hundreds of thousands of k-mers all occur once, listing ten of
+    /// them looks like a ranking but is an arbitrary sample. Saying how many tie makes
+    /// that explicit.
+    fn print_kmer_examples(
+        &self,
+        label: &str,
+        examples: &[(u64, usize)],
+        kmer_frequencies: &HashMap<u64, usize>,
+        inverted_index: &HashMap<u64, Vec<u32>>,
+        target_list: &[String],
+    ) {
+        let Some(&(_, boundary)) = examples.last() else { return };
+        let tied = kmer_frequencies.values().filter(|&&c| c == boundary).count();
+        eprintln!("[save] {} {} k-mers (encoded k-mer: occurrences):", examples.len(), label);
+        for &(hash, count) in examples {
+            let kmer = self.resolve_kmer_string(hash, inverted_index, target_list);
+            eprintln!("[save]   {kmer}: {count}");
+        }
+        if tied > examples.len() {
+            eprintln!("[save]   ({tied} k-mers occur {boundary}x; showing an arbitrary sample)");
+        }
+    }
+
+    /// Whether signatures kept their sequence text, which `resolve_kmer_string` needs.
+    fn has_stored_sequences(&self) -> bool {
+        self.signatures
+            .iter()
+            .next()
+            .is_some_and(|s| s.get_moltype_sequence().is_some() || s.get_raw_sequence().is_some())
+    }
+
+    /// Resolve one k-mer hash back to the actual encoded k-mer string it was hashed from,
+    /// by finding a signature that contains it (via the inverted index) and slicing that
+    /// signature's stored sequence at the recorded position.
+    ///
+    /// WHY: hashes are one-way (murmur), so the only way to recover the k-mer text is to
+    /// look up where it occurred in a sequence we already have in memory.
+    fn resolve_kmer_string(
+        &self,
+        hash: u64,
+        inverted_index: &HashMap<u64, Vec<u32>>,
+        target_list: &[String],
+    ) -> String {
+        let ksize = self.ksize as usize;
+        (|| {
+            let target_idx = *inverted_index.get(&hash)?.first()?;
+            let md5 = target_list.get(target_idx as usize)?;
+            let sig = self.signatures.get(md5)?;
+            let position = *sig.kmer_positions().get(&hash)?.first()?;
+            let seq = sig.get_moltype_sequence().or_else(|| sig.get_raw_sequence())?;
+            seq.get(position..position + ksize).map(str::to_string)
+        })()
+        .unwrap_or_else(|| format!("<sequence unavailable, hash {hash}>"))
     }
 
     /// Save the current index state to RocksDB using chunked storage format
@@ -377,6 +653,12 @@ impl ProteomeIndex {
     }
 
     pub fn save_state(&self) -> IndexResult<()> {
+        self.save_state_with_kmer_stats(None)
+    }
+
+    /// Like [`save_state`], but also writes the k-mer frequency spectrum to `kmer_stats_out`
+    /// as CSV (gzipped when the path ends in `.gz`) for plotting across alphabets and k-sizes.
+    pub fn save_state_with_kmer_stats(&self, kmer_stats_out: Option<&Path>) -> IndexResult<()> {
         let t_start = Instant::now();
         eprintln!("[save] save_state() started ({} signatures in memory)", self.signatures.len());
 
@@ -469,7 +751,7 @@ impl ProteomeIndex {
         // Build and persist search cache + individual signatures for fast search startup
         eprintln!("[save] Building search cache...");
         let t4 = Instant::now();
-        self.save_inverted_index()?;
+        self.save_inverted_index(kmer_stats_out)?;
         eprintln!("[save] Search cache saved in {:.1}s", t4.elapsed().as_secs_f32());
 
         // Flush to ensure data is written to disk
@@ -1474,7 +1756,8 @@ mod tests {
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };
     use crate::tests::test_utils::{self, print_kmer_positions};
-    use std::collections::HashMap;
+    use std::collections::{BTreeMap, HashMap};
+    use std::fs::File;
     use std::path::PathBuf;
 
     /// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
@@ -2626,6 +2909,141 @@ mod tests {
         let index3 =
             ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
+    }
+
+    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958), from
+    /// tests/testdata/fasta/ced9.fasta.
+    const CED9_PREFIX: &str = "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM";
+
+    #[test]
+    fn test_kmer_spectrum_csv_has_totals_comment_and_rows() {
+        use std::io::Read;
+
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein", true).unwrap();
+        // 3 k-mers seen once, 1 seen twice, 1 seen three times: 5 unique, 8 total.
+        let frequencies: HashMap<u64, usize> =
+            [(10, 1), (11, 1), (12, 1), (20, 2), (30, 3)].into_iter().collect();
+
+        let csv_path = temp_dir.path().join("spectrum.csv");
+        index.write_kmer_frequency_spectrum(&csv_path, &frequencies).unwrap();
+
+        let mut contents = String::new();
+        File::open(&csv_path).unwrap().read_to_string(&mut contents).unwrap();
+
+        assert_eq!(
+            contents,
+            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 moltype=protein ksize=10\n\
+             moltype,ksize,occurrences,n_kmers\n\
+             protein,10,1,3\n\
+             protein,10,2,1\n\
+             protein,10,3,1\n"
+        );
+    }
+
+    #[test]
+    fn test_median_occurrences_exact() {
+        // Counts 1,1,1,2,3 -> odd length, middle element is 1.
+        let odd: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&odd, 5), 1.0);
+
+        // Counts 1,1,2,3 -> even length, middle two are 1 and 2.
+        let even: BTreeMap<usize, usize> = [(1, 2), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&even, 4), 1.5);
+
+        // Counts 4,4,9,9 -> both middles inside one bucket.
+        let flat: BTreeMap<usize, usize> = [(4, 2), (9, 2)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&flat, 4), 6.5);
+
+        // Single value and empty.
+        assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect(), 1), 7.0);
+        assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new(), 0), 0.0);
+    }
+
+    #[test]
+    fn test_frequency_bins_groups_counts_into_powers_of_two() {
+        // Bin b holds counts in [2^b, 2^(b+1)): 1 | 2-3 | 4-7 | 8-15 | ... | 256-511
+        let frequencies: HashMap<u64, usize> =
+            [(10, 1), (11, 1), (12, 1), (20, 2), (21, 3), (30, 4), (31, 7), (40, 8), (50, 300)]
+                .into_iter()
+                .collect();
+
+        let bins = ProteomeIndex::frequency_bins(&frequencies);
+
+        let expected: BTreeMap<u32, usize> =
+            [(0, 3), (1, 2), (2, 2), (3, 1), (8, 1)].into_iter().collect();
+        assert_eq!(bins, expected);
+    }
+
+    #[test]
+    fn test_n_smallest_by_key_selects_most_and_least_common() {
+        let frequencies: HashMap<u64, usize> =
+            [(100, 5), (200, 9), (300, 1), (400, 9), (500, 3)].into_iter().collect();
+
+        // Most common: highest count first, ties broken by ascending hash (200 before 400).
+        let most = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| {
+            (std::cmp::Reverse(count), hash)
+        });
+        assert_eq!(most, vec![(200, 9), (400, 9), (100, 5)]);
+
+        // Least common: lowest count first.
+        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| (count, hash));
+        assert_eq!(least, vec![(300, 1), (500, 3), (100, 5)]);
+    }
+
+    #[test]
+    fn test_n_smallest_by_key_returns_all_when_n_exceeds_len() {
+        let frequencies: HashMap<u64, usize> = [(100, 2), (200, 1)].into_iter().collect();
+
+        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 10, |hash, count| (count, hash));
+
+        assert_eq!(least, vec![(200, 1), (100, 2)]);
+    }
+
+    #[test]
+    fn test_resolve_kmer_string_recovers_kmer_text_from_hash() {
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("ced9.db"), 10, 1, "protein", true).unwrap();
+        let sig = index.create_protein_signature(CED9_PREFIX, "ced9").unwrap();
+        let md5 = sig.signature().md5sum.clone();
+        index.store_signatures(vec![sig]).unwrap();
+
+        // The k-mer starting at position 0 is the first 10 residues of CED-9.
+        let stored = index.signatures.get(&md5).unwrap();
+        let (&hash, _) =
+            stored.kmer_positions().iter().find(|(_, positions)| positions.contains(&0)).unwrap();
+        drop(stored);
+
+        let inverted_index: HashMap<u64, Vec<u32>> = [(hash, vec![0])].into_iter().collect();
+        let resolved = index.resolve_kmer_string(hash, &inverted_index, std::slice::from_ref(&md5));
+
+        assert_eq!(resolved, "MTRCTADNSL");
+    }
+
+    #[test]
+    fn test_resolve_kmer_string_reports_unknown_hash() {
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("ced9.db"), 10, 1, "protein", true).unwrap();
+
+        let resolved = index.resolve_kmer_string(42, &HashMap::new(), &[]);
+
+        assert_eq!(resolved, "<sequence unavailable, hash 42>");
+    }
+
+    #[test]
+    fn test_has_stored_sequences_follows_store_raw_sequences() {
+        let temp_dir = tempdir().unwrap();
+        for (store_raw, expected) in [(true, true), (false, false)] {
+            let path = temp_dir.path().join(format!("ced9-{store_raw}.db"));
+            let index = ProteomeIndex::new(path, 10, 1, "protein", store_raw).unwrap();
+            let sig = index.create_protein_signature(CED9_PREFIX, "ced9").unwrap();
+            index.store_signatures(vec![sig]).unwrap();
+
+            assert_eq!(index.has_stored_sequences(), expected, "store_raw={store_raw}");
+        }
     }
 
     #[test]

@@ -392,17 +392,18 @@ impl ProteinSketch {
             let moltype_str = self.moltype.to_string();
             if moltype_str != "protein" {
                 let encoded_sequence = if let Some(ref alpha) = custom_hp {
-                    // Custom HP alphabets: apply the HP table directly, uppercased to match
-                    // the hashes stored in minhash (sourmash uppercases before hashing).
+                    // Custom HP alphabets: apply the HP table directly, keeping the table's
+                    // lowercase h/p so output matches built-in hp/dayhoff (which sourmash
+                    // encodes lowercase). Unmapped residues (X/U/O) stay uppercase, also
+                    // matching sourmash. This string is display-only — matched regions and
+                    // k-mer stats — so its case is independent of hashing, which must
+                    // uppercase because sourmash uppercases protein input before hashing.
                     let table = alpha.table();
                     sequence
                         .bytes()
                         .map(|b| {
-                            table
-                                .get(&b.to_ascii_uppercase())
-                                .copied()
-                                .unwrap_or(b)
-                                .to_ascii_uppercase() as char
+                            let upper = b.to_ascii_uppercase();
+                            table.get(&upper).copied().unwrap_or(upper) as char
                         })
                         .collect::<String>()
                 } else {
