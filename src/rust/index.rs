@@ -379,9 +379,13 @@ impl ProteomeIndex {
         if kmer_frequencies.is_empty() {
             return Ok(());
         }
-        Self::print_frequency_histogram(kmer_frequencies);
+        // Build the spectrum once. Every summary below (bins, total, unique, median, tie
+        // counts) is derived from it rather than rescanning the map, which holds over
+        // 125 million entries for protein k=15.
+        let spectrum = Self::frequency_spectrum(kmer_frequencies);
+        Self::print_frequency_histogram(&spectrum);
         if let Some(path) = kmer_stats_out {
-            self.write_kmer_frequency_spectrum(path, kmer_frequencies)?;
+            self.write_kmer_frequency_spectrum(path, &spectrum)?;
         }
 
         // Resolving a hash back to text needs the sequence it came from, which is only in
@@ -397,25 +401,12 @@ impl ProteomeIndex {
         });
         let least = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| (count, hash));
 
-        self.print_kmer_examples(
-            "most common",
-            &most,
-            kmer_frequencies,
-            inverted_index,
-            target_list,
-        );
-        self.print_kmer_examples(
-            "least common",
-            &least,
-            kmer_frequencies,
-            inverted_index,
-            target_list,
-        );
+        self.print_kmer_examples("most common", &most, &spectrum, inverted_index, target_list);
+        self.print_kmer_examples("least common", &least, &spectrum, inverted_index, target_list);
         Ok(())
     }
 
-    /// Write the k-mer frequency spectrum (occurrences -> how many k-mers had that many)
-    /// as CSV, gzip-compressed when the path ends in `.gz`.
+    /// Write the k-mer frequency spectrum as CSV, gzip-compressed when the path ends in `.gz`.
     ///
     /// WHY the spectrum rather than one row per k-mer: this is the distribution you plot, and
     /// it is a few thousand rows instead of tens of millions, so a sweep over alphabets and
@@ -424,44 +415,23 @@ impl ProteomeIndex {
     fn write_kmer_frequency_spectrum(
         &self,
         path: &Path,
-        kmer_frequencies: &HashMap<u64, usize>,
+        spectrum: &BTreeMap<usize, usize>,
     ) -> IndexResult<()> {
-        let spectrum = Self::frequency_spectrum(kmer_frequencies);
-
         let file = File::create(path)?;
-        let mut sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
-            Box::new(GzEncoder::new(file, Compression::default()))
+
+        // The gzip trailer is written when the encoder is finished. Finishing it explicitly
+        // rather than leaving it to Drop is what surfaces a failed final write: flate2's Drop
+        // discards that error, which would leave a truncated file behind while this function
+        // reported success.
+        if path.extension().is_some_and(|e| e == "gz") {
+            let mut encoder = GzEncoder::new(file, Compression::default());
+            self.write_spectrum_csv(&mut encoder, spectrum)?;
+            encoder.finish()?;
         } else {
-            Box::new(file)
-        };
-
-        // Totals go in a leading `#` comment rather than a column, because they are constant
-        // for the whole file and would otherwise be repeated on every row. Readers skip it
-        // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
-        let total: usize = kmer_frequencies.values().sum();
-        let unique = kmer_frequencies.len();
-        writeln!(
-            sink,
-            "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
-             median_seqs_per_kmer={:.1} moltype={} ksize={}",
-            total as f64 / unique as f64,
-            Self::median_occurrences(&spectrum, unique),
-            self.moltype,
-            self.ksize,
-        )?;
-
-        let mut writer = csv::Writer::from_writer(sink);
-        writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
-        let ksize = self.ksize.to_string();
-        for (occurrences, n_kmers) in &spectrum {
-            writer.write_record([
-                &self.moltype,
-                &ksize,
-                &occurrences.to_string(),
-                &n_kmers.to_string(),
-            ])?;
+            let mut file = file;
+            self.write_spectrum_csv(&mut file, spectrum)?;
         }
-        writer.flush()?;
+
         eprintln!(
             "[save] Wrote k-mer frequency spectrum ({} rows) to {}",
             spectrum.len(),
@@ -470,36 +440,84 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
-    ///
-    /// WHY power-of-two: k-mer frequency distributions are heavily right-skewed (most k-mers
-    /// occur once, a few occur thousands of times), so linear bins would be nearly unreadable.
-    fn frequency_bins(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<u32, usize> {
-        let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
-        for &freq in kmer_frequencies.values() {
-            let bin = usize::BITS - freq.leading_zeros() - 1;
-            *bins.entry(bin).or_insert(0) += 1;
+    /// Write the totals comment and one row per distinct occurrence count.
+    fn write_spectrum_csv<W: Write>(
+        &self,
+        sink: &mut W,
+        spectrum: &BTreeMap<usize, usize>,
+    ) -> IndexResult<()> {
+        // Totals go in a leading `#` comment rather than a column, because they are constant
+        // for the whole file and would otherwise be repeated on every row. Readers skip it
+        // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
+        let total = Self::total_kmers(spectrum);
+        let unique = Self::unique_kmers(spectrum);
+        writeln!(
+            sink,
+            "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
+             median_seqs_per_kmer={:.1} moltype={} ksize={}",
+            total as f64 / unique as f64,
+            Self::median_occurrences(spectrum),
+            self.moltype,
+            self.ksize,
+        )?;
+
+        let mut writer = csv::Writer::from_writer(sink);
+        writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
+        let ksize = self.ksize.to_string();
+        for (occurrences, n_kmers) in spectrum {
+            writer.write_record([
+                &self.moltype,
+                &ksize,
+                &occurrences.to_string(),
+                &n_kmers.to_string(),
+            ])?;
         }
-        bins
+        writer.flush()?;
+        Ok(())
     }
 
     /// Exact frequency spectrum: occurrence count -> how many k-mers were seen that many times.
     ///
-    /// Distinct from [`frequency_bins`], which buckets into powers of two for display. This
-    /// keeps every count so order statistics stay exact.
+    /// Counts are always at least 1 because the caller builds them by incrementing from zero,
+    /// which [`frequency_bins`] relies on to avoid underflowing on `leading_zeros`.
     fn frequency_spectrum(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<usize, usize> {
         let mut spectrum: BTreeMap<usize, usize> = BTreeMap::new();
         for &count in kmer_frequencies.values() {
+            debug_assert!(count > 0, "k-mer frequencies are counts, so never zero");
             *spectrum.entry(count).or_insert(0) += 1;
         }
         spectrum
+    }
+
+    /// Total (sequence, k-mer) pairs: each k-mer counted once per sequence containing it.
+    fn total_kmers(spectrum: &BTreeMap<usize, usize>) -> usize {
+        spectrum.iter().map(|(occurrences, n_kmers)| occurrences * n_kmers).sum()
+    }
+
+    /// How many distinct k-mers the index holds.
+    fn unique_kmers(spectrum: &BTreeMap<usize, usize>) -> usize {
+        spectrum.values().sum()
+    }
+
+    /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
+    ///
+    /// WHY power-of-two: k-mer frequency distributions are heavily right-skewed (most k-mers
+    /// occur once, a few occur thousands of times), so linear bins would be nearly unreadable.
+    fn frequency_bins(spectrum: &BTreeMap<usize, usize>) -> BTreeMap<u32, usize> {
+        let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
+        for (&count, &n_kmers) in spectrum {
+            let bin = usize::BITS - count.leading_zeros() - 1;
+            *bins.entry(bin).or_insert(0) += n_kmers;
+        }
+        bins
     }
 
     /// Median occurrences per k-mer, averaging the two middle values when the count is even.
     ///
     /// WHY alongside the mean: these distributions are heavily right-skewed, so a handful of
     /// very common k-mers drag the mean well above what a typical k-mer looks like.
-    fn median_occurrences(spectrum: &BTreeMap<usize, usize>, unique: usize) -> f64 {
+    fn median_occurrences(spectrum: &BTreeMap<usize, usize>) -> f64 {
+        let unique = Self::unique_kmers(spectrum);
         if unique == 0 {
             return 0.0;
         }
@@ -522,22 +540,22 @@ impl ProteomeIndex {
     ///
     /// Empty bins between the smallest and largest populated bin are printed with a zero count
     /// so that gaps in the distribution are explicit rather than silently skipped.
-    fn print_frequency_histogram(kmer_frequencies: &HashMap<u64, usize>) {
+    fn print_frequency_histogram(spectrum: &BTreeMap<usize, usize>) {
         const BAR_WIDTH: usize = 40;
-        let bins = Self::frequency_bins(kmer_frequencies);
-        let (&first, &last) = (bins.keys().next().unwrap(), bins.keys().next_back().unwrap());
-        let max_count = *bins.values().max().unwrap();
+        let bins = Self::frequency_bins(spectrum);
+        let (Some((&first, _)), Some((&last, _))) = (bins.iter().next(), bins.iter().next_back())
+        else {
+            return;
+        };
+        let max_count = bins.values().max().copied().unwrap_or(1);
 
-        // Each k-mer is counted once per sequence containing it, so this is the total number
-        // of (sequence, k-mer) pairs the index holds rather than a count of k-mer positions.
-        let total: usize = kmer_frequencies.values().sum();
-        let unique = kmer_frequencies.len();
-        let median = Self::median_occurrences(&Self::frequency_spectrum(kmer_frequencies), unique);
+        let total = Self::total_kmers(spectrum);
+        let unique = Self::unique_kmers(spectrum);
         eprintln!(
             "[save] K-mer frequency histogram: {total} total k-mers found, {unique} unique \
              (mean {:.2}, median {:.1} sequences per k-mer)",
             total as f64 / unique as f64,
-            median,
+            Self::median_occurrences(spectrum),
         );
         for bin in first..=last {
             let count = bins.get(&bin).copied().unwrap_or(0);
@@ -558,11 +576,15 @@ impl ProteomeIndex {
         n: usize,
         key: impl Fn(u64, usize) -> K,
     ) -> Vec<(u64, usize)> {
-        let mut heap: BinaryHeap<(K, u64, usize)> = BinaryHeap::with_capacity(n + 1);
+        let mut heap: BinaryHeap<(K, u64, usize)> = BinaryHeap::with_capacity(n);
         for (&hash, &count) in kmer_frequencies {
-            heap.push((key(hash, count), hash, count));
-            if heap.len() > n {
-                heap.pop();
+            let candidate = (key(hash, count), hash, count);
+            if heap.len() < n {
+                heap.push(candidate);
+            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+                // Replacing the worst entry avoids a push/pop pair for every element that
+                // cannot make the list, which is nearly all of them.
+                *heap.peek_mut().expect("heap is non-empty because n > 0") = candidate;
             }
         }
         let mut selected = heap.into_vec();
@@ -579,12 +601,12 @@ impl ProteomeIndex {
         &self,
         label: &str,
         examples: &[(u64, usize)],
-        kmer_frequencies: &HashMap<u64, usize>,
+        spectrum: &BTreeMap<usize, usize>,
         inverted_index: &HashMap<u64, Vec<u32>>,
         target_list: &[String],
     ) {
         let Some(&(_, boundary)) = examples.last() else { return };
-        let tied = kmer_frequencies.values().filter(|&&c| c == boundary).count();
+        let tied = spectrum.get(&boundary).copied().unwrap_or(0);
         eprintln!("[save] {} {} k-mers (encoded k-mer: occurrences):", examples.len(), label);
         for &(hash, count) in examples {
             let kmer = self.resolve_kmer_string(hash, inverted_index, target_list);
@@ -2923,11 +2945,10 @@ mod tests {
         let index =
             ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein", true).unwrap();
         // 3 k-mers seen once, 1 seen twice, 1 seen three times: 5 unique, 8 total.
-        let frequencies: HashMap<u64, usize> =
-            [(10, 1), (11, 1), (12, 1), (20, 2), (30, 3)].into_iter().collect();
+        let spectrum: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
 
         let csv_path = temp_dir.path().join("spectrum.csv");
-        index.write_kmer_frequency_spectrum(&csv_path, &frequencies).unwrap();
+        index.write_kmer_frequency_spectrum(&csv_path, &spectrum).unwrap();
 
         let mut contents = String::new();
         File::open(&csv_path).unwrap().read_to_string(&mut contents).unwrap();
@@ -2946,30 +2967,29 @@ mod tests {
     fn test_median_occurrences_exact() {
         // Counts 1,1,1,2,3 -> odd length, middle element is 1.
         let odd: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
-        assert_eq!(ProteomeIndex::median_occurrences(&odd, 5), 1.0);
+        assert_eq!(ProteomeIndex::median_occurrences(&odd), 1.0);
 
         // Counts 1,1,2,3 -> even length, middle two are 1 and 2.
         let even: BTreeMap<usize, usize> = [(1, 2), (2, 1), (3, 1)].into_iter().collect();
-        assert_eq!(ProteomeIndex::median_occurrences(&even, 4), 1.5);
+        assert_eq!(ProteomeIndex::median_occurrences(&even), 1.5);
 
         // Counts 4,4,9,9 -> both middles inside one bucket.
         let flat: BTreeMap<usize, usize> = [(4, 2), (9, 2)].into_iter().collect();
-        assert_eq!(ProteomeIndex::median_occurrences(&flat, 4), 6.5);
+        assert_eq!(ProteomeIndex::median_occurrences(&flat), 6.5);
 
         // Single value and empty.
-        assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect(), 1), 7.0);
-        assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new(), 0), 0.0);
+        assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect()), 7.0);
+        assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new()), 0.0);
     }
 
     #[test]
     fn test_frequency_bins_groups_counts_into_powers_of_two() {
         // Bin b holds counts in [2^b, 2^(b+1)): 1 | 2-3 | 4-7 | 8-15 | ... | 256-511
-        let frequencies: HashMap<u64, usize> =
-            [(10, 1), (11, 1), (12, 1), (20, 2), (21, 3), (30, 4), (31, 7), (40, 8), (50, 300)]
-                .into_iter()
-                .collect();
+        // Three k-mers seen once, one each at 2, 3, 4, 7, 8 and 300 occurrences.
+        let spectrum: BTreeMap<usize, usize> =
+            [(1, 3), (2, 1), (3, 1), (4, 1), (7, 1), (8, 1), (300, 1)].into_iter().collect();
 
-        let bins = ProteomeIndex::frequency_bins(&frequencies);
+        let bins = ProteomeIndex::frequency_bins(&spectrum);
 
         let expected: BTreeMap<u32, usize> =
             [(0, 3), (1, 2), (2, 2), (3, 1), (8, 1)].into_iter().collect();
