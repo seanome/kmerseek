@@ -92,6 +92,15 @@ enum Commands {
         #[arg(long, default_value = "0.05")]
         max_pvalue: f64,
 
+        /// Remove low-complexity (homopolymer) k-mers from query sketches.
+        /// Omit this to follow whatever the target index was built with, which is
+        /// almost always what you want. Pass it (or `--remove-low-complexity
+        /// false`) only to override deliberately; a value that disagrees with the
+        /// index is reported as a warning, because the two sides must match for
+        /// containment to be comparable.
+        #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+        remove_low_complexity: Option<bool>,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -273,6 +282,7 @@ fn main() -> IndexResult<()> {
             threshold,
             min_shared_kmers,
             max_pvalue,
+            remove_low_complexity: remove_low_complexity_arg,
             verbose,
             query_is_index,
             batch_size,
@@ -334,8 +344,29 @@ fn main() -> IndexResult<()> {
             // those k-mers match nothing yet still count toward the query cardinality,
             // deflating containment (intersection / query_size) for exactly the queries
             // that contain low-complexity regions.
-            let remove_low_complexity = searcher.index().remove_low_complexity();
-            eprintln!("  Remove low-complexity k-mers: {} (from index)", remove_low_complexity);
+            let index_removed = searcher.index().remove_low_complexity();
+            let remove_low_complexity = remove_low_complexity_arg.unwrap_or(index_removed);
+
+            eprintln!(
+                "  Index: low-complexity k-mers were {} when it was built",
+                if index_removed { "REMOVED" } else { "KEPT" }
+            );
+            eprintln!(
+                "  This search: low-complexity k-mers are {} from query sketches ({})",
+                if remove_low_complexity { "REMOVED" } else { "KEPT" },
+                if remove_low_complexity_arg.is_some() {
+                    "--remove-low-complexity"
+                } else {
+                    "matching the index"
+                }
+            );
+            if remove_low_complexity != index_removed {
+                eprintln!(
+                    "  WARNING: this disagrees with the index. Containment is \
+                     intersection / query_size, so k-mers present on only one side \
+                     still count toward the denominator and skew scores."
+                );
+            }
             eprintln!(
                 "  Index built by kmerseek: {}",
                 searcher.index().kmerseek_version().unwrap_or("unknown (pre-versioning index)")
@@ -463,8 +494,11 @@ fn main() -> IndexResult<()> {
                         for result in results {
                             *match_count += 1;
                             for region in &result.matched_regions {
-                                let csv_row =
-                                    SearchResultCsv::from_result_and_region(result, region);
+                                let csv_row = SearchResultCsv::from_result_and_region(
+                                    result,
+                                    region,
+                                    remove_low_complexity,
+                                );
                                 writer.serialize(&csv_row)?;
                                 *row_count += 1;
                             }
@@ -546,7 +580,11 @@ fn main() -> IndexResult<()> {
 
                 for result in &filtered_results {
                     for region in &result.matched_regions {
-                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                        let csv_row = SearchResultCsv::from_result_and_region(
+                            result,
+                            region,
+                            remove_low_complexity,
+                        );
                         writer.serialize(&csv_row)?;
                     }
                 }
@@ -557,7 +595,11 @@ fn main() -> IndexResult<()> {
 
                 for result in &filtered_results {
                     for region in &result.matched_regions {
-                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                        let csv_row = SearchResultCsv::from_result_and_region(
+                            result,
+                            region,
+                            remove_low_complexity,
+                        );
                         writer.serialize(&csv_row)?;
                     }
                 }

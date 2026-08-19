@@ -63,6 +63,10 @@ pub struct SearchResultCsv {
     pub ksize: u32,
     pub scaled: u32,
     pub moltype: String,
+    /// Whether low-complexity (homopolymer) k-mers were removed from both the
+    /// index and the query sketches for this search. Recorded per row, like
+    /// ksize/scaled/moltype, so a results file is self-describing.
+    pub remove_low_complexity: bool,
     pub jaccard: f64,
     pub max_containment: f64,
     pub average_abund: f64,
@@ -99,7 +103,11 @@ impl SearchResultCsv {
     /// similarity metrics with a specific matched region to create one CSV row. Each SearchResult
     /// will produce multiple CSV rows (one per matched region), with all similarity metrics
     /// repeated for each region.
-    pub fn from_result_and_region(result: &SearchResult, region: &MatchedRegion) -> Self {
+    pub fn from_result_and_region(
+        result: &SearchResult,
+        region: &MatchedRegion,
+        remove_low_complexity: bool,
+    ) -> Self {
         Self {
             query_name: result.query_name.clone(),
             query_md5: result.query_md5.clone(),
@@ -110,6 +118,7 @@ impl SearchResultCsv {
             ksize: result.ksize,
             scaled: result.scaled,
             moltype: result.moltype.clone(),
+            remove_low_complexity,
             jaccard: result.jaccard,
             max_containment: result.max_containment,
             average_abund: result.average_abund,
@@ -1287,7 +1296,7 @@ mod tests {
             matched_regions: vec![],
         };
 
-        let row = SearchResultCsv::from_result_and_region(&result, &region);
+        let row = SearchResultCsv::from_result_and_region(&result, &region, false);
 
         // Fields carried from the SearchResult.
         assert_eq!(row.query_name, "query1");

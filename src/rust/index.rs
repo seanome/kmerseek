@@ -1,7 +1,7 @@
 use dashmap::DashMap;
 use indicatif::{ProgressBar, ProgressStyle};
 use parking_lot::Mutex;
-use std::collections::{BTreeMap, BinaryHeap, HashMap, HashSet};
+use std::collections::{BTreeMap, BinaryHeap, HashMap};
 use std::fs::File;
 use std::io::Write;
 use std::path::{Path, PathBuf};

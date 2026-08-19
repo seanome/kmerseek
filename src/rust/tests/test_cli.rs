@@ -154,10 +154,127 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
             "--encoding",
             "hp",
         ]);
-        search_cmd.assert().success().stderr(predicate::str::contains(format!(
-            "Remove low-complexity k-mers: {} (from index)",
-            expected
-        )));
+        let state = if expected == "true" { "REMOVED" } else { "KEPT" };
+        search_cmd
+            .assert()
+            .success()
+            .stderr(predicate::str::contains(format!(
+                "Index: low-complexity k-mers were {state} when it was built"
+            )))
+            .stderr(predicate::str::contains(format!(
+                "This search: low-complexity k-mers are {state} from query sketches"
+            )))
+            .stderr(predicate::str::contains("(matching the index)"))
+            // Agreeing with the index must not warn.
+            .stderr(predicate::str::contains("WARNING").not());
+    }
+
+    Ok(())
+}
+
+/// Overriding the index's setting at search time is allowed but warned about,
+/// because containment is only comparable when both sides drop the same k-mers.
+#[test]
+fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("kept.db");
+
+    let mut index_cmd = Command::cargo_bin("kmerseek")?;
+    index_cmd.args([
+        "index",
+        "--input",
+        TEST_FASTA_GZ,
+        "--output",
+        index_path.to_str().unwrap(),
+        "--ksize",
+        "12",
+        "--encoding",
+        "hp",
+    ]);
+    index_cmd.assert().success();
+
+    let mut search_cmd = Command::cargo_bin("kmerseek")?;
+    search_cmd.args([
+        "search",
+        "--query",
+        TEST_CED9_FASTA,
+        "--target",
+        index_path.to_str().unwrap(),
+        "--ksize",
+        "12",
+        "--encoding",
+        "hp",
+        "--remove-low-complexity",
+    ]);
+
+    search_cmd
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Index: low-complexity k-mers were KEPT"))
+        .stderr(predicate::str::contains(
+            "This search: low-complexity k-mers are REMOVED from query sketches",
+        ))
+        .stderr(predicate::str::contains("WARNING: this disagrees with the index"));
+
+    Ok(())
+}
+
+/// The results file records the setting per row, so a CSV is self-describing
+/// without needing the command line that produced it.
+#[test]
+fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+
+    for (flag, expected) in [(true, "true"), (false, "false")] {
+        let index_path = temp_dir.path().join(format!("csv_{flag}.db"));
+        let csv_path = temp_dir.path().join(format!("csv_{flag}.csv"));
+
+        let mut index_cmd = Command::cargo_bin("kmerseek")?;
+        index_cmd.args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--encoding",
+            "hp",
+        ]);
+        if flag {
+            index_cmd.arg("--remove-low-complexity");
+        }
+        index_cmd.assert().success();
+
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            index_path.to_str().unwrap(),
+            "--output",
+            csv_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--encoding",
+            "hp",
+        ]);
+        search_cmd.assert().success();
+
+        let csv = std::fs::read_to_string(&csv_path)?;
+        let mut lines = csv.lines();
+        let header: Vec<&str> = lines.next().expect("header row").split(',').collect();
+        let col = header
+            .iter()
+            .position(|h| *h == "remove_low_complexity")
+            .expect("remove_low_complexity column");
+        // It sits with the other run metadata rather than at the end.
+        assert_eq!(header[col - 1], "moltype");
+
+        let first = lines.next().expect("at least one result row");
+        assert_eq!(first.split(',').nth(col), Some(expected));
     }
 
     Ok(())

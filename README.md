@@ -57,11 +57,28 @@ Removed 75 of 9063 k-mer windows as low-complexity (0.83%)
 ```
 
 The setting is **stored in the index**, and `kmerseek search` reads it back and
-builds query sketches the same way -- you don't repeat the flag when searching:
+builds query sketches the same way. You don't repeat the flag when searching, and
+search says plainly what the index holds and what it is doing:
 
 ```
-Remove low-complexity k-mers: true (from index)
+Index: low-complexity k-mers were REMOVED when it was built
+This search: low-complexity k-mers are REMOVED from query sketches (matching the index)
 ```
+
+Pass `--remove-low-complexity` (or `--remove-low-complexity false`) to `search`
+only to override that deliberately. Disagreeing with the index is allowed but
+warned about:
+
+```
+This search: low-complexity k-mers are REMOVED from query sketches (--remove-low-complexity)
+WARNING: this disagrees with the index. Containment is intersection / query_size,
+so k-mers present on only one side still count toward the denominator and skew scores.
+```
+
+Results carry the setting too, in a `remove_low_complexity` column next to
+`ksize`/`scaled`/`moltype`, so a CSV is self-describing without the command line
+that produced it. It is a column rather than a `#` comment line because a comment
+would break `pl.scan_csv` and every other plain CSV reader.
 
 That symmetry matters. Containment is `intersection / query_size`, so if the index
 dropped these k-mers but queries kept them, they'd match nothing while still
