@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 
 use crate::errors::{IndexError, IndexResult};
+use crate::hp_alphabets::HpAlphabet;
 
 /// Standard amino acids and their properties
 pub const STANDARD_AA: [char; 20] = [
@@ -75,47 +76,65 @@ impl AminoAcidAmbiguity {
     /// Validates a protein sequence, substituting representatives for non-canonical codes
     /// when `moltype` reduces the alphabet. Stops processing at the first stop codon (*).
     ///
-    /// WHY only for reduced alphabets: under Dayhoff or any HP table a code like B encodes
-    /// identically whether it is read as Asp or Asn, so substituting a representative is
-    /// lossless. Under `protein` there is no such equivalence. Picking Asp would assert a
-    /// residue the source never claimed, so the original code is kept and hashed as itself,
-    /// consistent with how X is already handled.
+    /// WHY only for reduced, biochemically-derived alphabets: under Dayhoff or a named HP
+    /// table a code like B encodes identically whether it is read as Asp or Asn, so
+    /// substituting a representative is lossless. Three moltypes are excluded:
+    ///   - `protein`/`raw` keep the full 20-letter alphabet, so there is no such equivalence
+    ///     to exploit — picking Asp would assert a residue the source never claimed.
+    ///   - `hp_shuffled_control[_1..10]` are HP tables too, but their partition is randomized
+    ///     rather than biochemically derived, so the two alternatives can land on opposite
+    ///     sides (see `test_shuffled_control_does_not_preserve_ambiguity_equivalence`).
+    ///
+    /// All three keep the original code and hash it as itself, consistent with how X is
+    /// already handled.
     pub fn validate_and_resolve<'a>(
         &self,
         sequence: &'a str,
         moltype: &str,
     ) -> IndexResult<Cow<'a, str>> {
-        let reduces_alphabet = moltype != "protein";
-        let mut result = String::new();
-        let mut substituted = false;
+        let reduces_alphabet = !matches!(moltype, "protein" | "raw")
+            && !matches!(
+                HpAlphabet::from_moltype(moltype),
+                Some(HpAlphabet::ShuffledControl | HpAlphabet::Shuffled(_))
+            );
 
-        for c in sequence.chars() {
+        // Validate first, recording where the kept region ends and where substitution first
+        // becomes necessary. Almost every sequence needs neither (roughly 900 of SwissProt's
+        // 207.6 M residues are non-canonical), so building an owned copy up front would
+        // allocate and copy once per sequence only to discard it.
+        let mut end = sequence.len();
+        let mut first_substitution = None;
+        for (offset, c) in sequence.char_indices() {
             if c == '*' {
-                // Stop codon - this is valid, but we stop reading here
-                result.push(c);
+                end = offset + c.len_utf8();
                 break;
             }
-
             if !self.is_valid_aa(c) {
-                return Err(IndexError::InvalidAminoAcid(c, result.len() + 1));
+                return Err(IndexError::InvalidAminoAcid(c, offset + 1));
             }
-
-            match Self::representative(c).filter(|_| reduces_alphabet) {
-                Some(representative) => {
-                    substituted = true;
-                    result.push(representative);
-                }
-                None => result.push(c),
+            if first_substitution.is_none() && reduces_alphabet && Self::representative(c).is_some()
+            {
+                first_substitution = Some(offset);
             }
         }
 
-        // If we changed the sequence (substitutions or stop codon truncation), return the result
-        // Otherwise, return the original sequence
-        if substituted || result.len() != sequence.len() {
-            Ok(Cow::Owned(result))
-        } else {
-            Ok(Cow::Borrowed(sequence))
+        let kept = &sequence[..end];
+        let Some(start) = first_substitution else {
+            return Ok(if end == sequence.len() {
+                Cow::Borrowed(sequence)
+            } else {
+                Cow::Owned(kept.to_string())
+            });
+        };
+
+        // Reaching here means reduces_alphabet held, so every remaining code can be looked up
+        // unconditionally. The stop codon has no representative and copies through.
+        let mut result = String::with_capacity(kept.len());
+        result.push_str(&kept[..start]);
+        for c in kept[start..].chars() {
+            result.push(Self::representative(c).unwrap_or(c));
         }
+        Ok(Cow::Owned(result))
     }
 }
 
@@ -282,6 +301,32 @@ mod tests {
         let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "protein").unwrap();
         assert_eq!(resolved.as_ref(), "ACDEFXBZJUO");
         assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
+    }
+
+    /// `raw` is a synonym for `protein` in encoding.rs (get_hash_function_from_moltype and
+    /// get_encoding_fn_from_moltype both treat them identically), so it must be exempt from
+    /// substitution for the same reason `protein` is.
+    #[test]
+    fn test_validate_and_resolve_keeps_codes_verbatim_for_raw() {
+        let aa = AminoAcidAmbiguity::new();
+
+        let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "raw").unwrap();
+        assert_eq!(resolved.as_ref(), "ACDEFXBZJUO");
+        assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
+    }
+
+    /// The shuffled-control HP alphabets randomize the h/p partition, so a fixed representative
+    /// is not lossless there (test_shuffled_control_does_not_preserve_ambiguity_equivalence).
+    /// Both the base control and a seeded variant must keep codes verbatim, not substitute.
+    #[test]
+    fn test_validate_and_resolve_keeps_codes_verbatim_for_shuffled_control() {
+        let aa = AminoAcidAmbiguity::new();
+
+        for moltype in ["hp_shuffled_control", "hp_shuffled_control_1"] {
+            let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
+            assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
+            assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");
+        }
     }
 
     #[test]
