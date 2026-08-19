@@ -678,6 +678,75 @@ impl ProteomeIndex {
         self.save_state_with_kmer_stats(None)
     }
 
+    /// Compute and write the k-mer frequency spectrum WITHOUT persisting a searchable
+    /// index -- no RocksDB writes at all (no per-signature storage, no SearchCache, no
+    /// metadata). Signatures must already be in memory (i.e. call after `process_fasta`).
+    ///
+    /// WHY this exists as a separate path rather than a flag on `save_state_with_kmer_stats`:
+    /// that function always persists a full searchable index (chunked signature storage +
+    /// one serialized SearchCache value) even when the caller only wants `--kmer-stats-out`.
+    /// That persistence is expensive in two independent ways that both broke real runs at
+    /// proteome scale: the SearchCache is one RocksDB value containing the whole inverted
+    /// index, which can exceed RocksDB's ~4 GiB single-value limit at high ksize + a small
+    /// alphabet + a large proteome ("Invalid argument: value is too large"); and chunked
+    /// signature storage writes thousands of small files (500K+ signatures / CHUNK_SIZE=100
+    /// per run), which hit transient filesystem I/O errors under concurrent load on a shared
+    /// parallel filesystem ("IO error: ... Input/output error"). Both are sidestepped
+    /// entirely by never writing to `self.db` -- everything below reads only `self.signatures`,
+    /// which is already in memory from `process_fasta`.
+    pub fn save_kmer_stats_only(&self, kmer_stats_out: &Path) -> IndexResult<()> {
+        let t0 = Instant::now();
+        let total_sigs = self.signatures.len();
+        eprintln!(
+            "[save] Computing k-mer frequency stats for {} signatures (no index persisted)...",
+            total_sigs
+        );
+
+        let mut target_list: Vec<String> = Vec::new();
+        let mut inverted_index: HashMap<u64, Vec<u32>> = HashMap::new();
+        let mut kmer_frequencies: HashMap<u64, usize> = HashMap::new();
+
+        for entry in self.signatures.iter() {
+            let idx = target_list.len() as u32;
+            target_list.push(entry.key().clone());
+
+            let mins = entry.value().signature().minhash.mins();
+            for min in mins {
+                inverted_index.entry(min).or_default().push(idx);
+                *kmer_frequencies.entry(min).or_insert(0) += 1;
+            }
+
+            if idx > 0 && idx % 1000 == 0 {
+                eprintln!(
+                    "[save] {}/{} signatures processed ({:.1}s elapsed)",
+                    idx,
+                    total_sigs,
+                    t0.elapsed().as_secs_f32(),
+                );
+            }
+        }
+
+        eprintln!(
+            "[save] Processed all {} signatures in {:.1}s. {} unique k-mers.",
+            total_sigs,
+            t0.elapsed().as_secs_f32(),
+            inverted_index.len(),
+        );
+
+        self.log_kmer_frequency_stats(
+            &kmer_frequencies,
+            &inverted_index,
+            &target_list,
+            Some(kmer_stats_out),
+        )?;
+
+        eprintln!(
+            "[save] Done in {:.1}s (nothing written to the index database).",
+            t0.elapsed().as_secs_f32()
+        );
+        Ok(())
+    }
+
     /// Like [`save_state`], but also writes the k-mer frequency spectrum to `kmer_stats_out`
     /// as CSV (gzipped when the path ends in `.gz`) for plotting across alphabets and k-sizes.
     pub fn save_state_with_kmer_stats(&self, kmer_stats_out: Option<&Path>) -> IndexResult<()> {
