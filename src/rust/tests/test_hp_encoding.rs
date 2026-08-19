@@ -140,6 +140,7 @@ mod tests {
             "hp_lehninger",
             "hp_thomas_dill_no_c",
             "hp_lehninger_plus_c",
+            "hp_lehninger_hpc",
             "hp_pbotc_1st_ed",
         ];
 
@@ -171,8 +172,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{moltype}: encoded_sequence is None (Bug 2)"));
             for ch in enc.chars() {
                 assert!(
-                    ch == 'h' || ch == 'p',
-                    "{moltype}: encoded_sequence char {ch:?} is not h/p (Bug 2 regression)"
+                    ch == 'h' || ch == 'p' || ch == 'c',
+                    "{moltype}: encoded_sequence char {ch:?} is not h/p/c (Bug 2 regression)"
                 );
             }
         }

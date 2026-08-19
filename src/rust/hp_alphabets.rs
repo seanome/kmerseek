@@ -19,6 +19,7 @@ pub enum HpAlphabet {
     KyteDoolittle,
     ThomasDillNoC,
     LehningerPlusC,
+    LehningerHpc,
     PBotC1stEd,
     ShuffledControl,
     /// Seeded shuffled control; seed must be 1-10.
@@ -33,6 +34,7 @@ impl HpAlphabet {
             Self::KyteDoolittle => &KYTE_DOOLITTLE_HP,
             Self::ThomasDillNoC => &THOMAS_DILL_NO_C_HP,
             Self::LehningerPlusC => &LEHNINGER_PLUS_C_HP,
+            Self::LehningerHpc => &LEHNINGER_HPC,
             Self::PBotC1stEd => &PBOTC_1ST_ED_HP,
             Self::ShuffledControl => &SHUFFLED_CONTROL_HP,
             Self::Shuffled(1) => &SHUFFLED_HP_1,
@@ -57,6 +59,7 @@ impl HpAlphabet {
             Self::KyteDoolittle => "kyte_doolittle",
             Self::ThomasDillNoC => "thomas_dill_no_c",
             Self::LehningerPlusC => "lehninger_plus_c",
+            Self::LehningerHpc => "lehninger_hpc",
             Self::PBotC1stEd => "pbotc_1st_ed",
             Self::ShuffledControl => "shuffled_control",
             Self::Shuffled(1) => "shuffled_control_1",
@@ -80,6 +83,7 @@ impl HpAlphabet {
             HpAlphabet::KyteDoolittle,
             HpAlphabet::ThomasDillNoC,
             HpAlphabet::LehningerPlusC,
+            HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
             HpAlphabet::ShuffledControl,
         ]
@@ -120,6 +124,26 @@ fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
     }
     for &r in p_residues {
         m.insert(r, b'p');
+    }
+    m.insert(b'*', b'*'); // stop codon pass-through
+    m
+}
+
+fn build_hpc(h_residues: &[u8], p_residues: &[u8], c_residues: &[u8]) -> HashMap<u8, u8> {
+    assert_eq!(
+        h_residues.len() + p_residues.len() + c_residues.len(),
+        20,
+        "HPC table must cover all 20 canonical amino acids"
+    );
+    let mut m = HashMap::with_capacity(21);
+    for &r in h_residues {
+        m.insert(r, b'h');
+    }
+    for &r in p_residues {
+        m.insert(r, b'p');
+    }
+    for &r in c_residues {
+        m.insert(r, b'c');
     }
     m.insert(b'*', b'*'); // stop codon pass-through
     m
@@ -205,6 +229,22 @@ static LEHNINGER_PLUS_C_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFGILMPVWY", b"DEHKNQRST"));
 
 // -----------------------------------------------------------------------------
+// Lehninger HPC: 3-letter extension of LehningerPlusC.
+//
+// LehningerPlusC folds cysteine into the hydrophobic class because its thiol
+// side chain is nonpolar. But cysteine's ability to form disulfide bonds is a
+// distinct chemistry from ordinary hydrophobic packing, so this variant keeps
+// Lehninger's H/P split for the other 19 residues and gives cysteine its own
+// third symbol ('c', for cystine) instead of merging it into 'h'.
+//
+//   h: A F G I L M P V W Y       (10 residues; = Lehninger's h, C excluded)
+//   p: D E H K N Q R S T         (9 residues; = Lehninger's p, C excluded)
+//   c: C                         (1 residue)
+// -----------------------------------------------------------------------------
+static LEHNINGER_HPC: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_hpc(b"AFGILMPVWY", b"DEHKNQRST", b"C"));
+
+// -----------------------------------------------------------------------------
 // Phillips et al. PBotC 1st ed, Figure 8.30.
 // Cys and Tyr are drawn in parentheses in the original figure,
 // indicating borderline H status. We follow the figure's grouping and
@@ -288,12 +328,12 @@ mod tests {
     }
 
     #[test]
-    fn all_mappings_are_h_or_p() {
+    fn all_mappings_are_h_p_or_c() {
         for alpha in all_named_alphabets() {
             for &r in ALL_RESIDUES {
                 let encoded = alpha.table()[&r];
                 assert!(
-                    encoded == b'h' || encoded == b'p',
+                    encoded == b'h' || encoded == b'p' || encoded == b'c',
                     "alphabet {:?} residue {} mapped to unexpected byte {}",
                     alpha,
                     r as char,
@@ -354,6 +394,13 @@ mod tests {
             b'h',
             "PBotC1stEd: C borderline-h (Phillips et al. 2008, Fig. 8.30)"
         );
+
+        // C = its own third class (cystine) in LehningerHpc, distinct from h/p.
+        assert_eq!(
+            HpAlphabet::LehningerHpc.table()[&b'C'],
+            b'c',
+            "LehningerHpc: C is cystine, its own class distinct from h/p"
+        );
     }
 
     #[test]
@@ -368,6 +415,11 @@ mod tests {
             HpAlphabet::LehningerPlusC.table()[&b'G'],
             b'h',
             "LehningerPlusC: G inherits Lehninger placement"
+        );
+        assert_eq!(
+            HpAlphabet::LehningerHpc.table()[&b'G'],
+            b'h',
+            "LehningerHpc: G inherits Lehninger placement"
         );
 
         // G = polar in ThomasDill, KyteDoolittle, ThomasDillNoC, PBotC1stEd.
@@ -411,6 +463,11 @@ mod tests {
             b'h',
             "PBotC1stEd: P hydrophobic (Phillips et al. 2008, Fig. 8.30; moved to p in 2nd ed)"
         );
+        assert_eq!(
+            HpAlphabet::LehningerHpc.table()[&b'P'],
+            b'h',
+            "LehningerHpc: P inherits Lehninger placement"
+        );
 
         // P = polar in ThomasDill, KyteDoolittle, ThomasDillNoC.
         assert_eq!(
@@ -445,6 +502,7 @@ mod tests {
             HpAlphabet::ThomasDill,
             HpAlphabet::ThomasDillNoC,
             HpAlphabet::LehningerPlusC,
+            HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
         ] {
             assert_eq!(alpha.table()[&b'W'], b'h', "{:?}: W hydrophobic (aromatic)", alpha);
@@ -466,6 +524,7 @@ mod tests {
             HpAlphabet::ThomasDill,
             HpAlphabet::ThomasDillNoC,
             HpAlphabet::LehningerPlusC,
+            HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
         ] {
             assert_eq!(alpha.table()[&b'Y'], b'h', "{:?}: Y hydrophobic (aromatic)", alpha);

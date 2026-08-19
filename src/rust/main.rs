@@ -123,6 +123,9 @@ enum ProteinEncoding {
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
     #[value(alias = "hp_lehninger_plus_c")]
     HpLehningerPlusC,
+    /// HPC Lehninger 3-letter: hydrophobic/polar/cystine, C split into its own class
+    #[value(alias = "hp_lehninger_hpc")]
+    HpLehningerHpc,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
     #[value(name = "hp-pbotc-1st-ed", alias = "hp_pbotc_1st_ed")]
     HpPBotC1stEd,
@@ -142,6 +145,7 @@ impl From<ProteinEncoding> for &'static str {
             ProteinEncoding::HpKyteDoolittle => "hp_kyte_doolittle",
             ProteinEncoding::HpThomasDillNoC => "hp_thomas_dill_no_c",
             ProteinEncoding::HpLehningerPlusC => "hp_lehninger_plus_c",
+            ProteinEncoding::HpLehningerHpc => "hp_lehninger_hpc",
             ProteinEncoding::HpPBotC1stEd => "hp_pbotc_1st_ed",
             ProteinEncoding::HpShuffledControl => "hp_shuffled_control",
         }
@@ -564,6 +568,7 @@ fn assign_encoding(
         "hp_kyte_doolittle" => ProteinEncoding::HpKyteDoolittle,
         "hp_thomas_dill_no_c" => ProteinEncoding::HpThomasDillNoC,
         "hp_lehninger_plus_c" => ProteinEncoding::HpLehningerPlusC,
+        "hp_lehninger_hpc" => ProteinEncoding::HpLehningerHpc,
         "hp_pbotc_1st_ed" => ProteinEncoding::HpPBotC1stEd,
         "hp_shuffled_control" => ProteinEncoding::HpShuffledControl,
         // Seeded shuffled controls (hp_shuffled_control_N) are stored with the seed
@@ -575,7 +580,7 @@ fn assign_encoding(
                 message: format!(
                     "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp, \
                      hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
-                     hp_thomas_dill_no_c, hp_lehninger_plus_c, hp_pbotc_1st_ed, \
+                     hp_thomas_dill_no_c, hp_lehninger_plus_c, hp_lehninger_hpc, hp_pbotc_1st_ed, \
                      hp_shuffled_control (or hp_shuffled_control_N for seeded variants)",
                     detected_moltype
                 ),
