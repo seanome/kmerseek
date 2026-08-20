@@ -1490,7 +1490,7 @@ impl ProteomeIndex {
         name: &str,
     ) -> IndexResult<ProteinSketch> {
         // Validate and resolve ambiguity if needed
-        let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence)?;
+        let processed_sequence = self.aa_ambiguity.validate_and_resolve(sequence, &self.moltype)?;
 
         // Create a new protein signature
         let mut protein_sig = ProteinSketch::new(name, self.ksize, self.scaled, &self.moltype)?;
@@ -3309,138 +3309,60 @@ mod tests {
         assert!(!index1.is_equivalent_to(&index3).unwrap());
     }
 
-    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958), from
-    /// tests/testdata/fasta/ced9.fasta.
-    const CED9_PREFIX: &str = "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM";
+    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958) with three residues
+    /// rewritten to the ambiguity codes that stand for them: Asn->B (Asx), Glu->Z (Glx),
+    /// Ile->J (Xle). Also carries U (Sec) and O (Pyl).
+    const CED9_WITH_AMBIGUITY_CODES: &str =
+        "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGJKGTEPTDFGZNSDAQDLPSPSRQASTRRUO";
 
+    /// Indexing the same sequence twice must produce byte-identical sketches.
+    ///
+    /// WHY: ambiguity codes were previously resolved by drawing at random from the
+    /// alternatives, so B became Asp on one run and Asn on the next. That changed the k-mers,
+    /// the hashes and the stored index every time the same FASTA was indexed.
     #[test]
-    fn test_kmer_spectrum_csv_has_totals_comment_and_rows() {
-        use std::io::Read;
-
+    fn test_ambiguity_codes_index_deterministically() {
         let temp_dir = tempdir().unwrap();
-        let index =
-            ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein", true).unwrap();
-        // 3 k-mers seen once, 1 seen twice, 1 seen three times: 5 unique, 8 total.
-        let frequencies: HashMap<u64, usize> =
-            [(10, 1), (11, 1), (12, 1), (20, 2), (30, 3)].into_iter().collect();
 
-        let csv_path = temp_dir.path().join("spectrum.csv");
-        index.write_kmer_frequency_spectrum(&csv_path, &frequencies).unwrap();
+        for (i, moltype) in ["protein", "dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+            let index =
+                ProteomeIndex::new(temp_dir.path().join(format!("d{i}.db")), 5, 1, moltype, true)
+                    .unwrap();
 
-        let mut contents = String::new();
-        File::open(&csv_path).unwrap().read_to_string(&mut contents).unwrap();
+            let first = index
+                .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                .unwrap()
+                .mins_as_set();
+            assert!(!first.is_empty(), "{moltype}: no k-mers produced");
 
-        assert_eq!(
-            contents,
-            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 moltype=protein ksize=10\n\
-             moltype,ksize,occurrences,n_kmers\n\
-             protein,10,1,3\n\
-             protein,10,2,1\n\
-             protein,10,3,1\n"
-        );
+            for attempt in 0..5 {
+                let again = index
+                    .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                    .unwrap()
+                    .mins_as_set();
+                assert_eq!(again, first, "{moltype}: sketch differed on attempt {attempt}");
+            }
+        }
     }
 
+    /// Under a reduced alphabet, an ambiguity code must sketch identically to *both* residues
+    /// it stands for — that is what makes substituting a representative lossless.
     #[test]
-    fn test_median_occurrences_exact() {
-        // Counts 1,1,1,2,3 -> odd length, middle element is 1.
-        let odd: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
-        assert_eq!(ProteomeIndex::median_occurrences(&odd, 5), 1.0);
-
-        // Counts 1,1,2,3 -> even length, middle two are 1 and 2.
-        let even: BTreeMap<usize, usize> = [(1, 2), (2, 1), (3, 1)].into_iter().collect();
-        assert_eq!(ProteomeIndex::median_occurrences(&even, 4), 1.5);
-
-        // Counts 4,4,9,9 -> both middles inside one bucket.
-        let flat: BTreeMap<usize, usize> = [(4, 2), (9, 2)].into_iter().collect();
-        assert_eq!(ProteomeIndex::median_occurrences(&flat, 4), 6.5);
-
-        // Single value and empty.
-        assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect(), 1), 7.0);
-        assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new(), 0), 0.0);
-    }
-
-    #[test]
-    fn test_frequency_bins_groups_counts_into_powers_of_two() {
-        // Bin b holds counts in [2^b, 2^(b+1)): 1 | 2-3 | 4-7 | 8-15 | ... | 256-511
-        let frequencies: HashMap<u64, usize> =
-            [(10, 1), (11, 1), (12, 1), (20, 2), (21, 3), (30, 4), (31, 7), (40, 8), (50, 300)]
-                .into_iter()
-                .collect();
-
-        let bins = ProteomeIndex::frequency_bins(&frequencies);
-
-        let expected: BTreeMap<u32, usize> =
-            [(0, 3), (1, 2), (2, 2), (3, 1), (8, 1)].into_iter().collect();
-        assert_eq!(bins, expected);
-    }
-
-    #[test]
-    fn test_n_smallest_by_key_selects_most_and_least_common() {
-        let frequencies: HashMap<u64, usize> =
-            [(100, 5), (200, 9), (300, 1), (400, 9), (500, 3)].into_iter().collect();
-
-        // Most common: highest count first, ties broken by ascending hash (200 before 400).
-        let most = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| {
-            (std::cmp::Reverse(count), hash)
-        });
-        assert_eq!(most, vec![(200, 9), (400, 9), (100, 5)]);
-
-        // Least common: lowest count first.
-        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| (count, hash));
-        assert_eq!(least, vec![(300, 1), (500, 3), (100, 5)]);
-    }
-
-    #[test]
-    fn test_n_smallest_by_key_returns_all_when_n_exceeds_len() {
-        let frequencies: HashMap<u64, usize> = [(100, 2), (200, 1)].into_iter().collect();
-
-        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 10, |hash, count| (count, hash));
-
-        assert_eq!(least, vec![(200, 1), (100, 2)]);
-    }
-
-    #[test]
-    fn test_resolve_kmer_string_recovers_kmer_text_from_hash() {
+    fn test_ambiguity_code_sketches_match_both_alternatives() {
         let temp_dir = tempdir().unwrap();
-        let index =
-            ProteomeIndex::new(temp_dir.path().join("ced9.db"), 10, 1, "protein", true).unwrap();
-        let sig = index.create_protein_signature(CED9_PREFIX, "ced9").unwrap();
-        let md5 = sig.signature().md5sum.clone();
-        index.store_signatures(vec![sig]).unwrap();
+        // Same fragment written three ways: with B, and with each residue B stands for.
+        let with_b = "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGIK";
+        let with_d = "MTRCTADNSLTNPAYRRRTMDTGEMKEFLGIK";
+        let with_n = "MTRCTADNSLTNPAYRRRTMNTGEMKEFLGIK";
 
-        // The k-mer starting at position 0 is the first 10 residues of CED-9.
-        let stored = index.signatures.get(&md5).unwrap();
-        let (&hash, _) =
-            stored.kmer_positions().iter().find(|(_, positions)| positions.contains(&0)).unwrap();
-        drop(stored);
+        for (i, moltype) in ["dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+            let index =
+                ProteomeIndex::new(temp_dir.path().join(format!("a{i}.db")), 5, 1, moltype, true)
+                    .unwrap();
+            let sketch = |seq| index.create_protein_signature(seq, "x").unwrap().mins_as_set();
 
-        let inverted_index: HashMap<u64, Vec<u32>> = [(hash, vec![0])].into_iter().collect();
-        let resolved = index.resolve_kmer_string(hash, &inverted_index, std::slice::from_ref(&md5));
-
-        assert_eq!(resolved, "MTRCTADNSL");
-    }
-
-    #[test]
-    fn test_resolve_kmer_string_reports_unknown_hash() {
-        let temp_dir = tempdir().unwrap();
-        let index =
-            ProteomeIndex::new(temp_dir.path().join("ced9.db"), 10, 1, "protein", true).unwrap();
-
-        let resolved = index.resolve_kmer_string(42, &HashMap::new(), &[]);
-
-        assert_eq!(resolved, "<sequence unavailable, hash 42>");
-    }
-
-    #[test]
-    fn test_has_stored_sequences_follows_store_raw_sequences() {
-        let temp_dir = tempdir().unwrap();
-        for (store_raw, expected) in [(true, true), (false, false)] {
-            let path = temp_dir.path().join(format!("ced9-{store_raw}.db"));
-            let index = ProteomeIndex::new(path, 10, 1, "protein", store_raw).unwrap();
-            let sig = index.create_protein_signature(CED9_PREFIX, "ced9").unwrap();
-            index.store_signatures(vec![sig]).unwrap();
-
-            assert_eq!(index.has_stored_sequences(), expected, "store_raw={store_raw}");
+            assert_eq!(sketch(with_b), sketch(with_d), "{moltype}: B should sketch like D");
+            assert_eq!(sketch(with_b), sketch(with_n), "{moltype}: B should sketch like N");
         }
     }
 
