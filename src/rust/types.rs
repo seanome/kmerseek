@@ -81,12 +81,19 @@ pub struct MolType(pub String);
 
 impl MolType {
     /// Create a new molecular type with validation
+    ///
+    /// WHY "raw": encoding::get_hash_function_from_moltype and
+    /// encoding::get_encoding_fn_from_moltype both already treat "raw" as a full synonym
+    /// for "protein" (identity encoding). Without it here, `ProteinSketch::new` — which
+    /// unwraps this constructor — panicked on any attempt to actually build a signature
+    /// with moltype "raw", even though it was already a documented, accepted string
+    /// elsewhere in the encoding pipeline.
     pub fn new(moltype: &str) -> Result<Self, String> {
         match moltype {
-            "protein" | "dayhoff" | "hp" => Ok(MolType(moltype.to_string())),
+            "protein" | "raw" | "dayhoff" | "hp" => Ok(MolType(moltype.to_string())),
             s if s.starts_with("hp_") => Ok(MolType(moltype.to_string())),
             _ => Err(format!(
-                "Invalid molecular type: {}. Must be one of: protein, dayhoff, hp, \
+                "Invalid molecular type: {}. Must be one of: protein, raw, dayhoff, hp, \
                  hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
                  hp_thomas_dill_no_c, hp_lehninger_plus_c, hp_pbotc_1st_ed, \
                  hp_shuffled_control",
@@ -185,6 +192,7 @@ mod tests {
     #[test]
     fn test_moltype_validation() {
         assert!(MolType::new("protein").is_ok());
+        assert!(MolType::new("raw").is_ok());
         assert!(MolType::new("dayhoff").is_ok());
         assert!(MolType::new("hp").is_ok());
         assert!(MolType::new("invalid").is_err());

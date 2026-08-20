@@ -340,6 +340,15 @@ impl ProteinSketch {
         // mean, so a query k-mer holding the literal code there already matches every
         // reference k-mer with either concrete residue, and expanding would just re-hash to
         // the same value. Only protein/raw need the expansion to recover that match.
+        //
+        // WHY hp_shuffled_control is excluded too, and deliberately so, not just because the
+        // `protein | raw` match misses it: its partition is randomized, so unlike the named
+        // HP tables it does NOT collapse B/J/Z's alternatives to one symbol (see
+        // aminoacid::test_shuffled_control_does_not_preserve_ambiguity_equivalence) — a real
+        // recall gain would be available here. Expanding it anyway would inject the same
+        // non-random, biochemically-derived signal (deciding exactly which two residues an
+        // ambiguity code can mean) that the control exists to withhold, undermining it as a
+        // baseline for measuring what the named alphabets contribute over random chance.
         let expand_ambiguity = matches!(moltype_str.as_str(), "protein" | "raw")
             && sequence.bytes().any(|b| matches!(b, b'B' | b'J' | b'Z'));
 
@@ -419,7 +428,12 @@ impl ProteinSketch {
             efficient_data_with_sequence.set_raw_sequence(sequence.to_string());
 
             let moltype_str = self.moltype.to_string();
-            if moltype_str != "protein" {
+            // WHY protein/raw: both use identity encoding (encoding::get_encoding_fn_from_moltype),
+            // so `encode_by_moltype` would just return a byte-for-byte duplicate of the raw
+            // sequence already stored above. Skip it for both, not just `protein`, to avoid
+            // doubling storage and to keep `get_moltype_sequence()` returning `None` for both,
+            // consistent with there being no actual encoding to store.
+            if !matches!(moltype_str.as_str(), "protein" | "raw") {
                 let encoded_sequence = if let Some(ref alpha) = custom_hp {
                     // Custom HP alphabets: apply the HP table directly, uppercased to match
                     // the hashes stored in minhash (sourmash uppercases before hashing).
@@ -630,6 +644,16 @@ mod tests {
     fn test_non_protein_moltype_stores_encoded_sequence() {
         let s = ProteinSketch::from_protein_sequence("p", SEQ, 5, 1, "hp").unwrap();
         assert_eq!(s.get_moltype_sequence(), Some(SEQ_HP_ENCODED));
+    }
+
+    /// `raw` uses identity encoding, same as `protein` (encoding::get_encoding_fn_from_moltype
+    /// treats them as synonyms), so it must skip storing an encoded-sequence copy just like
+    /// `protein` does — otherwise it duplicates the raw sequence for no reason.
+    #[test]
+    fn test_raw_moltype_stores_no_encoded_sequence() {
+        let s = ProteinSketch::from_protein_sequence("p", SEQ, 5, 1, "raw").unwrap();
+        assert_eq!(s.get_moltype_sequence(), None);
+        assert_eq!(s.get_raw_sequence(), Some(SEQ));
     }
 
     #[test]

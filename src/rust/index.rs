@@ -2372,6 +2372,28 @@ mod tests {
         Ok(())
     }
 
+    /// `raw` is documented as a full synonym for `protein` in encoding.rs, but `MolType::new`
+    /// never accepted it, so `ProteinSketch::new` (called from `create_protein_signature`)
+    /// panicked on `.unwrap()` for any real attempt to build a signature with moltype "raw".
+    /// This confirms that path now works, and that ambiguity codes expand under `raw` the
+    /// same way they do under `protein`.
+    #[test]
+    fn test_create_protein_signature_raw_moltype_does_not_panic() -> Result<()> {
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("raw_test.db"), 5, 1, "raw", false).unwrap();
+
+        let signature = index.create_protein_signature("ACDEFXBZJUO", "test_raw")?;
+        // 11 residues, ksize 5, 7 windows; the 5 windows overlapping B/Z/J carry 0, 0, 1, 2,
+        // 3, 3, 3 ambiguous positions respectively, giving 1+1+2+4+8+8+8 = 32 variants.
+        assert_eq!(
+            signature.kmer_positions().len(),
+            32,
+            "ambiguity codes should expand under raw moltype the same way they do under protein"
+        );
+
+        Ok(())
+    }
+
     #[test]
     fn test_create_protein_signature_amino_acid_validation_moltype_dayhoff() -> Result<()> {
         let dir = tempdir()?;
