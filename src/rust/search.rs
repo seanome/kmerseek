@@ -1088,6 +1088,15 @@ pub fn find_matched_regions(
     // WHY: This allows us to efficiently find consecutive regions in both query and target.
     query_target_pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
 
+    // WHY dedup by (qpos, tpos): an ambiguous window (B/J/Z under protein/raw) hashes to
+    // multiple variant hashvals at the same physical position (aminoacid::expand_ambiguity_variants).
+    // If both query and target carry the ambiguity code at the same aligned position, each
+    // variant hashval independently contributes an identical (qpos, tpos) pair, which the
+    // consecutive-run check below reads as a non-increment and splits one contiguous region
+    // into several fragments. Region-finding only cares about position correspondence, not
+    // which hashval produced it, so collapse same-position duplicates before walking runs.
+    query_target_pairs.dedup_by(|a, b| a.0 == b.0 && a.1 == b.1);
+
     // Find all consecutive regions where both query and target positions are consecutive
     let mut consecutive_regions = Vec::new();
     let mut i: usize = 0;
@@ -1539,6 +1548,42 @@ mod tests {
         Ok(())
     }
 
+    /// End-to-end recall check for ambiguity-code expansion, through the real
+    /// index -> store -> search pipeline (not a direct sketch intersection).
+    ///
+    /// The target has a literal B at position 5; the query has the concrete D at the same
+    /// position, otherwise identical. Both are 21 residues at k=5 (17 windows each). Before
+    /// expansion, a query k-mer with a concrete residue could never match a target k-mer
+    /// holding the ambiguity code as its own literal symbol, so containment would be well
+    /// below 1.0. With expansion, every one of the query's 17 k-mers is contained in the
+    /// target, since the target's ambiguous windows now also carry the D-reading's hash.
+    #[test]
+    fn test_search_ambiguity_expansion_recovers_full_containment() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let temp_path = temp_dir.path();
+
+        let target_index =
+            ProteomeIndex::new(temp_path.join("target_index"), 5, 1, "protein", false)?;
+        let target_sig =
+            target_index.create_protein_signature("ACDEFBGHIKLMNPQRSTVWY", "target_with_B")?;
+        target_index.store_signatures(vec![target_sig])?;
+        let searcher = ProteinSearcher::new(target_index);
+
+        let query_index =
+            ProteomeIndex::new(temp_path.join("query_index"), 5, 1, "protein", false)?;
+        let query_sig =
+            query_index.create_protein_signature("ACDEFDGHIKLMNPQRSTVWY", "query_with_D")?;
+
+        let results = searcher.search(&[query_sig], &SearchFilters::default())?;
+
+        assert_eq!(results.len(), 1, "Should find exactly one match");
+        let result = &results[0];
+        assert_eq!(result.containment, 1.0, "All 17 query k-mers should be contained in target");
+        assert_eq!(result.n_intersecting_hashes, 17, "Query has 17 k-mers at k=5 over 21 residues");
+
+        Ok(())
+    }
+
     /// Each `SearchFilters` field, exercised on its own, rejects an otherwise-real BCL2/CED9
     /// match. WHY: `compare()` checks all three conditions with `||`, which short-circuits -
     /// a permissive default on the other two fields is required so the field under test is
@@ -1718,6 +1763,30 @@ mod tests {
                 .expect("Should find landmark region");
             assert_region_matches(found, landmark);
         }
+
+        Ok(())
+    }
+
+    /// An ambiguous window (B/J/Z under protein/raw) expands to multiple variant hashvals at
+    /// the same physical position (aminoacid::expand_ambiguity_variants). When query and
+    /// target share the ambiguity code at the same aligned position, both independently
+    /// produce every variant hash there, so without deduping by (qpos, tpos) the duplicate
+    /// pairs read as non-consecutive and fragment one contiguous match into several. A plain
+    /// self-match (query == target) must still collapse to exactly one region spanning the
+    /// whole sequence, the same as it would with no ambiguity code at all.
+    #[test]
+    fn test_find_matched_regions_shared_ambiguity_code_does_not_fragment() -> Result<()> {
+        let seq = "ACDEFBGHIKLMNPQR";
+        let query = ProteinSketch::from_protein_sequence("q", seq, 5, 1, "protein")?;
+        let target = ProteinSketch::from_protein_sequence("t", seq, 5, 1, "protein")?;
+        let intersection = query.intersect(&target);
+        let regions = find_matched_regions(&query, &target, &intersection);
+
+        assert_eq!(regions.len(), 1, "self-match should collapse to one region, not fragment");
+        assert_eq!(regions[0].query_start, 0);
+        assert_eq!(regions[0].query_end, seq.len() as u32);
+        assert_eq!(regions[0].target_start, 0);
+        assert_eq!(regions[0].target_end, seq.len() as u32);
 
         Ok(())
     }
