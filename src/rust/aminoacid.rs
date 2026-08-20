@@ -23,6 +23,55 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 ///   - Z (Glx) = Glu or Gln — Dayhoff `c`, polar in every HP table
 pub const AMBIGUITY_CODES: [(char, char); 3] = [('B', 'D'), ('J', 'I'), ('Z', 'E')];
 
+/// Ambiguity codes paired with *both* residues they can mean, in the same order as
+/// `AMBIGUITY_CODES` (`alternatives[0]` is always that entry's representative).
+///
+/// Used only to expand a k-mer window into every concrete reading under `protein`/`raw`:
+/// unlike Dayhoff/HP, those alphabets don't collapse B/J/Z to one encoded symbol, so a query
+/// k-mer holding the ambiguity code as a literal character can never match a reference k-mer
+/// with the concrete residue. Generating both readings and hashing each recovers that match.
+pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
+    [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
+
+/// Windows with more ambiguous positions than this are hashed as their single literal
+/// reading instead of expanded, to cap the blowup at 2^4 = 16 variants per window. Real
+/// proteins essentially never cluster this many B/J/Z in one k-mer; this only guards against
+/// a pathological run of ambiguity codes turning one window into thousands of hash insertions.
+pub const MAX_AMBIGUOUS_PER_KMER: usize = 4;
+
+/// All concrete readings of `kmer` with every ambiguity code (B/J/Z) expanded to its two
+/// possible residues. Returns `vec![kmer.to_string()]` unchanged when there's nothing to
+/// expand, or when expansion would exceed `MAX_AMBIGUOUS_PER_KMER` (see its doc comment).
+pub fn expand_ambiguity_variants(kmer: &str) -> Vec<String> {
+    let ambiguous_count =
+        kmer.chars().filter(|c| AMBIGUITY_ALTERNATIVES.iter().any(|(code, _)| code == c)).count();
+    if ambiguous_count == 0 || ambiguous_count > MAX_AMBIGUOUS_PER_KMER {
+        return vec![kmer.to_string()];
+    }
+
+    kmer.chars().fold(vec![String::with_capacity(kmer.len())], |variants, c| {
+        match AMBIGUITY_ALTERNATIVES.iter().find(|(code, _)| *code == c) {
+            Some((_, alternatives)) => variants
+                .iter()
+                .flat_map(|prefix| {
+                    alternatives.iter().map(move |&a| {
+                        let mut s = prefix.clone();
+                        s.push(a);
+                        s
+                    })
+                })
+                .collect(),
+            None => variants
+                .into_iter()
+                .map(|mut s| {
+                    s.push(c);
+                    s
+                })
+                .collect(),
+        }
+    })
+}
+
 /// Non-canonical residues paired with their closest canonical analogue.
 ///
 /// These are specific amino acids, not ambiguity codes, so they carry real chemistry that
@@ -184,6 +233,54 @@ mod tests {
         assert_eq!(AminoAcidAmbiguity::representative('Z'), Some('E'));
         assert_eq!(AminoAcidAmbiguity::representative('U'), Some('C'));
         assert_eq!(AminoAcidAmbiguity::representative('O'), Some('K'));
+    }
+
+    /// `AMBIGUITY_CODES` and `AMBIGUITY_ALTERNATIVES` must agree: the single representative
+    /// used for Dayhoff/HP substitution has to be one of the two alternatives used for
+    /// `protein`/`raw` expansion, in the same order, or the two tables have silently drifted.
+    #[test]
+    fn test_ambiguity_alternatives_agree_with_representative() {
+        assert_eq!(AMBIGUITY_CODES.len(), AMBIGUITY_ALTERNATIVES.len());
+        for ((code, representative), (alt_code, alternatives)) in
+            AMBIGUITY_CODES.iter().zip(AMBIGUITY_ALTERNATIVES.iter())
+        {
+            assert_eq!(code, alt_code);
+            assert_eq!(*representative, alternatives[0], "{code}");
+        }
+    }
+
+    #[test]
+    fn test_expand_ambiguity_variants_no_ambiguity() {
+        assert_eq!(expand_ambiguity_variants("ACDEF"), vec!["ACDEF".to_string()]);
+    }
+
+    #[test]
+    fn test_expand_ambiguity_variants_single_code() {
+        let mut variants = expand_ambiguity_variants("ACBEF");
+        variants.sort();
+        assert_eq!(variants, vec!["ACDEF".to_string(), "ACNEF".to_string()]);
+    }
+
+    #[test]
+    fn test_expand_ambiguity_variants_multiple_codes_take_cartesian_product() {
+        // B -> D/N, J -> I/L: 2x2 = 4 concrete readings.
+        let mut variants = expand_ambiguity_variants("BJ");
+        variants.sort();
+        let mut expected =
+            vec!["DI".to_string(), "DL".to_string(), "NI".to_string(), "NL".to_string()];
+        expected.sort();
+        assert_eq!(variants, expected);
+    }
+
+    /// Above `MAX_AMBIGUOUS_PER_KMER` ambiguous positions, expansion is skipped entirely and
+    /// the literal k-mer is returned, instead of blowing up to 2^n variants.
+    #[test]
+    fn test_expand_ambiguity_variants_respects_cap() {
+        let kmer: String = std::iter::repeat('B').take(MAX_AMBIGUOUS_PER_KMER + 1).collect();
+        assert_eq!(expand_ambiguity_variants(&kmer), vec![kmer]);
+
+        let at_cap: String = std::iter::repeat('B').take(MAX_AMBIGUOUS_PER_KMER).collect();
+        assert_eq!(expand_ambiguity_variants(&at_cap).len(), 1 << MAX_AMBIGUOUS_PER_KMER);
     }
 
     /// The substitution must be lossless: both residues an ambiguity code stands for have to

@@ -325,14 +325,33 @@ impl ProteinSketch {
     /// This is ~3.4× faster to build and ~2.5× smaller to serialize, with identical
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
+        use crate::aminoacid::expand_ambiguity_variants;
         use crate::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
         use crate::hp_alphabets::HpAlphabet;
         use sourmash::_hash_murmur;
 
         let moltype_str = self.moltype.to_string();
         let custom_hp = HpAlphabet::from_moltype(&moltype_str);
+        let ksize = self.protein_ksize as usize;
 
-        if let Some(ref alpha) = custom_hp {
+        // WHY: only protein/raw keep each ambiguity code as its own literal symbol
+        // (aminoacid::validate_and_resolve's `reduces_alphabet`) — under Dayhoff/HP, B/J/Z
+        // already collapse to one shared encoded symbol regardless of which residue they
+        // mean, so a query k-mer holding the literal code there already matches every
+        // reference k-mer with either concrete residue, and expanding would just re-hash to
+        // the same value. Only protein/raw need the expansion to recover that match.
+        let expand_ambiguity = matches!(moltype_str.as_str(), "protein" | "raw")
+            && sequence.bytes().any(|b| matches!(b, b'B' | b'J' | b'Z'));
+
+        if expand_ambiguity {
+            for i in 0..sequence.len().saturating_sub(ksize - 1) {
+                let kmer = &sequence[i..i + ksize];
+                for variant in expand_ambiguity_variants(kmer) {
+                    let hashval = _hash_murmur(variant.to_ascii_uppercase().as_bytes(), SEED);
+                    self.signature.minhash.add_hash(hashval);
+                }
+            }
+        } else if let Some(ref alpha) = custom_hp {
             // Pre-encode with our custom HP table so sourmash hashes h/p bytes via
             // Murmur64Protein (identity). Unknown bytes pass through unchanged.
             let table = alpha.table();
@@ -349,11 +368,21 @@ impl ProteinSketch {
             self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         self.signature.md5sum = format!("{:x}", md5sum);
 
-        let ksize = self.protein_ksize as usize;
         let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
             let kmer = &sequence[i..i + ksize];
+
+            if expand_ambiguity {
+                for variant in expand_ambiguity_variants(kmer) {
+                    let hashval = _hash_murmur(variant.to_ascii_uppercase().as_bytes(), SEED);
+                    if hashvals.contains(&hashval) {
+                        self.kmer_positions_mut().entry(hashval).or_default().push(i);
+                    }
+                }
+                continue;
+            }
+
             // WHY: sourmash's ReadingFrame::new_protein calls to_ascii_uppercase() before
             // hashing, so we must uppercase the encoded k-mer to get matching hash values.
             let hashval = if let Some(ref alpha) = custom_hp {
@@ -646,6 +675,69 @@ mod tests {
         assert_eq!(mins.len(), SEQ_MINS);
         // Identical sketches intersect fully.
         assert_eq!(a.intersect(&b).len(), SEQ_MINS);
+    }
+
+    /// Under `protein`, expanding B into both D and N lets a query sketch built from either
+    /// concrete residue match the ambiguous reference at every overlapping k-mer — the
+    /// recall this feature exists for. "ACDEFBGHIKL" (11 residues, k=5) has 7 windows; the 2
+    /// flanking windows never touch the ambiguous position 5, but the 5 windows that do
+    /// overlap it match after expansion, matching neither before it.
+    #[test]
+    fn test_ambiguity_expansion_matches_both_concrete_residues_under_protein() {
+        let ambiguous =
+            ProteinSketch::from_protein_sequence("amb", "ACDEFBGHIKL", 5, 1, "protein").unwrap();
+        let with_d =
+            ProteinSketch::from_protein_sequence("d", "ACDEFDGHIKL", 5, 1, "protein").unwrap();
+        let with_n =
+            ProteinSketch::from_protein_sequence("n", "ACDEFNGHIKL", 5, 1, "protein").unwrap();
+
+        // 2 unambiguous windows + 5 windows overlapping B, each expanded to 2 variants.
+        assert_eq!(ambiguous.mins_as_set().len(), 2 + 5 * 2);
+
+        // Every one of the 7 windows in "ACDEFBGHIKL" matches both concrete readings.
+        assert_eq!(ambiguous.intersect(&with_d).len(), 7);
+        assert_eq!(ambiguous.intersect(&with_n).len(), 7);
+
+        // Baseline: two different concrete residues only agree on the 2 flanking windows
+        // that don't touch the differing position, confirming the match above comes from
+        // expansion and not from D/N coincidentally hashing alike.
+        assert_eq!(with_d.intersect(&with_n).len(), 2);
+    }
+
+    /// Dayhoff/HP already collapse B's two alternatives to one encoded symbol
+    /// (aminoacid::AMBIGUITY_CODES), so expansion must not trigger there: a B-containing
+    /// sequence must sketch identically to its single-representative-substituted form, not
+    /// pick up the extra variant hashes `protein` produces for the same sequence above.
+    ///
+    /// WHY resolve first: `add_protein` never substitutes ambiguity codes itself — that's
+    /// `AminoAcidAmbiguity::validate_and_resolve`, run one layer up by
+    /// `ProteomeIndex::create_protein_signature` before `add_protein` ever sees the sequence.
+    /// Under dayhoff/hp it substitutes B -> D, so `add_protein` never actually encounters a
+    /// literal B in production; this test resolves first to match that, rather than feeding
+    /// `add_protein` a raw B directly and exercising sourmash's unrelated handling of an
+    /// out-of-alphabet byte.
+    ///
+    /// WHY no fixed window count: unlike the `protein` test above, HP's 2-symbol alphabet
+    /// means distinct windows can legitimately collapse to the same encoded k-mer, so the
+    /// count varies by moltype. The equality check below is what actually matters here.
+    #[test]
+    fn test_ambiguity_expansion_does_not_apply_to_dayhoff_or_hp() {
+        use crate::aminoacid::AminoAcidAmbiguity;
+
+        let aa = AminoAcidAmbiguity::new();
+        for moltype in ["dayhoff", "hp"] {
+            let resolved_ambiguous = aa.validate_and_resolve("ACDEFBGHIKL", moltype).unwrap();
+            let ambiguous =
+                ProteinSketch::from_protein_sequence("amb", &resolved_ambiguous, 5, 1, moltype)
+                    .unwrap();
+            let resolved =
+                ProteinSketch::from_protein_sequence("res", "ACDEFDGHIKL", 5, 1, moltype).unwrap();
+            assert_eq!(
+                ambiguous.mins_as_set(),
+                resolved.mins_as_set(),
+                "{moltype}: B and its representative D must sketch identically"
+            );
+        }
     }
 
     #[test]

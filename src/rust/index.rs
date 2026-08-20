@@ -2304,22 +2304,21 @@ mod tests {
                     protein_signature.kmer_positions().len() == 16,
                     "Valid sequence 'ACDEFGHIKLMNPQRSTVWY' should be accepted and have 16 protein 5-mers",
                 );
-            } else if protein_signature.signature().md5sum == "fa11c30a562fd82" {
+            } else if protein_signature.signature().md5sum == "bfbd6817c8ffb1b6" {
+                // Under `protein`, B/Z/J expand into every concrete residue they can mean
+                // instead of collapsing to one representative. "ACDEFXBZJ"'s five 5-mer
+                // windows carry 0, 0, 1, 2, and 3 ambiguous positions respectively, giving
+                // 1+1+2+4+8 = 16 concrete variants instead of 5 literal ones.
                 assert!(
-                    protein_signature.kmer_positions().len() == 5,
-                    "Valid sequence 'ACDEFXBZJ' should be accepted and have 5 protein 5-mers",
+                    protein_signature.kmer_positions().len() == 16,
+                    "Valid sequence 'ACDEFXBZJ' should expand B/Z/J into every concrete reading, giving 16 protein 5-mer variants",
                 );
             } else {
-                // For the third sequence, just check the length is correct
-                if protein_signature.kmer_positions().len() == 5 {
-                    // This is the expected case for ACDEFXBZJ
-                } else {
-                    panic!(
-                        "Unexpected kmer count: {} for md5sum: {}",
-                        protein_signature.kmer_positions().len(),
-                        protein_signature.signature().md5sum
-                    );
-                }
+                panic!(
+                    "Unexpected kmer count: {} for md5sum: {}",
+                    protein_signature.kmer_positions().len(),
+                    protein_signature.signature().md5sum
+                );
             }
         }
 
@@ -2343,28 +2342,30 @@ mod tests {
             );
         }
 
-        // Test that ambiguous characters are resolved (not rejected)
+        // Test that ambiguous characters expand to every concrete reading, not just resolve
         let ambiguous_sequences = [
-            "PLANTANDANIMALGENBMES", // B should be resolved to D or N
-            "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
-            "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+            "PLANTANDANIMALGENBMES", // B expands to D and N
+            "PLANTANDANIMALGENZMES", // Z expands to E and Q
+            "PLANTANDANIMALGENJMES", // J expands to I and L
         ];
 
         for sequence in ambiguous_sequences.iter() {
             let result = index.create_protein_signature(sequence, "test_protein");
             assert!(
                 result.is_ok(),
-                "Sequence with ambiguous amino acid '{}' should be resolved, not rejected",
+                "Sequence with ambiguous amino acid '{}' should be accepted, not rejected",
                 sequence
             );
 
             let protein_signature = result.unwrap();
             print_kmer_positions(&protein_signature);
-            // Should have the same number of k-mers as the original sequence
+            // 21-residue sequence has 17 windows of size 5; the 4 windows overlapping the
+            // single ambiguous position each contribute 2 variants instead of 1, giving
+            // 13 + 4*2 = 21 concrete 5-mers instead of 17.
             assert_eq!(
                 protein_signature.kmer_positions().len(),
-                17,
-                "Resolved sequence should have 17 protein 5-mers"
+                21,
+                "Sequence with one ambiguous residue should expand into 21 protein 5-mer variants"
             );
         }
 
