@@ -139,7 +139,7 @@ mod tests {
             "hp_thomas_dill",
             "hp_lehninger",
             "hp_thomas_dill_no_c",
-            "hp_lehninger_plus_c",
+            "hp_lehninger_c_nonpolar",
             "hp_lehninger_hpc",
             "hp_pbotc_1st_ed",
         ];

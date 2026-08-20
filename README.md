@@ -92,7 +92,7 @@ default (`hp` moltype); the others are selectable via `hp_<name>` moltypes
 
 `hp_lehninger_hpc` is a 3-letter variant: it keeps Lehninger's H/P split for
 every residue except cysteine, which gets its own third symbol `c` (cystine)
-instead of being folded into `h` the way `hp_lehninger_plus_c` does --
+instead of being folded into `h` the way `hp_lehninger_c_nonpolar` does --
 disulfide-bond formation is a distinct chemistry from ordinary hydrophobic
 packing.
 

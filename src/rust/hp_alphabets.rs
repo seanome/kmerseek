@@ -18,7 +18,7 @@ pub enum HpAlphabet {
     ThomasDill,
     KyteDoolittle,
     ThomasDillNoC,
-    LehningerPlusC,
+    LehningerCNonpolar,
     LehningerHpc,
     PBotC1stEd,
     ShuffledControl,
@@ -33,7 +33,7 @@ impl HpAlphabet {
             Self::ThomasDill => &THOMAS_DILL_HP,
             Self::KyteDoolittle => &KYTE_DOOLITTLE_HP,
             Self::ThomasDillNoC => &THOMAS_DILL_NO_C_HP,
-            Self::LehningerPlusC => &LEHNINGER_PLUS_C_HP,
+            Self::LehningerCNonpolar => &LEHNINGER_C_NONPOLAR_HP,
             Self::LehningerHpc => &LEHNINGER_HPC,
             Self::PBotC1stEd => &PBOTC_1ST_ED_HP,
             Self::ShuffledControl => &SHUFFLED_CONTROL_HP,
@@ -58,7 +58,7 @@ impl HpAlphabet {
             Self::ThomasDill => "thomas_dill",
             Self::KyteDoolittle => "kyte_doolittle",
             Self::ThomasDillNoC => "thomas_dill_no_c",
-            Self::LehningerPlusC => "lehninger_plus_c",
+            Self::LehningerCNonpolar => "lehninger_c_nonpolar",
             Self::LehningerHpc => "lehninger_hpc",
             Self::PBotC1stEd => "pbotc_1st_ed",
             Self::ShuffledControl => "shuffled_control",
@@ -82,7 +82,7 @@ impl HpAlphabet {
             HpAlphabet::ThomasDill,
             HpAlphabet::KyteDoolittle,
             HpAlphabet::ThomasDillNoC,
-            HpAlphabet::LehningerPlusC,
+            HpAlphabet::LehningerCNonpolar,
             HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
             HpAlphabet::ShuffledControl,
@@ -225,13 +225,13 @@ static THOMAS_DILL_NO_C_HP: LazyLock<HashMap<u8, u8>> =
 //   h: A C F G I L M P V W Y     (11 residues)
 //   p: D E H K N Q R S T         (9 residues)
 // -----------------------------------------------------------------------------
-static LEHNINGER_PLUS_C_HP: LazyLock<HashMap<u8, u8>> =
+static LEHNINGER_C_NONPOLAR_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFGILMPVWY", b"DEHKNQRST"));
 
 // -----------------------------------------------------------------------------
-// Lehninger HPC: 3-letter extension of LehningerPlusC.
+// Lehninger HPC: 3-letter extension of LehningerCNonpolar.
 //
-// LehningerPlusC folds cysteine into the hydrophobic class because its thiol
+// LehningerCNonpolar folds cysteine into the hydrophobic class because its thiol
 // side chain is nonpolar. But cysteine's ability to form disulfide bonds is a
 // distinct chemistry from ordinary hydrophobic packing, so this variant keeps
 // Lehninger's H/P split for the other 19 residues and gives cysteine its own
@@ -373,7 +373,7 @@ mod tests {
             "ThomasDillNoC: C polar by construction"
         );
 
-        // C = hydrophobic in ThomasDill, KyteDoolittle, LehningerPlusC, PBotC1stEd.
+        // C = hydrophobic in ThomasDill, KyteDoolittle, LehningerCNonpolar, PBotC1stEd.
         assert_eq!(
             HpAlphabet::ThomasDill.table()[&b'C'],
             b'h',
@@ -385,9 +385,9 @@ mod tests {
             "KyteDoolittle: C hydrophobic (hydropathy +2.5, Kyte & Doolittle 1982)"
         );
         assert_eq!(
-            HpAlphabet::LehningerPlusC.table()[&b'C'],
+            HpAlphabet::LehningerCNonpolar.table()[&b'C'],
             b'h',
-            "LehningerPlusC: C hydrophobic by construction"
+            "LehningerCNonpolar: C hydrophobic by construction"
         );
         assert_eq!(
             HpAlphabet::PBotC1stEd.table()[&b'C'],
@@ -405,16 +405,16 @@ mod tests {
 
     #[test]
     fn glycine_placement() {
-        // G = hydrophobic in Lehninger (nonpolar aliphatic) and LehningerPlusC.
+        // G = hydrophobic in Lehninger (nonpolar aliphatic) and LehningerCNonpolar.
         assert_eq!(
             HpAlphabet::Lehninger.table()[&b'G'],
             b'h',
             "Lehninger: G nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)"
         );
         assert_eq!(
-            HpAlphabet::LehningerPlusC.table()[&b'G'],
+            HpAlphabet::LehningerCNonpolar.table()[&b'G'],
             b'h',
-            "LehningerPlusC: G inherits Lehninger placement"
+            "LehningerCNonpolar: G inherits Lehninger placement"
         );
         assert_eq!(
             HpAlphabet::LehningerHpc.table()[&b'G'],
@@ -447,16 +447,16 @@ mod tests {
 
     #[test]
     fn proline_placement() {
-        // P = hydrophobic in Lehninger (nonpolar aliphatic), LehningerPlusC, PBotC1stEd.
+        // P = hydrophobic in Lehninger (nonpolar aliphatic), LehningerCNonpolar, PBotC1stEd.
         assert_eq!(
             HpAlphabet::Lehninger.table()[&b'P'],
             b'h',
             "Lehninger: P nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)"
         );
         assert_eq!(
-            HpAlphabet::LehningerPlusC.table()[&b'P'],
+            HpAlphabet::LehningerCNonpolar.table()[&b'P'],
             b'h',
-            "LehningerPlusC: P inherits Lehninger placement"
+            "LehningerCNonpolar: P inherits Lehninger placement"
         );
         assert_eq!(
             HpAlphabet::PBotC1stEd.table()[&b'P'],
@@ -501,7 +501,7 @@ mod tests {
             HpAlphabet::Lehninger,
             HpAlphabet::ThomasDill,
             HpAlphabet::ThomasDillNoC,
-            HpAlphabet::LehningerPlusC,
+            HpAlphabet::LehningerCNonpolar,
             HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
         ] {
@@ -523,7 +523,7 @@ mod tests {
             HpAlphabet::Lehninger,
             HpAlphabet::ThomasDill,
             HpAlphabet::ThomasDillNoC,
-            HpAlphabet::LehningerPlusC,
+            HpAlphabet::LehningerCNonpolar,
             HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
         ] {
