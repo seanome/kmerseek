@@ -121,7 +121,7 @@ def test_resolve_query_names_no_match_returns_empty():
 def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
          containment=0.5, jaccard=0.1, query_enrichment=1.0, query_poisson_pvalue=0.05,
          region_poisson_score=2.0, region_tail_probability=None, region_enrichment=2.0,
-         moltype="hp_thomas_dill", region_subseq="MTRCTADNSL",
+         moltype="hp_thomas_dill", remove_low_complexity=False, region_subseq="MTRCTADNSL",
          moltype_seq="hpphphppph", target_subseq="MAHAGRTGYD", query_name=CED9_NAME):
     # Defaults to the probability region_poisson_score was computed from, so callers that
     # don't care about the distinction get a consistent pair; BH-correction tests override
@@ -138,6 +138,7 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "ksize": 10,
         "scaled": 1,
         "moltype": moltype,
+        "remove_low_complexity": remove_low_complexity,
         "jaccard": jaccard,
         "max_containment": containment,
         "average_abund": 1.0,

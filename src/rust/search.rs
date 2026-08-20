@@ -149,7 +149,11 @@ impl SearchResultCsv {
     /// similarity metrics with a specific matched region to create one CSV row. Each SearchResult
     /// will produce multiple CSV rows (one per matched region), with all similarity metrics
     /// repeated for each region.
-    pub fn from_result_and_region(result: &SearchResult, region: &MatchedRegion) -> Self {
+    pub fn from_result_and_region(
+        result: &SearchResult,
+        region: &MatchedRegion,
+        remove_low_complexity: bool,
+    ) -> Self {
         // See the matching debug_assert in ProteinSearcher::compare: a region shorter than
         // ksize should never exist, and saturating_sub would otherwise hide that as a silent
         // region_n_shared_kmers = 1 instead of a loud failure.
