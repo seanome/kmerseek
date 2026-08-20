@@ -334,12 +334,12 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
-        self.log_kmer_frequency_stats(
-            &kmer_frequencies,
-            &inverted_index,
-            &target_list,
-            kmer_stats_out,
-        )?;
+        self.log_kmer_frequency_stats(&kmer_frequencies, kmer_stats_out, |hashes| {
+            hashes
+                .iter()
+                .map(|&hash| (hash, self.resolve_kmer_string(hash, &inverted_index, &target_list)))
+                .collect()
+        })?;
 
         // Serialize and store the search cache
         eprintln!(
@@ -367,14 +367,17 @@ impl ProteomeIndex {
 
     /// Log a k-mer frequency histogram and the most/least common k-mers to stderr.
     ///
-    /// The lists show the actual encoded k-mer string (not the hash), resolved by looking up
-    /// one signature that contains each hash via the inverted index.
+    /// The lists show the actual encoded k-mer string (not the hash). `resolve` turns a
+    /// batch of hashes into their text (or a placeholder for any it can't find) -- callers
+    /// that already have a full inverted index can resolve directly from it;
+    /// `save_kmer_stats_only` (no inverted index kept in memory, to save memory at proteome
+    /// scale) scans signatures for just this handful of hashes instead. Either way this
+    /// function only ever asks for `2 * KMER_EXAMPLES` hashes, never a bulk resolution.
     fn log_kmer_frequency_stats(
         &self,
         kmer_frequencies: &HashMap<u64, usize>,
-        inverted_index: &HashMap<u64, Vec<u32>>,
-        target_list: &[String],
         kmer_stats_out: Option<&Path>,
+        resolve: impl Fn(&[u64]) -> HashMap<u64, String>,
     ) -> IndexResult<()> {
         if kmer_frequencies.is_empty() {
             return Ok(());
@@ -401,8 +404,13 @@ impl ProteomeIndex {
         });
         let least = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| (count, hash));
 
-        self.print_kmer_examples("most common", &most, &spectrum, inverted_index, target_list);
-        self.print_kmer_examples("least common", &least, &spectrum, inverted_index, target_list);
+        let mut wanted: Vec<u64> = most.iter().chain(least.iter()).map(|&(hash, _)| hash).collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        let resolved = resolve(&wanted);
+
+        self.print_kmer_examples("most common", &most, &spectrum, &resolved);
+        self.print_kmer_examples("least common", &least, &spectrum, &resolved);
         Ok(())
     }
 
@@ -602,14 +610,16 @@ impl ProteomeIndex {
         label: &str,
         examples: &[(u64, usize)],
         spectrum: &BTreeMap<usize, usize>,
-        inverted_index: &HashMap<u64, Vec<u32>>,
-        target_list: &[String],
+        resolved: &HashMap<u64, String>,
     ) {
         let Some(&(_, boundary)) = examples.last() else { return };
         let tied = spectrum.get(&boundary).copied().unwrap_or(0);
         eprintln!("[save] {} {} k-mers (encoded k-mer: occurrences):", examples.len(), label);
         for &(hash, count) in examples {
-            let kmer = self.resolve_kmer_string(hash, inverted_index, target_list);
+            let kmer = resolved
+                .get(&hash)
+                .cloned()
+                .unwrap_or_else(|| format!("<sequence unavailable, hash {hash}>"));
             eprintln!("[save]   {kmer}: {count}");
         }
         if tied > examples.len() {
@@ -647,6 +657,46 @@ impl ProteomeIndex {
             seq.get(position..position + ksize).map(str::to_string)
         })()
         .unwrap_or_else(|| format!("<sequence unavailable, hash {hash}>"))
+    }
+
+    /// Resolve a small set of k-mer hashes back to their sequence text by scanning
+    /// `self.signatures` directly, with no inverted index at all.
+    ///
+    /// WHY a scan instead of a lookup: `resolve_kmer_string` needs an inverted index (hash
+    /// -> protein) to do this in O(1), but building that index for the whole proteome is
+    /// exactly the memory cost `save_kmer_stats_only` exists to avoid (see its doc comment).
+    /// For a handful of hashes (`KMER_EXAMPLES` most + least common, ~20 total) a linear scan
+    /// that early-exits once every hash is found is the better trade -- O(hashes) memory
+    /// instead of O(total (protein, k-mer) pairs), and in practice touches only the first
+    /// handful of signatures before `remaining` empties out. Not a general-purpose reverse
+    /// lookup: don't reach for this for more than a small, fixed number of hashes.
+    fn resolve_kmer_strings_by_scan(&self, hashes: &[u64]) -> HashMap<u64, String> {
+        let ksize = self.ksize as usize;
+        let mut remaining: std::collections::HashSet<u64> = hashes.iter().copied().collect();
+        let mut resolved: HashMap<u64, String> = HashMap::with_capacity(hashes.len());
+        if remaining.is_empty() {
+            return resolved;
+        }
+        for entry in self.signatures.iter() {
+            if remaining.is_empty() {
+                break;
+            }
+            let Some(seq) = entry.get_moltype_sequence().or_else(|| entry.get_raw_sequence())
+            else {
+                continue;
+            };
+            let positions = entry.kmer_positions();
+            remaining.retain(|&hash| {
+                let Some(&position) = positions.get(&hash).and_then(|p| p.first()) else {
+                    return true; // not in this signature -- keep looking
+                };
+                if let Some(kmer_str) = seq.get(position..position + ksize) {
+                    resolved.insert(hash, kmer_str.to_string());
+                }
+                false // found (or an unresolvable slice) -- stop looking for this one either way
+            });
+        }
+        resolved
     }
 
     /// Save the current index state to RocksDB using chunked storage format
@@ -698,23 +748,21 @@ impl ProteomeIndex {
         let t0 = Instant::now();
         let total_sigs = self.signatures.len();
         eprintln!(
-            "[save] Computing k-mer frequency stats for {} signatures (no index persisted, \
-             no per-kmer text examples)...",
+            "[save] Computing k-mer frequency stats for {} signatures (no index persisted)...",
             total_sigs
         );
 
         // Only kmer_frequencies (one entry per UNIQUE k-mer) is needed for the CSV. An
         // earlier version of this function also built `inverted_index: HashMap<u64,
-        // Vec<u32>>` and `target_list: Vec<String>`, purely so the console's "most/least
-        // common k-mer" printout could resolve a hash back to real sequence text. Those
-        // two structures scale with total (protein, k-mer) PAIRS and total signature
-        // count respectively -- not unique_kmers -- and at UniRef50 scale (tens of
-        // billions of residues) that dwarfs kmer_frequencies itself, becoming the
-        // dominant memory cost this function was supposed to have eliminated. The
-        // example printout is a diagnostic nice-to-have, not part of --kmer-stats-out,
-        // so it's worth losing (resolve_kmer_string degrades to a placeholder string for
-        // a hash it can't find, not a panic -- see its doc comment) to avoid holding
-        // either structure in memory at all.
+        // Vec<u32>>` and `target_list: Vec<String>` up front, purely so the console's
+        // "most/least common k-mer" printout could resolve a hash back to real sequence
+        // text. Those two structures scale with total (protein, k-mer) PAIRS and total
+        // signature count respectively -- not unique_kmers -- and at UniRef50 scale (tens
+        // of billions of residues) that dwarfs kmer_frequencies itself, becoming the
+        // dominant memory cost this function was supposed to have eliminated. The example
+        // text is still produced (see log_kmer_frequency_stats's `resolve` closure below),
+        // just via `resolve_kmer_strings_by_scan` instead -- a scan bounded to the ~20
+        // hashes actually printed, not a structure sized to the whole proteome.
         let mut kmer_frequencies: HashMap<u64, usize> = HashMap::new();
         let mut n_processed = 0usize;
 
@@ -742,14 +790,9 @@ impl ProteomeIndex {
             kmer_frequencies.len(),
         );
 
-        let empty_inverted_index: HashMap<u64, Vec<u32>> = HashMap::new();
-        let empty_target_list: Vec<String> = Vec::new();
-        self.log_kmer_frequency_stats(
-            &kmer_frequencies,
-            &empty_inverted_index,
-            &empty_target_list,
-            Some(kmer_stats_out),
-        )?;
+        self.log_kmer_frequency_stats(&kmer_frequencies, Some(kmer_stats_out), |hashes| {
+            self.resolve_kmer_strings_by_scan(hashes)
+        })?;
 
         eprintln!(
             "[save] Done in {:.1}s (nothing written to the index database).",
