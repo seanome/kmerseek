@@ -153,28 +153,34 @@ the five borderline ones -- **C, G, P, W, Y** (bolded). Lehninger is the current
 default (`hp` moltype); the others are selectable via `hp_<name>` moltypes
 (e.g. `hp_thomas_dill`) for the alphabet robustness sweep.
 
-| AA | Lehninger (current) | Thomas-Dill/PBotC 2nd | Kyte-Doolittle | TD−C | Leh+C | PBotC 1st |
-|----|:---:|:---:|:---:|:---:|:---:|:---:|
-| A | h | h | h | h | h | h |
-| **C** | p | h | h | p | h | h |
-| D | p | p | p | p | p | p |
-| E | p | p | p | p | p | p |
-| F | h | h | h | h | h | h |
-| **G** | h | p | p | p | h | p |
-| H | p | p | p | p | p | p |
-| I | h | h | h | h | h | h |
-| K | p | p | p | p | p | p |
-| L | h | h | h | h | h | h |
-| M | h | h | h | h | h | h |
-| N | p | p | p | p | p | p |
-| **P** | h | p | p | p | h | h |
-| Q | p | p | p | p | p | p |
-| R | p | p | p | p | p | p |
-| S | p | p | p | p | p | p |
-| T | p | p | p | p | p | p |
-| V | h | h | h | h | h | h |
-| **W** | h | h | p | h | h | h |
-| **Y** | h | h | p | h | h | h |
+`hp_lehninger_hpc` is a 3-letter variant: it keeps Lehninger's H/P split for
+every residue except cysteine, which gets its own third symbol `c` (cystine)
+instead of being folded into `h` the way `hp_lehninger_c_nonpolar` does --
+disulfide-bond formation is a distinct chemistry from ordinary hydrophobic
+packing.
+
+| AA | Lehninger (current) | Thomas-Dill/PBotC 2nd | Kyte-Doolittle | TD−C | Leh+C | Leh HPC (3-letter) | PBotC 1st |
+|----|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
+| A | h | h | h | h | h | h | h |
+| **C** | p | h | h | p | h | c | h |
+| D | p | p | p | p | p | p | p |
+| E | p | p | p | p | p | p | p |
+| F | h | h | h | h | h | h | h |
+| **G** | h | p | p | p | h | h | p |
+| H | p | p | p | p | p | p | p |
+| I | h | h | h | h | h | h | h |
+| K | p | p | p | p | p | p | p |
+| L | h | h | h | h | h | h | h |
+| M | h | h | h | h | h | h | h |
+| N | p | p | p | p | p | p | p |
+| **P** | h | p | p | p | h | h | h |
+| Q | p | p | p | p | p | p | p |
+| R | p | p | p | p | p | p | p |
+| S | p | p | p | p | p | p | p |
+| T | p | p | p | p | p | p | p |
+| V | h | h | h | h | h | h | h |
+| **W** | h | h | p | h | h | h | h |
+| **Y** | h | h | p | h | h | h | h |
 
 ## Using the Builder Pattern
 
