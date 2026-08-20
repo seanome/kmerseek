@@ -334,6 +334,9 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
+        // Passed as a closure rather than the raw inverted_index/target_list so
+        // save_kmer_stats_only (below) can plug in a different, lower-memory resolution
+        // strategy instead -- see log_kmer_frequency_stats's doc comment.
         self.log_kmer_frequency_stats(&kmer_frequencies, kmer_stats_out, |hashes| {
             hashes
                 .iter()
@@ -404,10 +407,13 @@ impl ProteomeIndex {
         });
         let least = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| (count, hash));
 
-        let mut wanted: Vec<u64> = most.iter().chain(least.iter()).map(|&(hash, _)| hash).collect();
-        wanted.sort_unstable();
-        wanted.dedup();
-        let resolved = resolve(&wanted);
+        // Hashes actually printed below, deduplicated so a hash that lands in both `most`
+        // and `least` (a proteome with very few unique k-mers) is only resolved once.
+        let mut example_hashes: Vec<u64> =
+            most.iter().chain(least.iter()).map(|&(hash, _)| hash).collect();
+        example_hashes.sort_unstable();
+        example_hashes.dedup();
+        let resolved = resolve(&example_hashes);
 
         self.print_kmer_examples("most common", &most, &spectrum, &resolved);
         self.print_kmer_examples("least common", &least, &spectrum, &resolved);
@@ -462,9 +468,10 @@ impl ProteomeIndex {
         writeln!(
             sink,
             "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
-             median_seqs_per_kmer={:.1} moltype={} ksize={}",
+             median_seqs_per_kmer={:.1} mode_seqs_per_kmer={} moltype={} ksize={}",
             total as f64 / unique as f64,
             Self::median_occurrences(spectrum),
+            Self::mode_occurrences(spectrum),
             self.moltype,
             self.ksize,
         )?;
@@ -544,6 +551,20 @@ impl ProteomeIndex {
         lower.unwrap_or(0) as f64
     }
 
+    /// The most common per-k-mer occurrence count, ties broken toward the smaller count.
+    ///
+    /// WHY alongside mean and median: this answers "what does a typical k-mer look like" most
+    /// directly. In a k-mer frequency spectrum it is almost always 1, since most k-mers occur
+    /// in only one sequence -- seeing that plainly is more useful than inferring it from mean
+    /// and median alone.
+    fn mode_occurrences(spectrum: &BTreeMap<usize, usize>) -> usize {
+        spectrum
+            .iter()
+            .max_by_key(|&(&occurrences, &n_kmers)| (n_kmers, std::cmp::Reverse(occurrences)))
+            .map(|(&occurrences, _)| occurrences)
+            .unwrap_or(0)
+    }
+
     /// Print the binned frequency distribution as an ASCII bar chart.
     ///
     /// Empty bins between the smallest and largest populated bin are printed with a zero count
@@ -561,9 +582,10 @@ impl ProteomeIndex {
         let unique = Self::unique_kmers(spectrum);
         eprintln!(
             "[save] K-mer frequency histogram: {total} total k-mers found, {unique} unique \
-             (mean {:.2}, median {:.1} sequences per k-mer)",
+             (mean {:.2}, median {:.1}, mode {} sequences per k-mer)",
             total as f64 / unique as f64,
             Self::median_occurrences(spectrum),
+            Self::mode_occurrences(spectrum),
         );
         for bin in first..=last {
             let count = bins.get(&bin).copied().unwrap_or(0);
@@ -3078,7 +3100,7 @@ mod tests {
 
         assert_eq!(
             contents,
-            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 moltype=protein ksize=10\n\
+            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 mode_seqs_per_kmer=1 moltype=protein ksize=10\n\
              moltype,ksize,occurrences,n_kmers\n\
              protein,10,1,3\n\
              protein,10,2,1\n\
@@ -3103,6 +3125,20 @@ mod tests {
         // Single value and empty.
         assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect()), 7.0);
         assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new()), 0.0);
+    }
+
+    #[test]
+    fn test_mode_occurrences() {
+        // Occurrence count 1 has the most k-mers (3), so it's the mode.
+        let clear: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::mode_occurrences(&clear), 1);
+
+        // Tie between occurrence counts 2 and 5 (both have 4 k-mers): break toward smaller.
+        let tied: BTreeMap<usize, usize> = [(2, 4), (5, 4), (9, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::mode_occurrences(&tied), 2);
+
+        assert_eq!(ProteomeIndex::mode_occurrences(&[(7, 1)].into_iter().collect()), 7);
+        assert_eq!(ProteomeIndex::mode_occurrences(&BTreeMap::new()), 0);
     }
 
     #[test]
