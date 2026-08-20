@@ -3578,6 +3578,12 @@ mod tests {
         assert_eq!(least, vec![(200, 1), (100, 2)]);
     }
 
+    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958) with three residues
+    /// rewritten to the ambiguity codes that stand for them: Asn->B (Asx), Glu->Z (Glx),
+    /// Ile->J (Xle). Also carries U (Sec) and O (Pyl).
+    const CED9_WITH_AMBIGUITY_CODES: &str =
+        "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGJKGTEPTDFGZNSDAQDLPSPSRQASTRRUO";
+
     /// Indexing the same sequence twice must produce byte-identical sketches.
     ///
     /// WHY: ambiguity codes were previously resolved by drawing at random from the
