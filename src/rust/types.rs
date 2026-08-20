@@ -88,7 +88,7 @@ impl MolType {
             _ => Err(format!(
                 "Invalid molecular type: {}. Must be one of: protein, dayhoff, hp, \
                  hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
-                 hp_thomas_dill_no_c, hp_lehninger_plus_c, hp_pbotc_1st_ed, \
+                 hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
                  hp_shuffled_control",
                 moltype
             )),

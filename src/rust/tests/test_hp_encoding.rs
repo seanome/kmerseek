@@ -47,8 +47,9 @@ mod tests {
         }
     }
 
-    /// The encoded_sequence for a custom HP alphabet must consist solely of 'H' and 'P'
-    /// characters (or pass-through bytes for unknown amino acids).
+    /// The encoded_sequence for a custom HP alphabet must consist solely of 'h' and 'p'
+    /// characters (or pass-through bytes for unknown amino acids). Lowercase matches the
+    /// built-in hp/dayhoff encodings, which sourmash emits lowercase.
     #[test]
     fn test_custom_hp_encoded_sequence_contains_hp_chars() {
         let seq = "MKTAYIAKQRFLVS";
@@ -64,8 +65,8 @@ mod tests {
 
         for ch in enc.chars() {
             assert!(
-                ch == 'H' || ch == 'P',
-                "encoded_sequence char {ch:?} is not 'H' or 'P' — raw amino acid stored instead (Bug 2)"
+                ch == 'h' || ch == 'p',
+                "encoded_sequence char {ch:?} is not 'h' or 'p' — raw amino acid stored instead (Bug 2)"
             );
         }
     }
@@ -138,7 +139,8 @@ mod tests {
             "hp_thomas_dill",
             "hp_lehninger",
             "hp_thomas_dill_no_c",
-            "hp_lehninger_plus_c",
+            "hp_lehninger_c_nonpolar",
+            "hp_lehninger_hpc",
             "hp_pbotc_1st_ed",
         ];
 
@@ -170,8 +172,8 @@ mod tests {
                 .unwrap_or_else(|| panic!("{moltype}: encoded_sequence is None (Bug 2)"));
             for ch in enc.chars() {
                 assert!(
-                    ch == 'H' || ch == 'P',
-                    "{moltype}: encoded_sequence char {ch:?} is not H/P (Bug 2 regression)"
+                    ch == 'h' || ch == 'p' || ch == 'c',
+                    "{moltype}: encoded_sequence char {ch:?} is not h/p/c (Bug 2 regression)"
                 );
             }
         }

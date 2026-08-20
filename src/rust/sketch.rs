@@ -21,6 +21,15 @@ pub struct ProteinSketch {
     kmer_positions: HashMap<u64, Vec<usize>>,
     // Efficient storage data (optional, for performance)
     efficient_data: Option<ProteinSketchStore>,
+    // Whether add_protein() should drop low-complexity (homopolymer) k-mers.
+    // Defaults to false (legacy behavior); not persisted, since it only affects
+    // insertion, not the sketch that results from it.
+    remove_low_complexity: bool,
+    // Counts from the most recent add_protein() with removal on: k-mer windows
+    // examined, and windows removed as low-complexity. Both stay 0 when off.
+    // Not persisted; used only for index-time reporting.
+    kmer_windows_examined: usize,
+    low_complexity_kmers_removed: usize,
 }
 
 // Custom serialization for ProteinSketch
@@ -130,6 +139,9 @@ impl<'de> Deserialize<'de> for ProteinSketch {
                     scaled,
                     kmer_positions,
                     efficient_data: None,
+                    remove_low_complexity: false,
+                    kmer_windows_examined: 0,
+                    low_complexity_kmers_removed: 0,
                 })
             }
         }
@@ -178,7 +190,23 @@ impl ProteinSketch {
             scaled,
             kmer_positions: HashMap::new(),
             efficient_data: None,
+            remove_low_complexity: false,
+            kmer_windows_examined: 0,
+            low_complexity_kmers_removed: 0,
         })
+    }
+
+    /// Enable or disable dropping low-complexity (homopolymer) k-mers during
+    /// `add_protein`. Defaults to `false`.
+    pub fn set_remove_low_complexity(&mut self, remove_low_complexity: bool) {
+        self.remove_low_complexity = remove_low_complexity;
+    }
+
+    /// K-mer windows examined by the most recent `add_protein` with removal on,
+    /// and how many of those were removed as low-complexity. Both are 0 when
+    /// removal is off, since that path never walks windows itself.
+    pub fn low_complexity_counts(&self) -> (usize, usize) {
+        (self.kmer_windows_examined, self.low_complexity_kmers_removed)
     }
 
     /// Create a ProteinSketch from a protein sequence
@@ -211,6 +239,9 @@ impl ProteinSketch {
             scaled,
             kmer_positions,
             efficient_data: None,
+            remove_low_complexity: false,
+            kmer_windows_examined: 0,
+            low_complexity_kmers_removed: 0,
         }
     }
 
@@ -255,6 +286,9 @@ impl ProteinSketch {
             scaled,
             kmer_positions: data.kmer_positions.clone(),
             efficient_data: Some(data),
+            remove_low_complexity: false,
+            kmer_windows_examined: 0,
+            low_complexity_kmers_removed: 0,
         })
     }
 
@@ -334,12 +368,71 @@ impl ProteinSketch {
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
         use crate::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
         use crate::hp_alphabets::HpAlphabet;
+        use crate::kmer::is_homopolymer_kmer;
         use sourmash::_hash_murmur;
 
         let moltype_str = self.moltype.to_string();
         let custom_hp = HpAlphabet::from_moltype(&moltype_str);
+        let ksize = self.protein_ksize as usize;
+        let is_hp_moltype = custom_hp.is_some() || moltype_str == "hp";
 
-        if let Some(ref alpha) = custom_hp {
+        // WHY: low-complexity k-mers carry little discriminative signal, so when
+        // opted in, two independent homopolymer checks run per k-mer before
+        // insertion: the raw amino-acid sequence (e.g. "AAAAA", any moltype)
+        // and, for HP-family moltypes, the HP-encoded window (e.g. "hhhhh",
+        // which can also arise from a run of *different* hydrophobic residues
+        // like "LIVMA"). This means hashing one k-mer at a time instead of
+        // delegating to sourmash's black-box `add_protein`, which windows and
+        // inserts unconditionally. `remove_low_complexity` defaults to false,
+        // and the branch below keeps every k-mer.
+        if self.remove_low_complexity {
+            // Hoisted: both are loop-invariant, so resolving them per window would
+            // be pure overhead.
+            let table = custom_hp.as_ref().map(HpAlphabet::table);
+            let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
+            // Reused across windows so the custom-HP path allocates once, not once
+            // per k-mer.
+            let mut encoded: Vec<u8> = Vec::with_capacity(ksize);
+
+            self.kmer_windows_examined = 0;
+            self.low_complexity_kmers_removed = 0;
+            for i in 0..sequence.len().saturating_sub(ksize - 1) {
+                let kmer = &sequence[i..i + ksize];
+                self.kmer_windows_examined += 1;
+                if is_homopolymer_kmer(kmer.as_bytes()) {
+                    self.low_complexity_kmers_removed += 1;
+                    continue;
+                }
+                let hashval = if let Some(table) = table {
+                    encoded.clear();
+                    encoded.extend(kmer.bytes().map(|b| {
+                        table
+                            .get(&b.to_ascii_uppercase())
+                            .copied()
+                            .unwrap_or(b)
+                            .to_ascii_uppercase()
+                    }));
+                    if is_homopolymer_kmer(&encoded) {
+                        self.low_complexity_kmers_removed += 1;
+                        continue;
+                    }
+                    _hash_murmur(&encoded, SEED)
+                } else {
+                    // WHY still encode_with_fn here rather than mapping bytes: the
+                    // position-tracking loop below hashes its String's bytes, and for
+                    // any non-ASCII byte `char`-conversion re-encodes as multi-byte
+                    // UTF-8. Going through the same function keeps both loops hashing
+                    // identical bytes.
+                    let encoded_kmer = encode_with_fn(kmer, encoding_fn)?;
+                    if is_hp_moltype && is_homopolymer_kmer(encoded_kmer.as_bytes()) {
+                        self.low_complexity_kmers_removed += 1;
+                        continue;
+                    }
+                    _hash_murmur(encoded_kmer.as_bytes(), SEED)
+                };
+                self.signature.minhash.add_hash(hashval);
+            }
+        } else if let Some(ref alpha) = custom_hp {
             // Pre-encode with our custom HP table so sourmash hashes h/p bytes via
             // Murmur64Protein (identity). Unknown bytes pass through unchanged.
             let table = alpha.table();
@@ -356,7 +449,6 @@ impl ProteinSketch {
             self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         self.signature.md5sum = format!("{:x}", md5sum);
 
-        let ksize = self.protein_ksize as usize;
         let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
         for i in 0..sequence.len().saturating_sub(ksize - 1) {
@@ -399,17 +491,18 @@ impl ProteinSketch {
             let moltype_str = self.moltype.to_string();
             if moltype_str != "protein" {
                 let encoded_sequence = if let Some(ref alpha) = custom_hp {
-                    // Custom HP alphabets: apply the HP table directly, uppercased to match
-                    // the hashes stored in minhash (sourmash uppercases before hashing).
+                    // Custom HP alphabets: apply the HP table directly, keeping the table's
+                    // lowercase h/p so output matches built-in hp/dayhoff (which sourmash
+                    // encodes lowercase). Unmapped residues (X/U/O) stay uppercase, also
+                    // matching sourmash. This string is display-only — matched regions and
+                    // k-mer stats — so its case is independent of hashing, which must
+                    // uppercase because sourmash uppercases protein input before hashing.
                     let table = alpha.table();
                     sequence
                         .bytes()
                         .map(|b| {
-                            table
-                                .get(&b.to_ascii_uppercase())
-                                .copied()
-                                .unwrap_or(b)
-                                .to_ascii_uppercase() as char
+                            let upper = b.to_ascii_uppercase();
+                            table.get(&upper).copied().unwrap_or(upper) as char
                         })
                         .collect::<String>()
                 } else {
@@ -643,6 +736,102 @@ mod tests {
     fn test_non_protein_moltype_stores_encoded_sequence() {
         let s = ProteinSketch::from_protein_sequence("p", SEQ, 5, 1, "hp").unwrap();
         assert_eq!(s.get_moltype_sequence(), Some(SEQ_HP_ENCODED));
+    }
+
+    #[test]
+    fn test_remove_low_complexity_hp_kmers_toggle() {
+        use crate::tests::test_fixtures::TEST_PROTEIN;
+
+        // TEST_PROTEIN = "PLANTANDANIMALGENQMES"; the window at position 10,
+        // "IMALG", is all-hydrophobic ("hhhhh") under the HP (Lehninger)
+        // alphabet — the low-complexity case this targets.
+        const IMALG_HASH: u64 = 8541583772724823208;
+
+        // Default (off): low-complexity k-mers are kept, matching legacy behavior.
+        let mut off = ProteinSketch::new("off", 5, 1, "hp").unwrap();
+        off.add_protein(TEST_PROTEIN, false).unwrap();
+        assert_eq!(off.kmer_positions().len(), 14);
+        assert!(off.kmer_positions().contains_key(&IMALG_HASH));
+
+        // Opted in: the all-hydrophobic "IMALG" k-mer is dropped.
+        let mut on = ProteinSketch::new("on", 5, 1, "hp").unwrap();
+        on.set_remove_low_complexity(true);
+        on.add_protein(TEST_PROTEIN, false).unwrap();
+        assert_eq!(on.kmer_positions().len(), 13);
+        assert!(!on.kmer_positions().contains_key(&IMALG_HASH));
+    }
+
+    // Residues 26-55 of human FKBP8 (UniProt Q14318), which contains a genuine
+    // 11-residue poly-glutamate (E) tract — a real low-complexity region, not
+    // an invented motif.
+    const FKBP8_POLY_E: &str = "VLDGVEDAEGEEEEEEEEEEEDDLSELPPL";
+
+    #[test]
+    fn test_remove_low_complexity_raw_amino_acid_homopolymer() {
+        // Hash of "EEEEE" under the identity (protein) encoding.
+        const POLY_E_HASH: u64 = 11331501307295692494;
+
+        // Default (off): the raw poly-E homopolymer k-mer is kept, matching
+        // legacy behavior. The 7 overlapping "EEEEE" windows (positions 10-16
+        // within FKBP8_POLY_E) collapse to a single hash entry with 7 positions.
+        let mut off = ProteinSketch::new("off", 5, 1, "protein").unwrap();
+        off.add_protein(FKBP8_POLY_E, false).unwrap();
+        assert!(off.kmer_positions().contains_key(&POLY_E_HASH));
+        assert_eq!(off.kmer_positions()[&POLY_E_HASH].len(), 7);
+        assert_eq!(off.kmer_positions().len(), 20);
+
+        // Opted in: the raw poly-E k-mer is dropped, even though this is
+        // "protein" moltype (no HP encoding involved at all).
+        let mut on = ProteinSketch::new("on", 5, 1, "protein").unwrap();
+        on.set_remove_low_complexity(true);
+        on.add_protein(FKBP8_POLY_E, false).unwrap();
+        assert!(!on.kmer_positions().contains_key(&POLY_E_HASH));
+        assert_eq!(on.kmer_positions().len(), 19);
+    }
+
+    /// Custom `hp_*` alphabets take a separate encode-and-check path from the
+    /// sourmash built-in `hp` (they pre-encode to uppercase H/P via their own
+    /// table), so removal has to be exercised there too.
+    #[test]
+    fn test_remove_low_complexity_custom_hp_alphabet() {
+        use crate::tests::test_fixtures::TEST_PROTEIN;
+
+        // "IMALG" (position 10 of TEST_PROTEIN) is all-hydrophobic under the
+        // Lehninger partition, which places G in the h class. It is not a raw
+        // amino-acid homopolymer, so only the HP-encoded check can catch it --
+        // exactly the branch this test covers.
+        let mut off = ProteinSketch::new("off", 5, 1, "hp_lehninger").unwrap();
+        off.add_protein(TEST_PROTEIN, false).unwrap();
+        assert_eq!(off.kmer_positions().len(), 14);
+        assert_eq!(off.low_complexity_counts(), (0, 0), "counters stay 0 when removal is off");
+
+        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger").unwrap();
+        on.set_remove_low_complexity(true);
+        on.add_protein(TEST_PROTEIN, false).unwrap();
+        assert_eq!(on.kmer_positions().len(), 13);
+
+        // 21 residues at k=5 gives 17 windows; exactly one ("IMALG") is removed.
+        assert_eq!(on.low_complexity_counts(), (17, 1));
+    }
+
+    /// Both checks contribute on the same sequence: the raw check fires first and
+    /// short-circuits, so a window only reaches the encoded check when it is not
+    /// already a raw homopolymer.
+    #[test]
+    fn test_remove_low_complexity_counts_raw_and_encoded_together() {
+        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger").unwrap();
+        on.set_remove_low_complexity(true);
+        on.add_protein(FKBP8_POLY_E, false).unwrap();
+
+        // FKBP8_POLY_E is 30 residues -> 26 windows at k=5. Its HP (Lehninger)
+        // encoding is:
+        //   VLDGVEDAEGEEEEEEEEEEEDDLSELPPL
+        //   hhphhpphphppppppppppppphpphhhh
+        // The 11-residue E tract yields 7 fully-inside "EEEEE" windows, caught by
+        // the raw check. Two further windows ("EEEED", "EEEDD") are not raw
+        // homopolymers but still encode to "ppppp", so only the encoded check
+        // catches them. 7 + 2 = 9.
+        assert_eq!(on.low_complexity_counts(), (26, 9));
     }
 
     #[test]

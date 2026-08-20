@@ -222,28 +222,21 @@ fn benchmark_encodings_encode_kmer_with_encoding_fn(c: &mut Criterion) {
 fn benchmark_process_protein_kmers(c: &mut Criterion) {
     for moltype in MOLTYPES {
         for ksize in KSIZES {
-            let (index, _) = setup_test_index(ksize, moltype);
-
-            // Create a test protein signature
-            let mut protein_sig = kmerseek::sketch::ProteinSketch::new(
-                "test_protein",
-                ksize,
-                1, // scaled
-                moltype,
-            )
-            .unwrap();
-
-            // Add the protein sequence
-            protein_sig.add_protein(TEST_PROTEIN, true).unwrap();
-
             c.bench_function(&format!("process_protein_kmers_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
                     // Record start time for CPU measurement
                     let start_time = Instant::now();
 
-                    // Process kmers
-                    let mut sig = protein_sig.clone();
-                    index.process_kmers(TEST_PROTEIN, &mut sig).unwrap();
+                    // A fresh sketch each iteration: add_protein both sketches the
+                    // sequence and maps k-mer positions, which is the work measured.
+                    let mut sig = kmerseek::sketch::ProteinSketch::new(
+                        "test_protein",
+                        ksize,
+                        1, // scaled
+                        moltype,
+                    )
+                    .unwrap();
+                    sig.add_protein(TEST_PROTEIN, true).unwrap();
 
                     // Record end time
                     let end_time = Instant::now();
@@ -408,7 +401,7 @@ FSAEFLKVFIPSLFLSHVLALGLGIYIGKRLSTPSASTY";
 ///
 /// Also benchmarks batch sizes to help tune the --batch-size CLI default.
 fn benchmark_search_throughput(c: &mut Criterion) {
-    use kmerseek::search::ProteinSearcher;
+    use kmerseek::search::{ProteinSearcher, SearchFilters};
     use kmerseek::sketch::ProteinSketch;
 
     let target_fasta =
@@ -452,7 +445,9 @@ fn benchmark_search_throughput(c: &mut Criterion) {
             // benchmark: single query search_one()
             {
                 let bench_name = format!("search_one_{moltype}_k{ksize}");
-                c.bench_function(&bench_name, |b| b.iter(|| searcher.search_one(&query_sig)));
+                c.bench_function(&bench_name, |b| {
+                    b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default()))
+                });
             }
 
             // benchmark: batch search at several batch sizes (simulated by repeating query)
@@ -460,7 +455,12 @@ fn benchmark_search_throughput(c: &mut Criterion) {
                 let queries: Vec<ProteinSketch> = vec![query_sig.clone(); n_queries];
                 let bench_name = format!("search_batch{n_queries}_{moltype}_k{ksize}");
                 c.bench_function(&bench_name, |b| {
-                    b.iter(|| queries.iter().map(|q| searcher.search_one(q)).collect::<Vec<_>>())
+                    b.iter(|| {
+                        queries
+                            .iter()
+                            .map(|q| searcher.search_one(q, &SearchFilters::default()))
+                            .collect::<Vec<_>>()
+                    })
                 });
             }
         }
@@ -470,7 +470,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
 /// Benchmark indexing and searching the 2.8k uncharacterized protein file with hp encoding
 /// at large k-mer sizes (15, 20, 30) to see index build time, load time, and search selectivity.
 fn benchmark_index_hp_large_k(c: &mut Criterion) {
-    use kmerseek::search::ProteinSearcher;
+    use kmerseek::search::{ProteinSearcher, SearchFilters};
     use kmerseek::sketch::ProteinSketch;
 
     let target_fasta =
@@ -526,7 +526,9 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
             let mut query_sig = ProteinSketch::new(&query_seq.0, ksize, 1, "hp").unwrap();
             query_sig.add_protein(&query_seq.1, true).unwrap();
             let search_name = format!("search_one_hp_k{ksize}");
-            group.bench_function(&search_name, |b| b.iter(|| searcher.search_one(&query_sig)));
+            group.bench_function(&search_name, |b| {
+                b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default()))
+            });
         }
     }
     group.finish();
