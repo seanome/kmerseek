@@ -120,9 +120,14 @@ def test_resolve_query_names_no_match_returns_empty():
 # values, never the all-string rows a stdlib csv.DictReader would produce.
 def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
          containment=0.5, jaccard=0.1, query_enrichment=1.0, query_poisson_pvalue=0.05,
-         region_poisson_score=2.0, region_enrichment=2.0,
+         region_poisson_score=2.0, region_tail_probability=None, region_enrichment=2.0,
          moltype="hp_thomas_dill", region_subseq="MTRCTADNSL",
          moltype_seq="hpphphppph", target_subseq="MAHAGRTGYD", query_name=CED9_NAME):
+    # Defaults to the probability region_poisson_score was computed from, so callers that
+    # don't care about the distinction get a consistent pair; BH-correction tests override
+    # region_tail_probability directly since they exercise the probability, not the score.
+    if region_tail_probability is None:
+        region_tail_probability = 10.0**-region_poisson_score
     return {
         "query_name": query_name,
         "query_md5": "qmd5",
@@ -162,6 +167,7 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_n_shared_kmers": 1,
         "region_expected_shared_kmers": 0.68,
         "region_poisson_score": region_poisson_score,
+        "region_tail_probability": region_tail_probability,
         "region_enrichment": region_enrichment,
     }
 
@@ -273,6 +279,17 @@ def test_target_scores_corrects_region_scope_not_query_scope():
     # would bury it at q~1.
     rows = [_row(target_name="cryptic", query_poisson_pvalue=0.99, region_poisson_score=3.1549)]
     assert vh._target_scores(rows) == {"cryptic": 3.1549}
+
+
+def test_target_tail_probabilities_reads_the_same_row_target_scores_picks():
+    # region_poisson_score and region_tail_probability come from the same
+    # MatchedRegion, so the row with the best score is also the row with the
+    # smallest raw probability -- picking "best" by score and reading
+    # region_tail_probability off that row must agree with reading it directly.
+    rows = [_row(target_name="A", region_poisson_score=0.4, region_tail_probability=0.4),
+            _row(target_name="A", region_poisson_score=8.0, region_tail_probability=1e-08),
+            _row(target_name="A", region_poisson_score=0.2, region_tail_probability=0.6)]
+    assert vh._target_tail_probabilities(rows) == {"A": 1e-08}
 
 
 def test_benjamini_hochberg_single_pvalue_is_unchanged():
@@ -542,8 +559,9 @@ def test_main_corrects_pvalue_across_all_targets_not_just_displayed_ones(tmp_pat
     vh.main()
 
     svg_text = (out_dir / f"{vh.safe_filename(CED9_NAME)}.hits.svg").read_text()
-    # _render_query converts region_poisson_score (bigger is more significant) back to a
-    # p-value (10**-score) before benjamini_hochberg, which expects p-values.
+    # benjamini_hochberg corrects region_tail_probability (the raw probability), not
+    # region_poisson_score (its -log10 transform); _row()'s default derives one from the
+    # other, so these two rows carry 10**-0.01 and 10**-0.02 as their tail probabilities.
     expected_q = vh.benjamini_hochberg({"shown": 10.0**-0.01, "hidden": 10.0**-0.02})["shown"]
     assert f"region q={expected_q:.2g}" in svg_text
 

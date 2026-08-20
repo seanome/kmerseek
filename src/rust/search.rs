@@ -132,6 +132,10 @@ pub struct SearchResultCsv {
     pub region_n_shared_kmers: u32,
     pub region_expected_shared_kmers: f64,
     pub region_poisson_score: f64,
+    /// Raw Poisson survival probability behind region_poisson_score (see
+    /// MatchedRegion::tail_probability). Reported so downstream tools that need a probability
+    /// (e.g. Benjamini-Hochberg correction) don't have to invert the -log10 transform.
+    pub region_tail_probability: f64,
     pub region_enrichment: f64,
 }
 
@@ -190,6 +194,7 @@ impl SearchResultCsv {
             region_n_shared_kmers: region.length.saturating_sub(result.ksize) + 1,
             region_expected_shared_kmers: region.expected_shared_kmers,
             region_poisson_score: region.poisson_score,
+            region_tail_probability: region.tail_probability,
             region_enrichment: region.enrichment,
         }
     }
@@ -387,6 +392,15 @@ pub struct MatchedRegion {
     /// regions to look at first, not to make a significance claim about any single region.
     pub poisson_score: f64,
 
+    /// The raw Poisson survival-function probability `poisson_score` was computed from, before
+    /// the -log10 transform: `10f64.powf(-poisson_score)`. Reported alongside `poisson_score`
+    /// so downstream code that needs a probability (for example Benjamini-Hochberg FDR
+    /// correction, which multiplies and ranks p-values directly) doesn't have to reconstruct
+    /// one by undoing the log. Not named `poisson_pvalue`: it carries the same two structural
+    /// problems documented on `poisson_score` and is not a calibrated p-value either. 1.0 (no
+    /// evidence) without DB context.
+    pub tail_probability: f64,
+
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
     /// context or when expected_shared_kmers is 0.
     pub enrichment: f64,
@@ -425,6 +439,42 @@ fn fold_enrichment(observed: u32, expected: f64) -> f64 {
     }
 }
 
+/// Expected shared k-mers by chance within one region:
+///
+/// ```text
+/// lambda = sum, over every query k-mer whose start position falls inside the region,
+///          of freq_target(h) / N
+/// ```
+///
+/// `freq_target(h)` is how many target signatures contain a k-mer with hash `h`, and `N` is the
+/// total number of target signatures. Note there is no division by the region's length here:
+/// each term in the sum is already a per-k-mer database frequency, and the sum has one term per
+/// k-mer position inside the region. This is the same formula as
+/// `ProteinSearcher::calculate_expected_shared_kmers`, restricted to k-mer positions inside the
+/// region instead of the whole query.
+///
+/// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to the
+/// region only if it fits entirely inside. That is what makes the count equal
+/// `length - ksize + 1` at scaled=1.
+///
+/// `prefix` is `PreparedQuery::position_prefix`: `freq_target(h)/N` already summed by position,
+/// one entry per query, built once regardless of how many targets or regions it is looked up
+/// for. This turns the lookup into a difference of two prefix sums, O(1), instead of the O(query
+/// k-mer count) rescan that computing lambda from scratch for every region on every target would
+/// otherwise cost.
+fn region_expectation(prefix: &[f64], start: u32, end: u32, ksize: usize) -> f64 {
+    let last_index = prefix.len() - 1;
+    let window_start = (start as usize).min(last_index);
+    // A k-mer at p covers [p, p + ksize), so it fits inside [start, end) only when
+    // p <= end - ksize. A span shorter than ksize holds no whole k-mer at all - saturating
+    // here would wrongly admit position 0.
+    let window_end = match (end as usize).checked_sub(ksize) {
+        Some(last_start) => (last_start + 1).min(last_index),
+        None => window_start,
+    };
+    prefix[window_end] - prefix[window_start]
+}
+
 impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Query Name: {}", self.query_name)?;
@@ -461,6 +511,12 @@ pub struct PreparedQuery<'a> {
     pub mins: HashSet<u64>,
     /// Pre-computed TF-IDF score for the query
     pub tfidf: f64,
+    /// Prefix sums of target-DB k-mer frequency by query position, indexed 0..=max_position.
+    /// `position_prefix[p]` is the sum of freq_target(h)/N over every k-mer whose start
+    /// position is < p. Lets `region_expectation` answer any region window in O(1) instead of
+    /// rescanning every one of the query's k-mers per region per target (see
+    /// `ProteinSearcher::build_position_prefix`).
+    pub position_prefix: Vec<f64>,
 }
 
 impl SearchStats {
@@ -643,7 +699,43 @@ impl ProteinSearcher {
             sketch: query,
             mins: query.mins_as_set(),
             tfidf: self.calculate_tfidf(query),
+            position_prefix: self.build_position_prefix(query),
         }
+    }
+
+    /// Builds the per-position frequency prefix sums consumed by `region_expectation`. Runs
+    /// once per query in `prepare_query`, not once per region per target: `search_one` calls
+    /// `compare` once per candidate target sharing the query, and each `compare` call rescopes
+    /// the Poisson test to every matched region, so without this the query's full k-mer set
+    /// would be rescanned target-count x region-count times instead of once.
+    ///
+    /// Sized to the highest k-mer start position actually present in `query.kmer_positions()`,
+    /// not to the raw sequence length, since raw sequences are only optionally stored.
+    fn build_position_prefix(&self, query: &ProteinSketch) -> Vec<f64> {
+        let n_positions = query
+            .kmer_positions()
+            .values()
+            .flat_map(|positions| positions.iter().copied())
+            .max()
+            .map_or(0, |max_pos| max_pos + 1);
+
+        let mut position_freq = vec![0.0; n_positions];
+        for (hashval, positions) in query.kmer_positions() {
+            let freq = self.stats.kmer_frequencies.get(hashval).copied().unwrap_or(1) as f64
+                / self.stats.total_signatures as f64;
+            for &p in positions {
+                position_freq[p] = freq;
+            }
+        }
+
+        let mut prefix = Vec::with_capacity(n_positions + 1);
+        prefix.push(0.0);
+        let mut running = 0.0;
+        for freq in position_freq {
+            running += freq;
+            prefix.push(running);
+        }
+        prefix
     }
 
     /// Comprehensive search method that calculates all metrics including TF-IDF and overlap probability
@@ -933,7 +1025,8 @@ impl ProteinSearcher {
             // lambda: for each query k-mer positioned inside this region, how many target
             // signatures contain that k-mer's hash, divided by the total number of target
             // signatures, summed. See region_expectation for the exact formula.
-            let lambda = self.region_expectation(query.sketch, region.start, region.end, ksize);
+            let lambda =
+                region_expectation(&query.position_prefix, region.start, region.end, ksize);
             // find_matched_regions never emits a region shorter than ksize (its length is
             // consecutive_count + ksize - 1, and consecutive_count >= 1), so this can't
             // actually underflow. debug_assert catches it loudly if that invariant is ever
@@ -944,9 +1037,11 @@ impl ProteinSearcher {
                 region.length
             );
             let n_shared = region.length.saturating_sub(ksize as u32) + 1;
+            let tail_probability = poisson_survival(n_shared, lambda);
 
             region.expected_shared_kmers = lambda;
-            region.poisson_score = neg_log10_score(poisson_survival(n_shared, lambda));
+            region.poisson_score = neg_log10_score(tail_probability);
+            region.tail_probability = tail_probability;
             region.enrichment = fold_enrichment(n_shared, lambda);
         }
 
@@ -993,45 +1088,6 @@ impl ProteinSearcher {
         result.run_n_queries = total_queries;
 
         Some(result)
-    }
-
-    /// Expected shared k-mers by chance within one region:
-    ///
-    /// ```text
-    /// lambda = sum, over every query k-mer whose start position falls inside the region,
-    ///          of freq_target(h) / N
-    /// ```
-    ///
-    /// `freq_target(h)` is how many target signatures contain a k-mer with hash `h`, and `N`
-    /// is the total number of target signatures (`self.stats.total_signatures`). Note there is
-    /// no division by the region's length here: each term in the sum is already a per-k-mer
-    /// database frequency, and the sum has one term per k-mer position inside the region. This
-    /// is the same formula as `calculate_expected_shared_kmers`, restricted to k-mer positions
-    /// inside the region instead of the whole query.
-    ///
-    /// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to
-    /// the region only if it fits entirely inside. That is what makes the count equal
-    /// `length - ksize + 1` at scaled=1.
-    fn region_expectation(&self, query: &ProteinSketch, start: u32, end: u32, ksize: usize) -> f64 {
-        let window_start = start as usize;
-        // A k-mer at p covers [p, p + ksize), so it fits inside [start, end) only when
-        // p <= end - ksize. A span shorter than ksize holds no whole k-mer at all - saturating
-        // here would wrongly admit position 0.
-        let window_end = match (end as usize).checked_sub(ksize) {
-            Some(last_start) => last_start + 1,
-            None => window_start,
-        };
-        query
-            .kmer_positions()
-            .iter()
-            .map(|(hashval, positions)| {
-                let freq = self.stats.kmer_frequencies.get(hashval).copied().unwrap_or(1) as f64
-                    / self.stats.total_signatures as f64;
-                let n_in_window =
-                    positions.iter().filter(|&&p| p >= window_start && p < window_end).count();
-                freq * n_in_window as f64
-            })
-            .sum()
     }
 
     /// Set query-proteome k-mer frequencies for two-pass joint_kmer_freq computation.
@@ -1447,6 +1503,7 @@ pub fn find_matched_regions(
                         length: (query_end_pos - query_start_pos) as u32,
                         expected_shared_kmers: 0.0,
                         poisson_score: 0.0,
+                        tail_probability: 1.0,
                         enrichment: 0.0,
                     });
 
@@ -1487,6 +1544,7 @@ pub fn find_matched_regions(
             length: (query_end_pos - query_start_pos) as u32,
             expected_shared_kmers: 0.0,
             poisson_score: 0.0,
+            tail_probability: 1.0,
             enrichment: 0.0,
         });
 
@@ -1541,6 +1599,7 @@ mod tests {
             length: 6,
             expected_shared_kmers: 2.0,
             poisson_score: 0.05,
+            tail_probability: 0.89,
             enrichment: 1.5,
         };
 
@@ -1596,6 +1655,7 @@ mod tests {
         assert_eq!(row.region_n_shared_kmers, 2);
         assert_eq!(row.region_expected_shared_kmers, 2.0);
         assert_eq!(row.region_poisson_score, 0.05);
+        assert_eq!(row.region_tail_probability, 0.89);
         assert_eq!(row.region_enrichment, 1.5);
         // region_search_space, db_n_targets, db_n_kmers, and run_n_queries travel as
         // separate columns, never folded into a p-value.
@@ -2853,6 +2913,7 @@ mod tests {
         };
         let score_by_hand = -pvalue_by_hand.max(f64::MIN_POSITIVE).log10();
         assert_relative_eq!(region.poisson_score, score_by_hand, epsilon = 1e-12);
+        assert_relative_eq!(region.tail_probability, pvalue_by_hand, epsilon = 1e-12);
 
         // The region-scoped null (over ~5 background-frequency k-mers) is a much smaller number
         // than the whole-protein null (over all 266 of CED9's k-mers), so the two numbers are
@@ -3031,17 +3092,18 @@ mod tests {
 
         let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
         let sketch = ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp")?;
+        let prefix = searcher.build_position_prefix(&sketch);
 
         // A window holding one k-mer: [0, 0 + 1) after the ksize adjustment.
-        let single = searcher.region_expectation(&sketch, 0, ksize, ksize as usize);
+        let single = region_expectation(&prefix, 0, ksize, ksize as usize);
         assert_relative_eq!(single, 1.0, epsilon = 1e-12);
 
         // Widening the region by one residue admits one more k-mer start.
-        let double = searcher.region_expectation(&sketch, 0, ksize + 1, ksize as usize);
+        let double = region_expectation(&prefix, 0, ksize + 1, ksize as usize);
         assert_relative_eq!(double, 2.0, epsilon = 1e-12);
 
         // A span shorter than k contains no whole k-mer, so there is nothing to expect.
-        let too_short = searcher.region_expectation(&sketch, 0, ksize - 1, ksize as usize);
+        let too_short = region_expectation(&prefix, 0, ksize - 1, ksize as usize);
         assert_eq!(too_short, 0.0);
 
         Ok(())

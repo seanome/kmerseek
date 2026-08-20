@@ -206,8 +206,9 @@ def _union_coverage(regions):
     return covered
 
 
-def _target_scores(rows):
-    """{target_name: best (highest) region score}, one entry per distinct target.
+def _target_best_rows(rows):
+    """{target_name: the CSV row of its best (highest-scoring) region}, one entry per
+    distinct target.
 
     region_poisson_score is -log10 of the region's Poisson tail probability, so
     bigger means more surprising (see MatchedRegion::poisson_score in
@@ -225,10 +226,26 @@ def _target_scores(rows):
     strongest (highest-scoring) region as the target's evidence."""
     best = {}
     for row in rows:
-        score = float(row["region_poisson_score"])
         name = row["target_name"]
-        best[name] = max(best[name], score) if name in best else score
+        if name not in best or float(row["region_poisson_score"]) > float(best[name]["region_poisson_score"]):
+            best[name] = row
     return best
+
+
+def _target_scores(rows):
+    """{target_name: best (highest) region score}, one entry per distinct target."""
+    return {name: float(row["region_poisson_score"]) for name, row in _target_best_rows(rows).items()}
+
+
+def _target_tail_probabilities(rows):
+    """{target_name: raw Poisson tail probability of its best-scoring region}, one entry per
+    distinct target.
+
+    Reads region_tail_probability straight off the same row _target_scores takes its score
+    from (both columns come from the same MatchedRegion), instead of reconstructing a
+    probability by undoing the -log10 transform on the score. benjamini_hochberg needs real
+    probabilities to correct, not scores."""
+    return {name: float(row["region_tail_probability"]) for name, row in _target_best_rows(rows).items()}
 
 
 def benjamini_hochberg(pvalues):
@@ -586,11 +603,7 @@ def _render_query(query_name, query_rows, query_length, args):
     target actually tested, not just the ones that end up displayed, or it
     would understate how many comparisons were made.
     """
-    # benjamini_hochberg expects p-values (smaller is more significant), but
-    # _target_scores returns -log10 scores (bigger is more significant), so
-    # convert back before correcting.
-    target_pvalues = {name: 10.0**-score for name, score in _target_scores(query_rows).items()}
-    corrected_pvalues = benjamini_hochberg(target_pvalues)
+    corrected_pvalues = benjamini_hochberg(_target_tail_probabilities(query_rows))
     display_rows = [r for r in query_rows if float(r["containment"]) >= args.min_containment]
     if not display_rows:
         print(f"Skipping '{query_name}': no hits above --min-containment {args.min_containment}")
