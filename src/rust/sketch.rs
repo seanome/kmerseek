@@ -355,7 +355,7 @@ impl ProteinSketch {
         if expand_ambiguity {
             for i in 0..sequence.len().saturating_sub(ksize - 1) {
                 let kmer = &sequence[i..i + ksize];
-                for variant in expand_ambiguity_variants(kmer) {
+                for variant in expand_ambiguity_variants(kmer, ksize) {
                     let hashval = _hash_murmur(variant.to_ascii_uppercase().as_bytes(), SEED);
                     self.signature.minhash.add_hash(hashval);
                 }
@@ -383,7 +383,7 @@ impl ProteinSketch {
             let kmer = &sequence[i..i + ksize];
 
             if expand_ambiguity {
-                for variant in expand_ambiguity_variants(kmer) {
+                for variant in expand_ambiguity_variants(kmer, ksize) {
                     let hashval = _hash_murmur(variant.to_ascii_uppercase().as_bytes(), SEED);
                     if hashvals.contains(&hashval) {
                         self.kmer_positions_mut().entry(hashval).or_default().push(i);

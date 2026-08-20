@@ -2304,14 +2304,16 @@ mod tests {
                     protein_signature.kmer_positions().len() == 16,
                     "Valid sequence 'ACDEFGHIKLMNPQRSTVWY' should be accepted and have 16 protein 5-mers",
                 );
-            } else if protein_signature.signature().md5sum == "bfbd6817c8ffb1b6" {
-                // Under `protein`, B/Z/J expand into every concrete residue they can mean
-                // instead of collapsing to one representative. "ACDEFXBZJ"'s five 5-mer
-                // windows carry 0, 0, 1, 2, and 3 ambiguous positions respectively, giving
-                // 1+1+2+4+8 = 16 concrete variants instead of 5 literal ones.
+            } else if protein_signature.signature().md5sum == "a2bbb7fb88823bfc" {
+                // Under `protein`, B/Z/J expand into every concrete residue they can mean,
+                // up to max_ambiguous_per_kmer(5) == 1 ambiguous position per window.
+                // "ACDEFXBZJ"'s five 5-mer windows carry 0, 0, 1, 2, and 3 ambiguous
+                // positions respectively; only the 1-ambiguous window (DEFXB) expands, the
+                // 2- and 3-ambiguous windows exceed the cap and stay literal, giving
+                // 1+1+2+1+1 = 6 concrete variants instead of 5 literal ones.
                 assert!(
-                    protein_signature.kmer_positions().len() == 16,
-                    "Valid sequence 'ACDEFXBZJ' should expand B/Z/J into every concrete reading, giving 16 protein 5-mer variants",
+                    protein_signature.kmer_positions().len() == 6,
+                    "Valid sequence 'ACDEFXBZJ' should expand only the window with exactly 1 ambiguous position, giving 6 protein 5-mer variants",
                 );
             } else {
                 panic!(
@@ -2383,11 +2385,12 @@ mod tests {
         let index = ProteomeIndex::new(dir.path().join("raw_test.db"), 5, 1, "raw", false).unwrap();
 
         let signature = index.create_protein_signature("ACDEFXBZJUO", "test_raw")?;
-        // 11 residues, ksize 5, 7 windows; the 5 windows overlapping B/Z/J carry 0, 0, 1, 2,
-        // 3, 3, 3 ambiguous positions respectively, giving 1+1+2+4+8+8+8 = 32 variants.
+        // 11 residues, ksize 5 (max_ambiguous_per_kmer(5) == 1), 7 windows carrying
+        // 0, 0, 1, 2, 3, 3, 3 ambiguous positions respectively. Only the 1-ambiguous window
+        // expands; the rest exceed the cap and stay literal: 1+1+2+1+1+1+1 = 8 variants.
         assert_eq!(
             signature.kmer_positions().len(),
-            32,
+            8,
             "ambiguity codes should expand under raw moltype the same way they do under protein"
         );
 

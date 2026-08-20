@@ -33,19 +33,26 @@ pub const AMBIGUITY_CODES: [(char, char); 3] = [('B', 'D'), ('J', 'I'), ('Z', 'E
 pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
     [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
 
-/// Windows with more ambiguous positions than this are hashed as their single literal
-/// reading instead of expanded, to cap the blowup at 2^4 = 16 variants per window. Real
-/// proteins essentially never cluster this many B/J/Z in one k-mer; this only guards against
-/// a pathological run of ambiguity codes turning one window into thousands of hash insertions.
-pub const MAX_AMBIGUOUS_PER_KMER: usize = 4;
+/// The cap on ambiguous positions expanded per k-mer, scaled with k-mer size: a window with
+/// more ambiguous positions than this is hashed as its single literal reading instead of
+/// expanded, bounding the blowup at `2^max_ambiguous_per_kmer(ksize)` variants per window.
+///
+/// WHY ceil(ksize/10): a fixed cap independent of k would let long k-mers (more residues, so
+/// more chances at B/J/Z landing in the same window) expand just as far as short ones,
+/// growing the worst case with nothing to keep it proportionate. Scaling with k keeps the
+/// bound tied to window size: 1 ambiguous position for k<=10, 2 for k<=20, and so on.
+pub fn max_ambiguous_per_kmer(ksize: usize) -> usize {
+    ksize.div_ceil(10)
+}
 
 /// All concrete readings of `kmer` with every ambiguity code (B/J/Z) expanded to its two
 /// possible residues. Returns `vec![kmer.to_string()]` unchanged when there's nothing to
-/// expand, or when expansion would exceed `MAX_AMBIGUOUS_PER_KMER` (see its doc comment).
-pub fn expand_ambiguity_variants(kmer: &str) -> Vec<String> {
+/// expand, or when expansion would exceed `max_ambiguous_per_kmer(ksize)` (see its doc
+/// comment). `ksize` is the k-mer size `kmer` was windowed at.
+pub fn expand_ambiguity_variants(kmer: &str, ksize: usize) -> Vec<String> {
     let ambiguous_count =
         kmer.chars().filter(|c| AMBIGUITY_ALTERNATIVES.iter().any(|(code, _)| code == c)).count();
-    if ambiguous_count == 0 || ambiguous_count > MAX_AMBIGUOUS_PER_KMER {
+    if ambiguous_count == 0 || ambiguous_count > max_ambiguous_per_kmer(ksize) {
         return vec![kmer.to_string()];
     }
 
@@ -251,20 +258,22 @@ mod tests {
 
     #[test]
     fn test_expand_ambiguity_variants_no_ambiguity() {
-        assert_eq!(expand_ambiguity_variants("ACDEF"), vec!["ACDEF".to_string()]);
+        assert_eq!(expand_ambiguity_variants("ACDEF", 5), vec!["ACDEF".to_string()]);
     }
 
     #[test]
     fn test_expand_ambiguity_variants_single_code() {
-        let mut variants = expand_ambiguity_variants("ACBEF");
+        // ksize=5: max_ambiguous_per_kmer(5) == 1, so this single ambiguous position expands.
+        let mut variants = expand_ambiguity_variants("ACBEF", 5);
         variants.sort();
         assert_eq!(variants, vec!["ACDEF".to_string(), "ACNEF".to_string()]);
     }
 
     #[test]
     fn test_expand_ambiguity_variants_multiple_codes_take_cartesian_product() {
-        // B -> D/N, J -> I/L: 2x2 = 4 concrete readings.
-        let mut variants = expand_ambiguity_variants("BJ");
+        // ksize=20: max_ambiguous_per_kmer(20) == 2, enough for both of "BJ"'s ambiguous
+        // positions to expand. B -> D/N, J -> I/L: 2x2 = 4 concrete readings.
+        let mut variants = expand_ambiguity_variants("BJ", 20);
         variants.sort();
         let mut expected =
             vec!["DI".to_string(), "DL".to_string(), "NI".to_string(), "NL".to_string()];
@@ -272,15 +281,30 @@ mod tests {
         assert_eq!(variants, expected);
     }
 
-    /// Above `MAX_AMBIGUOUS_PER_KMER` ambiguous positions, expansion is skipped entirely and
-    /// the literal k-mer is returned, instead of blowing up to 2^n variants.
+    #[test]
+    fn test_max_ambiguous_per_kmer_scales_with_ksize() {
+        assert_eq!(max_ambiguous_per_kmer(1), 1);
+        assert_eq!(max_ambiguous_per_kmer(10), 1);
+        assert_eq!(max_ambiguous_per_kmer(11), 2);
+        assert_eq!(max_ambiguous_per_kmer(20), 2);
+        assert_eq!(max_ambiguous_per_kmer(21), 3);
+        assert_eq!(max_ambiguous_per_kmer(100), 10);
+    }
+
+    /// Above `max_ambiguous_per_kmer(ksize)` ambiguous positions, expansion is skipped
+    /// entirely and the literal k-mer is returned, instead of blowing up to 2^n variants.
+    /// ksize=10 puts the cap at exactly 1, so the boundary between 1 and 2 ambiguous
+    /// positions is exactly the boundary between expanding and not.
     #[test]
     fn test_expand_ambiguity_variants_respects_cap() {
-        let kmer: String = std::iter::repeat('B').take(MAX_AMBIGUOUS_PER_KMER + 1).collect();
-        assert_eq!(expand_ambiguity_variants(&kmer), vec![kmer]);
+        let ksize = 10;
+        assert_eq!(max_ambiguous_per_kmer(ksize), 1);
 
-        let at_cap: String = std::iter::repeat('B').take(MAX_AMBIGUOUS_PER_KMER).collect();
-        assert_eq!(expand_ambiguity_variants(&at_cap).len(), 1 << MAX_AMBIGUOUS_PER_KMER);
+        let at_cap = "BAAAAAAAAA"; // 1 ambiguous position: at the cap, expands.
+        assert_eq!(expand_ambiguity_variants(at_cap, ksize).len(), 2);
+
+        let over_cap = "BJAAAAAAAA"; // 2 ambiguous positions: over the cap, stays literal.
+        assert_eq!(expand_ambiguity_variants(over_cap, ksize), vec![over_cap.to_string()]);
     }
 
     /// The substitution must be lossless: both residues an ambiguity code stands for have to
