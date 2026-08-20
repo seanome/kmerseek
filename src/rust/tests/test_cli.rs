@@ -134,6 +134,10 @@ fn test_cli_index_rejects_zero_ksize() -> Result<(), Box<dyn std::error::Error>>
         .stderr(predicate::str::contains("K-mer size must be greater than 0"))
         .stderr(predicate::str::contains("panicked").not());
     assert!(!output_path.exists(), "a rejected k-mer size should leave no database behind");
+
+    Ok(())
+}
+
 /// Low-complexity removal must round-trip: `index --remove-low-complexity`
 /// persists the setting, and `search` picks it up from the index without the
 /// user restating it. A mismatch would silently skew containment, so this
