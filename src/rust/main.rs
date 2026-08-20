@@ -46,6 +46,14 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         kmer_stats_out: Option<PathBuf>,
 
+        /// Skip persisting a searchable index -- compute and write --kmer-stats-out only,
+        /// with no RocksDB writes at all. Requires --kmer-stats-out. Use this when you only
+        /// want the frequency spectrum, not a database to search later: it avoids both the
+        /// SearchCache's RocksDB single-value size limit (~4 GiB) and the filesystem I/O load
+        /// of chunked signature storage, neither of which stats-only output needs.
+        #[arg(long, requires = "kmer_stats_out")]
+        stats_only: bool,
+
         /// Remove low-complexity (homopolymer) k-mers from the index: raw
         /// amino-acid runs (e.g. "AAAAA") for any encoding, plus all-h or all-p
         /// runs for HP-family encodings (hp, hp_lehninger, hp_thomas_dill, etc.).
@@ -200,6 +208,7 @@ fn main() -> IndexResult<()> {
             shuffled_seed,
             progress_interval,
             kmer_stats_out,
+            stats_only,
             remove_low_complexity,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
@@ -272,7 +281,8 @@ fn main() -> IndexResult<()> {
             index.process_fasta(&input, progress_interval, 1000)?;
 
             // Report what removal actually did, so its effect is visible without
-            // having to rebuild and diff two indexes.
+            // having to rebuild and diff two indexes. Applies regardless of
+            // --stats-only -- removal happens during process_fasta either way.
             if remove_low_complexity {
                 let (examined, skipped) = index.low_complexity_counts();
                 let percent =
@@ -283,15 +293,25 @@ fn main() -> IndexResult<()> {
                 );
             }
 
-            // Enable compactions for better read performance
-            eprintln!("Optimizing database for read operations...");
-            index.enable_compactions()?;
+            if stats_only {
+                // --stats-only: skip persisting a searchable index entirely (see
+                // save_kmer_stats_only's doc comment for why). kmer_stats_out is
+                // guaranteed Some here -- clap's `requires = "kmer_stats_out"` enforces it.
+                let kmer_stats_out =
+                    kmer_stats_out.expect("clap requires kmer_stats_out with stats_only");
+                index.save_kmer_stats_only(&kmer_stats_out)?;
+                eprintln!("Stats-only run completed successfully (no index persisted).");
+            } else {
+                // Enable compactions for better read performance
+                eprintln!("Optimizing database for read operations...");
+                index.enable_compactions()?;
 
-            // Save the index state for loading
-            index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
+                // Save the index state for loading
+                index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
-            eprintln!("Indexing completed successfully!");
-            eprintln!("Database saved to: {}", output_path.display());
+                eprintln!("Indexing completed successfully!");
+                eprintln!("Database saved to: {}", output_path.display());
+            }
         }
         Commands::Search {
             query,
