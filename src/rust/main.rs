@@ -39,6 +39,20 @@ enum Commands {
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
         progress_interval: u32,
+
+        /// Write the k-mer frequency spectrum to this CSV path for plotting across alphabets
+        /// and k-sizes. Gzip-compressed when the path ends in .gz. Columns:
+        /// moltype, ksize, occurrences, n_kmers.
+        #[arg(long, value_name = "PATH")]
+        kmer_stats_out: Option<PathBuf>,
+
+        /// Remove low-complexity (homopolymer) k-mers from the index: raw
+        /// amino-acid runs (e.g. "AAAAA") for any encoding, plus all-h or all-p
+        /// runs for HP-family encodings (hp, hp_lehninger, hp_thomas_dill, etc.).
+        /// The setting is stored in the index and reused automatically at search
+        /// time, so you do not repeat it when searching.
+        #[arg(long, default_value = "false")]
+        remove_low_complexity: bool,
     },
     /// Search query sequences against a protein database
     Search {
@@ -94,6 +108,15 @@ enum Commands {
         /// matched region). Kept as an alias that applies whole-query filtering only.
         #[arg(long)]
         max_pvalue: Option<f64>,
+
+        /// Remove low-complexity (homopolymer) k-mers from query sketches.
+        /// Omit this to follow whatever the target index was built with, which is
+        /// almost always what you want. Pass it (or `--remove-low-complexity
+        /// false`) only to override deliberately; a value that disagrees with the
+        /// index is reported as a warning, because the two sides must match for
+        /// containment to be comparable.
+        #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
+        remove_low_complexity: Option<bool>,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
@@ -165,7 +188,16 @@ fn main() -> IndexResult<()> {
     eprintln!("kmerseek {}", env!("CARGO_PKG_VERSION"));
 
     match cli.command {
-        Commands::Index { input, output, ksize, encoding, shuffled_seed, progress_interval } => {
+        Commands::Index {
+            input,
+            output,
+            ksize,
+            encoding,
+            shuffled_seed,
+            progress_interval,
+            kmer_stats_out,
+            remove_low_complexity,
+        } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
             // Scaled factor is always 1 (captures all k-mers)
@@ -193,13 +225,16 @@ fn main() -> IndexResult<()> {
                     input.file_name().and_then(|name| name.to_str()).unwrap_or("unknown");
 
                 // Create a temporary index to generate the filename
-                let temp_index = ProteomeIndex::new_with_auto_filename(
+                let mut temp_index = ProteomeIndex::new_with_auto_filename(
                     &input,
                     ksize,
                     scaled,
                     &effective_moltype,
                     true, // Always store raw sequences
                 )?;
+                // Must match the real index, so the generated name carries the
+                // suffix and can't collide with a build that kept these k-mers.
+                temp_index.set_remove_low_complexity(remove_low_complexity);
 
                 let generated_filename = temp_index.generate_filename(base_name);
                 let output_path = input
@@ -215,27 +250,41 @@ fn main() -> IndexResult<()> {
             eprintln!("Scaled: {}", scaled);
             eprintln!("Encoding: {}", effective_moltype);
             eprintln!("Progress interval: {}", progress_interval);
+            eprintln!("Remove low-complexity k-mers: {}", remove_low_complexity);
             eprintln!("-------\n");
 
             // Create the index
-            let index = ProteomeIndex::new(
+            let mut index = ProteomeIndex::new(
                 &output_path,
                 ksize,
                 scaled,
                 &effective_moltype,
                 true, // Always store raw sequences
             )?;
+            index.set_remove_low_complexity(remove_low_complexity);
 
             // Process the FASTA file
             eprintln!("Processing FASTA file...");
             index.process_fasta(&input, progress_interval, 1000)?;
+
+            // Report what removal actually did, so its effect is visible without
+            // having to rebuild and diff two indexes.
+            if remove_low_complexity {
+                let (examined, skipped) = index.low_complexity_counts();
+                let percent =
+                    if examined == 0 { 0.0 } else { 100.0 * skipped as f64 / examined as f64 };
+                eprintln!(
+                    "Removed {} of {} k-mer windows as low-complexity ({:.2}%)",
+                    skipped, examined, percent
+                );
+            }
 
             // Enable compactions for better read performance
             eprintln!("Optimizing database for read operations...");
             index.enable_compactions()?;
 
             // Save the index state for loading
-            index.save_state()?;
+            index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
             eprintln!("Indexing completed successfully!");
             eprintln!("Database saved to: {}", output_path.display());
@@ -252,6 +301,7 @@ fn main() -> IndexResult<()> {
             max_query_pvalue,
             min_region_score,
             max_pvalue,
+            remove_low_complexity: remove_low_complexity_arg,
             verbose,
             query_is_index,
             batch_size,
@@ -337,6 +387,39 @@ fn main() -> IndexResult<()> {
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
 
+            // Build query sketches the same way the target index was built.
+            // WHY: if the index dropped low-complexity k-mers but queries keep them,
+            // those k-mers match nothing yet still count toward the query cardinality,
+            // deflating containment (intersection / query_size) for exactly the queries
+            // that contain low-complexity regions.
+            let index_removed = searcher.index().remove_low_complexity();
+            let remove_low_complexity = remove_low_complexity_arg.unwrap_or(index_removed);
+
+            eprintln!(
+                "  Index: low-complexity k-mers were {} when it was built",
+                if index_removed { "REMOVED" } else { "KEPT" }
+            );
+            eprintln!(
+                "  This search: low-complexity k-mers are {} from query sketches ({})",
+                if remove_low_complexity { "REMOVED" } else { "KEPT" },
+                if remove_low_complexity_arg.is_some() {
+                    "--remove-low-complexity"
+                } else {
+                    "matching the index"
+                }
+            );
+            if remove_low_complexity != index_removed {
+                eprintln!(
+                    "  WARNING: this disagrees with the index. Containment is \
+                     intersection / query_size, so k-mers present on only one side \
+                     still count toward the denominator and skew scores."
+                );
+            }
+            eprintln!(
+                "  Index built by kmerseek: {}",
+                searcher.index().kmerseek_version().unwrap_or("unknown (pre-versioning index)")
+            );
+
             // Perform search - use optimized all-vs-all method if query == target
             let search_results = if is_all_vs_all {
                 // Use optimized all-vs-all search that avoids cloning signatures
@@ -398,6 +481,7 @@ fn main() -> IndexResult<()> {
                             final_scaled,
                             final_encoding.into(),
                         )?;
+                        sig.set_remove_low_complexity(remove_low_complexity);
                         sig.add_protein(&sequence, true)?;
                         for min in sig.signature().minhash.mins() {
                             *qfreqs.entry(min).or_insert(0) += 1;
@@ -463,8 +547,11 @@ fn main() -> IndexResult<()> {
                         for result in results {
                             *match_count += 1;
                             for region in &result.matched_regions {
-                                let csv_row =
-                                    SearchResultCsv::from_result_and_region(result, region);
+                                let csv_row = SearchResultCsv::from_result_and_region(
+                                    result,
+                                    region,
+                                    remove_low_complexity,
+                                );
                                 writer.serialize(&csv_row)?;
                                 *row_count += 1;
                             }
@@ -484,6 +571,7 @@ fn main() -> IndexResult<()> {
 
                     let mut query_sig =
                         ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
+                    query_sig.set_remove_low_complexity(remove_low_complexity);
                     query_sig.add_protein(&sequence, true)?;
                     batch.push(query_sig);
 
@@ -548,7 +636,11 @@ fn main() -> IndexResult<()> {
 
                 for result in &filtered_results {
                     for region in &result.matched_regions {
-                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                        let csv_row = SearchResultCsv::from_result_and_region(
+                            result,
+                            region,
+                            remove_low_complexity,
+                        );
                         writer.serialize(&csv_row)?;
                     }
                 }
@@ -559,7 +651,11 @@ fn main() -> IndexResult<()> {
 
                 for result in &filtered_results {
                     for region in &result.matched_regions {
-                        let csv_row = SearchResultCsv::from_result_and_region(result, region);
+                        let csv_row = SearchResultCsv::from_result_and_region(
+                            result,
+                            region,
+                            remove_low_complexity,
+                        );
                         writer.serialize(&csv_row)?;
                     }
                 }

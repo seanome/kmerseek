@@ -34,6 +34,69 @@ Run real-world examples like:
 cargo run --example test_bcl2_processing
 ```
 
+## Removing low-complexity k-mers
+
+Low-complexity k-mers -- homopolymer runs like a poly-glutamate tract (`EEEEE`) or,
+under a reduced alphabet, an all-hydrophobic window (`hhhhh`) -- are abundant and
+carry little discriminative signal. Pass `--remove-low-complexity` at index time to
+drop them:
+
+```bash
+kmerseek index -i proteome.fasta --ksize 10 --encoding hp --remove-low-complexity
+```
+
+Two independent checks run per k-mer: the **raw amino-acid** window (any encoding),
+and for `hp`-family encodings the **HP-encoded** window as well. The second catches
+windows that aren't raw homopolymers but still collapse to one symbol -- `LIVMA` is
+five different residues that all encode to `h`.
+
+Indexing reports what was removed, so you can tell whether the flag mattered:
+
+```
+Removed 75 of 9063 k-mer windows as low-complexity (0.83%)
+```
+
+The setting is **stored in the index**, and `kmerseek search` reads it back and
+builds query sketches the same way. You don't repeat the flag when searching, and
+search says plainly what the index holds and what it is doing:
+
+```
+Index: low-complexity k-mers were REMOVED when it was built
+This search: low-complexity k-mers are REMOVED from query sketches (matching the index)
+```
+
+Pass `--remove-low-complexity` (or `--remove-low-complexity false`) to `search`
+only to override that deliberately. Disagreeing with the index is allowed but
+warned about:
+
+```
+This search: low-complexity k-mers are REMOVED from query sketches (--remove-low-complexity)
+WARNING: this disagrees with the index. Containment is intersection / query_size,
+so k-mers present on only one side still count toward the denominator and skew scores.
+```
+
+Results carry the setting too, in a `remove_low_complexity` column next to
+`ksize`/`scaled`/`moltype`, so a CSV is self-describing without the command line
+that produced it. It is a column rather than a `#` comment line because a comment
+would break `pl.scan_csv` and every other plain CSV reader.
+
+That symmetry matters. Containment is `intersection / query_size`, so if the index
+dropped these k-mers but queries kept them, they'd match nothing while still
+inflating the denominator -- deflating scores for exactly the queries containing
+low-complexity regions.
+
+Auto-generated filenames gain a `.nolowcomplexity` segment, so builds with and
+without removal coexist instead of overwriting each other:
+
+```
+proteome.fasta.hp.k10.scaled1.kmerseek.rocksdb                  # default
+proteome.fasta.hp.k10.scaled1.nolowcomplexity.kmerseek.rocksdb  # --remove-low-complexity
+```
+
+Removal is **off by default**; existing indexes and workflows are unaffected.
+Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
+`hhhhhhhhhp` is kept.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
@@ -143,6 +206,15 @@ let index = ProteomeIndex::builder()
     .scaled(1)
     .moltype("protein")
     .store_raw_sequences(true)
+    .build()?;
+
+// Dropping low-complexity (homopolymer) k-mers
+let index = ProteomeIndex::builder()
+    .path("/path/to/database.db")
+    .ksize(5)
+    .scaled(1)
+    .moltype("hp")
+    .remove_low_complexity(true)
     .build()?;
 ```
 
