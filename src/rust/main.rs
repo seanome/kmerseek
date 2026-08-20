@@ -88,9 +88,26 @@ enum Commands {
         #[arg(long, default_value = "2")]
         min_shared_kmers: usize,
 
-        /// Maximum uncorrected Poisson p-value required to report a match
+        /// Maximum uncorrected whole-query Poisson p-value required to report a match.
+        /// A match is reported if either this or --min-region-score passes.
         #[arg(long, default_value = "0.05")]
-        max_pvalue: f64,
+        max_query_pvalue: f64,
+
+        /// Minimum region-scoped score required to report a match, applied to the
+        /// best-scoring region. Bigger means more surprising: the score is -log10 of the
+        /// region's Poisson tail probability, so a p-value of 0.05 is a score of about 1.3,
+        /// and a p-value of 0.0007 is a score of about 3.16. This is a heuristic ranking
+        /// cutoff, not a statistically calibrated significance threshold (see the region
+        /// scoring notes in the docs). A match is reported if either this or
+        /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
+        /// the whole-query p-value is unimpressive. Defaults to about 1.3 (p=0.05).
+        #[arg(long)]
+        min_region_score: Option<f64>,
+
+        /// Deprecated: use --max-query-pvalue (whole protein) or --min-region-score (per
+        /// matched region). Kept as an alias that applies whole-query filtering only.
+        #[arg(long)]
+        max_pvalue: Option<f64>,
 
         /// Remove low-complexity (homopolymer) k-mers from query sketches.
         /// Omit this to follow whatever the target index was built with, which is
@@ -285,6 +302,8 @@ fn main() -> IndexResult<()> {
             shuffled_seed: _,
             threshold,
             min_shared_kmers,
+            max_query_pvalue,
+            min_region_score,
             max_pvalue,
             remove_low_complexity: remove_low_complexity_arg,
             verbose,
@@ -317,14 +336,43 @@ fn main() -> IndexResult<()> {
             eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
             eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            // --max-pvalue predates region scoring, so honour it as whole-query filtering only:
+            // a region floor of infinity can never be cleared (the check is a strict >),
+            // leaving the query scope as the only decider, the same as before region scoring
+            // existed.
+            let (max_query_pvalue, min_region_score) = match max_pvalue {
+                Some(deprecated) => {
+                    if let Some(ignored) = min_region_score {
+                        eprintln!(
+                            "WARNING: --min-region-score {ignored} is ignored because \
+                             --max-pvalue was also passed; the region scope is forced to \
+                             infinity (never passes) to reproduce pre-region-scoring \
+                             behaviour."
+                        );
+                    }
+                    eprintln!(
+                        "WARNING: --max-pvalue is deprecated; it now applies whole-query \
+                         filtering only.\n         Use --max-query-pvalue {deprecated} for the \
+                         same behaviour, or --min-region-score to\n         keep sub-protein \
+                         domain hits whose whole-query p-value is unimpressive."
+                    );
+                    (deprecated, f64::INFINITY)
+                }
+                // -log10(0.05): the score-scale equivalent of the same 0.05 default this flag
+                // used before the -log10 transform.
+                None => (max_query_pvalue, min_region_score.unwrap_or(-0.05_f64.log10())),
+            };
+
             eprintln!("  Threshold: {}", threshold);
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
-            eprintln!("  Maximum p-value: {}", max_pvalue);
+            eprintln!("  Maximum query p-value: {}", max_query_pvalue);
+            eprintln!("  Minimum region score: {}", min_region_score);
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters = SearchFilters { threshold, min_shared_kmers, max_pvalue };
+            let filters =
+                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -412,12 +460,15 @@ fn main() -> IndexResult<()> {
                 use kmerseek::sketch::ProteinSketch;
                 use needletail::parse_fastx_file;
 
-                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq.
+                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq. Also
+                // counts the total number of queries up front. That count is attached to each
+                // result as run_n_queries (see SearchResult::run_n_queries) and is not used in
+                // any correction.
                 eprintln!("First pass: scanning query proteome for k-mer frequencies...");
+                let mut total_queries: usize = 0;
                 {
                     use std::collections::HashMap;
                     let mut qfreqs: HashMap<u64, usize> = HashMap::new();
-                    let mut total_queries: usize = 0;
                     let mut freq_reader = parse_fastx_file(&query)
                         .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
                     while let Some(record) = freq_reader.next() {
@@ -490,8 +541,10 @@ fn main() -> IndexResult<()> {
                  -> anyhow::Result<()> {
                     // Search all queries in this batch in parallel. Results failing `filters`
                     // are never included (see SearchFilters), so no post-hoc filtering needed here.
-                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
-                        batch.par_iter().map(|q| searcher.search_one(q, &filters)).collect();
+                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> = batch
+                        .par_iter()
+                        .map(|q| searcher.search_one(q, &filters, total_queries))
+                        .collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
                     for results in &batch_results {
@@ -566,15 +619,18 @@ fn main() -> IndexResult<()> {
             };
 
             // search() / search_all_vs_all() already applied `filters` internally, so
-            // search_results only contains matches that passed threshold/min_shared_kmers/max_pvalue.
+            // search_results only contains matches that passed threshold/min_shared_kmers and
+            // cleared the query p-value or the region score.
             let filtered_results = search_results;
 
             eprintln!(
-                "Found {} matches above threshold {} with at least {} shared k-mers and p-value < {}",
+                "Found {} matches above threshold {} with at least {} shared k-mers and \
+                 query p-value < {} or region score > {}",
                 filtered_results.len(),
                 threshold,
                 min_shared_kmers,
-                max_pvalue
+                max_query_pvalue,
+                min_region_score
             );
 
             use kmerseek::search::SearchResultCsv;

@@ -8,7 +8,7 @@ beneath each hit. Hits are numbered instead of connected to their alignment
 block with leader lines, since lines cross when hits interleave.
 
 Input is the CSV produced by `kmerseek search -o results.csv` (one row per
-matched region: query_start, query_end, query_subseq, target_start, target_end,
+matched region: region_start, region_end, region_subseq, target_start, target_end,
 target_subseq, moltype_seq, ...) plus the query FASTA, used to draw the full-length
 protein bar and to get the exact query names to plot.
 
@@ -87,10 +87,21 @@ def read_fasta_lengths(fasta_path):
 
 
 def short_label(name, max_len=28):
-    """Shorten a UniProt-style header ('sp|P10415|BCL2_HUMAN Apoptosis...')
-    to a display id ('BCL2_HUMAN'); falls back to the first word."""
+    """Shorten a pipe-delimited header to a display id; falls back to the
+    first word. Two header shapes are recognized:
+    - GENCODE ('ENSP...|ENST...|ENSG...|OTTHUMG...|OTTHUMT...|GENE-201|GENE|len'):
+      the gene symbol is field index 6, not 2 -- using index 2 would show the
+      ENSG accession instead of a readable gene name.
+    - UniProt-style ('sp|P10415|BCL2_HUMAN Apoptosis...'): the name is field
+      index 2.
+    """
     parts = name.split("|")
-    short = parts[2].split(" ")[0] if len(parts) >= 3 else name.split(" ")[0]
+    if len(parts) >= 8:
+        short = parts[6].split(" ")[0]
+    elif len(parts) >= 3:
+        short = parts[2].split(" ")[0]
+    else:
+        short = name.split(" ")[0]
     if len(short) > max_len:
         short = short[: max_len - 1] + "…"
     return short
@@ -124,7 +135,7 @@ def scan_csv(csv_path):
     """Open the results CSV lazily -- nothing is read off disk until a query
     is `.collect()`-ed, so the whole file never has to fit in memory at once.
     infer_schema_length=None scans every row for dtypes up front, since a
-    poisson_pvalue column of mostly-0 values with rare 1e-300-style outliers
+    p-value column of mostly-0 values with rare 1e-300-style outliers
     further down the file could otherwise get mis-inferred as a narrower type."""
     return pl.scan_csv(csv_path, infer_schema_length=None)
 
@@ -168,10 +179,10 @@ def merge_regions_by_target(rows, gap_merge):
 
     hits = []
     for target_name, target_rows in by_target.items():
-        target_rows.sort(key=lambda r: int(r["query_start"]))
+        target_rows.sort(key=lambda r: int(r["region_start"]))
         cluster = [target_rows[0]]
         for row in target_rows[1:]:
-            if int(row["query_start"]) - int(cluster[-1]["query_end"]) <= gap_merge:
+            if int(row["region_start"]) - int(cluster[-1]["region_end"]) <= gap_merge:
                 cluster.append(row)
             else:
                 hits.append(_build_hit(target_name, cluster))
@@ -195,10 +206,46 @@ def _union_coverage(regions):
     return covered
 
 
-def _target_pvalues(rows):
-    """{target_name: poisson_pvalue}, one entry per distinct target -- every row
-    for a target carries the same query-target result-level p-value."""
-    return {r["target_name"]: float(r["poisson_pvalue"]) for r in rows}
+def _target_best_rows(rows):
+    """{target_name: the CSV row of its best (highest-scoring) region}, one entry per
+    distinct target.
+
+    region_poisson_score is -log10 of the region's Poisson tail probability, so
+    bigger means more surprising (see MatchedRegion::poisson_score in
+    src/rust/search.rs). It's a ranking heuristic, not a calibrated p-value --
+    but it is still the number that decides which hits this plot surfaces, so
+    it is what gets corrected here, not the whole-query p-value. This plot
+    draws regions, and `kmerseek search` now reports a hit when either scope
+    clears, so a real sub-protein domain call routinely carries an unimpressive
+    whole-query p-value (BCL2/CED9: 0.99 whole-query, score ~3.16 i.e. p=0.0007
+    for its region). Correcting the whole-query number instead would push
+    those hits to q~1 and let --max-hits cut them, hiding what the region
+    scoring exists to surface.
+
+    Unlike the query-level stats, region scores differ row to row, so take the
+    strongest (highest-scoring) region as the target's evidence."""
+    best = {}
+    for row in rows:
+        name = row["target_name"]
+        if name not in best or float(row["region_poisson_score"]) > float(best[name]["region_poisson_score"]):
+            best[name] = row
+    return best
+
+
+def _target_scores(rows):
+    """{target_name: best (highest) region score}, one entry per distinct target."""
+    return {name: float(row["region_poisson_score"]) for name, row in _target_best_rows(rows).items()}
+
+
+def _target_tail_probabilities(rows):
+    """{target_name: raw Poisson tail probability of its best-scoring region}, one entry per
+    distinct target.
+
+    Reads region_tail_probability straight off the same row _target_scores takes its score
+    from (both columns come from the same MatchedRegion), instead of reconstructing a
+    probability by undoing the -log10 transform on the score. benjamini_hochberg needs real
+    probabilities to correct, not scores."""
+    return {name: float(row["region_tail_probability"]) for name, row in _target_best_rows(rows).items()}
 
 
 def benjamini_hochberg(pvalues):
@@ -217,8 +264,8 @@ def benjamini_hochberg(pvalues):
 
 
 def _build_hit(target_name, cluster):
-    region_rows = sorted(cluster, key=lambda r: int(r["query_start"]))
-    regions = [(int(r["query_start"]), int(r["query_end"])) for r in region_rows]
+    region_rows = sorted(cluster, key=lambda r: int(r["region_start"]))
+    regions = [(int(r["region_start"]), int(r["region_end"])) for r in region_rows]
     return {
         "target_name": target_name,
         "start": min(r[0] for r in regions),
@@ -227,13 +274,17 @@ def _build_hit(target_name, cluster):
         "region_rows": region_rows,
         "coverage": _union_coverage(regions),
         "n_regions": len(cluster),
-        # containment/jaccard/enrichment/poisson_pvalue are query-target *result*
-        # stats, not per-region -- every row in the cluster carries the same
-        # value (it's the same query-target pair); max() is just a safe pick.
+        # containment/jaccard/query_* are query-target *result* stats, not
+        # per-region -- every row in the cluster carries the same value (it's the
+        # same query-target pair); max() is just a safe pick.
         "containment": max(float(r["containment"]) for r in cluster),
         "jaccard": max(float(r["jaccard"]) for r in cluster),
-        "enrichment": max(float(r["enrichment"]) for r in cluster),
-        "poisson_pvalue": max(float(r["poisson_pvalue"]) for r in cluster),
+        "query_enrichment": max(float(r["query_enrichment"]) for r in cluster),
+        "query_poisson_pvalue": max(float(r["query_poisson_pvalue"]) for r in cluster),
+        # Region stats do vary per row; the strongest (highest-scoring) region is the hit's
+        # evidence.
+        "region_poisson_score": max(float(r["region_poisson_score"]) for r in cluster),
+        "region_enrichment": max(float(r["region_enrichment"]) for r in cluster),
         "moltype": region_rows[0]["moltype"],
     }
 
@@ -327,7 +378,7 @@ class GenePlot:
         for row in hit["region_rows"]:
             if show_region_labels:
                 height += self.LINE_H
-            for key in ("query_subseq", "moltype_seq", "target_subseq"):
+            for key in ("region_subseq", "moltype_seq", "target_subseq"):
                 height += len(wrap_seq(row[key])) * self.LINE_H + self.LINE_H * self.GROUP_GAP
         return height + self.HIT_GAP
 
@@ -468,19 +519,24 @@ class GenePlot:
         # every target tested for this query); absent when a hit is built and
         # plotted directly, e.g. in tests, without going through that pipeline.
         q_value = hit.get("corrected_pvalue")
-        q_part = f"   q-value={q_value:.2g}" if q_value is not None else ""
+        q_part = f"   region q={q_value:.2g}" if q_value is not None else ""
+        # Both scopes are shown: either one can be what got this hit reported, and
+        # seeing them side by side is how you tell a whole-protein match from a
+        # localized domain call.
         return (f"containment={hit['containment']:.2f}   jaccard={hit['jaccard']:.3f}   "
-                f"enrichment={hit['enrichment']:.2f}   p-value={hit['poisson_pvalue']:.2g}{q_part}")
+                f"region enrich={hit['region_enrichment']:.2f}   "
+                f"region score={hit['region_poisson_score']:.2g}{q_part}   "
+                f"query p={hit['query_poisson_pvalue']:.2g}")
 
     @staticmethod
     def _region_label_text(r_idx, hit, row):
-        r_start, r_end = int(row["query_start"]), int(row["query_end"])
+        r_start, r_end = int(row["region_start"]), int(row["region_end"])
         return (f"region {r_idx}/{hit['n_regions']}:  {r_start + 1}-{r_end}aa, "
-                f"containment={float(row['containment']):.2f}")
+                f"score={float(row['region_poisson_score']):.2g}")
 
     def _draw_region_alignment(self, row, y):
         """Draw one region's query/moltype/target lines; return the y cursor after it."""
-        groups = (("query", row["query_subseq"]), (row["moltype"], row["moltype_seq"]),
+        groups = (("query", row["region_subseq"]), (row["moltype"], row["moltype_seq"]),
                   ("target", row["target_subseq"]))
         for label, seq in groups:
             self.ax_text.text(self.LABEL_X_OFFSET, y, f"{label}:", ha="left", va="top",
@@ -547,7 +603,7 @@ def _render_query(query_name, query_rows, query_length, args):
     target actually tested, not just the ones that end up displayed, or it
     would understate how many comparisons were made.
     """
-    corrected_pvalues = benjamini_hochberg(_target_pvalues(query_rows))
+    corrected_pvalues = benjamini_hochberg(_target_tail_probabilities(query_rows))
     display_rows = [r for r in query_rows if float(r["containment"]) >= args.min_containment]
     if not display_rows:
         print(f"Skipping '{query_name}': no hits above --min-containment {args.min_containment}")
