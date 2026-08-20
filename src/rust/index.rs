@@ -1517,6 +1517,20 @@ mod tests {
         Ok(())
     }
 
+    /// k=1 and k=100 are the boundaries next to the rejected 0 and 101, so they
+    /// should construct normally rather than being rejected.
+    #[test]
+    fn test_new_accepts_boundary_ksizes() -> Result<()> {
+        let dir = tempdir()?;
+        let small = ProteomeIndex::new(dir.path().join("small.db"), 1, 1, "protein", false)?;
+        assert_eq!(small.ksize(), 1);
+
+        let large = ProteomeIndex::new(dir.path().join("large.db"), 100, 1, "protein", false)?;
+        assert_eq!(large.ksize(), 100);
+
+        Ok(())
+    }
+
     /// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
     /// than unit tests with all the moltype testing. Also, it's a lot of tests!
 
