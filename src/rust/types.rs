@@ -97,7 +97,9 @@ impl MolType {
             // Dayhoff carries its class count too; the bare name is the pre-rename
             // spelling and normalizes to it.
             "dayhoff" => Ok(MolType("reduced_dayhoff6".to_string())),
-            "protein" | "hp" => Ok(MolType(moltype.to_string())),
+            // `raw` is a synonym for `protein` in encoding.rs; both keep their own name so
+            // generated filenames stay stable.
+            "protein" | "raw" => Ok(MolType(moltype.to_string())),
             s if s.starts_with("reduced_") => Ok(MolType(moltype.to_string())),
             _ => Err(format!(
                 "Invalid molecular type: {}. Must be one of: protein, reduced_dayhoff6, hp, \
@@ -244,13 +246,18 @@ mod tests {
         assert_eq!(MolType::new("dayhoff").unwrap(), MolType::new("reduced_dayhoff6").unwrap());
     }
 
-    /// `protein` and `hp` go straight to sourmash, so they keep their names.
+    /// `hp` is now the pre-rename spelling of the Lehninger 2-class alphabet.
     #[test]
-    fn test_moltype_leaves_builtins_alone() {
-        for moltype in ["protein", "hp"] {
-            assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
-        }
-        for moltype in ["reduced_sdm12", "reduced_gbmr4", "reduced_uniprot18"] {
+    fn test_moltype_normalizes_builtin_hp_to_lehninger2() {
+        assert_eq!(MolType::new("hp").unwrap().get(), "reduced_hp_lehninger2");
+        assert_eq!(MolType::new("hp").unwrap(), MolType::new("reduced_hp_lehninger2").unwrap());
+    }
+
+    /// `protein` and its synonym `raw` are the full 20-letter alphabet and keep their names,
+    /// as do the alphabets that already carry a class count.
+    #[test]
+    fn test_moltype_leaves_current_names_alone() {
+        for moltype in ["protein", "raw", "reduced_sdm12", "reduced_gbmr4", "reduced_uniprot18"] {
             assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
         }
     }

@@ -24,6 +24,7 @@ use crate::encoding::get_hash_function_from_moltype;
 use crate::errors::{IndexError, IndexResult};
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
+use crate::types::MolType;
 
 /// Schema version for the on-disk index format.
 /// Increment this constant whenever the stored format changes in a backward-incompatible way
@@ -271,6 +272,15 @@ impl ProteomeIndex {
         moltype: &str,
         store_raw_sequences: bool,
     ) -> IndexResult<Self> {
+        // Normalize before storing: pre-rename spellings (`hp`, `dayhoff`, `hp_<name>`) must
+        // be written to metadata under their current names, or reopening the index would hit
+        // reject_legacy_builtin_hp and refuse a database this binary just wrote.
+        let moltype = MolType::new(moltype)
+            .map_err(|message| IndexError::ValidationError { message })?
+            .get()
+            .to_string();
+        let moltype = moltype.as_str();
+
         // Create RocksDB options optimized for large datasets
         let opts = Self::create_rocksdb_options(true);
 
@@ -378,12 +388,41 @@ impl ProteomeIndex {
     /// read through the legacy struct, which defaults it to `false` -- correct,
     /// since those indexes kept every k-mer.
     fn read_metadata(db: &DB, raw: &[u8]) -> IndexResult<ProteomeIndexMetadata> {
-        if Self::read_schema_version(db)? >= SCHEMA_VERSION_WITH_REMOVE_LOW_COMPLEXITY {
-            Ok(bincode::deserialize(raw)?)
-        } else {
-            let legacy: LegacyProteomeIndexMetadata = bincode::deserialize(raw)?;
-            Ok(legacy.into())
+        let metadata =
+            if Self::read_schema_version(db)? >= SCHEMA_VERSION_WITH_REMOVE_LOW_COMPLEXITY {
+                bincode::deserialize(raw)?
+            } else {
+                let legacy: LegacyProteomeIndexMetadata = bincode::deserialize(raw)?;
+                legacy.into()
+            };
+        Self::reject_legacy_builtin_hp(&metadata)?;
+        Ok(metadata)
+    }
+
+    /// Moltype of indexes built with the pre-rename `hp` encoding.
+    ///
+    /// `hp` used sourmash's built-in HP encoder, which hashes lowercase `h`/`p`. It shares
+    /// the Lehninger partition with `reduced_hp_lehninger2` but none of its hashes, because
+    /// a pre-encoded custom table is uppercased to `H`/`P` before hashing. `hp` is now a
+    /// spelling of `reduced_hp_lehninger2`, so such an index would sketch queries on the
+    /// uppercase path and quietly match nothing at all. Refusing to open it is the only
+    /// honest option; there is no conversion short of rebuilding.
+    const LEGACY_BUILTIN_HP_MOLTYPE: &'static str = "hp";
+
+    fn reject_legacy_builtin_hp(metadata: &ProteomeIndexMetadata) -> IndexResult<()> {
+        if metadata.moltype != Self::LEGACY_BUILTIN_HP_MOLTYPE {
+            return Ok(());
         }
+        Err(IndexError::ValidationError {
+            message: format!(
+                "This index was built with the old `hp` encoding, whose k-mer hashes are not \
+                 compatible with `reduced_hp_lehninger2` (same amino-acid partition, but \
+                 sourmash hashed it as lowercase h/p where kmerseek now hashes uppercase \
+                 H/P). Searching it would silently return no matches. Rebuild the index with \
+                 --encoding reduced_hp_lehninger2 --ksize {}",
+                metadata.ksize
+            ),
+        })
     }
 
     /// Get a reference to the signatures map (for testing)
@@ -2226,21 +2265,25 @@ mod tests {
 
         // HP encoding collapses 20 aa to 2 letters (h/p), so multiple original k-mers
         // can produce the same hash. We store all positions together in sorted order.
+        // These hashes changed when `hp` stopped meaning sourmash's built-in HP encoder and
+        // became a spelling of reduced_hp_lehninger2. The partition is the same either way --
+        // note the collisions below are unchanged -- but sourmash hashed the encoded sequence
+        // as lowercase h/p, while a pre-encoded custom table is uppercased to H/P first.
         let expected_positions: HashMap<u64, Vec<usize>> = [
-            (17248460043117039725, vec![11]),    // MALGE
-            (5673218808929106268, vec![9]),      // NIMAL
-            (16969835101383990681, vec![1]),     // LANTA
-            (7345312524621807974, vec![6]),      // NDANI
-            (16370543730027378051, vec![4]),     // TANDA
-            (3278382041688965244, vec![8]),      // ANIMA
-            (8541583772724823208, vec![10]),     // IMALG
-            (16158526221854164806, vec![14]),    // GENQM
-            (11553019557737058697, vec![13]),    // LGENQ
-            (9081059129327932468, vec![15]),     // ENQME
-            (2863220259252354754, vec![7]),      // DANIM
-            (4230974618842309829, vec![0, 12]),  // PLANT(0) + ALGEN(12) → same HP hash
-            (13058023948041027181, vec![3, 16]), // NTAND(3) + NQMES(16) → same HP hash
-            (4144736064335623701, vec![2, 5]),   // ANTAN(2) + ANDAN(5) → same HP hash
+            (9746043091681970730, vec![11]),     // MALGE
+            (10056128287015296535, vec![9]),     // NIMAL
+            (7019719558633629292, vec![1]),      // LANTA
+            (5939524841130662146, vec![6]),      // NDANI
+            (404086296606694721, vec![4]),       // TANDA
+            (7053678018212408099, vec![8]),      // ANIMA
+            (1279034388713273924, vec![10]),     // IMALG
+            (12234409608613177709, vec![14]),    // GENQM
+            (13511132584368456433, vec![13]),    // LGENQ
+            (12149598683164131833, vec![15]),    // ENQME
+            (15040771676010984362, vec![7]),     // DANIM
+            (10075545896705975686, vec![0, 12]), // PLANT(0) + ALGEN(12) → same HP hash
+            (2195622560529879952, vec![3, 16]),  // NTAND(3) + NQMES(16) → same HP hash
+            (246458236452686356, vec![2, 5]),    // ANTAN(2) + ANDAN(5) → same HP hash
         ]
         .into_iter()
         .collect();
@@ -2387,7 +2430,7 @@ mod tests {
         assert_eq!(signature.kmer_positions().len(), 14, "Expected 14 k-mers for the test protein");
 
         // Verify some specific k-mers are present
-        let expected_hash = 4230974618842309829; // Hash for "PLANT" in HP encoding ("hhhpp")
+        let expected_hash = 10075545896705975686; // Hash for "PLANT" in HP encoding ("hhhpp")
         assert!(
             signature.kmer_positions().contains_key(&expected_hash),
             "Expected k-mer hash {} to be present",
@@ -2424,7 +2467,7 @@ mod tests {
 
         // TEST_PROTEIN = "PLANTANDANIMALGENQMES"; window 10, "IMALG", is
         // all-hydrophobic ("hhhhh") under the HP (Lehninger) alphabet.
-        const IMALG_HASH: u64 = 8541583772724823208;
+        const IMALG_HASH: u64 = 1279034388713273924;
 
         // Default: removal is off, so the low-complexity k-mer is kept.
         let index_off = ProteomeIndex::new(
@@ -2587,7 +2630,7 @@ mod tests {
             let reopened = ProteomeIndex::open_for_search(&db_path)?;
             assert!(!reopened.remove_low_complexity());
             assert_eq!(reopened.ksize(), 5);
-            assert_eq!(reopened.moltype(), "hp");
+            assert_eq!(reopened.moltype(), "reduced_hp_lehninger2");
             // No version was ever stamped on these.
             assert_eq!(reopened.kmerseek_version(), None);
         }
@@ -2641,7 +2684,7 @@ mod tests {
         assert_eq!(loaded.signature_count(), 2);
         assert_eq!(loaded.ksize(), 5);
         assert_eq!(loaded.scaled(), 1);
-        assert_eq!(loaded.moltype(), "hp");
+        assert_eq!(loaded.moltype(), "reduced_hp_lehninger2");
 
         // Counts are per-process build state, not persisted, so a fresh load
         // starts at zero rather than inheriting the writer's totals.
@@ -2666,7 +2709,8 @@ mod tests {
         let (ksize, scaled, moltype) = ProteomeIndex::get_index_parameters(&db_path)?;
         assert_eq!(ksize, 7);
         assert_eq!(scaled, 1);
-        assert_eq!(moltype, "dayhoff");
+        // Stored under its current name, not the "dayhoff" spelling it was created with.
+        assert_eq!(moltype, "reduced_dayhoff6");
 
         Ok(())
     }
@@ -2846,12 +2890,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "24ca8d939672666b" {
+                if md5sum == "65f2e51343e817f2" {
                     assert!(
                         stored_signature.kmer_positions().len() == 6,
                         "LIVINGALIVE should have 6 hp 5-mers"
                     );
-                } else if md5sum == "668d7173d661287b" {
+                } else if md5sum == "cc40f55c5ceacf82" {
                     assert!(
                         stored_signature.kmer_positions().len() == 14,
                         "PLANTANDANIMALGENQMES should have 14 hp 5-mers"
@@ -3331,22 +3375,22 @@ mod tests {
             if sequence == &"PLANTANDANIMALGENBMES" {
                 // B resolves to D or N → HP hash for NDMES/NNMES (both map to "pphpp" HP encoding)
                 assert!(
-                    protein_signature.kmer_positions().contains_key(&13058023948041027181),
-                    "Expected k-mer with hash 13058023948041027181 (NDMES/NNMES HP) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&2195622560529879952),
+                    "Expected k-mer with hash 2195622560529879952 (NDMES/NNMES HP) to be present in {}",
                     sequence
                 );
             } else if sequence == &"PLANTANDANIMALGENZMES" {
                 // Z resolves to E or Q → HP hash for NEMES/NQMES (both map to "pphpp" HP encoding)
                 assert!(
-                    protein_signature.kmer_positions().contains_key(&13058023948041027181),
-                    "Expected k-mer with hash 13058023948041027181 (NEMES/NQMES HP) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&2195622560529879952),
+                    "Expected k-mer with hash 2195622560529879952 (NEMES/NQMES HP) to be present in {}",
                     sequence
                 );
             } else if sequence == &"PLANTANDANIMALGENJMES" {
                 // J resolves to I or L → HP hash for NLMES/NIMES (both map to "phhpp" HP encoding)
                 assert!(
-                    protein_signature.kmer_positions().contains_key(&10495165127682499337),
-                    "Expected k-mer with hash 10495165127682499337 (NLMES/NIMES HP) to be present in {}",
+                    protein_signature.kmer_positions().contains_key(&11876943794100007072),
+                    "Expected k-mer with hash 11876943794100007072 (NLMES/NIMES HP) to be present in {}",
                     sequence
                 );
             }
@@ -3637,6 +3681,40 @@ mod tests {
         }
     }
 
+    /// An index written with the pre-rename `hp` encoding holds hashes from sourmash's own
+    /// HP encoder, which are not comparable with the ones kmerseek produces now. Opening it
+    /// must fail loudly: after normalization the moltypes compare equal, so the search would
+    /// otherwise run to completion and report no matches at all.
+    #[test]
+    fn test_legacy_builtin_hp_index_is_rejected() {
+        let metadata = |moltype: &str| ProteomeIndexMetadata {
+            total_signatures: 1,
+            chunk_count: 1,
+            combined_mins: vec![],
+            combined_abunds: None,
+            moltype: moltype.to_string(),
+            ksize: 10,
+            scaled: 1,
+            store_raw_sequences: true,
+            remove_low_complexity: false,
+        };
+
+        let error = ProteomeIndex::reject_legacy_builtin_hp(&metadata("hp"))
+            .expect_err("an `hp` index must be refused");
+        let message = error.to_string();
+        assert!(message.contains("reduced_hp_lehninger2"), "{message}");
+        assert!(message.contains("Rebuild the index"), "{message}");
+        assert!(message.contains("--ksize 10"), "{message}");
+
+        // Every other moltype passes through, including the renamed HP alphabets.
+        for moltype in ["protein", "reduced_dayhoff6", "reduced_hp_lehninger2", "reduced_sdm12"] {
+            assert!(
+                ProteomeIndex::reject_legacy_builtin_hp(&metadata(moltype)).is_ok(),
+                "{moltype}"
+            );
+        }
+    }
+
     #[test]
     fn test_index_stats() {
         let temp_dir = tempdir().unwrap();
@@ -3685,8 +3763,8 @@ mod tests {
         // Verify the manual index has content
         assert!(manual_index.signature_count() == 25, "Manual index should have 25 signatures");
         assert!(
-            manual_index.combined_minhash_size() == 1603,
-            "Manual index should have combined minhash of size 1603"
+            manual_index.combined_minhash_size() == 1646,
+            "Manual index should have combined minhash of size 1646"
         );
 
         println!("Saving manual index state...");
@@ -3710,8 +3788,8 @@ mod tests {
             "Auto-generated index should have 25 signatures"
         );
         assert!(
-            auto_index.combined_minhash_size() == 1603,
-            "Auto-generated index should have combined minhash of size 1603"
+            auto_index.combined_minhash_size() == 1646,
+            "Auto-generated index should have combined minhash of size 1646"
         );
 
         // Compare the two indices - they should be equivalent since they processed the same data
@@ -3728,10 +3806,12 @@ mod tests {
         let base_path = temp_dir.path().join("test.fasta");
 
         // Test different parameter combinations
+        // The moltype in the filename is the normalized name, so passing a pre-rename
+        // spelling still produces a file named after the current alphabet.
         let test_cases = vec![
-            (16, 5, "hp", "test.fasta.hp.k16.scaled5.kmerseek.rocksdb"),
+            (16, 5, "hp", "test.fasta.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (10, 1, "protein", "test.fasta.protein.k10.scaled1.kmerseek.rocksdb"),
-            (8, 100, "dayhoff", "test.fasta.dayhoff.k8.scaled100.kmerseek.rocksdb"),
+            (8, 100, "dayhoff", "test.fasta.reduced_dayhoff6.k8.scaled100.kmerseek.rocksdb"),
         ];
 
         for (ksize, scaled, moltype, expected) in test_cases {
@@ -3756,13 +3836,15 @@ mod tests {
         assert!(fasta_path.exists(), "BCL2 FASTA file not found at {:?}", fasta_path);
 
         // Test different parameter combinations
+        // The fourth field is the normalized moltype that ends up in the filename: pre-rename
+        // spellings are rewritten to the current alphabet name when the index is created.
         let test_cases = vec![
-            (16, 5, "hp", "BCL2 with hp encoding, k=16, scaled=5"),
-            (10, 1, "protein", "BCL2 with protein encoding, k=10, scaled=1"),
-            (8, 100, "dayhoff", "BCL2 with dayhoff encoding, k=8, scaled=100"),
+            (16, 5, "hp", "reduced_hp_lehninger2", "BCL2 with hp encoding, k=16, scaled=5"),
+            (10, 1, "protein", "protein", "BCL2 with protein encoding, k=10, scaled=1"),
+            (8, 100, "dayhoff", "reduced_dayhoff6", "BCL2 with dayhoff encoding, k=8, scaled=100"),
         ];
 
-        for (ksize, scaled, moltype, description) in test_cases {
+        for (ksize, scaled, moltype, stored_moltype, description) in test_cases {
             println!("Testing: {}", description);
 
             // Create index with automatic filename generation
@@ -3771,7 +3853,7 @@ mod tests {
                     .unwrap();
 
             // Verify the generated filename
-            let expected_filename = format!("bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.{}.k{}.scaled{}.kmerseek.rocksdb", moltype, ksize, scaled);
+            let expected_filename = format!("bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.{}.k{}.scaled{}.kmerseek.rocksdb", stored_moltype, ksize, scaled);
             let generated_filename = auto_index.generate_filename(
                 "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz",
             );
@@ -3869,15 +3951,15 @@ mod tests {
 
         // Test with various filename patterns
         let test_cases = vec![
-            ("simple.fasta", "simple.fasta.hp.k16.scaled5.kmerseek.rocksdb"),
+            ("simple.fasta", "simple.fasta.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (
                 "complex-name_with.underscores.fasta.gz",
-                "complex-name_with.underscores.fasta.gz.hp.k16.scaled5.kmerseek.rocksdb",
+                "complex-name_with.underscores.fasta.gz.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
             ),
-            ("no_extension", "no_extension.hp.k16.scaled5.kmerseek.rocksdb"),
+            ("no_extension", "no_extension.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (
                 "multiple.dots.in.name.fasta",
-                "multiple.dots.in.name.fasta.hp.k16.scaled5.kmerseek.rocksdb",
+                "multiple.dots.in.name.fasta.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
             ),
         ];
 
@@ -3890,10 +3972,11 @@ mod tests {
         }
 
         // Test with different molecular types
+        // Pre-rename spellings normalize, so the filename names the current alphabet.
         let moltype_cases = vec![
-            ("hp", "test.fasta.hp.k8.scaled10.kmerseek.rocksdb"),
+            ("hp", "test.fasta.reduced_hp_lehninger2.k8.scaled10.kmerseek.rocksdb"),
             ("protein", "test.fasta.protein.k8.scaled10.kmerseek.rocksdb"),
-            ("dayhoff", "test.fasta.dayhoff.k8.scaled10.kmerseek.rocksdb"),
+            ("dayhoff", "test.fasta.reduced_dayhoff6.k8.scaled10.kmerseek.rocksdb"),
             ("raw", "test.fasta.raw.k8.scaled10.kmerseek.rocksdb"),
         ];
 

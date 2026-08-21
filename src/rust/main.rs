@@ -151,11 +151,10 @@ enum ProteinEncoding {
     /// Dayhoff encoding, 6 classes
     #[value(name = "reduced-dayhoff6", aliases = ["reduced_dayhoff6", "dayhoff"])]
     Dayhoff,
-    /// HP encoding — sourmash built-in Lehninger classification (backward-compatible)
-    Hp,
-    /// HP Lehninger, 2 classes (same partition as `hp`, but NOT the same hashes: sourmash
-    /// hashes `hp` as lowercase h/p, this is uppercased to H/P first)
-    #[value(name = "reduced-hp-lehninger2", aliases = ["reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger"])]
+    /// HP Lehninger, 2 classes. Also selected by the pre-rename spellings `hp_lehninger` and
+    /// `hp`; indexes built with the old sourmash-backed `hp` must be rebuilt (their hashes
+    /// differ)
+    #[value(name = "reduced-hp-lehninger2", aliases = ["reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger", "hp"])]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
     #[value(name = "reduced-hp-thomas-dill2", aliases = ["reduced_hp_thomas_dill2", "hp_thomas_dill", "hp-thomas-dill"])]
@@ -209,7 +208,6 @@ impl From<ProteinEncoding> for &'static str {
         match encoding {
             ProteinEncoding::Protein => "protein",
             ProteinEncoding::Dayhoff => "reduced_dayhoff6",
-            ProteinEncoding::Hp => "hp",
             ProteinEncoding::HpLehninger => "reduced_hp_lehninger2",
             ProteinEncoding::HpThomasDill => "reduced_hp_thomas_dill2",
             ProteinEncoding::HpKyteDoolittle => "reduced_hp_kyte_doolittle2",
@@ -766,7 +764,6 @@ fn assign_encoding(
     let detected_encoding = match canonical.as_str() {
         "protein" => ProteinEncoding::Protein,
         "reduced_dayhoff6" => ProteinEncoding::Dayhoff,
-        "hp" => ProteinEncoding::Hp,
         "reduced_hp_lehninger2" => ProteinEncoding::HpLehninger,
         "reduced_hp_thomas_dill2" => ProteinEncoding::HpThomasDill,
         "reduced_hp_kyte_doolittle2" => ProteinEncoding::HpKyteDoolittle,
@@ -790,7 +787,7 @@ fn assign_encoding(
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown encoding in database: {}. Expected one of: protein, reduced_dayhoff6, hp, \
+                    "Unknown encoding in database: {}. Expected one of: protein, reduced_dayhoff6, \
                      reduced_hp_lehninger2, reduced_hp_thomas_dill2, reduced_hp_kyte_doolittle2, \
                      reduced_hp_thomas_dill_no_c2, reduced_hp_lehninger_c_nonpolar2, \
                      reduced_hp_lehninger_hpc3, reduced_hp_pbotc_1st_ed2, \

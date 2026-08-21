@@ -2671,7 +2671,8 @@ mod tests {
         );
         assert_eq!(bcl2_result.ksize, ksize);
         assert_eq!(bcl2_result.scaled, scaled);
-        assert_eq!(bcl2_result.moltype, moltype);
+        // Results carry the normalized moltype, not the spelling the index was created with.
+        assert_eq!(bcl2_result.moltype, "reduced_hp_lehninger2");
 
         // Verify we have intersecting k-mers
         assert!(
@@ -2695,11 +2696,10 @@ mod tests {
         // WHY: With multiple signatures in the database, some k-mers will be rare and have
         // higher IDF values, making TF-IDF > 0. In a real database search, TF-IDF helps
         // identify matches based on rare, significant k-mers.
-        assert!(
-            bcl2_result.query_tfidf == 565.119680433367,
-            "query_tfidf should be 565.119680433367, got {}",
-            bcl2_result.query_tfidf
-        );
+        // Compared approximately, not with ==: this is a sum over a HashMap keyed by k-mer
+        // hash, so the summation order (and therefore the last bits) depends on the hash
+        // values themselves.
+        approx::assert_relative_eq!(bcl2_result.query_tfidf, 565.119680433367, epsilon = 1e-9);
 
         assert!(
             bcl2_result.mean_matched_kmer_freq > 0.0,

@@ -154,7 +154,14 @@ impl<'de> Deserialize<'de> for ProteinSketch {
 
 impl ProteinSketch {
     pub fn new(name: &str, protein_ksize: u32, scaled: u32, moltype: &str) -> anyhow::Result<Self> {
-        let hash_function = get_hash_function_from_moltype(moltype)?;
+        // WHY normalize before anything else: pre-rename spellings (`hp`, `dayhoff`,
+        // `hp_<name>`) have to pick the same hash function and the same stored name. Reading
+        // the hash function from the raw string while storing the normalized one built the
+        // minhash for one encoding and pre-encoded for another, which silently emptied
+        // kmer_positions.
+        let moltype = MolType::new(moltype).map_err(|e| anyhow::anyhow!(e))?;
+        let moltype_str = moltype.get().to_string();
+        let hash_function = get_hash_function_from_moltype(&moltype_str)?;
         let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO;
 
         let minhash = KmerMinHash::new(
@@ -171,14 +178,14 @@ impl ProteinSketch {
             name: name.to_string(),
             md5sum: String::new(),
             minhash,
-            moltype: moltype.to_string(),
+            moltype: moltype_str,
             ksize: protein_ksize,
         };
 
         Ok(Self {
             name: name.to_string(),
             signature,
-            moltype: MolType::new(moltype).unwrap(),
+            moltype,
             protein_ksize,
             scaled,
             kmer_positions: HashMap::new(),
@@ -669,7 +676,8 @@ mod tests {
         assert_eq!(s.protein_ksize(), 5);
         assert_eq!(s.scaled(), 1);
         assert_eq!(s.minhash_ksize(), 15); // 5 * PROTEIN_TO_MINHASH_RATIO
-        assert_eq!(s.moltype().to_string(), "hp");
+                                           // `hp` normalizes to the current name for the Lehninger 2-class alphabet.
+        assert_eq!(s.moltype().to_string(), "reduced_hp_lehninger2");
         assert_eq!(s.signature().minhash.mins().len(), 0);
         assert!(!s.has_efficient_data());
         assert!(s.get_efficient_data().is_none());
@@ -701,7 +709,7 @@ mod tests {
         // TEST_PROTEIN = "PLANTANDANIMALGENQMES"; the window at position 10,
         // "IMALG", is all-hydrophobic ("hhhhh") under the HP (Lehninger)
         // alphabet — the low-complexity case this targets.
-        const IMALG_HASH: u64 = 8541583772724823208;
+        const IMALG_HASH: u64 = 1279034388713273924;
 
         // Default (off): low-complexity k-mers are kept, matching legacy behavior.
         let mut off = ProteinSketch::new("off", 5, 1, "hp").unwrap();

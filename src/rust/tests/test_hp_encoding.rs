@@ -322,24 +322,21 @@ mod tests {
         assert_eq!(legacy.moltype().get(), "reduced_dayhoff6");
     }
 
-    /// The built-in `hp` and our Lehninger table agree on the partition but not on the
-    /// bytes they hash: sourmash encodes `hp` to lowercase h/p, while a pre-encoded custom
-    /// table is uppercased to H/P before hashing. They are therefore separate moltypes, and
-    /// merging their names would silently invalidate every index built under the other one.
+    /// `hp` is now a spelling of `reduced_hp_lehninger2`, not a separate encoding: same
+    /// partition, same hashes, same stored name. Before the merge the two shared a partition
+    /// but no hashes, because sourmash's built-in HP encoder hashes lowercase h/p while a
+    /// pre-encoded custom table is uppercased to H/P first. `hp` now takes the custom path
+    /// like every other alphabet in the family.
     #[test]
-    fn test_builtin_hp_and_lehninger2_share_a_partition_but_not_hashes() {
+    fn test_bare_hp_is_the_lehninger_alphabet() {
         let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
 
-        let builtin = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp").unwrap();
-        let custom =
+        let bare = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp").unwrap();
+        let named =
             ProteinSketch::from_protein_sequence("x", seq, 8, 1, "reduced_hp_lehninger2").unwrap();
 
-        // Same partition: the encoded sequences are character-for-character equal.
-        assert_eq!(builtin.get_moltype_sequence(), custom.get_moltype_sequence());
-
-        // Different hashed bytes: no k-mer hash is shared.
-        let (b, c) = (builtin.mins_as_set(), custom.mins_as_set());
-        assert_eq!(b.len(), c.len());
-        assert_eq!(b.intersection(&c).count(), 0, "hp and lehninger2 unexpectedly share hashes");
+        assert_eq!(bare.mins_as_set(), named.mins_as_set());
+        assert_eq!(bare.get_moltype_sequence(), named.get_moltype_sequence());
+        assert_eq!(bare.moltype().get(), "reduced_hp_lehninger2");
     }
 }

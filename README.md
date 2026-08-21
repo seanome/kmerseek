@@ -152,18 +152,37 @@ amino acids into, so the name states how much chemistry it discards:
 | Moltype | Classes | Previously |
 |---------|:---:|---|
 | `reduced_dayhoff6` | 6 | `dayhoff` |
+| `reduced_hp_lehninger2` | 2 | `hp_lehninger`, `hp` |
 | `reduced_hp_<name>2` / `3` | 2 or 3 | `hp_<name>` |
 | `reduced_gbmr4` ... `reduced_uniprot18` | 4-18 | new |
 
-The old spellings are still accepted on the command line and in existing indexes, and
-are normalized to the current name on read, so databases built before the rename keep
-working. Nothing writes the old names any more.
+`protein` (the full 20-letter alphabet, also spelled `raw`) keeps its name -- it does not
+reduce anything.
 
-`protein` (the full 20-letter alphabet) and `hp` are unchanged. `hp` is sourmash's
-built-in HP encoding: it uses the same Lehninger partition as
-`reduced_hp_lehninger2`, but sourmash hashes it as lowercase `h`/`p` while the custom
-tables are uppercased to `H`/`P` before hashing, so the two share no k-mer hashes and
-are not interchangeable. Pick one and stay with it for a given index.
+The old spellings are still accepted on the command line and are normalized to the
+current name, so `--encoding hp_thomas_dill` and `--encoding hp` still work and are
+recorded under the current name.
+
+### Indexes built before the rename
+
+Most keep working: `dayhoff` and the `hp_<name>` alphabets resolve to the same hash
+function and the same table as before, so their k-mer hashes are unchanged and existing
+databases are searchable as-is.
+
+The one exception is `hp`. It used to select sourmash's built-in HP encoder, which applies
+the same Lehninger partition but hashes the encoded sequence as lowercase `h`/`p`, where
+kmerseek's own tables are uppercased to `H`/`P` first. The two share no k-mer hashes at
+all. `hp` is now a spelling of `reduced_hp_lehninger2`, so an index built under the old
+`hp` would sketch queries on the uppercase path and match nothing. kmerseek refuses to
+open such an index and tells you to rebuild it:
+
+```
+This index was built with the old `hp` encoding, whose k-mer hashes are not compatible
+with `reduced_hp_lehninger2` ... Rebuild the index with --encoding reduced_hp_lehninger2
+```
+
+Rebuilding reproduces the same hits -- the amino-acid partition never changed, only the
+bytes that get hashed.
 
 ## HP Alphabet Variants
 
@@ -171,8 +190,9 @@ are not interchangeable. Pick one and stay with it for a given index.
 / polar (`p`) before k-mer extraction. The alphabets below (see
 `src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
 the five borderline ones -- **C, G, P, W, Y** (bolded). Lehninger is the current
-default (`hp` moltype); the others are selectable via `reduced_hp_<name>2` moltypes
-(e.g. `reduced_hp_thomas_dill2`) for the alphabet robustness sweep.
+default, spelled `reduced_hp_lehninger2`; the others are selectable via the same
+`reduced_hp_<name>2` pattern (e.g. `reduced_hp_thomas_dill2`) for the alphabet
+robustness sweep.
 
 The trailing digit is the class count, matching the multi-letter alphabets in the
 next section, so every moltype states its size. These were previously named
@@ -188,7 +208,7 @@ packing.
 
 | Moltype | Classes | Previously |
 |---------|:---:|---|
-| `reduced_hp_lehninger2` | 2 | `hp_lehninger` |
+| `reduced_hp_lehninger2` | 2 | `hp_lehninger`, `hp` |
 | `reduced_hp_thomas_dill2` | 2 | `hp_thomas_dill` |
 | `reduced_hp_kyte_doolittle2` | 2 | `hp_kyte_doolittle` |
 | `reduced_hp_thomas_dill_no_c2` | 2 | `hp_thomas_dill_no_c` |
@@ -264,7 +284,7 @@ regions at k=5.
 
 ### Ambiguity codes
 
-Under `reduced_dayhoff6`, `hp` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
+Under `reduced_dayhoff6` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
 by a fixed representative, because both residues each code stands for land in the same
 class either way. Most of these alphabets split at least one of those pairs -- SDM12 and
 HSDM17 give Asp and Asn separate classes -- so under them B/J/Z, along with U (Sec) and

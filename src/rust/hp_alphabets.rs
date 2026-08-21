@@ -136,7 +136,16 @@ impl HpAlphabet {
     }
 
     /// Parse the pre-rename `"hp_<name>"` form, e.g. `"hp_lehninger"`.
+    ///
+    /// Bare `"hp"` is included: it used to select sourmash's built-in HP encoder, which
+    /// applies this same Lehninger partition, so it is now just another spelling of
+    /// [`Self::Lehninger`]. The hashes differ (sourmash hashed lowercase h/p, this table is
+    /// uppercased to H/P first), which is why indexes built under the old `hp` are refused
+    /// on open rather than reinterpreted -- see `ProteomeIndex::reject_legacy_builtin_hp`.
     fn from_legacy_moltype(s: &str) -> Option<HpAlphabet> {
+        if s == "hp" {
+            return Some(HpAlphabet::Lehninger);
+        }
         let name = s.strip_prefix("hp_")?;
         if let Some(a) = Self::all_named().iter().find(|a| a.name() == name) {
             return Some(*a);
@@ -691,10 +700,17 @@ mod tests {
 
     #[test]
     fn from_moltype_rejects_unrelated_strings() {
-        for moltype in
-            ["protein", "dayhoff", "hp", "reduced_sdm12", "reduced_hp_", "reduced_hp_nope2"]
-        {
+        for moltype in ["protein", "dayhoff", "reduced_sdm12", "reduced_hp_", "reduced_hp_nope2"] {
             assert_eq!(HpAlphabet::from_moltype(moltype), None, "{moltype}");
         }
+    }
+
+    /// Bare `hp` selected sourmash's built-in HP encoder, which uses the Lehninger
+    /// partition, so it is now a spelling of that alphabet rather than an encoding of its
+    /// own.
+    #[test]
+    fn bare_hp_parses_as_lehninger() {
+        assert_eq!(HpAlphabet::from_moltype("hp"), Some(HpAlphabet::Lehninger));
+        assert_eq!(HpAlphabet::from_moltype("hp").unwrap().to_moltype(), "reduced_hp_lehninger2");
     }
 }
