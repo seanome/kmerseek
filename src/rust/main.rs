@@ -153,7 +153,8 @@ enum ProteinEncoding {
     Dayhoff,
     /// HP encoding — sourmash built-in Lehninger classification (backward-compatible)
     Hp,
-    /// HP Lehninger (explicit; identical hashes to hp)
+    /// HP Lehninger, 2 classes (same partition as `hp`, but NOT the same hashes: sourmash
+    /// hashes `hp` as lowercase h/p, this is uppercased to H/P first)
     #[value(name = "reduced-hp-lehninger2", aliases = ["reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger"])]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
