@@ -26,14 +26,17 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
     match moltype {
         "protein" | "raw" => Ok(HashFunctions::Murmur64Protein),
         "hp" => Ok(HashFunctions::Murmur64Hp),
-        "dayhoff" => Ok(HashFunctions::Murmur64Dayhoff),
+        // Dayhoff has no table of ours; sourmash encodes and hashes it. The arm must
+        // come before the `reduced_` catch-all below, which assumes a pre-encoded
+        // sequence and would hand back the wrong hash function.
+        "dayhoff" | "reduced_dayhoff6" => Ok(HashFunctions::Murmur64Dayhoff),
         // Custom alphabets pre-encode the sequence before hashing, so the hash
         // function sees an already-encoded sequence and uses identity.
         s if s.starts_with("hp_") || s.starts_with("reduced_") => {
             Ok(HashFunctions::Murmur64Protein)
         }
         _ => Err(anyhow::anyhow!(
-            "Invalid moltype: {}. Supported values: 'protein', 'dayhoff', 'hp', \
+            "Invalid moltype: {}. Supported values: 'protein', 'reduced_dayhoff6', 'hp', \
              'reduced_hp_lehninger2', 'reduced_hp_thomas_dill2', 'reduced_hp_kyte_doolittle2', \
              'reduced_hp_thomas_dill_no_c2', 'reduced_hp_lehninger_c_nonpolar2', \
              'reduced_hp_lehninger_hpc3', 'reduced_hp_pbotc_1st_ed2', \
@@ -41,7 +44,7 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
              'reduced_hp_shuffled_control2_1'..'reduced_hp_shuffled_control2_10', \
              'reduced_gbmr4', 'reduced_wwmj5', 'reduced_gbmr7', 'reduced_sdm12', \
              'reduced_mmseqs12', 'reduced_wass14', 'reduced_hsdm17', 'reduced_uniprot18' \
-             (the pre-rename 'hp_<name>' spellings are still accepted)",
+             (the pre-rename 'hp_<name>' and 'dayhoff' spellings are still accepted)",
             moltype
         )),
     }
@@ -52,7 +55,7 @@ pub fn get_moltype_from_hash_function_string(
 ) -> Result<String, anyhow::Error> {
     match hash_function.as_str() {
         MURMUR64PROTEIN => Ok("protein".to_string()),
-        MURMUR64DAYHOFF => Ok("dayhoff".to_string()),
+        MURMUR64DAYHOFF => Ok("reduced_dayhoff6".to_string()),
         MURMUR64HP => Ok("hp".to_string()),
         _ => Err(anyhow::anyhow!(
             "Invalid hash function: {}, only 'Murmur64' with 'protein', 'dayhoff', or 'hp' are supported", hash_function
@@ -65,7 +68,7 @@ pub fn get_moltype_from_hash_function(
 ) -> Result<String, anyhow::Error> {
     match hash_function {
         HashFunctions::Murmur64Protein => Ok("protein".to_string()),
-        HashFunctions::Murmur64Dayhoff => Ok("dayhoff".to_string()),
+        HashFunctions::Murmur64Dayhoff => Ok("reduced_dayhoff6".to_string()),
         HashFunctions::Murmur64Hp => Ok("hp".to_string()),
         _ => Err(anyhow::anyhow!(
             "Invalid hash function: {}, only Sourmash HashFunctions::Murmur64 with 'protein', 'dayhoff', or 'hp' are supported", hash_function
@@ -91,12 +94,14 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
     match moltype {
         "protein" | "raw" => Ok(|b| b),
         "hp" => Ok(aa_to_hp),
-        "dayhoff" => Ok(aa_to_dayhoff),
+        // Before the `reduced_` arm below for the same reason as in
+        // get_hash_function_from_moltype: dayhoff is encoded by sourmash, not pre-encoded.
+        "dayhoff" | "reduced_dayhoff6" => Ok(aa_to_dayhoff),
         // Custom alphabets pre-encode via custom_alphabet_table(); return identity here so
         // callers that only need a fn(u8)->u8 don't crash. add_protein handles them separately.
         s if s.starts_with("hp_") || s.starts_with("reduced_") => Ok(|b| b),
         _ => Err(anyhow::anyhow!(
-            "Invalid moltype: {}, only 'protein', 'hp', or 'dayhoff' are supported",
+            "Invalid moltype: {}, only 'protein', 'hp', or 'reduced_dayhoff6' are supported",
             moltype
         )),
     }

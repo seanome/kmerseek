@@ -144,6 +144,27 @@ the others) -- use it to tame proteome-scale searches where a gene can have doze
 distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
 
+## Encoding Names
+
+Every reduced alphabet's moltype ends in the number of classes it collapses the 20
+amino acids into, so the name states how much chemistry it discards:
+
+| Moltype | Classes | Previously |
+|---------|:---:|---|
+| `reduced_dayhoff6` | 6 | `dayhoff` |
+| `reduced_hp_<name>2` / `3` | 2 or 3 | `hp_<name>` |
+| `reduced_gbmr4` ... `reduced_uniprot18` | 4-18 | new |
+
+The old spellings are still accepted on the command line and in existing indexes, and
+are normalized to the current name on read, so databases built before the rename keep
+working. Nothing writes the old names any more.
+
+`protein` (the full 20-letter alphabet) and `hp` are unchanged. `hp` is sourmash's
+built-in HP encoding: it uses the same Lehninger partition as
+`reduced_hp_lehninger2`, but sourmash hashes it as lowercase `h`/`p` while the custom
+tables are uppercased to `H`/`P` before hashing, so the two share no k-mer hashes and
+are not interchangeable. Pick one and stay with it for a given index.
+
 ## HP Alphabet Variants
 
 `--encoding hp` collapses the 20 canonical amino acids down to hydrophobic (`h`)
@@ -243,7 +264,7 @@ regions at k=5.
 
 ### Ambiguity codes
 
-Under `dayhoff`, `hp` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
+Under `reduced_dayhoff6`, `hp` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
 by a fixed representative, because both residues each code stands for land in the same
 class either way. Most of these alphabets split at least one of those pairs -- SDM12 and
 HSDM17 give Asp and Asn separate classes -- so under them B/J/Z, along with U (Sec) and

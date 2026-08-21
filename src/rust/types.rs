@@ -94,16 +94,20 @@ impl MolType {
             return Ok(MolType(alphabet.to_moltype()));
         }
         match moltype {
-            "protein" | "dayhoff" | "hp" => Ok(MolType(moltype.to_string())),
+            // Dayhoff carries its class count too; the bare name is the pre-rename
+            // spelling and normalizes to it.
+            "dayhoff" => Ok(MolType("reduced_dayhoff6".to_string())),
+            "protein" | "hp" => Ok(MolType(moltype.to_string())),
             s if s.starts_with("reduced_") => Ok(MolType(moltype.to_string())),
             _ => Err(format!(
-                "Invalid molecular type: {}. Must be one of: protein, dayhoff, hp, \
+                "Invalid molecular type: {}. Must be one of: protein, reduced_dayhoff6, hp, \
                  reduced_hp_lehninger2, reduced_hp_thomas_dill2, reduced_hp_kyte_doolittle2, \
                  reduced_hp_thomas_dill_no_c2, reduced_hp_lehninger_c_nonpolar2, \
                  reduced_hp_lehninger_hpc3, reduced_hp_pbotc_1st_ed2, \
                  reduced_hp_shuffled_control2, reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, \
                  reduced_sdm12, reduced_mmseqs12, reduced_wass14, reduced_hsdm17, \
-                 reduced_uniprot18 (the pre-rename hp_<name> spellings are still accepted)",
+                 reduced_uniprot18 (the pre-rename hp_<name> and dayhoff spellings are \
+                 still accepted)",
                 moltype
             )),
         }
@@ -230,10 +234,20 @@ mod tests {
         }
     }
 
-    /// The built-in moltypes are sourmash's own and must not be rewritten.
+    /// `dayhoff` carries its class count now, so the bare name normalizes the way the
+    /// pre-rename HP names do. Its hash function is unchanged, so existing dayhoff indexes
+    /// keep matching (see `test_dayhoff_rename_preserves_hashes`).
+    #[test]
+    fn test_moltype_normalizes_legacy_dayhoff() {
+        assert_eq!(MolType::new("dayhoff").unwrap().get(), "reduced_dayhoff6");
+        assert_eq!(MolType::new("reduced_dayhoff6").unwrap().get(), "reduced_dayhoff6");
+        assert_eq!(MolType::new("dayhoff").unwrap(), MolType::new("reduced_dayhoff6").unwrap());
+    }
+
+    /// `protein` and `hp` go straight to sourmash, so they keep their names.
     #[test]
     fn test_moltype_leaves_builtins_alone() {
-        for moltype in ["protein", "dayhoff", "hp"] {
+        for moltype in ["protein", "hp"] {
             assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
         }
         for moltype in ["reduced_sdm12", "reduced_gbmr4", "reduced_uniprot18"] {

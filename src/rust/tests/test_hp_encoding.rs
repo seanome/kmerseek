@@ -304,4 +304,42 @@ mod tests {
             assert_eq!(from_legacy.moltype().get(), current, "{legacy} was not normalized");
         }
     }
+
+    /// Renaming `dayhoff` to `reduced_dayhoff6` must not change a single hash: both names
+    /// resolve to sourmash's Murmur64Dayhoff and its own encoder, so existing dayhoff
+    /// indexes stay searchable. This is the guarantee that `hp` cannot make, because the
+    /// built-in HP path hashes lowercase h/p while the custom tables hash uppercase H/P.
+    #[test]
+    fn test_dayhoff_rename_preserves_hashes() {
+        let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
+
+        let legacy = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "dayhoff").unwrap();
+        let current =
+            ProteinSketch::from_protein_sequence("x", seq, 8, 1, "reduced_dayhoff6").unwrap();
+
+        assert_eq!(legacy.mins_as_set(), current.mins_as_set());
+        assert_eq!(legacy.get_moltype_sequence(), current.get_moltype_sequence());
+        assert_eq!(legacy.moltype().get(), "reduced_dayhoff6");
+    }
+
+    /// The built-in `hp` and our Lehninger table agree on the partition but not on the
+    /// bytes they hash: sourmash encodes `hp` to lowercase h/p, while a pre-encoded custom
+    /// table is uppercased to H/P before hashing. They are therefore separate moltypes, and
+    /// merging their names would silently invalidate every index built under the other one.
+    #[test]
+    fn test_builtin_hp_and_lehninger2_share_a_partition_but_not_hashes() {
+        let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
+
+        let builtin = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp").unwrap();
+        let custom =
+            ProteinSketch::from_protein_sequence("x", seq, 8, 1, "reduced_hp_lehninger2").unwrap();
+
+        // Same partition: the encoded sequences are character-for-character equal.
+        assert_eq!(builtin.get_moltype_sequence(), custom.get_moltype_sequence());
+
+        // Different hashed bytes: no k-mer hash is shared.
+        let (b, c) = (builtin.mins_as_set(), custom.mins_as_set());
+        assert_eq!(b.len(), c.len());
+        assert_eq!(b.intersection(&c).count(), 0, "hp and lehninger2 unexpectedly share hashes");
+    }
 }
