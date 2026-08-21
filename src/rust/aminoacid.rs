@@ -107,7 +107,7 @@ impl AminoAcidAmbiguity {
     /// substituting a representative is lossless. Three groups of moltypes are excluded:
     ///   - `protein`/`raw` keep the full 20-letter alphabet, so there is no such equivalence
     ///     to exploit — picking Asp would assert a residue the source never claimed.
-    ///   - `hp_shuffled_control[_1..10]` are HP tables too, but their partition is randomized
+    ///   - `reduced_hp_shuffled_control2[_1..10]` are HP tables too, but their partition is randomized
     ///     rather than biochemically derived, so the two alternatives can land on opposite
     ///     sides (see `test_shuffled_control_does_not_preserve_ambiguity_equivalence`). These
     ///     are excluded by name rather than by the equivalence check below, because a control
@@ -353,7 +353,7 @@ mod tests {
     fn test_validate_and_resolve_keeps_codes_verbatim_for_shuffled_control() {
         let aa = AminoAcidAmbiguity::new();
 
-        for moltype in ["hp_shuffled_control", "hp_shuffled_control_1"] {
+        for moltype in ["reduced_hp_shuffled_control2", "reduced_hp_shuffled_control2_1"] {
             let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
             assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
             assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");

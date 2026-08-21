@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::hp_alphabets::HpAlphabet;
+
 /// A type-safe wrapper for k-mer sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct KmerSize(pub u32);
@@ -80,20 +82,28 @@ impl fmt::Display for Scaled {
 pub struct MolType(pub String);
 
 impl MolType {
-    /// Create a new molecular type with validation
+    /// Create a new molecular type with validation.
+    ///
+    /// Pre-rename HP spellings (`hp_thomas_dill`) are accepted and normalized to their
+    /// current form (`reduced_hp_thomas_dill2`). Normalizing here rather than at each call
+    /// site means an index written before the rename compares equal to a query sketched
+    /// after it: `find_matched_regions` asserts the two moltypes match, and the same
+    /// alphabet under two spellings would otherwise abort the search.
     pub fn new(moltype: &str) -> Result<Self, String> {
+        if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
+            return Ok(MolType(alphabet.to_moltype()));
+        }
         match moltype {
             "protein" | "dayhoff" | "hp" => Ok(MolType(moltype.to_string())),
-            s if s.starts_with("hp_") || s.starts_with("reduced_") => {
-                Ok(MolType(moltype.to_string()))
-            }
+            s if s.starts_with("reduced_") => Ok(MolType(moltype.to_string())),
             _ => Err(format!(
                 "Invalid molecular type: {}. Must be one of: protein, dayhoff, hp, \
-                 hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
-                 hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
-                 hp_shuffled_control, reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, \
+                 reduced_hp_lehninger2, reduced_hp_thomas_dill2, reduced_hp_kyte_doolittle2, \
+                 reduced_hp_thomas_dill_no_c2, reduced_hp_lehninger_c_nonpolar2, \
+                 reduced_hp_lehninger_hpc3, reduced_hp_pbotc_1st_ed2, \
+                 reduced_hp_shuffled_control2, reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, \
                  reduced_sdm12, reduced_mmseqs12, reduced_wass14, reduced_hsdm17, \
-                 reduced_uniprot18",
+                 reduced_uniprot18 (the pre-rename hp_<name> spellings are still accepted)",
                 moltype
             )),
         }
@@ -192,5 +202,42 @@ mod tests {
         assert!(MolType::new("dayhoff").is_ok());
         assert!(MolType::new("hp").is_ok());
         assert!(MolType::new("invalid").is_err());
+    }
+
+    /// A moltype written before class counts were added to the HP names must normalize to
+    /// the current spelling. `find_matched_regions` asserts query and target moltypes are
+    /// equal, so an index built as `hp_thomas_dill` and a query sketched afterwards would
+    /// otherwise abort the search even though both use the same alphabet.
+    #[test]
+    fn test_moltype_normalizes_legacy_hp_names() {
+        let expected = [
+            ("hp_lehninger", "reduced_hp_lehninger2"),
+            ("hp_thomas_dill", "reduced_hp_thomas_dill2"),
+            ("hp_kyte_doolittle", "reduced_hp_kyte_doolittle2"),
+            ("hp_thomas_dill_no_c", "reduced_hp_thomas_dill_no_c2"),
+            ("hp_lehninger_c_nonpolar", "reduced_hp_lehninger_c_nonpolar2"),
+            ("hp_lehninger_hpc", "reduced_hp_lehninger_hpc3"),
+            ("hp_pbotc_1st_ed", "reduced_hp_pbotc_1st_ed2"),
+            ("hp_shuffled_control", "reduced_hp_shuffled_control2"),
+            ("hp_shuffled_control_4", "reduced_hp_shuffled_control2_4"),
+        ];
+
+        for (legacy, current) in expected {
+            assert_eq!(MolType::new(legacy).unwrap().get(), current, "{legacy}");
+            // Already-current names pass through unchanged.
+            assert_eq!(MolType::new(current).unwrap().get(), current, "{current}");
+            assert_eq!(MolType::new(legacy).unwrap(), MolType::new(current).unwrap());
+        }
+    }
+
+    /// The built-in moltypes are sourmash's own and must not be rewritten.
+    #[test]
+    fn test_moltype_leaves_builtins_alone() {
+        for moltype in ["protein", "dayhoff", "hp"] {
+            assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
+        }
+        for moltype in ["reduced_sdm12", "reduced_gbmr4", "reduced_uniprot18"] {
+            assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
+        }
     }
 }

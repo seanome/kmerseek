@@ -34,11 +34,14 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
         }
         _ => Err(anyhow::anyhow!(
             "Invalid moltype: {}. Supported values: 'protein', 'dayhoff', 'hp', \
-             'hp_lehninger', 'hp_thomas_dill', 'hp_kyte_doolittle', \
-             'hp_thomas_dill_no_c', 'hp_lehninger_c_nonpolar', 'hp_lehninger_hpc', 'hp_pbotc_1st_ed', \
-             'hp_shuffled_control', 'hp_shuffled_control_1'..'hp_shuffled_control_10', \
+             'reduced_hp_lehninger2', 'reduced_hp_thomas_dill2', 'reduced_hp_kyte_doolittle2', \
+             'reduced_hp_thomas_dill_no_c2', 'reduced_hp_lehninger_c_nonpolar2', \
+             'reduced_hp_lehninger_hpc3', 'reduced_hp_pbotc_1st_ed2', \
+             'reduced_hp_shuffled_control2', \
+             'reduced_hp_shuffled_control2_1'..'reduced_hp_shuffled_control2_10', \
              'reduced_gbmr4', 'reduced_wwmj5', 'reduced_gbmr7', 'reduced_sdm12', \
-             'reduced_mmseqs12', 'reduced_wass14', 'reduced_hsdm17', 'reduced_uniprot18'",
+             'reduced_mmseqs12', 'reduced_wass14', 'reduced_hsdm17', 'reduced_uniprot18' \
+             (the pre-rename 'hp_<name>' spellings are still accepted)",
             moltype
         )),
     }
@@ -101,7 +104,8 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
 
 /// Residue-to-symbol table for the moltypes that pre-encode a sequence before hashing.
 ///
-/// Covers both alphabet families: the two- and three-letter HP tables (`hp_*`) and the
+/// Covers both alphabet families: the two- and three-letter HP tables
+/// (`reduced_hp_*2`/`reduced_hp_*3`, and their pre-rename `hp_*` spellings) and the
 /// multi-letter reduced alphabets (`reduced_*`). Returns `None` for `protein`, `raw`,
 /// `dayhoff` and the built-in `hp`, which sourmash encodes itself.
 pub fn custom_alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {

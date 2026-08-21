@@ -756,12 +756,12 @@ mod tests {
         // Lehninger partition, which places G in the h class. It is not a raw
         // amino-acid homopolymer, so only the HP-encoded check can catch it --
         // exactly the branch this test covers.
-        let mut off = ProteinSketch::new("off", 5, 1, "hp_lehninger").unwrap();
+        let mut off = ProteinSketch::new("off", 5, 1, "reduced_hp_lehninger2").unwrap();
         off.add_protein(TEST_PROTEIN, false).unwrap();
         assert_eq!(off.kmer_positions().len(), 14);
         assert_eq!(off.low_complexity_counts(), (0, 0), "counters stay 0 when removal is off");
 
-        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger").unwrap();
+        let mut on = ProteinSketch::new("on", 5, 1, "reduced_hp_lehninger2").unwrap();
         on.set_remove_low_complexity(true);
         on.add_protein(TEST_PROTEIN, false).unwrap();
         assert_eq!(on.kmer_positions().len(), 13);
@@ -775,7 +775,7 @@ mod tests {
     /// already a raw homopolymer.
     #[test]
     fn test_remove_low_complexity_counts_raw_and_encoded_together() {
-        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger").unwrap();
+        let mut on = ProteinSketch::new("on", 5, 1, "reduced_hp_lehninger2").unwrap();
         on.set_remove_low_complexity(true);
         on.add_protein(FKBP8_POLY_E, false).unwrap();
 

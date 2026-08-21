@@ -150,14 +150,34 @@ distinct hits. See
 / polar (`p`) before k-mer extraction. The alphabets below (see
 `src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
 the five borderline ones -- **C, G, P, W, Y** (bolded). Lehninger is the current
-default (`hp` moltype); the others are selectable via `hp_<name>` moltypes
-(e.g. `hp_thomas_dill`) for the alphabet robustness sweep.
+default (`hp` moltype); the others are selectable via `reduced_hp_<name>2` moltypes
+(e.g. `reduced_hp_thomas_dill2`) for the alphabet robustness sweep.
 
-`hp_lehninger_hpc` is a 3-letter variant: it keeps Lehninger's H/P split for
+The trailing digit is the class count, matching the multi-letter alphabets in the
+next section, so every moltype states its size. These were previously named
+`hp_<name>` without the count. The old spellings are still accepted on the command
+line and in existing indexes, and are normalized to the current name on read, so a
+database built before the rename keeps working; nothing writes them any more.
+
+`reduced_hp_lehninger_hpc3` is a 3-letter variant: it keeps Lehninger's H/P split for
 every residue except cysteine, which gets its own third symbol `c` (cystine)
-instead of being folded into `h` the way `hp_lehninger_c_nonpolar` does --
+instead of being folded into `h` the way `reduced_hp_lehninger_c_nonpolar2` does --
 disulfide-bond formation is a distinct chemistry from ordinary hydrophobic
 packing.
+
+| Moltype | Classes | Previously |
+|---------|:---:|---|
+| `reduced_hp_lehninger2` | 2 | `hp_lehninger` |
+| `reduced_hp_thomas_dill2` | 2 | `hp_thomas_dill` |
+| `reduced_hp_kyte_doolittle2` | 2 | `hp_kyte_doolittle` |
+| `reduced_hp_thomas_dill_no_c2` | 2 | `hp_thomas_dill_no_c` |
+| `reduced_hp_lehninger_c_nonpolar2` | 2 | `hp_lehninger_c_nonpolar` |
+| `reduced_hp_lehninger_hpc3` | 3 | `hp_lehninger_hpc` |
+| `reduced_hp_pbotc_1st_ed2` | 2 | `hp_pbotc_1st_ed` |
+| `reduced_hp_shuffled_control2` | 2 | `hp_shuffled_control` |
+
+Seeded controls put the seed after the class count -- `reduced_hp_shuffled_control2_3`
+is seed 3 of a 2-class control, not a 23-class alphabet.
 
 | AA | Lehninger (current) | Thomas-Dill/PBotC 2nd | Kyte-Doolittle | TD−C | Leh+C | Leh HPC (3-letter) | PBotC 1st |
 |----|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -187,7 +207,8 @@ packing.
 The HP alphabets above answer one question per residue. The alphabets in this section
 (see `src/rust/reduced_alphabets.rs`) keep 4 to 18 classes, so they discard less
 chemistry per position while still collapsing the substitutions that proteins tolerate
-most often. Select one with `--encoding reduced_<name>`.
+most often. They follow the same naming rule: the number in the moltype is the class
+count.
 
 Peterson et al. (2009) benchmarked over 150 published clustering schemes against DALI
 fold assignments and found that reduced alphabets beat the full 20-letter alphabet,

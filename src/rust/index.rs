@@ -3593,7 +3593,9 @@ mod tests {
     fn test_ambiguity_codes_index_deterministically() {
         let temp_dir = tempdir().unwrap();
 
-        for (i, moltype) in ["protein", "dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+        for (i, moltype) in
+            ["protein", "dayhoff", "hp", "reduced_hp_pbotc_1st_ed2"].iter().enumerate()
+        {
             let index =
                 ProteomeIndex::new(temp_dir.path().join(format!("d{i}.db")), 5, 1, moltype, true)
                     .unwrap();
@@ -3624,7 +3626,7 @@ mod tests {
         let with_d = "MTRCTADNSLTNPAYRRRTMDTGEMKEFLGIK";
         let with_n = "MTRCTADNSLTNPAYRRRTMNTGEMKEFLGIK";
 
-        for (i, moltype) in ["dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+        for (i, moltype) in ["dayhoff", "hp", "reduced_hp_pbotc_1st_ed2"].iter().enumerate() {
             let index =
                 ProteomeIndex::new(temp_dir.path().join(format!("a{i}.db")), 5, 1, moltype, true)
                     .unwrap();

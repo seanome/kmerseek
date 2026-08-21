@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::IndexResult;
+use kmerseek::hp_alphabets::HpAlphabet;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
 
@@ -32,7 +33,8 @@ enum Commands {
         #[arg(short, long, default_value = "protein")]
         encoding: ProteinEncoding,
 
-        /// Seed for hp_shuffled_control (1-10). Produces moltype hp_shuffled_control_N.
+        /// Seed for reduced_hp_shuffled_control2 (1-10). Produces moltype
+        /// reduced_hp_shuffled_control2_N.
         #[arg(long)]
         shuffled_seed: Option<u64>,
 
@@ -151,28 +153,28 @@ enum ProteinEncoding {
     /// HP encoding — sourmash built-in Lehninger classification (backward-compatible)
     Hp,
     /// HP Lehninger (explicit; identical hashes to hp)
-    #[value(alias = "hp_lehninger")]
+    #[value(name = "reduced-hp-lehninger2", aliases = ["reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger"])]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
-    #[value(alias = "hp_thomas_dill")]
+    #[value(name = "reduced-hp-thomas-dill2", aliases = ["reduced_hp_thomas_dill2", "hp_thomas_dill", "hp-thomas-dill"])]
     HpThomasDill,
     /// HP Kyte-Doolittle 1982 binarized at hydropathy > 0 (W=p, Y=p)
-    #[value(alias = "hp_kyte_doolittle")]
+    #[value(name = "reduced-hp-kyte-doolittle2", aliases = ["reduced_hp_kyte_doolittle2", "hp_kyte_doolittle", "hp-kyte-doolittle"])]
     HpKyteDoolittle,
     /// HP Thomas-Dill with C reassigned to polar (isolation variant)
-    #[value(alias = "hp_thomas_dill_no_c")]
+    #[value(name = "reduced-hp-thomas-dill-no-c2", aliases = ["reduced_hp_thomas_dill_no_c2", "hp_thomas_dill_no_c", "hp-thomas-dill-no-c"])]
     HpThomasDillNoC,
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
-    #[value(alias = "hp_lehninger_c_nonpolar")]
+    #[value(name = "reduced-hp-lehninger-c-nonpolar2", aliases = ["reduced_hp_lehninger_c_nonpolar2", "hp_lehninger_c_nonpolar", "hp-lehninger-c-nonpolar"])]
     HpLehningerCNonpolar,
     /// HPC Lehninger 3-letter: hydrophobic/polar/cystine, C split into its own class
-    #[value(alias = "hp_lehninger_hpc")]
+    #[value(name = "reduced-hp-lehninger-hpc3", aliases = ["reduced_hp_lehninger_hpc3", "hp_lehninger_hpc", "hp-lehninger-hpc"])]
     HpLehningerHpc,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
-    #[value(name = "hp-pbotc-1st-ed", alias = "hp_pbotc_1st_ed")]
+    #[value(name = "reduced-hp-pbotc-1st-ed2", aliases = ["reduced_hp_pbotc_1st_ed2", "hp_pbotc_1st_ed", "hp-pbotc-1st-ed"])]
     HpPBotC1stEd,
     /// HP shuffled negative control (scrambled hydrophobicity signal)
-    #[value(alias = "hp_shuffled_control")]
+    #[value(name = "reduced-hp-shuffled-control2", aliases = ["reduced_hp_shuffled_control2", "hp_shuffled_control", "hp-shuffled-control"])]
     HpShuffledControl,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
     #[value(alias = "reduced_gbmr4")]
@@ -206,14 +208,14 @@ impl From<ProteinEncoding> for &'static str {
             ProteinEncoding::Protein => "protein",
             ProteinEncoding::Dayhoff => "dayhoff",
             ProteinEncoding::Hp => "hp",
-            ProteinEncoding::HpLehninger => "hp_lehninger",
-            ProteinEncoding::HpThomasDill => "hp_thomas_dill",
-            ProteinEncoding::HpKyteDoolittle => "hp_kyte_doolittle",
-            ProteinEncoding::HpThomasDillNoC => "hp_thomas_dill_no_c",
-            ProteinEncoding::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar",
-            ProteinEncoding::HpLehningerHpc => "hp_lehninger_hpc",
-            ProteinEncoding::HpPBotC1stEd => "hp_pbotc_1st_ed",
-            ProteinEncoding::HpShuffledControl => "hp_shuffled_control",
+            ProteinEncoding::HpLehninger => "reduced_hp_lehninger2",
+            ProteinEncoding::HpThomasDill => "reduced_hp_thomas_dill2",
+            ProteinEncoding::HpKyteDoolittle => "reduced_hp_kyte_doolittle2",
+            ProteinEncoding::HpThomasDillNoC => "reduced_hp_thomas_dill_no_c2",
+            ProteinEncoding::HpLehningerCNonpolar => "reduced_hp_lehninger_c_nonpolar2",
+            ProteinEncoding::HpLehningerHpc => "reduced_hp_lehninger_hpc3",
+            ProteinEncoding::HpPBotC1stEd => "reduced_hp_pbotc_1st_ed2",
+            ProteinEncoding::HpShuffledControl => "reduced_hp_shuffled_control2",
             ProteinEncoding::ReducedGbmr4 => "reduced_gbmr4",
             ProteinEncoding::ReducedWwmj5 => "reduced_wwmj5",
             ProteinEncoding::ReducedGbmr7 => "reduced_gbmr7",
@@ -252,7 +254,7 @@ fn main() -> IndexResult<()> {
             let effective_moltype: String = match (encoding, shuffled_seed) {
                 (ProteinEncoding::HpShuffledControl, Some(seed)) => {
                     assert!((1..=10).contains(&seed), "--shuffled-seed must be 1-10, got {seed}");
-                    format!("hp_shuffled_control_{seed}")
+                    HpAlphabet::Shuffled(seed).to_moltype()
                 }
                 _ => {
                     let s: &'static str = encoding.into();
@@ -749,22 +751,29 @@ fn assign_encoding(
     // WHY: We need to compare the user-provided encoding with the detected encoding.
     // The detected encoding comes from the database as a string, so we convert it to
     // the enum type for comparison.
-    let detected_encoding = match detected_moltype {
+    // Indexes built before class counts were added to the HP names store the old
+    // "hp_<name>" moltype. HpAlphabet::from_moltype() still parses those, so normalizing
+    // here lets the match below deal only in current names.
+    let canonical = HpAlphabet::from_moltype(detected_moltype)
+        .map(|alphabet| alphabet.to_moltype())
+        .unwrap_or_else(|| detected_moltype.to_string());
+
+    let detected_encoding = match canonical.as_str() {
         "protein" => ProteinEncoding::Protein,
         "dayhoff" => ProteinEncoding::Dayhoff,
         "hp" => ProteinEncoding::Hp,
-        "hp_lehninger" => ProteinEncoding::HpLehninger,
-        "hp_thomas_dill" => ProteinEncoding::HpThomasDill,
-        "hp_kyte_doolittle" => ProteinEncoding::HpKyteDoolittle,
-        "hp_thomas_dill_no_c" => ProteinEncoding::HpThomasDillNoC,
-        "hp_lehninger_c_nonpolar" => ProteinEncoding::HpLehningerCNonpolar,
-        "hp_lehninger_hpc" => ProteinEncoding::HpLehningerHpc,
-        "hp_pbotc_1st_ed" => ProteinEncoding::HpPBotC1stEd,
-        "hp_shuffled_control" => ProteinEncoding::HpShuffledControl,
-        // Seeded shuffled controls (hp_shuffled_control_N) are stored with the seed
-        // in the moltype; map them back to HpShuffledControl so the encoding path
-        // picks them up via HpAlphabet::from_moltype() which parses the numeric suffix.
-        s if s.starts_with("hp_shuffled_control_") => ProteinEncoding::HpShuffledControl,
+        "reduced_hp_lehninger2" => ProteinEncoding::HpLehninger,
+        "reduced_hp_thomas_dill2" => ProteinEncoding::HpThomasDill,
+        "reduced_hp_kyte_doolittle2" => ProteinEncoding::HpKyteDoolittle,
+        "reduced_hp_thomas_dill_no_c2" => ProteinEncoding::HpThomasDillNoC,
+        "reduced_hp_lehninger_c_nonpolar2" => ProteinEncoding::HpLehningerCNonpolar,
+        "reduced_hp_lehninger_hpc3" => ProteinEncoding::HpLehningerHpc,
+        "reduced_hp_pbotc_1st_ed2" => ProteinEncoding::HpPBotC1stEd,
+        "reduced_hp_shuffled_control2" => ProteinEncoding::HpShuffledControl,
+        // Seeded shuffled controls carry the seed in the moltype; map them back to
+        // HpShuffledControl so the encoding path picks them up via
+        // HpAlphabet::from_moltype(), which parses the numeric suffix.
+        s if s.starts_with("reduced_hp_shuffled_control2_") => ProteinEncoding::HpShuffledControl,
         "reduced_gbmr4" => ProteinEncoding::ReducedGbmr4,
         "reduced_wwmj5" => ProteinEncoding::ReducedWwmj5,
         "reduced_gbmr7" => ProteinEncoding::ReducedGbmr7,
@@ -777,10 +786,11 @@ fn assign_encoding(
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
                     "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp, \
-                     hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
-                     hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
-                     hp_shuffled_control (or hp_shuffled_control_N for seeded variants), \
-                     reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, reduced_sdm12, \
+                     reduced_hp_lehninger2, reduced_hp_thomas_dill2, reduced_hp_kyte_doolittle2, \
+                     reduced_hp_thomas_dill_no_c2, reduced_hp_lehninger_c_nonpolar2, \
+                     reduced_hp_lehninger_hpc3, reduced_hp_pbotc_1st_ed2, \
+                     reduced_hp_shuffled_control2 (or reduced_hp_shuffled_control2_N for seeded \
+                     variants), reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, reduced_sdm12, \
                      reduced_mmseqs12, reduced_wass14, reduced_hsdm17, reduced_uniprot18",
                     detected_moltype
                 ),

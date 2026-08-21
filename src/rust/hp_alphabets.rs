@@ -89,26 +89,60 @@ impl HpAlphabet {
         ]
     }
 
-    /// Moltype string stored in the index (e.g. `"hp_thomas_dill"`).
+    /// Number of classes this alphabet partitions the 20 residues into.
+    pub fn size(&self) -> usize {
+        match self {
+            Self::LehningerHpc => 3,
+            _ => 2,
+        }
+    }
+
+    /// Moltype string stored in the index (e.g. `"reduced_hp_thomas_dill2"`).
+    ///
+    /// The trailing digit is the class count, so these read the same way as the
+    /// multi-letter alphabets in [`crate::reduced_alphabets`] (`reduced_sdm12`,
+    /// `reduced_gbmr4`): every alphabet states its size in its name.
     pub fn to_moltype(&self) -> String {
+        match self {
+            // The seed goes after the class count, so "…control2_3" is seed 3 of a
+            // 2-class control and never reads as class count 23.
+            Self::Shuffled(n) => format!("reduced_hp_shuffled_control2_{n}"),
+            _ => format!("reduced_hp_{}{}", self.name(), self.size()),
+        }
+    }
+
+    /// The moltype string this alphabet used before class counts were part of the name.
+    ///
+    /// Still accepted by [`Self::from_moltype`] so that indexes and CSVs written before
+    /// the rename keep opening; nothing writes it any more.
+    pub fn legacy_moltype(&self) -> String {
         format!("hp_{}", self.name())
     }
 
-    /// Parse from a moltype string. Returns `None` for `"hp"` (sourmash built-in)
-    /// and for unrecognized strings.
+    /// Parse from a moltype string, current or legacy. Returns `None` for `"hp"`
+    /// (sourmash built-in) and for unrecognized strings.
     pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
+        Self::from_current_moltype(s).or_else(|| Self::from_legacy_moltype(s))
+    }
+
+    /// Parse `"reduced_hp_<name><size>"`, e.g. `"reduced_hp_lehninger2"`.
+    fn from_current_moltype(s: &str) -> Option<HpAlphabet> {
+        let name = s.strip_prefix("reduced_hp_")?;
+        if let Some(a) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
+            return Some(*a);
+        }
+        let seed = name.strip_prefix("shuffled_control2_")?.parse().ok()?;
+        Some(HpAlphabet::Shuffled(seed))
+    }
+
+    /// Parse the pre-rename `"hp_<name>"` form, e.g. `"hp_lehninger"`.
+    fn from_legacy_moltype(s: &str) -> Option<HpAlphabet> {
         let name = s.strip_prefix("hp_")?;
-        // Try named alphabets first.
         if let Some(a) = Self::all_named().iter().find(|a| a.name() == name) {
             return Some(*a);
         }
-        // Try seeded shuffled controls: "shuffled_control_N" -> Shuffled(N).
-        if let Some(n_str) = name.strip_prefix("shuffled_control_") {
-            if let Ok(n) = n_str.parse::<u64>() {
-                return Some(HpAlphabet::Shuffled(n));
-            }
-        }
-        None
+        let seed = name.strip_prefix("shuffled_control_")?.parse().ok()?;
+        Some(HpAlphabet::Shuffled(seed))
     }
 }
 
@@ -577,5 +611,90 @@ mod tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(names.len(), sorted.len(), "duplicate alphabet names detected");
+    }
+
+    /// Every alphabet's moltype must end in its class count, so the HP names read the same
+    /// way as `reduced_sdm12` and `reduced_gbmr4`.
+    #[test]
+    fn moltype_ends_in_class_count() {
+        let expected = [
+            (HpAlphabet::Lehninger, "reduced_hp_lehninger2"),
+            (HpAlphabet::ThomasDill, "reduced_hp_thomas_dill2"),
+            (HpAlphabet::KyteDoolittle, "reduced_hp_kyte_doolittle2"),
+            (HpAlphabet::ThomasDillNoC, "reduced_hp_thomas_dill_no_c2"),
+            (HpAlphabet::LehningerCNonpolar, "reduced_hp_lehninger_c_nonpolar2"),
+            (HpAlphabet::LehningerHpc, "reduced_hp_lehninger_hpc3"),
+            (HpAlphabet::PBotC1stEd, "reduced_hp_pbotc_1st_ed2"),
+            (HpAlphabet::ShuffledControl, "reduced_hp_shuffled_control2"),
+        ];
+
+        for (alphabet, moltype) in expected {
+            assert_eq!(alphabet.to_moltype(), moltype);
+            assert_eq!(HpAlphabet::from_moltype(moltype), Some(alphabet));
+        }
+    }
+
+    /// The count in the name has to be the number of distinct symbols the table emits,
+    /// otherwise the name lies about what the index stores.
+    #[test]
+    fn class_count_matches_distinct_table_symbols() {
+        for alphabet in HpAlphabet::all_named() {
+            let symbols: std::collections::HashSet<u8> = alphabet
+                .table()
+                .iter()
+                .filter(|(residue, _)| **residue != b'*')
+                .map(|(_, symbol)| *symbol)
+                .collect();
+            assert_eq!(symbols.len(), alphabet.size(), "{}", alphabet.name());
+            assert!(
+                alphabet.to_moltype().ends_with(&alphabet.size().to_string()),
+                "{}",
+                alphabet.name()
+            );
+        }
+    }
+
+    /// Seeded controls put the seed after the class count, so seed 3 of a 2-class control
+    /// cannot be misread as a 23-class alphabet.
+    #[test]
+    fn seeded_shuffled_control_moltype_separates_count_from_seed() {
+        assert_eq!(HpAlphabet::Shuffled(3).to_moltype(), "reduced_hp_shuffled_control2_3");
+        assert_eq!(
+            HpAlphabet::from_moltype("reduced_hp_shuffled_control2_3"),
+            Some(HpAlphabet::Shuffled(3))
+        );
+        assert_eq!(
+            HpAlphabet::from_moltype("reduced_hp_shuffled_control2_10"),
+            Some(HpAlphabet::Shuffled(10))
+        );
+    }
+
+    /// Indexes built before the rename store `hp_<name>`, so those strings must still
+    /// resolve to the same alphabet and therefore to the same hashes.
+    #[test]
+    fn legacy_moltypes_still_parse_to_the_same_alphabet() {
+        for alphabet in HpAlphabet::all_named() {
+            let legacy = alphabet.legacy_moltype();
+            assert!(legacy.starts_with("hp_"), "{legacy}");
+            assert_eq!(HpAlphabet::from_moltype(&legacy), Some(*alphabet), "{legacy}");
+            // The legacy spelling is accepted but never written back out.
+            assert_ne!(alphabet.to_moltype(), legacy);
+        }
+
+        for seed in 1..=10 {
+            assert_eq!(
+                HpAlphabet::from_moltype(&format!("hp_shuffled_control_{seed}")),
+                Some(HpAlphabet::Shuffled(seed))
+            );
+        }
+    }
+
+    #[test]
+    fn from_moltype_rejects_unrelated_strings() {
+        for moltype in
+            ["protein", "dayhoff", "hp", "reduced_sdm12", "reduced_hp_", "reduced_hp_nope2"]
+        {
+            assert_eq!(HpAlphabet::from_moltype(moltype), None, "{moltype}");
+        }
     }
 }

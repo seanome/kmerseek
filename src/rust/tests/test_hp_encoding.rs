@@ -17,9 +17,14 @@ mod tests {
     fn test_custom_hp_kmer_positions_match_minhash() {
         let seq = "NSQLAGKRILVTQADTFMGPTLCEVFAEMGNTLSGFLNYCSFNLNLQTLRHYVLAKILNKH";
         let ksize = 10;
-        let sketch =
-            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle")
-                .unwrap();
+        let sketch = ProteinSketch::from_protein_sequence(
+            "test_seq",
+            seq,
+            ksize,
+            1,
+            "reduced_hp_kyte_doolittle2",
+        )
+        .unwrap();
 
         let minhash_set = sketch.mins_as_set();
         assert!(!minhash_set.is_empty(), "minhash should not be empty");
@@ -53,9 +58,14 @@ mod tests {
     #[test]
     fn test_custom_hp_encoded_sequence_contains_hp_chars() {
         let seq = "MKTAYIAKQRFLVS";
-        let sketch =
-            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle")
-                .unwrap();
+        let sketch = ProteinSketch::from_protein_sequence(
+            "test_hp_enc",
+            seq,
+            8,
+            1,
+            "reduced_hp_kyte_doolittle2",
+        )
+        .unwrap();
 
         let enc = sketch
             .get_moltype_sequence()
@@ -75,9 +85,14 @@ mod tests {
     #[test]
     fn test_custom_hp_encoded_sequence_differs_from_raw() {
         let seq = "MKTAYIAKQRFLVS";
-        let sketch =
-            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle")
-                .unwrap();
+        let sketch = ProteinSketch::from_protein_sequence(
+            "test_hp_diff",
+            seq,
+            8,
+            1,
+            "reduced_hp_kyte_doolittle2",
+        )
+        .unwrap();
 
         let raw = sketch.get_raw_sequence().expect("raw_sequence should be Some");
         let enc = sketch.get_moltype_sequence().expect("encoded_sequence should be Some");
@@ -112,9 +127,14 @@ mod tests {
 
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
 
-        let sketch =
-            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle")
-                .unwrap();
+        let sketch = ProteinSketch::from_protein_sequence(
+            "self_test",
+            seq,
+            8,
+            1,
+            "reduced_hp_kyte_doolittle2",
+        )
+        .unwrap();
 
         let shared_hashes = sketch.mins_as_set();
         assert!(!shared_hashes.is_empty(), "self-hit must share hashes");
@@ -135,13 +155,13 @@ mod tests {
         let ksize = 8;
 
         let alphabets = [
-            "hp_kyte_doolittle",
-            "hp_thomas_dill",
-            "hp_lehninger",
-            "hp_thomas_dill_no_c",
-            "hp_lehninger_c_nonpolar",
-            "hp_lehninger_hpc",
-            "hp_pbotc_1st_ed",
+            "reduced_hp_kyte_doolittle2",
+            "reduced_hp_thomas_dill2",
+            "reduced_hp_lehninger2",
+            "reduced_hp_thomas_dill_no_c2",
+            "reduced_hp_lehninger_c_nonpolar2",
+            "reduced_hp_lehninger_hpc3",
+            "reduced_hp_pbotc_1st_ed2",
         ];
 
         for moltype in alphabets {
@@ -221,7 +241,8 @@ mod tests {
 
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
         let sketch =
-            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "reduced_hp_kyte_doolittle2")
+                .unwrap();
 
         let empty: HashSet<u64> = HashSet::new();
         let regions = find_matched_regions(&sketch, &sketch, &empty);
@@ -240,9 +261,11 @@ mod tests {
         let seq_b = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"; // all-cys: likely different HP pattern
 
         let sketch_a =
-            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "reduced_hp_kyte_doolittle2")
+                .unwrap();
         let sketch_b =
-            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "reduced_hp_kyte_doolittle2")
+                .unwrap();
 
         let shared = sketch_a
             .mins_as_set()
@@ -252,5 +275,33 @@ mod tests {
 
         // Must not panic even if shared hashes map to different HP subsequences.
         let _regions = find_matched_regions(&sketch_a, &sketch_b, &shared);
+    }
+
+    /// An index built before the HP rename stores `hp_<name>`; a query sketched afterwards
+    /// uses `reduced_hp_<name>2`. Both must resolve to the same table and therefore the same
+    /// hashes, otherwise every pre-rename index would silently stop matching.
+    #[test]
+    fn test_legacy_and_current_moltype_names_sketch_identically() {
+        use crate::hp_alphabets::HpAlphabet;
+
+        let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
+
+        for alphabet in HpAlphabet::all_named() {
+            let legacy = alphabet.legacy_moltype();
+            let current = alphabet.to_moltype();
+
+            let from_legacy =
+                ProteinSketch::from_protein_sequence("x", seq, 8, 1, &legacy).unwrap();
+            let from_current =
+                ProteinSketch::from_protein_sequence("x", seq, 8, 1, &current).unwrap();
+
+            assert_eq!(
+                from_legacy.mins_as_set(),
+                from_current.mins_as_set(),
+                "{legacy} and {current} produced different hashes"
+            );
+            // The legacy spelling is normalized away, so nothing downstream sees two names.
+            assert_eq!(from_legacy.moltype().get(), current, "{legacy} was not normalized");
+        }
     }
 }
