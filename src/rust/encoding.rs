@@ -1,5 +1,9 @@
 use anyhow::Result;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
+use std::collections::HashMap;
+
+use crate::hp_alphabets::HpAlphabet;
+use crate::reduced_alphabets::ReducedAlphabet;
 
 const MURMUR64PROTEIN: &str = "Murmur64Protein";
 const MURMUR64DAYHOFF: &str = "Murmur64Dayhoff";
@@ -23,14 +27,18 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
         "protein" | "raw" => Ok(HashFunctions::Murmur64Protein),
         "hp" => Ok(HashFunctions::Murmur64Hp),
         "dayhoff" => Ok(HashFunctions::Murmur64Dayhoff),
-        // Custom HP alphabets pre-encode the sequence before hashing, so the
-        // hash function sees an already-encoded h/p sequence and uses identity.
-        s if s.starts_with("hp_") => Ok(HashFunctions::Murmur64Protein),
+        // Custom alphabets pre-encode the sequence before hashing, so the hash
+        // function sees an already-encoded sequence and uses identity.
+        s if s.starts_with("hp_") || s.starts_with("reduced_") => {
+            Ok(HashFunctions::Murmur64Protein)
+        }
         _ => Err(anyhow::anyhow!(
             "Invalid moltype: {}. Supported values: 'protein', 'dayhoff', 'hp', \
              'hp_lehninger', 'hp_thomas_dill', 'hp_kyte_doolittle', \
              'hp_thomas_dill_no_c', 'hp_lehninger_c_nonpolar', 'hp_lehninger_hpc', 'hp_pbotc_1st_ed', \
-             'hp_shuffled_control', 'hp_shuffled_control_1'..'hp_shuffled_control_10'",
+             'hp_shuffled_control', 'hp_shuffled_control_1'..'hp_shuffled_control_10', \
+             'reduced_gbmr4', 'reduced_wwmj5', 'reduced_gbmr7', 'reduced_sdm12', \
+             'reduced_mmseqs12', 'reduced_wass14', 'reduced_hsdm17', 'reduced_uniprot18'",
             moltype
         )),
     }
@@ -81,14 +89,26 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
         "protein" | "raw" => Ok(|b| b),
         "hp" => Ok(aa_to_hp),
         "dayhoff" => Ok(aa_to_dayhoff),
-        // Custom HP alphabets pre-encode in HpAlphabet::table(); return identity here so
-        // callers that only need a fn(u8)->u8 don't crash. process_kmers handles them separately.
-        s if s.starts_with("hp_") => Ok(|b| b),
+        // Custom alphabets pre-encode via custom_alphabet_table(); return identity here so
+        // callers that only need a fn(u8)->u8 don't crash. add_protein handles them separately.
+        s if s.starts_with("hp_") || s.starts_with("reduced_") => Ok(|b| b),
         _ => Err(anyhow::anyhow!(
             "Invalid moltype: {}, only 'protein', 'hp', or 'dayhoff' are supported",
             moltype
         )),
     }
+}
+
+/// Residue-to-symbol table for the moltypes that pre-encode a sequence before hashing.
+///
+/// Covers both alphabet families: the two- and three-letter HP tables (`hp_*`) and the
+/// multi-letter reduced alphabets (`reduced_*`). Returns `None` for `protein`, `raw`,
+/// `dayhoff` and the built-in `hp`, which sourmash encodes itself.
+pub fn custom_alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
+    if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
+        return Some(alphabet.table());
+    }
+    ReducedAlphabet::from_moltype(moltype).map(|alphabet| alphabet.table())
 }
 
 /// Encode a sequence using the specified moltype.

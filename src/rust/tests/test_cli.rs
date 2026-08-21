@@ -84,7 +84,8 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
 fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
 
-    for encoding in ["protein", "dayhoff", "hp"] {
+    for encoding in ["protein", "dayhoff", "hp", "reduced_gbmr4", "reduced_sdm12", "reduced_hsdm17"]
+    {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", encoding));
 
         let mut cmd = Command::cargo_bin("kmerseek")?;

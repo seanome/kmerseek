@@ -174,6 +174,30 @@ enum ProteinEncoding {
     /// HP shuffled negative control (scrambled hydrophobicity signal)
     #[value(alias = "hp_shuffled_control")]
     HpShuffledControl,
+    /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
+    #[value(alias = "reduced_gbmr4")]
+    ReducedGbmr4,
+    /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
+    #[value(alias = "reduced_wwmj5")]
+    ReducedWwmj5,
+    /// GBMR7, 7 classes (Solis & Rackovsky 2000)
+    #[value(alias = "reduced_gbmr7")]
+    ReducedGbmr7,
+    /// SDM12, 12 classes (Prlic et al. 2000; best AUC in Peterson et al. 2009)
+    #[value(alias = "reduced_sdm12")]
+    ReducedSdm12,
+    /// MMSEQS12, 12 classes (Steinegger & Soding 2018)
+    #[value(alias = "reduced_mmseqs12")]
+    ReducedMmseqs12,
+    /// WASS14, 14 classes, hydrophobicity-clustered (Ieremie et al. 2024)
+    #[value(alias = "reduced_wass14")]
+    ReducedWass14,
+    /// HSDM17, 17 classes (Prlic et al. 2000; best precision in Peterson et al. 2009)
+    #[value(alias = "reduced_hsdm17")]
+    ReducedHsdm17,
+    /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
+    #[value(alias = "reduced_uniprot18")]
+    ReducedUniprot18,
 }
 
 impl From<ProteinEncoding> for &'static str {
@@ -190,6 +214,14 @@ impl From<ProteinEncoding> for &'static str {
             ProteinEncoding::HpLehningerHpc => "hp_lehninger_hpc",
             ProteinEncoding::HpPBotC1stEd => "hp_pbotc_1st_ed",
             ProteinEncoding::HpShuffledControl => "hp_shuffled_control",
+            ProteinEncoding::ReducedGbmr4 => "reduced_gbmr4",
+            ProteinEncoding::ReducedWwmj5 => "reduced_wwmj5",
+            ProteinEncoding::ReducedGbmr7 => "reduced_gbmr7",
+            ProteinEncoding::ReducedSdm12 => "reduced_sdm12",
+            ProteinEncoding::ReducedMmseqs12 => "reduced_mmseqs12",
+            ProteinEncoding::ReducedWass14 => "reduced_wass14",
+            ProteinEncoding::ReducedHsdm17 => "reduced_hsdm17",
+            ProteinEncoding::ReducedUniprot18 => "reduced_uniprot18",
         }
     }
 }
@@ -733,13 +765,23 @@ fn assign_encoding(
         // in the moltype; map them back to HpShuffledControl so the encoding path
         // picks them up via HpAlphabet::from_moltype() which parses the numeric suffix.
         s if s.starts_with("hp_shuffled_control_") => ProteinEncoding::HpShuffledControl,
+        "reduced_gbmr4" => ProteinEncoding::ReducedGbmr4,
+        "reduced_wwmj5" => ProteinEncoding::ReducedWwmj5,
+        "reduced_gbmr7" => ProteinEncoding::ReducedGbmr7,
+        "reduced_sdm12" => ProteinEncoding::ReducedSdm12,
+        "reduced_mmseqs12" => ProteinEncoding::ReducedMmseqs12,
+        "reduced_wass14" => ProteinEncoding::ReducedWass14,
+        "reduced_hsdm17" => ProteinEncoding::ReducedHsdm17,
+        "reduced_uniprot18" => ProteinEncoding::ReducedUniprot18,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
                     "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp, \
                      hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
                      hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
-                     hp_shuffled_control (or hp_shuffled_control_N for seeded variants)",
+                     hp_shuffled_control (or hp_shuffled_control_N for seeded variants), \
+                     reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, reduced_sdm12, \
+                     reduced_mmseqs12, reduced_wass14, reduced_hsdm17, reduced_uniprot18",
                     detected_moltype
                 ),
             });

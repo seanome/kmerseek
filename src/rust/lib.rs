@@ -8,6 +8,7 @@ pub mod io;
 pub mod iterators;
 pub mod kmer;
 pub mod metrics;
+pub mod reduced_alphabets;
 pub mod search;
 pub mod signature;
 pub mod significance;

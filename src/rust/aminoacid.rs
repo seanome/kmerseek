@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::encoding::custom_alphabet_table;
 use crate::errors::{IndexError, IndexResult};
 use crate::hp_alphabets::HpAlphabet;
 
@@ -22,6 +23,31 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 ///   - J (Xle) = Ile or Leu — Dayhoff `e`, hydrophobic in every HP table
 ///   - Z (Glx) = Glu or Gln — Dayhoff `c`, polar in every HP table
 pub const AMBIGUITY_CODES: [(char, char); 3] = [('B', 'D'), ('J', 'I'), ('Z', 'E')];
+
+/// The two residues each ambiguity code stands for.
+///
+/// Substituting a fixed representative is lossless only in an alphabet that maps both
+/// residues of a pair onto the same symbol, which is what `preserves_ambiguity_equivalence`
+/// checks.
+pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
+    [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
+
+/// Whether both residues behind every ambiguity code encode identically under `moltype`.
+///
+/// Dayhoff and the built-in `hp` have no lookup table of ours (sourmash encodes them
+/// internally) and are covered by
+/// `test_ambiguity_alternatives_encode_identically_in_reduced_alphabets`, so they answer
+/// `true`. Most of the multi-letter `reduced_*` alphabets answer `false`: SDM12 and HSDM17
+/// give Asp and Asn their own classes, so reading B as Asp would assert a residue the
+/// source never claimed.
+fn preserves_ambiguity_equivalence(moltype: &str) -> bool {
+    let Some(table) = custom_alphabet_table(moltype) else {
+        return true;
+    };
+    AMBIGUITY_ALTERNATIVES
+        .iter()
+        .all(|(_, [first, second])| table.get(&(*first as u8)) == table.get(&(*second as u8)))
+}
 
 /// Non-canonical residues paired with their closest canonical analogue.
 ///
@@ -76,16 +102,20 @@ impl AminoAcidAmbiguity {
     /// Validates a protein sequence, substituting representatives for non-canonical codes
     /// when `moltype` reduces the alphabet. Stops processing at the first stop codon (*).
     ///
-    /// WHY only for reduced, biochemically-derived alphabets: under Dayhoff or a named HP
+    /// WHY only for alphabets that collapse each ambiguous pair: under Dayhoff or a named HP
     /// table a code like B encodes identically whether it is read as Asp or Asn, so
-    /// substituting a representative is lossless. Three moltypes are excluded:
+    /// substituting a representative is lossless. Three groups of moltypes are excluded:
     ///   - `protein`/`raw` keep the full 20-letter alphabet, so there is no such equivalence
     ///     to exploit — picking Asp would assert a residue the source never claimed.
     ///   - `hp_shuffled_control[_1..10]` are HP tables too, but their partition is randomized
     ///     rather than biochemically derived, so the two alternatives can land on opposite
-    ///     sides (see `test_shuffled_control_does_not_preserve_ambiguity_equivalence`).
+    ///     sides (see `test_shuffled_control_does_not_preserve_ambiguity_equivalence`). These
+    ///     are excluded by name rather than by the equivalence check below, because a control
+    ///     should not start substituting on the seeds where the shuffle happens to agree.
+    ///   - the `reduced_*` alphabets that split an ambiguous pair across classes, which is
+    ///     most of them (`preserves_ambiguity_equivalence`).
     ///
-    /// All three keep the original code and hash it as itself, consistent with how X is
+    /// All of them keep the original code and hash it as itself, consistent with how X is
     /// already handled.
     pub fn validate_and_resolve<'a>(
         &self,
@@ -96,7 +126,8 @@ impl AminoAcidAmbiguity {
             && !matches!(
                 HpAlphabet::from_moltype(moltype),
                 Some(HpAlphabet::ShuffledControl | HpAlphabet::Shuffled(_))
-            );
+            )
+            && preserves_ambiguity_equivalence(moltype);
 
         // Validate first, recording where the kept region ends and where substitution first
         // becomes necessary. Almost every sequence needs neither (roughly 900 of SwissProt's
@@ -198,9 +229,9 @@ mod tests {
         use crate::encoding::encode_by_moltype;
         use crate::hp_alphabets::HpAlphabet;
 
-        let alternatives = [('B', "DN"), ('J', "IL"), ('Z', "EQ")];
-
-        for (code, pair) in alternatives {
+        for (code, [first, second]) in AMBIGUITY_ALTERNATIVES {
+            let pair: String = [first, second].iter().collect();
+            let pair = pair.as_str();
             for moltype in ["dayhoff", "hp"] {
                 let encoded: Vec<String> = pair
                     .chars()
@@ -352,6 +383,67 @@ mod tests {
         match result.unwrap() {
             Cow::Borrowed(s) => assert_eq!(s, "ACDEFGHIKLMNPQRSTVWY"),
             Cow::Owned(_) => panic!("Expected borrowed string for non-ambiguous sequence"),
+        }
+    }
+
+    /// Only GBMR4 and GBMR7 keep both residues of every ambiguous pair in one class. The
+    /// other six reduced alphabets split at least one pair, so a fixed representative would
+    /// commit to a reading the source never made. Spelled out per alphabet so that changing
+    /// a cluster constant surfaces here instead of silently changing indexed hashes.
+    #[test]
+    fn test_which_reduced_alphabets_preserve_ambiguity_equivalence() {
+        use crate::reduced_alphabets::ReducedAlphabet;
+
+        let expected = [
+            (ReducedAlphabet::Gbmr4, true),
+            (ReducedAlphabet::Wwmj5, false),
+            (ReducedAlphabet::Gbmr7, true),
+            (ReducedAlphabet::Sdm12, false),
+            (ReducedAlphabet::Mmseqs12, false),
+            (ReducedAlphabet::Wass14, false),
+            (ReducedAlphabet::Hsdm17, false),
+            (ReducedAlphabet::Uniprot18, false),
+        ];
+
+        for (alphabet, preserves) in expected {
+            assert_eq!(
+                preserves_ambiguity_equivalence(&alphabet.to_moltype()),
+                preserves,
+                "{}",
+                alphabet.name()
+            );
+        }
+    }
+
+    /// GBMR4 maps D/N, I/L and E/Q each onto a single class, so B/J/Z take their
+    /// representative and U/O take their canonical analogue, exactly as under dayhoff.
+    #[test]
+    fn test_validate_and_resolve_substitutes_in_gbmr4() {
+        let aa = AminoAcidAmbiguity::new();
+
+        assert_eq!(
+            aa.validate_and_resolve("ACDEFXBZJUO", "reduced_gbmr4").unwrap().as_ref(),
+            "ACDEFXDEICK"
+        );
+    }
+
+    /// SDM12 gives Asp and Asn separate classes, so nothing is substituted and B/J/Z/U/O
+    /// hash as themselves, the same way X already does.
+    #[test]
+    fn test_validate_and_resolve_keeps_codes_verbatim_for_split_reduced_alphabets() {
+        let aa = AminoAcidAmbiguity::new();
+
+        for moltype in [
+            "reduced_wwmj5",
+            "reduced_sdm12",
+            "reduced_mmseqs12",
+            "reduced_wass14",
+            "reduced_hsdm17",
+            "reduced_uniprot18",
+        ] {
+            let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
+            assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
+            assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");
         }
     }
 }

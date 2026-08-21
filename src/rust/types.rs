@@ -84,12 +84,16 @@ impl MolType {
     pub fn new(moltype: &str) -> Result<Self, String> {
         match moltype {
             "protein" | "dayhoff" | "hp" => Ok(MolType(moltype.to_string())),
-            s if s.starts_with("hp_") => Ok(MolType(moltype.to_string())),
+            s if s.starts_with("hp_") || s.starts_with("reduced_") => {
+                Ok(MolType(moltype.to_string()))
+            }
             _ => Err(format!(
                 "Invalid molecular type: {}. Must be one of: protein, dayhoff, hp, \
                  hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
                  hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
-                 hp_shuffled_control",
+                 hp_shuffled_control, reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, \
+                 reduced_sdm12, reduced_mmseqs12, reduced_wass14, reduced_hsdm17, \
+                 reduced_uniprot18",
                 moltype
             )),
         }

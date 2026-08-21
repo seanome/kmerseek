@@ -359,15 +359,16 @@ impl ProteinSketch {
     /// This is ~3.4× faster to build and ~2.5× smaller to serialize, with identical
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
-        use crate::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
-        use crate::hp_alphabets::HpAlphabet;
+        use crate::encoding::{
+            custom_alphabet_table, encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype,
+        };
         use crate::kmer::is_homopolymer_kmer;
         use sourmash::_hash_murmur;
 
         let moltype_str = self.moltype.to_string();
-        let custom_hp = HpAlphabet::from_moltype(&moltype_str);
+        let custom_table = custom_alphabet_table(&moltype_str);
         let ksize = self.protein_ksize as usize;
-        let is_hp_moltype = custom_hp.is_some() || moltype_str == "hp";
+        let is_hp_moltype = custom_table.is_some() || moltype_str == "hp";
 
         // WHY: low-complexity k-mers carry little discriminative signal, so when
         // opted in, two independent homopolymer checks run per k-mer before
@@ -381,7 +382,7 @@ impl ProteinSketch {
         if self.remove_low_complexity {
             // Hoisted: both are loop-invariant, so resolving them per window would
             // be pure overhead.
-            let table = custom_hp.as_ref().map(HpAlphabet::table);
+            let table = custom_table;
             let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
             // Reused across windows so the custom-HP path allocates once, not once
             // per k-mer.
@@ -425,10 +426,9 @@ impl ProteinSketch {
                 };
                 self.signature.minhash.add_hash(hashval);
             }
-        } else if let Some(ref alpha) = custom_hp {
-            // Pre-encode with our custom HP table so sourmash hashes h/p bytes via
+        } else if let Some(table) = custom_table {
+            // Pre-encode with our custom table so sourmash hashes the reduced symbols via
             // Murmur64Protein (identity). Unknown bytes pass through unchanged.
-            let table = alpha.table();
             let pre_encoded: String = sequence
                 .bytes()
                 .map(|b| table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b) as char)
@@ -448,8 +448,7 @@ impl ProteinSketch {
             let kmer = &sequence[i..i + ksize];
             // WHY: sourmash's ReadingFrame::new_protein calls to_ascii_uppercase() before
             // hashing, so we must uppercase the encoded k-mer to get matching hash values.
-            let hashval = if let Some(ref alpha) = custom_hp {
-                let table = alpha.table();
+            let hashval = if let Some(table) = custom_table {
                 let encoded: Vec<u8> = kmer
                     .bytes()
                     .map(|b| {
@@ -483,14 +482,13 @@ impl ProteinSketch {
 
             let moltype_str = self.moltype.to_string();
             if moltype_str != "protein" {
-                let encoded_sequence = if let Some(ref alpha) = custom_hp {
-                    // Custom HP alphabets: apply the HP table directly, keeping the table's
-                    // lowercase h/p so output matches built-in hp/dayhoff (which sourmash
-                    // encodes lowercase). Unmapped residues (X/U/O) stay uppercase, also
-                    // matching sourmash. This string is display-only — matched regions and
-                    // k-mer stats — so its case is independent of hashing, which must
-                    // uppercase because sourmash uppercases protein input before hashing.
-                    let table = alpha.table();
+                let encoded_sequence = if let Some(table) = custom_table {
+                    // Custom alphabets: apply the table directly, keeping its lowercase
+                    // symbols so output matches built-in hp/dayhoff (which sourmash encodes
+                    // lowercase). Unmapped residues (X/U/O) stay uppercase, also matching
+                    // sourmash. This string is display-only (matched regions and k-mer
+                    // stats), so its case is independent of hashing, which must uppercase
+                    // because sourmash uppercases protein input before hashing.
                     sequence
                         .bytes()
                         .map(|b| {

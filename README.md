@@ -182,6 +182,53 @@ packing.
 | **W** | h | h | p | h | h | h | h |
 | **Y** | h | h | p | h | h | h | h |
 
+## Multi-Letter Reduced Alphabets
+
+The HP alphabets above answer one question per residue. The alphabets in this section
+(see `src/rust/reduced_alphabets.rs`) keep 4 to 18 classes, so they discard less
+chemistry per position while still collapsing the substitutions that proteins tolerate
+most often. Select one with `--encoding reduced_<name>`.
+
+Peterson et al. (2009) benchmarked over 150 published clustering schemes against DALI
+fold assignments and found that reduced alphabets beat the full 20-letter alphabet,
+with the best results at 9-12 classes. Ieremie et al. (2024) reused their top three and
+added five more when testing how alphabet reduction affects protein language models.
+Where the two papers overlap, their partitions are identical.
+
+| Moltype | Classes | Clusters | Source |
+|---------|:---:|---|---|
+| `reduced_gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
+| `reduced_wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
+| `reduced_gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
+| `reduced_sdm12` | 12 | `A` `D` `KER` `N` `TSQ` `YF` `LIVM` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
+| `reduced_mmseqs12` | 12 | `AST` `LM` `IV` `KR` `EQ` `ND` `FY` `C` `G` `H` `P` `W` | Steinegger & Soding 2018 |
+| `reduced_wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
+| `reduced_hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
+| `reduced_uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
+
+GBMR4, SDM12 and HSDM17 were the top performers in Peterson et al. on recall at 0.01
+errors per query, AUC and mean pooled precision respectively. Each is a refinement of
+the previous one: going from GBMR4 to SDM12 to HSDM17 only splits classes, never moves
+a residue across an existing boundary (`test_hsdm17_refines_sdm12_refines_gbmr4`).
+
+Each class is written as its first residue in lowercase, so an SDM12-encoded sequence
+shows `LIVM` as `l` and can be read against the source residues directly.
+
+Class count and k-size trade off against each other, so a k that works for `hp` is
+usually too long here. Searching CED-9 against the 25-sequence BCL-2 test file at k=10
+finds the same 21 targets under `hp` and `reduced_gbmr4`, but `hp` reports 1673 matched
+regions against GBMR4's 294; `reduced_sdm12` finds nothing at k=10 and 17 targets in 110
+regions at k=5.
+
+### Ambiguity codes
+
+Under `dayhoff`, `hp` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
+by a fixed representative, because both residues each code stands for land in the same
+class either way. Most of these alphabets split at least one of those pairs -- SDM12 and
+HSDM17 give Asp and Asn separate classes -- so under them B/J/Z, along with U (Sec) and
+O (Pyl), are kept and hashed as themselves, the way X already is. Only `reduced_gbmr4`
+and `reduced_gbmr7` collapse all three pairs and so still substitute.
+
 ## Using the Builder Pattern
 
 The `ProteomeIndex` now supports a fluent Builder pattern:
