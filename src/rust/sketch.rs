@@ -1,6 +1,6 @@
 use crate::encoding::get_hash_function_from_moltype;
 use crate::signature::StableSignature;
-use crate::types::MolType;
+use crate::types::{KmerSize, MolType};
 use crate::SEED;
 use serde::{Deserialize, Serialize};
 use sourmash::signature::SigsTrait;
@@ -153,7 +153,14 @@ impl<'de> Deserialize<'de> for ProteinSketch {
 }
 
 impl ProteinSketch {
+    /// # Errors
+    ///
+    /// Returns an error for an unsupported `moltype`, or for a `protein_ksize`
+    /// outside the range `KmerSize` accepts. Rejecting the size here matters:
+    /// `add_protein` walks windows with `len().saturating_sub(ksize - 1)`, which
+    /// underflows and panics when `ksize` is 0.
     pub fn new(name: &str, protein_ksize: u32, scaled: u32, moltype: &str) -> anyhow::Result<Self> {
+        KmerSize::new(protein_ksize).map_err(|e| anyhow::anyhow!("Invalid k-mer size: {e}"))?;
         let hash_function = get_hash_function_from_moltype(moltype)?;
         let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO;
 
@@ -660,6 +667,41 @@ mod tests {
     // HP-encoding of SEQ (each residue -> h/p), stored for non-protein moltypes.
     const SEQ_HP_ENCODED: &str =
         "hpphhhhpppphphhppphppphppphhhhphphhhhpphhphpppphphhpphhphphphhhphphphhpphhphpp";
+
+    /// k=0 used to reach `add_protein`, where walking windows with
+    /// `len().saturating_sub(ksize - 1)` underflows and panics. The size is now
+    /// rejected at construction instead.
+    #[test]
+    fn test_new_rejects_zero_ksize() {
+        let err = ProteinSketch::new("p", 0, 1, "protein").unwrap_err();
+        assert!(
+            err.to_string().contains("K-mer size must be greater than 0"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn test_new_rejects_oversized_ksize() {
+        let err = ProteinSketch::new("p", 101, 1, "protein").unwrap_err();
+        assert!(err.to_string().contains("K-mer size too large"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn test_new_accepts_boundary_ksizes() {
+        assert_eq!(ProteinSketch::new("p", 1, 1, "protein").unwrap().protein_ksize(), 1);
+        assert_eq!(ProteinSketch::new("p", 100, 1, "protein").unwrap().protein_ksize(), 100);
+    }
+
+    /// k=1 is the smallest accepted size and the boundary next to the rejected 0,
+    /// so it should sketch normally rather than panic.
+    #[test]
+    fn test_add_protein_at_ksize_one() {
+        let mut s = ProteinSketch::new("p", 1, 1, "protein").unwrap();
+        s.add_protein(SEQ, false).unwrap();
+        // Distinct 1-mers are bounded by the alphabet, not the 78 windows. SEQ uses
+        // 19 of the 20 amino acids; it contains no cysteine.
+        assert_eq!(s.kmer_positions().len(), 19);
+    }
 
     fn protein_sketch() -> ProteinSketch {
         ProteinSketch::from_protein_sequence("p1", SEQ, 5, 1, "protein").unwrap()
