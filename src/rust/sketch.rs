@@ -367,23 +367,21 @@ impl ProteinSketch {
     /// sourmash-encoded alphabets (protein20, dayhoff6, hp_lehninger2) sourmash applies the
     /// encoder itself and hashes its lowercase output, so these must NOT be uppercased.
     fn hash_kmer(
-        kmer: &str,
+        kmer: &[u8],
         residue_classes: Option<&HashMap<u8, u8>>,
         encoding_fn: fn(u8) -> u8,
-    ) -> anyhow::Result<u64> {
+        scratch: &mut Vec<u8>,
+    ) -> u64 {
         use sourmash::_hash_murmur;
 
-        if let Some(table) = residue_classes {
-            let encoded: Vec<u8> = kmer
-                .bytes()
-                .map(|b| {
-                    table.get(&b.to_ascii_uppercase()).copied().unwrap_or(b).to_ascii_uppercase()
-                })
-                .collect();
-            return Ok(_hash_murmur(&encoded, SEED));
+        scratch.clear();
+        match residue_classes {
+            Some(table) => scratch.extend(kmer.iter().map(|b| {
+                table.get(&b.to_ascii_uppercase()).copied().unwrap_or(*b).to_ascii_uppercase()
+            })),
+            None => scratch.extend(kmer.iter().map(|b| encoding_fn(*b))),
         }
-        let encoded = crate::encoding::encode_with_fn(kmer, encoding_fn)?;
-        Ok(_hash_murmur(encoded.as_bytes(), SEED))
+        _hash_murmur(scratch, SEED)
     }
 
     /// Add a protein sequence, building the minhash and k-mer position map.
@@ -417,7 +415,7 @@ impl ProteinSketch {
         // delegating to sourmash's black-box `add_protein`, which windows and
         // inserts unconditionally. `remove_low_complexity` defaults to false,
         // and the branch below keeps every k-mer.
-        if has_ambiguity_codes(sequence) && !self.remove_low_complexity {
+        if has_ambiguity_codes(sequence.as_bytes()) && !self.remove_low_complexity {
             // B, J and Z each stand for two residues. Rather than committing to one, index
             // every window under both readings, so a query carrying either residue matches.
             // sourmash's add_protein windows and hashes internally and cannot do this, so
@@ -425,12 +423,21 @@ impl ProteinSketch {
             // alphabet would otherwise pre-encode the whole sequence in one go below and
             // never expand.
             let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
-            for i in 0..sequence.len().saturating_sub(ksize - 1) {
-                let Some(readings) = ambiguity_readings(&sequence[i..i + ksize]) else {
+            let residues = sequence.as_bytes();
+            let mut scratch = Vec::with_capacity(ksize);
+            for i in 0..residues.len().saturating_sub(ksize - 1) {
+                let kmer = &residues[i..i + ksize];
+                if !has_ambiguity_codes(kmer) {
+                    let hashval = Self::hash_kmer(kmer, residue_classes, encoding_fn, &mut scratch);
+                    self.signature.minhash.add_hash(hashval);
+                    continue;
+                }
+                let Some(readings) = ambiguity_readings(kmer) else {
                     continue;
                 };
                 for reading in readings {
-                    let hashval = Self::hash_kmer(&reading, residue_classes, encoding_fn)?;
+                    let hashval =
+                        Self::hash_kmer(&reading, residue_classes, encoding_fn, &mut scratch);
                     self.signature.minhash.add_hash(hashval);
                 }
             }
@@ -500,12 +507,28 @@ impl ProteinSketch {
         let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
         let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
-        for i in 0..sequence.len().saturating_sub(ksize - 1) {
-            let Some(readings) = ambiguity_readings(&sequence[i..i + ksize]) else {
+        let residues = sequence.as_bytes();
+        // Checked once for the whole sequence: almost none carry an ambiguity code (roughly
+        // 900 non-canonical residues in SwissProt's 207.6 M), so the per-window check is
+        // skipped entirely for nearly every sequence.
+        let sequence_has_codes = has_ambiguity_codes(residues);
+        // Reused across windows. Without it this loop allocated once per window, and once
+        // per reading, for every sequence indexed.
+        let mut scratch = Vec::with_capacity(ksize);
+        for i in 0..residues.len().saturating_sub(ksize - 1) {
+            let kmer = &residues[i..i + ksize];
+            if !sequence_has_codes || !has_ambiguity_codes(kmer) {
+                let hashval = Self::hash_kmer(kmer, residue_classes, encoding_fn, &mut scratch);
+                if hashvals.contains(&hashval) {
+                    self.kmer_positions_mut().entry(hashval).or_default().push(i);
+                }
+                continue;
+            }
+            let Some(readings) = ambiguity_readings(kmer) else {
                 continue;
             };
             for reading in readings {
-                let hashval = Self::hash_kmer(&reading, residue_classes, encoding_fn)?;
+                let hashval = Self::hash_kmer(&reading, residue_classes, encoding_fn, &mut scratch);
                 if hashvals.contains(&hashval) {
                     self.kmer_positions_mut().entry(hashval).or_default().push(i);
                 }

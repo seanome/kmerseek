@@ -26,39 +26,48 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
     [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
 
-/// Ceiling on how many readings one k-mer window may expand into.
+/// Most ambiguity codes allowed in one k-mer window.
 ///
-/// Each ambiguity code doubles the count, so this allows up to four codes in a single
-/// window. Windows past the ceiling are skipped rather than indexed under an arbitrary
-/// subset of their readings; they are vanishingly rare (roughly 900 non-canonical residues
-/// in SwissProt's 207.6 M).
-pub const MAX_AMBIGUITY_READINGS: usize = 16;
+/// Each code doubles the number of readings, so four codes give sixteen. A window carrying
+/// more is skipped rather than indexed under a subset of its readings. SwissProt holds
+/// roughly 900 non-canonical residues in 207.6 M, so windows near this bound are rare and
+/// windows past it should not occur.
+pub const MAX_AMBIGUITY_CODES_PER_WINDOW: usize = 4;
+
+/// Readings a single window can expand into, derived from [`MAX_AMBIGUITY_CODES_PER_WINDOW`].
+pub const MAX_AMBIGUITY_READINGS: usize = 1 << MAX_AMBIGUITY_CODES_PER_WINDOW;
 
 /// The residues `code` stands for, or `None` if it is not an ambiguity code.
-fn alternatives(code: u8) -> Option<[char; 2]> {
+fn alternatives(code: u8) -> Option<[u8; 2]> {
     AMBIGUITY_ALTERNATIVES
         .iter()
         .find(|(ambiguity_code, _)| *ambiguity_code as u8 == code)
-        .map(|(_, pair)| *pair)
+        .map(|(_, [first, second])| [*first as u8, *second as u8])
 }
 
-/// Whether `sequence` contains any ambiguity code, and so needs expanding.
-pub fn has_ambiguity_codes(sequence: &str) -> bool {
-    sequence.bytes().any(|b| alternatives(b).is_some())
+/// Whether `residues` contains any ambiguity code, and so needs expanding.
+pub fn has_ambiguity_codes(residues: &[u8]) -> bool {
+    residues.iter().any(|b| alternatives(*b).is_some())
 }
 
 /// Every reading of `kmer`, with each ambiguity code replaced by both residues it stands
 /// for. A k-mer with no ambiguity codes yields itself.
 ///
-/// Returns `None` when the window carries more codes than [`MAX_AMBIGUITY_READINGS`] allows.
-pub fn ambiguity_readings(kmer: &str) -> Option<Vec<String>> {
-    let expansion = kmer.bytes().filter(|b| alternatives(*b).is_some()).count();
-    if 1usize.checked_shl(expansion as u32)? > MAX_AMBIGUITY_READINGS {
+/// Returns `None` when the window carries more than [`MAX_AMBIGUITY_CODES_PER_WINDOW`]
+/// codes.
+///
+/// WHY bytes rather than `&str`: callers hash the result, and hashing reads bytes. Going
+/// through `String` would add a UTF-8 validation per reading and a panic path for input
+/// that validation has already ruled out.
+pub fn ambiguity_readings(kmer: &[u8]) -> Option<Vec<Vec<u8>>> {
+    let codes = kmer.iter().filter(|b| alternatives(**b).is_some()).count();
+    if codes > MAX_AMBIGUITY_CODES_PER_WINDOW {
         return None;
     }
 
-    let mut readings: Vec<Vec<u8>> = vec![Vec::with_capacity(kmer.len())];
-    for residue in kmer.bytes() {
+    let mut readings: Vec<Vec<u8>> = Vec::with_capacity(1 << codes);
+    readings.push(Vec::with_capacity(kmer.len()));
+    for &residue in kmer {
         match alternatives(residue) {
             None => {
                 for reading in &mut readings {
@@ -69,9 +78,9 @@ pub fn ambiguity_readings(kmer: &str) -> Option<Vec<String>> {
                 let mut branched = Vec::with_capacity(readings.len() * 2);
                 for reading in readings {
                     let mut with_second = reading.clone();
-                    with_second.push(second as u8);
+                    with_second.push(second);
                     let mut with_first = reading;
-                    with_first.push(first as u8);
+                    with_first.push(first);
                     branched.push(with_first);
                     branched.push(with_second);
                 }
@@ -79,10 +88,7 @@ pub fn ambiguity_readings(kmer: &str) -> Option<Vec<String>> {
             }
         }
     }
-
-    // Every byte pushed above came from the input or from AMBIGUITY_ALTERNATIVES, so each
-    // reading is still valid UTF-8.
-    Some(readings.into_iter().map(|reading| String::from_utf8(reading).expect("ASCII")).collect())
+    Some(readings)
 }
 
 /// Non-canonical residues paired with their closest canonical analogue.
@@ -347,39 +353,50 @@ mod tests {
         }
     }
 
+    /// Expansion readable as strings; the function itself works in bytes so that hashing
+    /// does not pay for UTF-8 validation.
+    fn readings(kmer: &str) -> Option<Vec<String>> {
+        Some(
+            ambiguity_readings(kmer.as_bytes())?
+                .into_iter()
+                .map(|reading| String::from_utf8(reading).expect("input is ASCII"))
+                .collect(),
+        )
+    }
+
     /// B stands for Asp or Asn, so a k-mer covering one is indexed under both readings.
     /// Picking a single residue would commit to a reading the source never made, and under
     /// SDM12 or HSDM17 -- where Asp and Asn are separate classes -- the two readings are
     /// different k-mers.
     #[test]
     fn test_ambiguity_readings_expands_each_code_to_both_residues() {
-        assert_eq!(ambiguity_readings("MKBTA").unwrap(), vec!["MKDTA", "MKNTA"]);
-        assert_eq!(ambiguity_readings("MKJTA").unwrap(), vec!["MKITA", "MKLTA"]);
-        assert_eq!(ambiguity_readings("MKZTA").unwrap(), vec!["MKETA", "MKQTA"]);
+        assert_eq!(readings("MKBTA").unwrap(), vec!["MKDTA", "MKNTA"]);
+        assert_eq!(readings("MKJTA").unwrap(), vec!["MKITA", "MKLTA"]);
+        assert_eq!(readings("MKZTA").unwrap(), vec!["MKETA", "MKQTA"]);
     }
 
     /// A window free of ambiguity codes yields itself, so the expansion path adds no k-mers
     /// in the common case.
     #[test]
     fn test_ambiguity_readings_passes_through_unambiguous_kmers() {
-        assert_eq!(ambiguity_readings("MKTAY").unwrap(), vec!["MKTAY"]);
+        assert_eq!(readings("MKTAY").unwrap(), vec!["MKTAY"]);
         // X and the stop codon carry no residue identity, so they are not expanded either.
-        assert_eq!(ambiguity_readings("MXT*A").unwrap(), vec!["MXT*A"]);
+        assert_eq!(readings("MXT*A").unwrap(), vec!["MXT*A"]);
     }
 
     /// Codes multiply, so two in one window give four readings and three give eight.
     #[test]
     fn test_ambiguity_readings_multiply() {
-        assert_eq!(ambiguity_readings("BZ").unwrap(), vec!["DE", "DQ", "NE", "NQ"]);
-        assert_eq!(ambiguity_readings("BJZ").unwrap().len(), 8);
+        assert_eq!(readings("BZ").unwrap(), vec!["DE", "DQ", "NE", "NQ"]);
+        assert_eq!(readings("BJZ").unwrap().len(), 8);
     }
 
     /// Past four codes in one window the expansion is refused rather than indexed under an
     /// arbitrary subset of its readings.
     #[test]
     fn test_ambiguity_readings_refuses_runaway_expansion() {
-        assert_eq!(ambiguity_readings("BBBB").unwrap().len(), MAX_AMBIGUITY_READINGS);
-        assert_eq!(ambiguity_readings("BBBBB"), None);
+        assert_eq!(readings("BBBB").unwrap().len(), MAX_AMBIGUITY_READINGS);
+        assert_eq!(readings("BBBBB"), None);
     }
 
     /// Every reading must be a sequence over the canonical residues, since each stands for a
@@ -387,7 +404,7 @@ mod tests {
     #[test]
     fn test_ambiguity_readings_are_canonical() {
         let aa = AminoAcidAmbiguity::new();
-        for reading in ambiguity_readings("ACBJZ").unwrap() {
+        for reading in readings("ACBJZ").unwrap() {
             assert!(aa.validate_sequence(&reading).is_ok(), "{reading}");
             for c in reading.chars() {
                 assert!(STANDARD_AA.contains(&c), "{reading}: {c} is not canonical");
