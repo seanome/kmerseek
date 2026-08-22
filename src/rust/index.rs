@@ -3637,7 +3637,7 @@ mod tests {
 
     /// Where the alphabet puts Asp and Asn in different classes, the two readings really are
     /// different k-mers, so B contributes strictly more than either alone. This is the case
-    /// a fixed representative silently got wrong.
+    /// a fixed representative got wrong.
     #[test]
     fn test_ambiguity_code_adds_both_readings_when_classes_differ() {
         let temp_dir = tempdir().unwrap();

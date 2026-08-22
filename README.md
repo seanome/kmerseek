@@ -46,7 +46,7 @@ kmerseek index -i proteome.fasta --ksize 10 --alphabet hp_lehninger2 --remove-lo
 ```
 
 Two independent checks run per k-mer: the **raw amino-acid** window (any encoding),
-and for `hp`-family encodings the **HP-encoded** window as well. The second catches
+and for the HP-family alphabets the **HP-encoded** window as well. The second catches
 windows that aren't raw homopolymers but still collapse to one symbol -- `LIVMA` is
 five different residues that all encode to `h`.
 
@@ -112,7 +112,7 @@ are printed alongside it. Categorical colors always come from a built-in matplot
 sized to how many distinct targets there are (Set2 for up to 8, tab10 up to 10,
 Set3 up to 12, tab20 beyond that) -- the alignment block's title is colored to
 match its box. Example, `ced9.fasta` searched against a 25-protein BCL2-family
-database (`hp` encoding, k=17, scaled=1, every hit shown):
+database (`hp_lehninger2`, k=17, every hit shown):
 
 ![Example hit visualization for CED9_CAEEL](docs/images/ced9_hits_example.png)
 
@@ -128,11 +128,8 @@ python scripts/visualize_hits.py \
     --output-dir hits_png/
 ```
 
-Use **`--scaled 1`** -- higher scaled values subsample k-mers and can silently drop
-real hits (e.g. CED9 vs. BCL2_HUMAN itself disappears at `--scaled 2`, even though
-it's a genuine match at `--scaled 1`). Use `--ksize` of at least 12 too -- shorter
-k-mers under reduced alphabets like `hp` produce so many overlapping sliding-window
-matches that the hit track becomes an unreadable wall of fragments.
+Use a `--ksize` of at least 12. Shorter k-mers under a reduced alphabet produce so many
+overlapping sliding-window matches that the hit track becomes a wall of fragments.
 
 `--query-fasta` supplies the full-length protein for the top bar and must be the
 same FASTA used as the search query. Omit `--query-name` to render one PNG+SVG pair
@@ -170,61 +167,35 @@ the 20 amino acids into, so a filename or a results CSV says how much reduction 
 | `hsdm17` | 17 | Prlic et al. 2000 |
 | `uniprot18` | 18 | Ieremie et al. 2024 |
 
-The two-and-three-class alphabets keep an `hp_` prefix because they are one family that
-differs only on borderline residues, and grouping them makes a sweep easy to write. The
-multi-letter ones use the names their papers use, digit included, so `sdm12` and `gbmr4`
-are directly citeable.
+The two- and three-class alphabets share an `hp_` prefix. They differ only on borderline
+residues, so grouping them keeps a sweep easy to write and to grep. The multi-letter ones
+use the names their papers use, digit included, so `sdm12` and `gbmr4` can be looked up.
 
-Seeded negative controls put the seed after the class count:
-`hp_random_control2_3` is seed 3 of a 2-class control, not a 23-class alphabet. Use
-`--random-seed 1..10` to get independent replicates.
+Seeded negative controls put the seed after the class count, so `hp_random_control2_3`
+is seed 3 of a 2-class control rather than a 23-class alphabet. `--random-seed 1..10`
+gives independent replicates.
 
-### Older spellings
+### Indexes built before this change
 
-These all still work on the command line and in existing indexes, and are normalized to
-the current name on read:
-
-| Older | Now |
-|---|---|
-| `protein`, `raw` | `protein20` |
-| `dayhoff` | `dayhoff6` |
-| `hp_<name>` without a class count | `hp_<name>2` |
-| a `reduced_` prefix on anything | the same name without it |
-| `shuffled_control` | `random_control` |
-| `--encoding` | `--alphabet` |
-| `--shuffled-seed` | `--random-seed` |
-
-Nothing writes the older names any more.
-
-### Indexes built before the rename
-
-Most keep working. `dayhoff`, `protein` and the `hp_<name>` alphabets resolve to the same
-hash function and the same table as before, so their k-mer hashes are unchanged and
-existing databases are searchable as-is.
-
-The one exception is `hp`. It used to select sourmash's built-in HP encoder, which applies
-the same Lehninger partition but hashes the encoded sequence as lowercase `h`/`p`, where
-kmerseek's own tables are uppercased to `H`/`P` first. The two share no k-mer hashes at
-all. `hp` is now a spelling of `hp_lehninger2`, so an index built under the old `hp` would
-sketch queries on the uppercase path and match nothing. kmerseek refuses to open such an
-index and tells you to rebuild it:
+Only the current names parse. An index recording `protein`, `dayhoff`, `hp`, or an
+`hp_<name>` without its class count fails to open:
 
 ```
-This index was built with the old `hp` encoding, whose k-mer hashes are not compatible
-with `hp_lehninger2` ... Rebuild the index with --alphabet hp_lehninger2
+Unknown alphabet in database: hp
 ```
 
-Rebuilding reproduces the same hits: the amino-acid partition never changed, only the
-bytes that get hashed.
+The k-mers inside are still valid. Every alphabet hashes as it did before: `protein20`
+and `dayhoff6` use the same sourmash hash functions as `protein` and `dayhoff`,
+`hp_lehninger2` uses the same one as `hp`, and each `hp_<name>2` uses the same table as
+`hp_<name>`. Only the recorded name changed, so rebuilding produces the same hits.
 
 ## HP Alphabet Variants
 
 `--alphabet hp_lehninger2` collapses the 20 canonical amino acids down to hydrophobic (`h`)
 / polar (`p`) before k-mer extraction. The alphabets below (see
 `src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
-the five borderline ones: C, G, P, W and Y. Lehninger is the current
-default, spelled `hp_lehninger2`; the others are selectable via the same
-`hp_<name>2` pattern (e.g. `hp_thomas_dill2`) for the alphabet
+the five borderline ones: C, G, P, W and Y. `hp_lehninger2` is the one sourmash's own HP
+encoding uses; the others follow the same `hp_<name>2` pattern and exist for the alphabet
 robustness sweep.
 
 Cysteine is the residue the schemes disagree about most, because its thiol side chain is
@@ -241,11 +212,10 @@ Leh+C | `AFILMV` CGPWY | `DEHKNQRST`
 PBotC 1st | `AFILMV` CPWY | `DEHKNQRST` G
 
 The residues in backticks are fixed across every scheme: `AFILMV` is always hydrophobic
-and `DEHKNQRST` always polar. Only the five borderline residues C, G, P, W and Y move,
-which is the whole of the disagreement between these alphabets.
+and `DEHKNQRST` always polar. The schemes differ only in where they put C, G, P, W and Y.
 
-`hp_lehninger_hpc3` is the odd one out, with three classes rather than two: it keeps
-Lehninger's split for the other 19 residues and gives cysteine its own symbol `c`.
+`hp_lehninger_hpc3` has three classes rather than two. It keeps Lehninger's split for the
+other 19 residues and gives cysteine its own symbol `c`.
 
 | Alphabet / Scheme | Hydrophobic (`h`) | Polar (`p`) | Cystine (`c`) |
 | -- | -- | -- | -- |
@@ -283,20 +253,31 @@ a residue across an existing boundary (`test_hsdm17_refines_sdm12_refines_gbmr4`
 Each class is written as its first residue in lowercase, so an SDM12-encoded sequence
 shows `LIVM` as `l` and can be read against the source residues directly.
 
-Class count and k-size trade off against each other, so a k that works for `hp` is
-usually too long here. Searching CED-9 against the 25-sequence BCL-2 test file at k=10
-finds the same 21 targets under `hp` and `gbmr4`, but `hp` reports 1673 matched
-regions against GBMR4's 294; `sdm12` finds nothing at k=10 and 17 targets in 110
-regions at k=5.
+Class count and k-size trade off against each other, so a k that suits a 2-class
+alphabet is usually too long here. Searching CED-9 against the 25-sequence BCL-2 test
+file at k=10 finds the same 21 targets under `hp_lehninger2` and `gbmr4`, but
+`hp_lehninger2` reports 1673 matched regions against GBMR4's 294. `sdm12` finds nothing
+at k=10, and 17 targets in 110 regions at k=5.
 
 ### Ambiguity codes
 
-Under `dayhoff6` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
-by a fixed representative, because both residues each code stands for land in the same
-class either way. Most of these alphabets split at least one of those pairs -- SDM12 and
-HSDM17 give Asp and Asn separate classes -- so under them B/J/Z, along with U (Sec) and
-O (Pyl), are kept and hashed as themselves, the way X already is. Only `gbmr4`
-and `gbmr7` collapse all three pairs and so still substitute.
+B (Asx), J (Xle) and Z (Glx) each stand for two residues. Every k-mer covering one is
+indexed under both readings, so a query holding either residue matches. kmerseek does not
+pick a representative: under `sdm12` and `hsdm17`, Asp and Asn fall in different classes,
+so choosing one would assert a residue the source never had.
+
+How much this adds depends on the alphabet. Under `dayhoff6` and the HP tables both
+readings of every pair encode the same, so they hash alike and the k-mer count is
+unchanged. Under `protein20`, `sdm12` and `hsdm17` the readings differ and the count
+grows: a 21-residue sequence with one B goes from 17 k-mers to 21 at k=5.
+
+A window is capped at 16 readings, which allows four codes. Past that it is skipped
+rather than indexed under some of its readings. SwissProt holds about 900 non-canonical
+residues in 207.6 M, so the cap should not be reached in practice.
+
+U (Sec) and O (Pyl) are handled differently. They are specific residues rather than
+ambiguities, so each takes its closest canonical analogue, C and K, under a reduced
+alphabet. Under `protein20` they are kept as themselves.
 
 ## Using the Builder Pattern
 

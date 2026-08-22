@@ -603,7 +603,7 @@ mod tests {
     }
 
     /// Every alphabet's moltype must end in its class count, so the HP names read the same
-    /// way as `reduced_sdm12` and `reduced_gbmr4`.
+    /// way as `sdm12` and `gbmr4`.
     #[test]
     fn moltype_ends_in_class_count() {
         let expected = [
@@ -660,8 +660,8 @@ mod tests {
     }
 
     /// The claim the README's table rests on: every scheme agrees on 15 of the 20 residues
-    /// and disagrees only about C, G, P, W and Y. If a new alphabet moved one of the other
-    /// 15, the table would quietly stop being true.
+    /// and disagrees only about C, G, P, W and Y. A new alphabet that moved one of the other
+    /// 15 would make the table wrong.
     #[test]
     fn schemes_differ_only_on_the_five_borderline_residues() {
         const ALWAYS_HYDROPHOBIC: &[u8] = b"AFILMV";
@@ -675,7 +675,7 @@ mod tests {
         );
 
         for alphabet in HpAlphabet::all_named() {
-            // The randomized control has no reason to agree; that is what makes it a control.
+            // The randomized control is a negative control, so it has no reason to agree.
             if matches!(alphabet, HpAlphabet::RandomControl) {
                 continue;
             }

@@ -157,8 +157,8 @@ impl ProteinSketch {
         // WHY normalize before anything else: pre-rename spellings (`hp`, `dayhoff`,
         // `hp_<name>`) have to pick the same hash function and the same stored name. Reading
         // the hash function from the raw string while storing the normalized one built the
-        // minhash for one encoding and pre-encoded for another, which silently emptied
-        // kmer_positions.
+        // minhash for one encoding and pre-encoded for another, which left kmer_positions
+        // empty.
         let moltype = MolType::new(moltype).map_err(|e| anyhow::anyhow!(e))?;
         let moltype_str = moltype.get().to_string();
         let hash_function = get_hash_function_from_moltype(&moltype_str)?;
@@ -796,7 +796,7 @@ mod tests {
         // "IMALG" (position 10 of TEST_PROTEIN) is all-hydrophobic under the
         // Lehninger partition, which places G in the h class. It is not a raw
         // amino-acid homopolymer, so only the HP-encoded check can catch it --
-        // exactly the branch this test covers.
+        // the branch this test covers.
         let mut off = ProteinSketch::new("off", 5, 1, "hp_lehninger2").unwrap();
         off.add_protein(TEST_PROTEIN, false).unwrap();
         assert_eq!(off.kmer_positions().len(), 14);

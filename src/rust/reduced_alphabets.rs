@@ -6,7 +6,7 @@
 //! SDM12 and HSDM17 as the best performers on recall, AUC and mean pooled precision
 //! respectively. Ieremie et al. (2024) reused those three and added GBMR7, WWMJ5,
 //! MMSEQS12, WASS14 and UNIPROT18 when testing how alphabet reduction affects protein
-//! language models. Where the two papers overlap their partitions agree exactly.
+//! language models. Where the two papers overlap, their partitions agree.
 //!
 //! References:
 //!   Peterson, E. L., Kondev, J., Theriot, J. A. & Phillips, R. (2009). Reduced amino
@@ -20,7 +20,8 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
-/// The 20 canonical residues, sorted. Every alphabet below must cover exactly these.
+/// The 20 canonical residues, sorted. Every alphabet below must cover all of these and
+/// nothing else.
 const CANONICAL_AA: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
 
 /// Reduced alphabets with more than the two or three classes of an HP table.
@@ -129,8 +130,8 @@ impl ReducedAlphabet {
 /// WHY the first residue as the symbol: it keeps the encoded sequence readable, so
 /// SDM12's `LIVM` class shows up as `l` rather than an opaque index, and the encoded
 /// string can be eyeballed against the source residues. The assertions below enforce
-/// that this is unambiguous, since two clusters starting with the same residue would
-/// silently merge into one class.
+/// that this is unambiguous. Two clusters starting with the same residue would merge
+/// into one class without any error.
 fn build_reduced(clusters: &[&str]) -> HashMap<u8, u8> {
     let mut m = HashMap::with_capacity(21);
     for cluster in clusters {

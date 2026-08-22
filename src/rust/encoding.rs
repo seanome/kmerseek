@@ -134,8 +134,8 @@ pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
 ///
 /// # Arguments
 /// * `sequence` - The sequence to encode (can be a k-mer or full sequence)
-/// * `moltype` - The molecule type encoding to use, e.g. "protein", "reduced_dayhoff6",
-///   or any reduced alphabet name
+/// * `moltype` - The alphabet to encode with, e.g. "protein20", "dayhoff6", or any
+///   reduced alphabet name
 ///
 /// # Returns
 /// * `Ok(String)` - The encoded sequence
@@ -151,7 +151,7 @@ pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
 /// ```
 pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
     // Table-backed alphabets cannot be expressed as a fn(u8) -> u8, so they are applied
-    // here directly. Without this the HP family would silently encode to the identity.
+    // here directly. Without this the HP family would encode to the identity.
     if let Some(table) = alphabet_table(moltype) {
         return Ok(sequence
             .bytes()

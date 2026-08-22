@@ -31,11 +31,11 @@ enum Commands {
         ksize: u32,
 
         /// Reduced amino acid alphabet to index with
-        #[arg(short = 'a', long, alias = "encoding", default_value = "protein20")]
+        #[arg(short = 'a', long, default_value = "protein20")]
         alphabet: ProteinAlphabet,
 
         /// Seed for hp_random_control2 (1-10). Produces alphabet hp_random_control2_N.
-        #[arg(long, alias = "shuffled-seed")]
+        #[arg(long)]
         random_seed: Option<u64>,
 
         /// Progress notification interval (number of sequences between progress reports)
@@ -83,11 +83,11 @@ enum Commands {
         ksize: Option<u32>,
 
         /// Reduced amino acid alphabet (must match the database)
-        #[arg(short = 'a', long, alias = "encoding", default_value = "protein20")]
+        #[arg(short = 'a', long, default_value = "protein20")]
         alphabet: ProteinAlphabet,
 
         /// Seed for hp_random_control2 (1-10). Must match the seed used during indexing.
-        #[arg(long, alias = "shuffled-seed")]
+        #[arg(long)]
         random_seed: Option<u64>,
 
         /// Minimum containment threshold (0.0 = show all matches)
@@ -147,61 +147,61 @@ enum Commands {
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum ProteinAlphabet {
     /// The full 20-letter amino acid alphabet: no reduction
-    #[value(name = "protein20", aliases = ["protein", "raw"])]
+    #[value(name = "protein20")]
     Protein,
     /// Dayhoff, 6 classes
-    #[value(name = "dayhoff6", alias = "dayhoff")]
+    #[value(name = "dayhoff6")]
     Dayhoff,
     /// HP Lehninger, 2 classes. Also accepts the older spellings `hp_lehninger` and `hp`;
     /// note that indexes built with the old sourmash-backed `hp` must be rebuilt, since it
     /// hashed the same partition differently
-    #[value(name = "hp_lehninger2", aliases = ["hp-lehninger2", "reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger", "hp"])]
+    #[value(name = "hp_lehninger2", alias = "hp-lehninger2")]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
-    #[value(name = "hp_thomas_dill2", aliases = ["hp-thomas-dill2", "reduced_hp_thomas_dill2", "hp_thomas_dill", "hp-thomas-dill"])]
+    #[value(name = "hp_thomas_dill2", alias = "hp-thomas-dill2")]
     HpThomasDill,
     /// HP Kyte-Doolittle 1982 binarized at hydropathy > 0 (W=p, Y=p)
-    #[value(name = "hp_kyte_doolittle2", aliases = ["hp-kyte-doolittle2", "reduced_hp_kyte_doolittle2", "hp_kyte_doolittle", "hp-kyte-doolittle"])]
+    #[value(name = "hp_kyte_doolittle2", alias = "hp-kyte-doolittle2")]
     HpKyteDoolittle,
     /// HP Thomas-Dill with C reassigned to polar (isolation variant)
-    #[value(name = "hp_thomas_dill_no_c2", aliases = ["hp-thomas-dill-no-c2", "reduced_hp_thomas_dill_no_c2", "hp_thomas_dill_no_c", "hp-thomas-dill-no-c"])]
+    #[value(name = "hp_thomas_dill_no_c2", alias = "hp-thomas-dill-no-c2")]
     HpThomasDillNoC,
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
-    #[value(name = "hp_lehninger_c_nonpolar2", aliases = ["hp-lehninger-c-nonpolar2", "reduced_hp_lehninger_c_nonpolar2", "hp_lehninger_c_nonpolar", "hp-lehninger-c-nonpolar"])]
+    #[value(name = "hp_lehninger_c_nonpolar2", alias = "hp-lehninger-c-nonpolar2")]
     HpLehningerCNonpolar,
     /// HPC Lehninger 3-letter: hydrophobic/polar/cystine, C split into its own class
-    #[value(name = "hp_lehninger_hpc3", aliases = ["hp-lehninger-hpc3", "reduced_hp_lehninger_hpc3", "hp_lehninger_hpc", "hp-lehninger-hpc"])]
+    #[value(name = "hp_lehninger_hpc3", alias = "hp-lehninger-hpc3")]
     HpLehningerHpc,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
-    #[value(name = "hp_pbotc_1st_ed2", aliases = ["hp-pbotc-1st-ed2", "reduced_hp_pbotc_1st_ed2", "hp_pbotc_1st_ed", "hp-pbotc-1st-ed"])]
+    #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
     /// HP negative control, 2 classes: the h/p split is randomized, scrambling the
     /// hydrophobicity signal. Use --random-seed for independent replicates
-    #[value(name = "hp_random_control2", aliases = ["hp-random-control2", "reduced_hp_shuffled_control2", "hp_shuffled_control", "hp-shuffled-control"])]
+    #[value(name = "hp_random_control2", alias = "hp-random-control2")]
     HpRandomControl,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
-    #[value(name = "gbmr4", alias = "reduced_gbmr4")]
+    #[value(name = "gbmr4")]
     ReducedGbmr4,
     /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
-    #[value(name = "wwmj5", alias = "reduced_wwmj5")]
+    #[value(name = "wwmj5")]
     ReducedWwmj5,
     /// GBMR7, 7 classes (Solis & Rackovsky 2000)
-    #[value(name = "gbmr7", alias = "reduced_gbmr7")]
+    #[value(name = "gbmr7")]
     ReducedGbmr7,
     /// SDM12, 12 classes (Prlic et al. 2000; best AUC in Peterson et al. 2009)
-    #[value(name = "sdm12", alias = "reduced_sdm12")]
+    #[value(name = "sdm12")]
     ReducedSdm12,
     /// MMSEQS12, 12 classes (Steinegger & Soding 2018)
-    #[value(name = "mmseqs12", alias = "reduced_mmseqs12")]
+    #[value(name = "mmseqs12")]
     ReducedMmseqs12,
     /// WASS14, 14 classes, hydrophobicity-clustered (Ieremie et al. 2024)
-    #[value(name = "wass14", alias = "reduced_wass14")]
+    #[value(name = "wass14")]
     ReducedWass14,
     /// HSDM17, 17 classes (Prlic et al. 2000; best precision in Peterson et al. 2009)
-    #[value(name = "hsdm17", alias = "reduced_hsdm17")]
+    #[value(name = "hsdm17")]
     ReducedHsdm17,
     /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
-    #[value(name = "uniprot18", alias = "reduced_uniprot18")]
+    #[value(name = "uniprot18")]
     ReducedUniprot18,
 }
 

@@ -20,9 +20,9 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 ///
 /// A code is never resolved to one of the pair. Every k-mer window covering it is indexed
 /// under *both* readings instead (`ambiguity_readings`), so a search matches whichever
-/// residue the query actually has. Picking one would assert a residue the source never
+/// residue the query holds. Picking one would assert a residue the source never
 /// claimed, and which reading is safe depends on the alphabet: SDM12 and HSDM17 give Asp
-/// and Asn separate classes, so under them the two readings are genuinely different k-mers.
+/// and Asn separate classes, so under them the two readings are different k-mers.
 pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
     [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
 
@@ -350,7 +350,7 @@ mod tests {
     /// B stands for Asp or Asn, so a k-mer covering one is indexed under both readings.
     /// Picking a single residue would commit to a reading the source never made, and under
     /// SDM12 or HSDM17 -- where Asp and Asn are separate classes -- the two readings are
-    /// genuinely different k-mers.
+    /// different k-mers.
     #[test]
     fn test_ambiguity_readings_expands_each_code_to_both_residues() {
         assert_eq!(ambiguity_readings("MKBTA").unwrap(), vec!["MKDTA", "MKNTA"]);
@@ -358,8 +358,8 @@ mod tests {
         assert_eq!(ambiguity_readings("MKZTA").unwrap(), vec!["MKETA", "MKQTA"]);
     }
 
-    /// A window free of ambiguity codes yields exactly itself, so the expansion path costs
-    /// nothing for the overwhelmingly common case.
+    /// A window free of ambiguity codes yields itself, so the expansion path adds no k-mers
+    /// in the common case.
     #[test]
     fn test_ambiguity_readings_passes_through_unambiguous_kmers() {
         assert_eq!(ambiguity_readings("MKTAY").unwrap(), vec!["MKTAY"]);
@@ -382,8 +382,8 @@ mod tests {
         assert_eq!(ambiguity_readings("BBBBB"), None);
     }
 
-    /// Every reading must be a real sequence over the canonical residues: the point is that
-    /// each is a k-mer the source could actually have had.
+    /// Every reading must be a sequence over the canonical residues, since each stands for a
+    /// k-mer the source could have held.
     #[test]
     fn test_ambiguity_readings_are_canonical() {
         let aa = AminoAcidAmbiguity::new();

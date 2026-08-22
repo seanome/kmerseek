@@ -44,7 +44,7 @@ fn test_cli_index_basic() -> Result<(), Box<dyn std::error::Error>> {
         output_path.to_str().unwrap(),
         "--ksize",
         "5",
-        "--encoding",
+        "--alphabet",
         "protein20",
     ]);
 
@@ -70,7 +70,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
         output_path.to_str().unwrap(),
         "--ksize",
         "10",
-        "--encoding",
+        "--alphabet",
         "hp_lehninger2",
     ]);
 
@@ -87,8 +87,8 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
 
     // Every alphabet, not a sample: a wrong table or hash function shows up as an indexing
-    // failure, and there is no reason to leave any of them unexercised. Built from the
-    // alphabet lists rather than hardcoded, so a newly added alphabet is covered for free.
+    // failure. Built from the alphabet lists rather than hardcoded, so a newly added
+    // alphabet is covered without editing this test.
     let alphabets: Vec<String> = ["protein20".to_string(), "dayhoff6".to_string()]
         .into_iter()
         .chain(HpAlphabet::all_named().iter().map(HpAlphabet::to_moltype))
@@ -142,7 +142,7 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
             index_path.to_str().unwrap(),
             "--ksize",
             "12",
-            "--encoding",
+            "--alphabet",
             "hp_lehninger2",
         ]);
         if flag {
@@ -163,7 +163,7 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
             index_path.to_str().unwrap(),
             "--ksize",
             "12",
-            "--encoding",
+            "--alphabet",
             "hp_lehninger2",
         ]);
         let state = if expected == "true" { "REMOVED" } else { "KEPT" };
@@ -201,7 +201,7 @@ fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn 
         index_path.to_str().unwrap(),
         "--ksize",
         "12",
-        "--encoding",
+        "--alphabet",
         "hp_lehninger2",
     ]);
     index_cmd.assert().success();
@@ -215,7 +215,7 @@ fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn 
         index_path.to_str().unwrap(),
         "--ksize",
         "12",
-        "--encoding",
+        "--alphabet",
         "hp_lehninger2",
         "--remove-low-complexity",
     ]);
@@ -251,7 +251,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             index_path.to_str().unwrap(),
             "--ksize",
             "12",
-            "--encoding",
+            "--alphabet",
             "hp_lehninger2",
         ]);
         if flag {
@@ -270,7 +270,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             csv_path.to_str().unwrap(),
             "--ksize",
             "12",
-            "--encoding",
+            "--alphabet",
             "hp_lehninger2",
         ]);
         search_cmd.assert().success();
@@ -309,7 +309,7 @@ fn test_cli_remove_low_complexity_auto_filename_does_not_collide(
             fasta.to_str().unwrap(),
             "--ksize",
             "8",
-            "--encoding",
+            "--alphabet",
             "hp_lehninger2",
         ]);
         if flag {
@@ -380,7 +380,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         target_index_path.to_str().unwrap(),
         "--ksize",
         "12",
-        "--encoding",
+        "--alphabet",
         "hp_lehninger2",
     ]);
 
@@ -411,7 +411,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         output_csv.to_str().unwrap(),
         "--ksize",
         "12",
-        "--encoding",
+        "--alphabet",
         "hp_lehninger2",
         "--min-shared-kmers",
         "0",

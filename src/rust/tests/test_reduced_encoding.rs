@@ -16,8 +16,8 @@ mod tests {
     const CED9_FRAGMENT: &str = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
 
     /// Every hash in kmer_positions must also be in the minhash, and vice versa. A case
-    /// mismatch between the two encoding loops silently empties matched regions rather
-    /// than failing, so each alphabet is checked rather than a representative one.
+    /// mismatch between the two encoding loops empties matched regions without failing, so
+    /// each alphabet is checked rather than a representative one.
     #[test]
     fn test_reduced_alphabets_kmer_positions_match_minhash() {
         let ksize = 10;
@@ -96,7 +96,7 @@ mod tests {
     }
 
     /// Every character of an encoded sequence has to be one of the alphabet's own symbols,
-    /// so the class count in the name is what the index actually stores.
+    /// so the class count in the name is what the index stores.
     #[test]
     fn test_encoded_sequence_uses_only_alphabet_symbols() {
         for alphabet in ReducedAlphabet::all() {
@@ -127,8 +127,8 @@ mod tests {
     }
 
     /// A coarser alphabet must collapse the fragment at least as hard as any finer one.
-    /// Checked over every ordered pair rather than a sliding chain, so a table wired to the
-    /// wrong alphabet cannot hide between two neighbours that happen to be consistent.
+    /// Checked over every ordered pair rather than a sliding chain. A table wired to the
+    /// wrong alphabet could otherwise sit between two neighbours that agree with each other.
     #[test]
     fn test_coarser_alphabets_collapse_at_least_as_much() {
         use std::collections::HashSet;
