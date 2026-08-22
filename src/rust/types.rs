@@ -83,36 +83,22 @@ impl fmt::Display for Scaled {
 pub struct MolType(pub String);
 
 impl MolType {
-    /// Create a new molecular type with validation.
-    ///
-    /// Pre-rename HP spellings (`hp_thomas_dill`) are accepted and normalized to their
-    /// current form (`reduced_hp_thomas_dill2`). Normalizing here rather than at each call
-    /// site means an index written before the rename compares equal to a query sketched
-    /// after it: `find_matched_regions` asserts the two moltypes match, and the same
-    /// alphabet under two spellings would otherwise abort the search.
+    /// Create a molecular type, rejecting anything that is not a known alphabet.
     pub fn new(moltype: &str) -> Result<Self, String> {
-        if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
-            return Ok(MolType(alphabet.to_moltype()));
+        let known = matches!(moltype, "protein20" | "dayhoff6")
+            || HpAlphabet::from_moltype(moltype).is_some()
+            || ReducedAlphabet::from_moltype(moltype).is_some();
+        if known {
+            return Ok(MolType(moltype.to_string()));
         }
-        if let Some(alphabet) = ReducedAlphabet::from_moltype(moltype) {
-            return Ok(MolType(alphabet.to_moltype()));
-        }
-        match moltype {
-            // Every alphabet states its class count, the unreduced one included: `protein`
-            // and its synonym `raw` are the older spellings of the full 20-letter alphabet,
-            // and `dayhoff` of the 6-class one.
-            "protein20" | "protein" | "raw" => Ok(MolType("protein20".to_string())),
-            "dayhoff6" | "dayhoff" => Ok(MolType("dayhoff6".to_string())),
-            _ => Err(format!(
-                "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \
-                 hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
-                 hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-                 hp_random_control2, gbmr4, wwmj5, gbmr7, sdm12, mmseqs12, wass14, hsdm17, \
-                 uniprot18 (older spellings -- protein, raw, hp, dayhoff, hp_<name> without \
-                 a class count, a reduced_ prefix, shuffled_control -- are still accepted)",
-                moltype
-            )),
-        }
+        Err(format!(
+            "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \
+             hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
+             hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
+             hp_random_control2, gbmr4, wwmj5, gbmr7, sdm12, mmseqs12, wass14, hsdm17, \
+             uniprot18",
+            moltype
+        ))
     }
 
     /// Get the raw value
@@ -205,52 +191,9 @@ mod tests {
     #[test]
     fn test_moltype_validation() {
         assert!(MolType::new("protein20").is_ok());
-        assert!(MolType::new("dayhoff").is_ok());
-        assert!(MolType::new("hp").is_ok());
+        assert!(MolType::new("dayhoff6").is_ok());
+        assert!(MolType::new("hp_lehninger2").is_ok());
         assert!(MolType::new("invalid").is_err());
-    }
-
-    /// A moltype written before class counts were added to the HP names must normalize to
-    /// the current spelling. `find_matched_regions` asserts query and target moltypes are
-    /// equal, so an index built as `hp_thomas_dill` and a query sketched afterwards would
-    /// otherwise abort the search even though both use the same alphabet.
-    #[test]
-    fn test_moltype_normalizes_legacy_hp_names() {
-        let expected = [
-            ("hp_lehninger", "hp_lehninger2"),
-            ("hp_thomas_dill", "hp_thomas_dill2"),
-            ("hp_kyte_doolittle", "hp_kyte_doolittle2"),
-            ("hp_thomas_dill_no_c", "hp_thomas_dill_no_c2"),
-            ("hp_lehninger_c_nonpolar", "hp_lehninger_c_nonpolar2"),
-            ("hp_lehninger_hpc", "hp_lehninger_hpc3"),
-            ("hp_pbotc_1st_ed", "hp_pbotc_1st_ed2"),
-            ("hp_shuffled_control", "hp_random_control2"),
-            ("hp_shuffled_control_4", "hp_random_control2_4"),
-        ];
-
-        for (legacy, current) in expected {
-            assert_eq!(MolType::new(legacy).unwrap().get(), current, "{legacy}");
-            // Already-current names pass through unchanged.
-            assert_eq!(MolType::new(current).unwrap().get(), current, "{current}");
-            assert_eq!(MolType::new(legacy).unwrap(), MolType::new(current).unwrap());
-        }
-    }
-
-    /// `dayhoff` carries its class count now, so the bare name normalizes the way the
-    /// pre-rename HP names do. Its hash function is unchanged, so existing dayhoff indexes
-    /// keep matching (see `test_dayhoff_rename_preserves_hashes`).
-    #[test]
-    fn test_moltype_normalizes_legacy_dayhoff() {
-        assert_eq!(MolType::new("dayhoff").unwrap().get(), "dayhoff6");
-        assert_eq!(MolType::new("dayhoff6").unwrap().get(), "dayhoff6");
-        assert_eq!(MolType::new("dayhoff").unwrap(), MolType::new("dayhoff6").unwrap());
-    }
-
-    /// `hp` is now the pre-rename spelling of the Lehninger 2-class alphabet.
-    #[test]
-    fn test_moltype_normalizes_builtin_hp_to_lehninger2() {
-        assert_eq!(MolType::new("hp").unwrap().get(), "hp_lehninger2");
-        assert_eq!(MolType::new("hp").unwrap(), MolType::new("hp_lehninger2").unwrap());
     }
 
     /// `protein` and its synonym `raw` are the full 20-letter alphabet and keep their names,
@@ -259,14 +202,6 @@ mod tests {
     fn test_moltype_leaves_current_names_alone() {
         for moltype in ["protein20", "dayhoff6", "hp_lehninger2", "sdm12", "gbmr4", "uniprot18"] {
             assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
-        }
-    }
-
-    /// The full alphabet carries its count too, so `protein` and `raw` are older spellings.
-    #[test]
-    fn test_moltype_normalizes_protein_and_raw() {
-        for moltype in ["protein", "raw", "protein20"] {
-            assert_eq!(MolType::new(moltype).unwrap().get(), "protein20", "{moltype}");
         }
     }
 }

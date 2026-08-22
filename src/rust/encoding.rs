@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sourmash::encodings::{aa_to_dayhoff, HashFunctions};
+use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 use std::collections::HashMap;
 
 use crate::hp_alphabets::HpAlphabet;
@@ -25,15 +25,16 @@ const MURMUR64HP: &str = "Murmur64Hp";
 /// * `Err(...)` if the `moltype` is unrecognized
 pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, anyhow::Error> {
     match moltype {
-        "protein20" | "protein" | "raw" => Ok(HashFunctions::Murmur64Protein),
+        "protein20" => Ok(HashFunctions::Murmur64Protein),
         // Dayhoff has no table of ours; sourmash encodes and hashes it. This arm has to come
         // before the table lookup below, which assumes a pre-encoded sequence.
-        "dayhoff6" | "dayhoff" => Ok(HashFunctions::Murmur64Dayhoff),
+        "dayhoff6" => Ok(HashFunctions::Murmur64Dayhoff),
+        // Lehninger is sourmash's own aa_to_hp partition, so sourmash encodes and hashes it.
+        // Sketches are then byte-identical to sourmash's for the same sequence.
+        "hp_lehninger2" => Ok(HashFunctions::Murmur64Hp),
         // Every other alphabet pre-encodes through its own table, so the hash function sees
-        // an already-encoded sequence and hashes it as protein. This includes bare `hp`,
-        // which is a spelling of hp_lehninger2: it must NOT map to Murmur64Hp, or sourmash
-        // would run its own HP encoder over an already-encoded string, encoding twice.
-        s if custom_alphabet_table(s).is_some() => Ok(HashFunctions::Murmur64Protein),
+        // an already-encoded sequence and hashes it as protein.
+        s if alphabet_table(s).is_some() => Ok(HashFunctions::Murmur64Protein),
         _ => Err(anyhow::anyhow!(
             "Invalid alphabet: {}. Supported values: 'protein20', 'dayhoff6', \
              'hp_lehninger2', 'hp_thomas_dill2', 'hp_kyte_doolittle2', \
@@ -41,9 +42,7 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
              'hp_pbotc_1st_ed2', 'hp_random_control2', \
              'hp_random_control2_1'..'hp_random_control2_10', \
              'gbmr4', 'wwmj5', 'gbmr7', 'sdm12', 'mmseqs12', 'wass14', 'hsdm17', \
-             'uniprot18' (older spellings -- 'protein', 'raw', 'hp', 'dayhoff', \
-             'hp_<name>' without a class count, a 'reduced_' prefix, 'shuffled_control' \
-             -- are still accepted)",
+             'uniprot18'",
             moltype
         )),
     }
@@ -55,17 +54,10 @@ pub fn get_moltype_from_hash_function_string(
     match hash_function.as_str() {
         MURMUR64PROTEIN => Ok("protein20".to_string()),
         MURMUR64DAYHOFF => Ok("dayhoff6".to_string()),
-        // Murmur64Hp is sourmash's own HP encoding, which hashes lowercase h/p. kmerseek
-        // hashes the same partition as uppercase H/P via hp_lehninger2, so a
-        // signature written this way is not interchangeable with ours and is refused rather
-        // than relabelled.
-        MURMUR64HP => Err(anyhow::anyhow!(
-            "Signature uses sourmash's built-in HP hash function (Murmur64Hp), whose hashes \
-             are not compatible with kmerseek's hp_lehninger2. Re-sketch the input \
-             with kmerseek."
-        )),
+        MURMUR64HP => Ok("hp_lehninger2".to_string()),
         _ => Err(anyhow::anyhow!(
-            "Invalid hash function: {}, only 'Murmur64' with 'protein' or 'dayhoff' are supported",
+            "Invalid hash function: {}, only 'Murmur64' with 'protein', 'dayhoff' or 'hp' \
+             are supported",
             hash_function
         )),
     }
@@ -77,12 +69,7 @@ pub fn get_moltype_from_hash_function(
     match hash_function {
         HashFunctions::Murmur64Protein => Ok("protein20".to_string()),
         HashFunctions::Murmur64Dayhoff => Ok("dayhoff6".to_string()),
-        // See get_moltype_from_hash_function_string: sourmash's HP hashes differ from ours.
-        HashFunctions::Murmur64Hp => Err(anyhow::anyhow!(
-            "Signature uses sourmash's built-in HP hash function (Murmur64Hp), whose hashes \
-             are not compatible with kmerseek's hp_lehninger2. Re-sketch the input \
-             with kmerseek."
-        )),
+        HashFunctions::Murmur64Hp => Ok("hp_lehninger2".to_string()),
         _ => Err(anyhow::anyhow!(
             "Invalid hash function: {}, only Sourmash HashFunctions::Murmur64 with 'protein', 'dayhoff', or 'hp' are supported", hash_function
         ))
@@ -106,14 +93,16 @@ pub fn get_moltype_from_hash_function(
 /// * `Err(...)` - An error if the `moltype` is unrecognized.
 pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyhow::Error> {
     match moltype {
-        "protein20" | "protein" | "raw" => Ok(|b| b),
+        "protein20" => Ok(|b| b),
         // Before the table lookup below, for the same reason as in
         // get_hash_function_from_moltype: dayhoff is encoded by sourmash, not pre-encoded.
-        "dayhoff6" | "dayhoff" => Ok(aa_to_dayhoff),
+        "dayhoff6" => Ok(aa_to_dayhoff),
+        // Encoded by sourmash, like dayhoff6 above.
+        "hp_lehninger2" => Ok(aa_to_hp),
         // Table-backed alphabets cannot be expressed as a fn(u8) -> u8; return identity here
         // so callers that only need one don't crash. encode_by_moltype and add_protein apply
         // the table themselves.
-        s if custom_alphabet_table(s).is_some() => Ok(|b| b),
+        s if alphabet_table(s).is_some() => Ok(|b| b),
         _ => Err(anyhow::anyhow!(
             "Invalid alphabet: {}, only 'protein20', 'dayhoff6' and the reduced \
              alphabets are supported",
@@ -122,13 +111,16 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
     }
 }
 
-/// Residue-to-symbol table for the moltypes that pre-encode a sequence before hashing.
+/// The residue-to-class table for alphabets kmerseek encodes itself.
 ///
-/// Covers both alphabet families: the two- and three-letter HP tables (`hp_*2`/`hp_*3`,
-/// plus bare `hp`) and the multi-letter reduced alphabets (`sdm12`, `gbmr4`, ...). Returns
-/// `None` for `protein20` and `dayhoff6`, which sourmash encodes itself.
-pub fn custom_alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
+/// Returns `None` for the three alphabets sourmash encodes: `protein20` (no reduction),
+/// `dayhoff6`, and `hp_lehninger2` (sourmash's own `aa_to_hp` partition). Those are hashed
+/// by sourmash directly; everything else is pre-encoded through the table returned here.
+pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
     if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
+        if alphabet.uses_sourmash_encoder() {
+            return None;
+        }
         return Some(alphabet.table());
     }
     ReducedAlphabet::from_moltype(moltype).map(|alphabet| alphabet.table())
@@ -160,7 +152,7 @@ pub fn custom_alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> 
 pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
     // Table-backed alphabets cannot be expressed as a fn(u8) -> u8, so they are applied
     // here directly. Without this the HP family would silently encode to the identity.
-    if let Some(table) = custom_alphabet_table(moltype) {
+    if let Some(table) = alphabet_table(moltype) {
         return Ok(sequence
             .bytes()
             .map(|b| {
@@ -224,18 +216,25 @@ mod tests {
             panic!("Expected HashFunctions::Murmur64Protein for 'protein20'");
         }
 
-        if let Ok(hf) = get_hash_function_from_moltype("raw") {
+        if let Ok(hf) = get_hash_function_from_moltype("protein20") {
             assert_eq!(hf, HashFunctions::Murmur64Protein);
         } else {
             panic!("Expected HashFunctions::Murmur64Protein for 'raw'");
         }
 
-        // `hp` is the pre-rename spelling of reduced_hp_lehninger2, which pre-encodes with
-        // our own table and so hashes as protein. It is deliberately no longer Murmur64Hp.
-        if let Ok(hf) = get_hash_function_from_moltype("hp") {
+        // Lehninger is sourmash's own partition, so it keeps sourmash's HP hash function and
+        // its sketches match sourmash's byte for byte.
+        if let Ok(hf) = get_hash_function_from_moltype("hp_lehninger2") {
+            assert_eq!(hf, HashFunctions::Murmur64Hp);
+        } else {
+            panic!("Expected HashFunctions::Murmur64Hp for 'hp_lehninger2'");
+        }
+
+        // Alphabets with no sourmash equivalent are pre-encoded, so they hash as protein.
+        if let Ok(hf) = get_hash_function_from_moltype("sdm12") {
             assert_eq!(hf, HashFunctions::Murmur64Protein);
         } else {
-            panic!("Expected HashFunctions::Murmur64Protein for 'hp'");
+            panic!("Expected HashFunctions::Murmur64Protein for 'sdm12'");
         }
 
         if let Ok(hf) = get_hash_function_from_moltype("dayhoff6") {
@@ -249,7 +248,7 @@ mod tests {
 
     #[test]
     fn test_get_encoding_fn_from_moltype() {
-        if let Ok(raw_fn) = get_encoding_fn_from_moltype("raw") {
+        if let Ok(raw_fn) = get_encoding_fn_from_moltype("protein20") {
             assert_eq!(raw_fn(b'A'), b'A');
         } else {
             panic!("Expected identity function for 'raw'");
@@ -261,14 +260,20 @@ mod tests {
             panic!("Expected identity function for 'protein20'");
         }
 
-        // `hp` now names the table-backed Lehninger alphabet, and a table cannot be a
-        // fn(u8) -> u8, so this returns the identity. Callers that want the encoding go
-        // through encode_by_moltype, which consults the table
-        // (test_encode_by_moltype_hp_uses_the_lehninger_table).
-        if let Ok(hp_fn) = get_encoding_fn_from_moltype("hp") {
-            assert_eq!(hp_fn(b'A'), b'A');
+        // Lehninger is sourmash's own partition, so it encodes through sourmash's aa_to_hp
+        // rather than a table of ours.
+        if let Ok(hp_fn) = get_encoding_fn_from_moltype("hp_lehninger2") {
+            assert_eq!(hp_fn(b'A'), aa_to_hp(b'A'));
         } else {
-            panic!("Expected identity function for 'hp'");
+            panic!("Expected aa_to_hp for 'hp_lehninger2'");
+        }
+
+        // A table-backed alphabet cannot be a fn(u8) -> u8, so it falls back to the
+        // identity here; encode_by_moltype applies the table instead.
+        if let Ok(td_fn) = get_encoding_fn_from_moltype("hp_thomas_dill2") {
+            assert_eq!(td_fn(b'A'), b'A');
+        } else {
+            panic!("Expected identity function for 'hp_thomas_dill2'");
         }
 
         if let Ok(dayhoff_fn) = get_encoding_fn_from_moltype("dayhoff6") {
@@ -282,7 +287,7 @@ mod tests {
 
     #[test]
     fn test_encode_by_moltype_protein() -> Result<()> {
-        let encoded = encode_by_moltype(TEST_KMER, "protein")?;
+        let encoded = encode_by_moltype(TEST_KMER, "protein20")?;
         assert_eq!(encoded, TEST_KMER);
         Ok(())
     }
@@ -296,7 +301,7 @@ mod tests {
 
     #[test]
     fn test_encode_by_moltype_hp() -> Result<()> {
-        let encoded = encode_by_moltype(TEST_KMER, "hp")?;
+        let encoded = encode_by_moltype(TEST_KMER, "hp_lehninger2")?;
         assert_eq!(encoded, "hhhhphhhhhp");
         Ok(())
     }
@@ -325,7 +330,7 @@ mod tests {
     #[test]
     fn test_encode_by_moltype_sequence() -> Result<()> {
         let sequence = "MKTAYIAKQR";
-        let encoded = encode_by_moltype(sequence, "protein")?;
+        let encoded = encode_by_moltype(sequence, "protein20")?;
         assert_eq!(encoded, sequence);
         Ok(())
     }
@@ -333,7 +338,7 @@ mod tests {
     #[test]
     fn test_encode_by_moltype_sequence_hp() -> Result<()> {
         let sequence = "MKTAYIAKQR";
-        let encoded = encode_by_moltype(sequence, "hp")?;
+        let encoded = encode_by_moltype(sequence, "hp_lehninger2")?;
         // Verify the encoding produces the correct length and uses only 'h' and 'p'
         assert_eq!(encoded.len(), sequence.len());
         assert!(encoded.chars().all(|c| c == 'h' || c == 'p'));

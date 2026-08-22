@@ -222,39 +222,34 @@ bytes that get hashed.
 `--alphabet hp_lehninger2` collapses the 20 canonical amino acids down to hydrophobic (`h`)
 / polar (`p`) before k-mer extraction. The alphabets below (see
 `src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
-the five borderline ones -- **C, G, P, W, Y** (bolded). Lehninger is the current
+the five borderline ones: C, G, P, W and Y. Lehninger is the current
 default, spelled `hp_lehninger2`; the others are selectable via the same
 `hp_<name>2` pattern (e.g. `hp_thomas_dill2`) for the alphabet
 robustness sweep.
 
-`hp_lehninger_hpc3` is a 3-letter variant: it keeps Lehninger's H/P split for
-every residue except cysteine, which gets its own third symbol `c` (cystine)
-instead of being folded into `h` the way `hp_lehninger_c_nonpolar2` does --
-disulfide-bond formation is a distinct chemistry from ordinary hydrophobic
-packing.
+Cysteine is the residue the schemes disagree about most, because its thiol side chain is
+nonpolar but its disulfide bonding is a chemistry of its own. `hp_lehninger_c_nonpolar2`
+folds it into `h`; `hp_lehninger_hpc3` gives it a third class instead.
 
-| AA | Lehninger (current) | Thomas-Dill/PBotC 2nd | Kyte-Doolittle | TD−C | Leh+C | Leh HPC (3-letter) | PBotC 1st |
-|----|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
-| A | h | h | h | h | h | h | h |
-| **C** | p | h | h | p | h | c | h |
-| D | p | p | p | p | p | p | p |
-| E | p | p | p | p | p | p | p |
-| F | h | h | h | h | h | h | h |
-| **G** | h | p | p | p | h | h | p |
-| H | p | p | p | p | p | p | p |
-| I | h | h | h | h | h | h | h |
-| K | p | p | p | p | p | p | p |
-| L | h | h | h | h | h | h | h |
-| M | h | h | h | h | h | h | h |
-| N | p | p | p | p | p | p | p |
-| **P** | h | p | p | p | h | h | h |
-| Q | p | p | p | p | p | p | p |
-| R | p | p | p | p | p | p | p |
-| S | p | p | p | p | p | p | p |
-| T | p | p | p | p | p | p | p |
-| V | h | h | h | h | h | h | h |
-| **W** | h | h | p | h | h | h | h |
-| **Y** | h | h | p | h | h | h | h |
+Alphabet / Scheme | Hydrophobic (`h`) | Polar (`p`)
+-- | -- | --
+Lehninger (default) | `AFILMV` GPWY | `DEHKNQRST` C
+Thomas-Dill / PBotC 2nd | `AFILMV` CWY | `DEHKNQRST` GP
+Kyte-Doolittle | `AFILMV` C | `DEHKNQRST` GPWY
+TD−C | `AFILMV` WY | `DEHKNQRST` CGP
+Leh+C | `AFILMV` CGPWY | `DEHKNQRST`
+PBotC 1st | `AFILMV` CPWY | `DEHKNQRST` G
+
+The residues in backticks are fixed across every scheme: `AFILMV` is always hydrophobic
+and `DEHKNQRST` always polar. Only the five borderline residues C, G, P, W and Y move,
+which is the whole of the disagreement between these alphabets.
+
+`hp_lehninger_hpc3` is the odd one out, with three classes rather than two: it keeps
+Lehninger's split for the other 19 residues and gives cysteine its own symbol `c`.
+
+| Alphabet / Scheme | Hydrophobic (`h`) | Polar (`p`) | Cystine (`c`) |
+| -- | -- | -- | -- |
+| Leh HPC | `AFILMV` GPWY | `DEHKNQRST` | C |
 
 ## Multi-Letter Reduced Alphabets
 

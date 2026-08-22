@@ -274,7 +274,7 @@ mod tests {
         "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR";
 
     fn make_stable() -> StableSignature {
-        let mut sig = ProteinSketch::from_protein_sequence("test_seq", SEQ, 5, 1, "protein")
+        let mut sig = ProteinSketch::from_protein_sequence("test_seq", SEQ, 5, 1, "protein20")
             .unwrap()
             .into_signature();
         sig.location = "loc.fasta".to_string();
@@ -283,7 +283,7 @@ mod tests {
     }
 
     fn small_signature() -> SmallSignature {
-        let minhash = ProteinSketch::from_protein_sequence("small_seq", SEQ, 5, 1, "protein")
+        let minhash = ProteinSketch::from_protein_sequence("small_seq", SEQ, 5, 1, "protein20")
             .unwrap()
             .signature()
             .get_minhash()

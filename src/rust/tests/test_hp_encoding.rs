@@ -187,7 +187,7 @@ mod tests {
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
         let ksize = 8;
 
-        for moltype in ["hp", "dayhoff"] {
+        for moltype in ["hp_lehninger2", "dayhoff6"] {
             let sketch = ProteinSketch::from_protein_sequence("test", seq, ksize, 1, moltype)
                 .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
 
@@ -252,70 +252,5 @@ mod tests {
 
         // Must not panic even if shared hashes map to different HP subsequences.
         let _regions = find_matched_regions(&sketch_a, &sketch_b, &shared);
-    }
-
-    /// An index built before the HP names settled stores an older spelling; a query sketched
-    /// afterwards uses the current one. Both must resolve to the same table and therefore
-    /// the same hashes, otherwise every older index would silently stop matching.
-    #[test]
-    fn test_older_and_current_moltype_names_sketch_identically() {
-        use crate::hp_alphabets::HpAlphabet;
-
-        let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
-
-        for alphabet in HpAlphabet::all_named() {
-            let current = alphabet.to_moltype();
-            // The two spellings this alphabet had before: no class count, and with the
-            // redundant `reduced_` prefix.
-            let older = [format!("hp_{}", alphabet.name()), format!("reduced_{current}")];
-
-            let from_current =
-                ProteinSketch::from_protein_sequence("x", seq, 8, 1, &current).unwrap();
-
-            for spelling in older {
-                let from_older =
-                    ProteinSketch::from_protein_sequence("x", seq, 8, 1, &spelling).unwrap();
-                assert_eq!(
-                    from_older.mins_as_set(),
-                    from_current.mins_as_set(),
-                    "{spelling} and {current} produced different hashes"
-                );
-                // Older spellings are normalized away, so nothing downstream sees two names.
-                assert_eq!(from_older.moltype().get(), current, "{spelling} was not normalized");
-            }
-        }
-    }
-
-    /// Renaming `dayhoff` to `dayhoff6` must not change a single hash: both names
-    /// resolve to sourmash's Murmur64Dayhoff and its own encoder, so existing dayhoff
-    /// indexes stay searchable. This is the guarantee that `hp` cannot make, because the
-    /// built-in HP path hashes lowercase h/p while the custom tables hash uppercase H/P.
-    #[test]
-    fn test_dayhoff_rename_preserves_hashes() {
-        let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
-
-        let legacy = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "dayhoff").unwrap();
-        let current = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "dayhoff6").unwrap();
-
-        assert_eq!(legacy.mins_as_set(), current.mins_as_set());
-        assert_eq!(legacy.get_moltype_sequence(), current.get_moltype_sequence());
-        assert_eq!(legacy.moltype().get(), "dayhoff6");
-    }
-
-    /// `hp` is now a spelling of `hp_lehninger2`, not a separate encoding: same
-    /// partition, same hashes, same stored name. Before the merge the two shared a partition
-    /// but no hashes, because sourmash's built-in HP encoder hashes lowercase h/p while a
-    /// pre-encoded custom table is uppercased to H/P first. `hp` now takes the custom path
-    /// like every other alphabet in the family.
-    #[test]
-    fn test_bare_hp_is_the_lehninger_alphabet() {
-        let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
-
-        let bare = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp").unwrap();
-        let named = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp_lehninger2").unwrap();
-
-        assert_eq!(bare.mins_as_set(), named.mins_as_set());
-        assert_eq!(bare.get_moltype_sequence(), named.get_moltype_sequence());
-        assert_eq!(bare.moltype().get(), "hp_lehninger2");
     }
 }

@@ -346,7 +346,7 @@ pub struct MatchedRegion {
     /// Encoded sequence (hp/dayhoff/protein encoding)
     pub moltype_seq: String,
 
-    // One of "protein", "dayhoff", or "hp"
+    // One of "protein20", "dayhoff6", or "hp"
     pub moltype: MolType,
 
     /// Length of the match
@@ -1352,8 +1352,8 @@ fn calculate_similarity_from_precomputed(
 /// use kmerseek::sketch::ProteinSketch;
 /// use kmerseek::search::calculate_similarity;
 ///
-/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp").unwrap();
-/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp").unwrap();
+/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp_lehninger2").unwrap();
+/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp_lehninger2").unwrap();
 /// let result = calculate_similarity(&query, &target);
 /// ```
 #[must_use]
@@ -1604,7 +1604,7 @@ mod tests {
             target_end: 17,
             target_subseq: "TSUBSEQ".to_string(),
             moltype_seq: "hphph".to_string(),
-            moltype: MolType::new("hp").unwrap(),
+            moltype: MolType::new("hp_lehninger2").unwrap(),
             length: 6,
             expected_shared_kmers: 2.0,
             poisson_score: 0.05,
@@ -1621,7 +1621,7 @@ mod tests {
             n_intersecting_hashes: 7,
             ksize: 5,
             scaled: 1,
-            moltype: "hp".to_string(),
+            moltype: "hp_lehninger2".to_string(),
             jaccard: 0.25,
             max_containment: 0.6,
             average_abund: 2.0,
@@ -1789,25 +1789,25 @@ mod tests {
         // still caches this fixture, so if multiple test cases use it, the FASTA is only read once.
         // This gives us the caching benefit while maintaining compatibility with #[case] attributes.
         let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp_lehninger2").unwrap()
     }
 
     #[fixture]
     fn ced9_sketch_k15() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
     }
 
     #[fixture]
     fn bcl2_sketch_k12() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp_lehninger2").unwrap()
     }
 
     #[fixture]
     fn bcl2_sketch_k15() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
     }
 
     /// Read the first record from a FASTA file and return name and sequence.
@@ -1850,10 +1850,10 @@ mod tests {
         let target_index_path = temp_path.join("target_index");
         let target_index = ProteomeIndex::new(
             &target_index_path,
-            15,    // ksize - k=15 is where BCL2/CED9 have good HP overlap
-            1,     // scaled
-            "hp",  // moltype
-            false, // store_raw_sequences
+            15,              // ksize - k=15 is where BCL2/CED9 have good HP overlap
+            1,               // scaled
+            "hp_lehninger2", // moltype
+            false,           // store_raw_sequences
         )?;
 
         target_index.process_fasta(target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
@@ -1865,10 +1865,10 @@ mod tests {
         let query_index_path = temp_path.join("query_index");
         let query_index = ProteomeIndex::new(
             &query_index_path,
-            15,    // ksize
-            1,     // scaled
-            "hp",  // moltype
-            false, // store_raw_sequences
+            15,              // ksize
+            1,               // scaled
+            "hp_lehninger2", // moltype
+            false,           // store_raw_sequences
         )?;
 
         query_index.process_fasta(query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
@@ -1918,7 +1918,7 @@ mod tests {
         let temp_path = temp_dir.path();
 
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(
             TEST_CED9_FASTA,
             DEFAULT_PROGRESS_INTERVAL,
@@ -1927,7 +1927,7 @@ mod tests {
         let searcher = ProteinSearcher::new(target_index);
 
         let query_index_path = temp_path.join("query_index");
-        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", false)?;
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(
             TEST_BLC2_FASTA,
             DEFAULT_PROGRESS_INTERVAL,
@@ -1982,12 +1982,12 @@ mod tests {
     fn test_pvalue_scopes_combine_with_or() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", true)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp_lehninger2", true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(target_index);
 
         let query_index_path = temp_dir.path().join("query_index");
-        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", true)?;
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp_lehninger2", true)?;
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
@@ -2051,7 +2051,7 @@ mod tests {
     ) -> Result<()> {
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 12, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 12, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(TEST_FASTA_GZ, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
         target_index.save_state()?;
         drop(target_index);
@@ -2162,7 +2162,7 @@ mod tests {
         // 14 is the minimum k-mersize that finds multiple match regions from Delilah's analyses
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Read CED9 sequence from FASTA file
         let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
@@ -2257,7 +2257,7 @@ mod tests {
 
         // Create target index
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
 
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
@@ -2268,7 +2268,8 @@ mod tests {
         let query_fasta = temp_path.join("query.fasta");
         std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
 
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
 
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
@@ -2297,12 +2298,13 @@ mod tests {
 
         // Create indices
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let searcher = ProteinSearcher::new(target_index);
 
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
@@ -2353,7 +2355,7 @@ mod tests {
         std::fs::write(&target_fasta, ">exact_match\nATCGATCGATCGATCG\n>partial_match\nATCGATCGATCGATCA\n>no_match\nGGGGGGGGGGGGGGGG")?;
 
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let searcher = ProteinSearcher::new(target_index);
@@ -2362,7 +2364,8 @@ mod tests {
         let query_fasta = temp_path.join("query.fasta");
         std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
 
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
@@ -2403,9 +2406,9 @@ mod tests {
         let temp_path = temp_dir.path().join("test.db");
 
         // Create a proper index with a database path
-        let index = ProteomeIndex::new(&temp_path, 10, 5, "hp", false)?;
+        let index = ProteomeIndex::new(&temp_path, 10, 5, "hp_lehninger2", false)?;
 
-        let query = ProteinSketch::new("test", 10, 5, "hp")?;
+        let query = ProteinSketch::new("test", 10, 5, "hp_lehninger2")?;
         let stats = SearchStats {
             total_signatures: 100,
             idf: HashMap::new(),
@@ -2601,7 +2604,7 @@ mod tests {
     fn test_search_database_bcl2_ced9() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Create temporary directory for the index
         let temp_dir = TempDir::new()?;
@@ -2749,7 +2752,7 @@ mod tests {
     fn test_joint_kmer_freq_two_pass() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
@@ -2860,7 +2863,7 @@ mod tests {
     fn test_region_poisson_score_independently_recomputed() -> Result<()> {
         let ksize = 15;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
@@ -2941,7 +2944,7 @@ mod tests {
     fn test_multiplicity_components_are_reported_separately() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
@@ -3095,12 +3098,13 @@ mod tests {
         let ksize = 12;
         let temp_dir = TempDir::new()?;
         let index_path = temp_dir.path().join("index");
-        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp", true)?;
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(index);
 
         let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
-        let sketch = ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp")?;
+        let sketch =
+            ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp_lehninger2")?;
         let prefix = searcher.build_position_prefix(&sketch);
 
         // A window holding one k-mer: [0, 0 + 1) after the ksize adjustment.
@@ -3137,7 +3141,7 @@ mod tests {
         let ksize = 12;
         let temp_dir = TempDir::new()?;
         let index_path = temp_dir.path().join("index");
-        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp", true)?;
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         assert_eq!(index.signature_count(), 25);
 
@@ -3176,7 +3180,7 @@ mod tests {
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
         let ksize = 9;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");

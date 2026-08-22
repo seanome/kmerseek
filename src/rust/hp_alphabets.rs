@@ -115,54 +115,23 @@ impl HpAlphabet {
         }
     }
 
-    /// Parse from a moltype string, current or older. Returns `None` for unrecognized
-    /// strings.
+    /// Parse from a moltype string. Returns `None` for unrecognized strings.
     pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
-        Self::from_current_moltype(s).or_else(|| Self::from_older_moltype(s))
-    }
-
-    /// Parse `"hp_<name><size>"`, e.g. `"hp_lehninger2"` or `"hp_lehninger_hpc3"`.
-    fn from_current_moltype(s: &str) -> Option<HpAlphabet> {
-        if let Some(a) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
-            return Some(*a);
+        if let Some(alphabet) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
+            return Some(*alphabet);
         }
         let seed = s.strip_prefix("hp_random_control2_")?.parse().ok()?;
         Some(HpAlphabet::Random(seed))
     }
 
-    /// Parse the spellings used before the names were settled, so that indexes and command
-    /// lines written against any of them keep working:
+    /// Whether sourmash encodes this alphabet itself.
     ///
-    ///   - `"hp"` — sourmash's built-in HP moltype, which applies this same Lehninger
-    ///     partition. Its *hashes* differ (sourmash hashed lowercase h/p, this table is
-    ///     uppercased to H/P first), which is why indexes built that way are refused on open
-    ///     rather than reinterpreted; see `ProteomeIndex::reject_legacy_builtin_hp`.
-    ///   - `"hp_<name>"` — before the class count was part of the name.
-    ///   - `"reduced_hp_<name><size>"` — before the redundant `reduced_` prefix was dropped.
-    ///   - any of the above with `shuffled_control` — before the negative control was renamed
-    ///     to `random_control`.
-    fn from_older_moltype(s: &str) -> Option<HpAlphabet> {
-        let s = s.strip_prefix("reduced_").unwrap_or(s);
-        let s = s.replace("shuffled_control", "random_control");
-
-        if s == "hp" {
-            return Some(HpAlphabet::Lehninger);
-        }
-        if let Some(a) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
-            return Some(*a);
-        }
-        if let Some(seed) = s.strip_prefix("hp_random_control2_").and_then(|seed| seed.parse().ok())
-        {
-            return Some(HpAlphabet::Random(seed));
-        }
-
-        // Oldest form: "hp_<name>" carrying no class count.
-        let name = s.strip_prefix("hp_")?;
-        if let Some(a) = Self::all_named().iter().find(|a| a.name() == name) {
-            return Some(*a);
-        }
-        let seed = name.strip_prefix("random_control_")?.parse().ok()?;
-        Some(HpAlphabet::Random(seed))
+    /// Lehninger is sourmash's own `aa_to_hp` partition, so `hp_lehninger2` is sketched
+    /// through sourmash's Murmur64Hp rather than pre-encoded here. That keeps its hashes
+    /// identical to sourmash's for the same sequence. The other HP tables have no sourmash
+    /// equivalent and are pre-encoded.
+    pub fn uses_sourmash_encoder(&self) -> bool {
+        matches!(self, Self::Lehninger)
     }
 }
 
@@ -683,80 +652,6 @@ mod tests {
         assert_eq!(HpAlphabet::from_moltype("hp_random_control2_10"), Some(HpAlphabet::Random(10)));
     }
 
-    /// Every spelling these alphabets have ever had must still resolve to the same variant,
-    /// so indexes and Nextflow configs written against any of them keep working. Only the
-    /// first column is written back out.
-    #[test]
-    fn older_moltype_spellings_still_parse_to_the_same_alphabet() {
-        let spellings = [
-            (HpAlphabet::Lehninger, "hp_lehninger2", "hp_lehninger", "reduced_hp_lehninger2"),
-            (
-                HpAlphabet::ThomasDill,
-                "hp_thomas_dill2",
-                "hp_thomas_dill",
-                "reduced_hp_thomas_dill2",
-            ),
-            (
-                HpAlphabet::KyteDoolittle,
-                "hp_kyte_doolittle2",
-                "hp_kyte_doolittle",
-                "reduced_hp_kyte_doolittle2",
-            ),
-            (
-                HpAlphabet::ThomasDillNoC,
-                "hp_thomas_dill_no_c2",
-                "hp_thomas_dill_no_c",
-                "reduced_hp_thomas_dill_no_c2",
-            ),
-            (
-                HpAlphabet::LehningerCNonpolar,
-                "hp_lehninger_c_nonpolar2",
-                "hp_lehninger_c_nonpolar",
-                "reduced_hp_lehninger_c_nonpolar2",
-            ),
-            (
-                HpAlphabet::LehningerHpc,
-                "hp_lehninger_hpc3",
-                "hp_lehninger_hpc",
-                "reduced_hp_lehninger_hpc3",
-            ),
-            (
-                HpAlphabet::PBotC1stEd,
-                "hp_pbotc_1st_ed2",
-                "hp_pbotc_1st_ed",
-                "reduced_hp_pbotc_1st_ed2",
-            ),
-            (
-                HpAlphabet::RandomControl,
-                "hp_random_control2",
-                "hp_shuffled_control",
-                "reduced_hp_shuffled_control2",
-            ),
-        ];
-
-        for (alphabet, current, oldest, with_reduced_prefix) in spellings {
-            assert_eq!(alphabet.to_moltype(), current);
-            for spelling in [current, oldest, with_reduced_prefix] {
-                assert_eq!(HpAlphabet::from_moltype(spelling), Some(alphabet), "{spelling}");
-            }
-        }
-
-        // Seeded controls, under every spelling the seed suffix has had.
-        for seed in 1..=10 {
-            for spelling in [
-                format!("hp_random_control2_{seed}"),
-                format!("hp_shuffled_control_{seed}"),
-                format!("reduced_hp_shuffled_control2_{seed}"),
-            ] {
-                assert_eq!(
-                    HpAlphabet::from_moltype(&spelling),
-                    Some(HpAlphabet::Random(seed)),
-                    "{spelling}"
-                );
-            }
-        }
-    }
-
     #[test]
     fn from_moltype_rejects_unrelated_strings() {
         for moltype in ["protein", "dayhoff6", "sdm12", "hp_", "hp_nope2"] {
@@ -764,12 +659,45 @@ mod tests {
         }
     }
 
-    /// Bare `hp` selected sourmash's built-in HP encoder, which uses the Lehninger
-    /// partition, so it is now a spelling of that alphabet rather than an encoding of its
-    /// own.
+    /// The claim the README's table rests on: every scheme agrees on 15 of the 20 residues
+    /// and disagrees only about C, G, P, W and Y. If a new alphabet moved one of the other
+    /// 15, the table would quietly stop being true.
     #[test]
-    fn bare_hp_parses_as_lehninger() {
-        assert_eq!(HpAlphabet::from_moltype("hp"), Some(HpAlphabet::Lehninger));
-        assert_eq!(HpAlphabet::from_moltype("hp").unwrap().to_moltype(), "hp_lehninger2");
+    fn schemes_differ_only_on_the_five_borderline_residues() {
+        const ALWAYS_HYDROPHOBIC: &[u8] = b"AFILMV";
+        const ALWAYS_POLAR: &[u8] = b"DEHKNQRST";
+        const BORDERLINE: &[u8] = b"CGPWY";
+
+        assert_eq!(
+            ALWAYS_HYDROPHOBIC.len() + ALWAYS_POLAR.len() + BORDERLINE.len(),
+            20,
+            "the three groups must partition the canonical residues"
+        );
+
+        for alphabet in HpAlphabet::all_named() {
+            // The randomized control has no reason to agree; that is what makes it a control.
+            if matches!(alphabet, HpAlphabet::RandomControl) {
+                continue;
+            }
+            let table = alphabet.table();
+            for &residue in ALWAYS_HYDROPHOBIC {
+                assert_eq!(
+                    table[&residue],
+                    b'h',
+                    "{}: {} should be hydrophobic in every scheme",
+                    alphabet.name(),
+                    residue as char
+                );
+            }
+            for &residue in ALWAYS_POLAR {
+                assert_eq!(
+                    table[&residue],
+                    b'p',
+                    "{}: {} should be polar in every scheme",
+                    alphabet.name(),
+                    residue as char
+                );
+            }
+        }
     }
 }

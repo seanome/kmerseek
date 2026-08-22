@@ -5,6 +5,8 @@ use tempfile::tempdir;
 
 use approx::assert_relative_eq;
 
+use crate::hp_alphabets::HpAlphabet;
+use crate::reduced_alphabets::ReducedAlphabet;
 use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 
@@ -43,7 +45,7 @@ fn test_cli_index_basic() -> Result<(), Box<dyn std::error::Error>> {
         "--ksize",
         "5",
         "--encoding",
-        "protein",
+        "protein20",
     ]);
 
     cmd.assert().success().stderr(predicate::str::contains("Indexing completed successfully!"));
@@ -69,7 +71,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
         "--ksize",
         "10",
         "--encoding",
-        "hp",
+        "hp_lehninger2",
     ]);
 
     cmd.assert().success().stderr(predicate::str::contains("Indexing completed successfully!"));
@@ -81,11 +83,21 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 #[test]
-fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>> {
+fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
 
-    for encoding in ["protein", "dayhoff", "hp", "gbmr4", "sdm12", "hsdm17"] {
-        let output_path = temp_dir.path().join(format!("test_output_{}.db", encoding));
+    // Every alphabet, not a sample: a wrong table or hash function shows up as an indexing
+    // failure, and there is no reason to leave any of them unexercised. Built from the
+    // alphabet lists rather than hardcoded, so a newly added alphabet is covered for free.
+    let alphabets: Vec<String> = ["protein20".to_string(), "dayhoff6".to_string()]
+        .into_iter()
+        .chain(HpAlphabet::all_named().iter().map(HpAlphabet::to_moltype))
+        .chain(ReducedAlphabet::all().iter().map(ReducedAlphabet::to_moltype))
+        .collect();
+    assert_eq!(alphabets.len(), 18, "every alphabet must be exercised here");
+
+    for alphabet in &alphabets {
+        let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
 
         let mut cmd = Command::cargo_bin("kmerseek")?;
         cmd.args([
@@ -96,8 +108,8 @@ fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>
             output_path.to_str().unwrap(),
             "--ksize",
             "8",
-            "--encoding",
-            encoding,
+            "--alphabet",
+            alphabet,
         ]);
 
         cmd.assert().success().stderr(predicate::str::contains("Indexing completed successfully!"));
@@ -131,7 +143,7 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
             "--ksize",
             "12",
             "--encoding",
-            "hp",
+            "hp_lehninger2",
         ]);
         if flag {
             index_cmd.arg("--remove-low-complexity");
@@ -152,7 +164,7 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
             "--ksize",
             "12",
             "--encoding",
-            "hp",
+            "hp_lehninger2",
         ]);
         let state = if expected == "true" { "REMOVED" } else { "KEPT" };
         search_cmd
@@ -190,7 +202,7 @@ fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn 
         "--ksize",
         "12",
         "--encoding",
-        "hp",
+        "hp_lehninger2",
     ]);
     index_cmd.assert().success();
 
@@ -204,7 +216,7 @@ fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn 
         "--ksize",
         "12",
         "--encoding",
-        "hp",
+        "hp_lehninger2",
         "--remove-low-complexity",
     ]);
 
@@ -240,7 +252,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             "--ksize",
             "12",
             "--encoding",
-            "hp",
+            "hp_lehninger2",
         ]);
         if flag {
             index_cmd.arg("--remove-low-complexity");
@@ -259,7 +271,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             "--ksize",
             "12",
             "--encoding",
-            "hp",
+            "hp_lehninger2",
         ]);
         search_cmd.assert().success();
 
@@ -291,7 +303,15 @@ fn test_cli_remove_low_complexity_auto_filename_does_not_collide(
 
     for flag in [false, true] {
         let mut cmd = Command::cargo_bin("kmerseek")?;
-        cmd.args(["index", "--input", fasta.to_str().unwrap(), "--ksize", "8", "--encoding", "hp"]);
+        cmd.args([
+            "index",
+            "--input",
+            fasta.to_str().unwrap(),
+            "--ksize",
+            "8",
+            "--encoding",
+            "hp_lehninger2",
+        ]);
         if flag {
             cmd.arg("--remove-low-complexity");
         }
@@ -361,7 +381,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         "--ksize",
         "12",
         "--encoding",
-        "hp",
+        "hp_lehninger2",
     ]);
 
     index_cmd
@@ -392,7 +412,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
         "--ksize",
         "12",
         "--encoding",
-        "hp",
+        "hp_lehninger2",
         "--min-shared-kmers",
         "0",
         "--max-pvalue",

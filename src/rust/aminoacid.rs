@@ -1,8 +1,6 @@
 use std::borrow::Cow;
 
-use crate::encoding::custom_alphabet_table;
 use crate::errors::{IndexError, IndexResult};
-use crate::hp_alphabets::HpAlphabet;
 
 /// Standard amino acids and their properties
 pub const STANDARD_AA: [char; 20] = [
@@ -14,39 +12,77 @@ pub const STANDARD_AA: [char; 20] = [
 /// the stop codon.
 pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 
-/// Ambiguity codes paired with the representative used to encode them.
-///
-/// Each code stands for one of two residues that land on the *same* side of every reduced
-/// alphabet, so either representative yields an identical encoding and the choice is
-/// lossless:
-///   - B (Asx) = Asp or Asn — Dayhoff `c`, polar in every HP table
-///   - J (Xle) = Ile or Leu — Dayhoff `e`, hydrophobic in every HP table
-///   - Z (Glx) = Glu or Gln — Dayhoff `c`, polar in every HP table
-pub const AMBIGUITY_CODES: [(char, char); 3] = [('B', 'D'), ('J', 'I'), ('Z', 'E')];
-
 /// The two residues each ambiguity code stands for.
 ///
-/// Substituting a fixed representative is lossless only in an alphabet that maps both
-/// residues of a pair onto the same symbol, which is what `preserves_ambiguity_equivalence`
-/// checks.
+///   - B (Asx) = Asp or Asn
+///   - J (Xle) = Ile or Leu
+///   - Z (Glx) = Glu or Gln
+///
+/// A code is never resolved to one of the pair. Every k-mer window covering it is indexed
+/// under *both* readings instead (`ambiguity_readings`), so a search matches whichever
+/// residue the query actually has. Picking one would assert a residue the source never
+/// claimed, and which reading is safe depends on the alphabet: SDM12 and HSDM17 give Asp
+/// and Asn separate classes, so under them the two readings are genuinely different k-mers.
 pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
     [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
 
-/// Whether both residues behind every ambiguity code encode identically under `moltype`.
+/// Ceiling on how many readings one k-mer window may expand into.
 ///
-/// Dayhoff and the built-in `hp` have no lookup table of ours (sourmash encodes them
-/// internally) and are covered by
-/// `test_ambiguity_alternatives_encode_identically_in_reduced_alphabets`, so they answer
-/// `true`. Most of the multi-letter `reduced_*` alphabets answer `false`: SDM12 and HSDM17
-/// give Asp and Asn their own classes, so reading B as Asp would assert a residue the
-/// source never claimed.
-fn preserves_ambiguity_equivalence(moltype: &str) -> bool {
-    let Some(table) = custom_alphabet_table(moltype) else {
-        return true;
-    };
+/// Each ambiguity code doubles the count, so this allows up to four codes in a single
+/// window. Windows past the ceiling are skipped rather than indexed under an arbitrary
+/// subset of their readings; they are vanishingly rare (roughly 900 non-canonical residues
+/// in SwissProt's 207.6 M).
+pub const MAX_AMBIGUITY_READINGS: usize = 16;
+
+/// The residues `code` stands for, or `None` if it is not an ambiguity code.
+fn alternatives(code: u8) -> Option<[char; 2]> {
     AMBIGUITY_ALTERNATIVES
         .iter()
-        .all(|(_, [first, second])| table.get(&(*first as u8)) == table.get(&(*second as u8)))
+        .find(|(ambiguity_code, _)| *ambiguity_code as u8 == code)
+        .map(|(_, pair)| *pair)
+}
+
+/// Whether `sequence` contains any ambiguity code, and so needs expanding.
+pub fn has_ambiguity_codes(sequence: &str) -> bool {
+    sequence.bytes().any(|b| alternatives(b).is_some())
+}
+
+/// Every reading of `kmer`, with each ambiguity code replaced by both residues it stands
+/// for. A k-mer with no ambiguity codes yields itself.
+///
+/// Returns `None` when the window carries more codes than [`MAX_AMBIGUITY_READINGS`] allows.
+pub fn ambiguity_readings(kmer: &str) -> Option<Vec<String>> {
+    let expansion = kmer.bytes().filter(|b| alternatives(*b).is_some()).count();
+    if 1usize.checked_shl(expansion as u32)? > MAX_AMBIGUITY_READINGS {
+        return None;
+    }
+
+    let mut readings: Vec<Vec<u8>> = vec![Vec::with_capacity(kmer.len())];
+    for residue in kmer.bytes() {
+        match alternatives(residue) {
+            None => {
+                for reading in &mut readings {
+                    reading.push(residue);
+                }
+            }
+            Some([first, second]) => {
+                let mut branched = Vec::with_capacity(readings.len() * 2);
+                for reading in readings {
+                    let mut with_second = reading.clone();
+                    with_second.push(second as u8);
+                    let mut with_first = reading;
+                    with_first.push(first as u8);
+                    branched.push(with_first);
+                    branched.push(with_second);
+                }
+                readings = branched;
+            }
+        }
+    }
+
+    // Every byte pushed above came from the input or from AMBIGUITY_ALTERNATIVES, so each
+    // reading is still valid UTF-8.
+    Some(readings.into_iter().map(|reading| String::from_utf8(reading).expect("ASCII")).collect())
 }
 
 /// Non-canonical residues paired with their closest canonical analogue.
@@ -67,7 +103,10 @@ impl AminoAcidAmbiguity {
     }
 
     fn is_valid_aa(&self, aa: char) -> bool {
-        STANDARD_AA.contains(&aa) || SPECIAL_AA.contains(&aa) || Self::representative(aa).is_some()
+        STANDARD_AA.contains(&aa)
+            || SPECIAL_AA.contains(&aa)
+            || alternatives(aa as u8).is_some()
+            || Self::representative(aa).is_some()
     }
 
     /// The canonical residue used to encode `aa`, or `None` if `aa` needs no substitution.
@@ -77,9 +116,8 @@ impl AminoAcidAmbiguity {
     /// index contents on every run. The alternatives are interchangeable under every reduced
     /// alphabet, so a fixed representative is both reproducible and lossless there.
     fn representative(aa: char) -> Option<char> {
-        AMBIGUITY_CODES
+        NONCANONICAL_AA
             .iter()
-            .chain(NONCANONICAL_AA.iter())
             .find(|(code, _)| *code == aa)
             .map(|(_, representative)| *representative)
     }
@@ -99,35 +137,23 @@ impl AminoAcidAmbiguity {
         Ok(())
     }
 
-    /// Validates a protein sequence, substituting representatives for non-canonical codes
-    /// when `moltype` reduces the alphabet. Stops processing at the first stop codon (*).
+    /// Validates a protein sequence, substituting canonical analogues for the non-canonical
+    /// residues U and O when `moltype` reduces the alphabet. Stops at the first stop codon.
     ///
-    /// WHY only for alphabets that collapse each ambiguous pair: under Dayhoff or a named HP
-    /// table a code like B encodes identically whether it is read as Asp or Asn, so
-    /// substituting a representative is lossless. Three groups of moltypes are excluded:
-    ///   - `protein20` (spelled `protein` or `raw` in older indexes) keeps all 20 residues, so there is no such equivalence
-    ///     to exploit — picking Asp would assert a residue the source never claimed.
-    ///   - `hp_random_control2[_1..10]` are HP tables too, but their partition is randomized
-    ///     rather than biochemically derived, so the two alternatives can land on opposite
-    ///     sides (see `test_random_control_does_not_preserve_ambiguity_equivalence`). These
-    ///     are excluded by name rather than by the equivalence check below, because a control
-    ///     should not start substituting on the seeds where the shuffle happens to agree.
-    ///   - the multi-letter alphabets that split an ambiguous pair across classes, which is
-    ///     most of them (`preserves_ambiguity_equivalence`).
+    /// U (Sec) and O (Pyl) are specific residues, not ambiguities: U is cysteine with
+    /// selenium for sulfur, O is a lysine derivative. Under a reduced alphabet each lands in
+    /// its analogue's class anyway, so substituting is lossless and keeps them from being
+    /// discarded as unknown. Under `protein20` nothing is substituted, since there is no
+    /// class to fall into and rewriting U as C would assert a residue the source never had.
     ///
-    /// All of them keep the original code and hash it as itself, consistent with how X is
-    /// already handled.
+    /// The ambiguity codes B, J and Z are never resolved here. They stay in the sequence and
+    /// every k-mer covering one is indexed under both readings; see `ambiguity_readings`.
     pub fn validate_and_resolve<'a>(
         &self,
         sequence: &'a str,
         moltype: &str,
     ) -> IndexResult<Cow<'a, str>> {
-        let reduces_alphabet = !matches!(moltype, "protein20" | "protein" | "raw")
-            && !matches!(
-                HpAlphabet::from_moltype(moltype),
-                Some(HpAlphabet::RandomControl | HpAlphabet::Random(_))
-            )
-            && preserves_ambiguity_equivalence(moltype);
+        let reduces_alphabet = moltype != "protein20";
 
         // Validate first, recording where the kept region ends and where substitution first
         // becomes necessary. Almost every sequence needs neither (roughly 900 of SwissProt's
@@ -158,8 +184,9 @@ impl AminoAcidAmbiguity {
             });
         };
 
-        // Reaching here means reduces_alphabet held, so every remaining code can be looked up
-        // unconditionally. The stop codon has no representative and copies through.
+        // Reaching here means reduces_alphabet held. Codes with no representative -- X, the
+        // stop codon, and the ambiguity codes, which are expanded at k-mer time instead --
+        // copy through unchanged.
         let mut result = String::with_capacity(kept.len());
         result.push_str(&kept[..start]);
         for c in kept[start..].chars() {
@@ -209,72 +236,13 @@ mod tests {
         assert_eq!(AminoAcidAmbiguity::representative('X'), None);
         assert_eq!(AminoAcidAmbiguity::representative('*'), None);
 
-        // Ambiguity codes and non-canonical residues resolve to one fixed representative.
-        assert_eq!(AminoAcidAmbiguity::representative('B'), Some('D'));
-        assert_eq!(AminoAcidAmbiguity::representative('J'), Some('I'));
-        assert_eq!(AminoAcidAmbiguity::representative('Z'), Some('E'));
+        // Non-canonical residues resolve to one fixed analogue.
+        // B, J and Z are expanded at k-mer time, not resolved to one residue.
+        assert_eq!(AminoAcidAmbiguity::representative('B'), None);
+        assert_eq!(AminoAcidAmbiguity::representative('J'), None);
+        assert_eq!(AminoAcidAmbiguity::representative('Z'), None);
         assert_eq!(AminoAcidAmbiguity::representative('U'), Some('C'));
         assert_eq!(AminoAcidAmbiguity::representative('O'), Some('K'));
-    }
-
-    /// The substitution must be lossless: both residues an ambiguity code stands for have to
-    /// encode identically under every biochemically-derived alphabet, otherwise picking a
-    /// representative would silently commit to one reading.
-    ///
-    /// `hp_random_control2` is deliberately exempt — it is a negative control whose partition
-    /// is randomized, so it has no reason to respect biochemical equivalence, and is asserted
-    /// separately below so that a real alphabet breaking equivalence still fails this test.
-    #[test]
-    fn test_ambiguity_alternatives_encode_identically_in_reduced_alphabets() {
-        use crate::encoding::encode_by_moltype;
-        use crate::hp_alphabets::HpAlphabet;
-
-        for (code, [first, second]) in AMBIGUITY_ALTERNATIVES {
-            let pair: String = [first, second].iter().collect();
-            let pair = pair.as_str();
-            for moltype in ["dayhoff", "hp"] {
-                let encoded: Vec<String> = pair
-                    .chars()
-                    .map(|c| encode_by_moltype(&c.to_string(), moltype).unwrap())
-                    .collect();
-                assert_eq!(
-                    encoded[0], encoded[1],
-                    "{code}: {moltype} encodes {pair} differently ({encoded:?})"
-                );
-            }
-
-            for alphabet in HpAlphabet::all_named() {
-                if matches!(alphabet, HpAlphabet::RandomControl) {
-                    continue;
-                }
-                let table = alphabet.table();
-                let codes: Vec<u8> =
-                    pair.bytes().map(|b| *table.get(&b).expect("canonical residue")).collect();
-                assert_eq!(
-                    codes[0],
-                    codes[1],
-                    "{code}: {} encodes {pair} differently",
-                    alphabet.name()
-                );
-            }
-        }
-    }
-
-    /// Documents the one alphabet where substituting a representative is *not* lossless.
-    /// The random control randomizes the partition, so D/N, I/L and E/Q land on opposite
-    /// sides. Substitution there is still deterministic, which is what matters for a control.
-    #[test]
-    fn test_random_control_does_not_preserve_ambiguity_equivalence() {
-        use crate::hp_alphabets::HpAlphabet;
-
-        let table = HpAlphabet::RandomControl.table();
-        for (code, pair) in [('B', "DN"), ('J', "IL"), ('Z', "EQ")] {
-            let codes: Vec<u8> = pair.bytes().map(|b| *table.get(&b).unwrap()).collect();
-            assert_ne!(
-                codes[0], codes[1],
-                "{code}: random control unexpectedly preserves {pair} equivalence"
-            );
-        }
     }
 
     #[test]
@@ -309,18 +277,25 @@ mod tests {
     fn test_validate_and_resolve_with_stop_codon() {
         let aa = AminoAcidAmbiguity::new();
 
-        assert_eq!(aa.validate_and_resolve("ACDEF*GHI", "hp").unwrap().as_ref(), "ACDEF*");
-        assert_eq!(aa.validate_and_resolve("ACDEFB*GHI", "hp").unwrap().as_ref(), "ACDEFD*");
+        assert_eq!(
+            aa.validate_and_resolve("ACDEF*GHI", "hp_lehninger2").unwrap().as_ref(),
+            "ACDEF*"
+        );
+        // B survives: it is expanded at k-mer time, not resolved here.
+        assert_eq!(
+            aa.validate_and_resolve("ACDEFB*GHI", "hp_lehninger2").unwrap().as_ref(),
+            "ACDEFB*"
+        );
     }
 
     #[test]
-    fn test_validate_and_resolve_substitutes_in_reduced_alphabets() {
+    fn test_validate_and_resolve_substitutes_noncanonical_in_reduced_alphabets() {
         let aa = AminoAcidAmbiguity::new();
 
-        // B/J/Z take their representative; U/O take their canonical analogue; X is untouched.
+        // U/O take their canonical analogue; B/J/Z and X are untouched.
         assert_eq!(
-            aa.validate_and_resolve("ACDEFXBZJUO", "dayhoff").unwrap().as_ref(),
-            "ACDEFXDEICK"
+            aa.validate_and_resolve("ACDEFXBZJUO", "dayhoff6").unwrap().as_ref(),
+            "ACDEFXBZJCK"
         );
     }
 
@@ -341,23 +316,9 @@ mod tests {
     fn test_validate_and_resolve_keeps_codes_verbatim_for_raw() {
         let aa = AminoAcidAmbiguity::new();
 
-        let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "raw").unwrap();
+        let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "protein20").unwrap();
         assert_eq!(resolved.as_ref(), "ACDEFXBZJUO");
         assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
-    }
-
-    /// The random-control HP alphabets randomize the h/p partition, so a fixed representative
-    /// is not lossless there (test_random_control_does_not_preserve_ambiguity_equivalence).
-    /// Both the base control and a seeded variant must keep codes verbatim, not substitute.
-    #[test]
-    fn test_validate_and_resolve_keeps_codes_verbatim_for_random_control() {
-        let aa = AminoAcidAmbiguity::new();
-
-        for moltype in ["hp_random_control2", "hp_random_control2_1"] {
-            let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
-            assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
-            assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");
-        }
     }
 
     #[test]
@@ -365,11 +326,11 @@ mod tests {
         let aa = AminoAcidAmbiguity::new();
 
         // Previously this drew at random, so repeated calls disagreed.
-        let first = aa.validate_and_resolve("BZJUO", "hp").unwrap().into_owned();
+        let first = aa.validate_and_resolve("BZJUO", "hp_lehninger2").unwrap().into_owned();
         for _ in 0..10 {
-            assert_eq!(aa.validate_and_resolve("BZJUO", "hp").unwrap().as_ref(), first);
+            assert_eq!(aa.validate_and_resolve("BZJUO", "hp_lehninger2").unwrap().as_ref(), first);
         }
-        assert_eq!(first, "DEICK");
+        assert_eq!(first, "BZJCK");
     }
 
     #[test]
@@ -377,7 +338,7 @@ mod tests {
         let aa = AminoAcidAmbiguity::new();
 
         // Test sequence with no ambiguous amino acids
-        let result = aa.validate_and_resolve("ACDEFGHIKLMNPQRSTVWY", "hp");
+        let result = aa.validate_and_resolve("ACDEFGHIKLMNPQRSTVWY", "hp_lehninger2");
         assert!(result.is_ok());
         // Should return borrowed string (no allocation)
         match result.unwrap() {
@@ -386,57 +347,51 @@ mod tests {
         }
     }
 
-    /// Only GBMR4 and GBMR7 keep both residues of every ambiguous pair in one class. The
-    /// other six reduced alphabets split at least one pair, so a fixed representative would
-    /// commit to a reading the source never made. Spelled out per alphabet so that changing
-    /// a cluster constant surfaces here instead of silently changing indexed hashes.
+    /// B stands for Asp or Asn, so a k-mer covering one is indexed under both readings.
+    /// Picking a single residue would commit to a reading the source never made, and under
+    /// SDM12 or HSDM17 -- where Asp and Asn are separate classes -- the two readings are
+    /// genuinely different k-mers.
     #[test]
-    fn test_which_reduced_alphabets_preserve_ambiguity_equivalence() {
-        use crate::reduced_alphabets::ReducedAlphabet;
-
-        let expected = [
-            (ReducedAlphabet::Gbmr4, true),
-            (ReducedAlphabet::Wwmj5, false),
-            (ReducedAlphabet::Gbmr7, true),
-            (ReducedAlphabet::Sdm12, false),
-            (ReducedAlphabet::Mmseqs12, false),
-            (ReducedAlphabet::Wass14, false),
-            (ReducedAlphabet::Hsdm17, false),
-            (ReducedAlphabet::Uniprot18, false),
-        ];
-
-        for (alphabet, preserves) in expected {
-            assert_eq!(
-                preserves_ambiguity_equivalence(&alphabet.to_moltype()),
-                preserves,
-                "{}",
-                alphabet.name()
-            );
-        }
+    fn test_ambiguity_readings_expands_each_code_to_both_residues() {
+        assert_eq!(ambiguity_readings("MKBTA").unwrap(), vec!["MKDTA", "MKNTA"]);
+        assert_eq!(ambiguity_readings("MKJTA").unwrap(), vec!["MKITA", "MKLTA"]);
+        assert_eq!(ambiguity_readings("MKZTA").unwrap(), vec!["MKETA", "MKQTA"]);
     }
 
-    /// GBMR4 maps D/N, I/L and E/Q each onto a single class, so B/J/Z take their
-    /// representative and U/O take their canonical analogue, exactly as under dayhoff.
+    /// A window free of ambiguity codes yields exactly itself, so the expansion path costs
+    /// nothing for the overwhelmingly common case.
     #[test]
-    fn test_validate_and_resolve_substitutes_in_gbmr4() {
-        let aa = AminoAcidAmbiguity::new();
-
-        assert_eq!(
-            aa.validate_and_resolve("ACDEFXBZJUO", "gbmr4").unwrap().as_ref(),
-            "ACDEFXDEICK"
-        );
+    fn test_ambiguity_readings_passes_through_unambiguous_kmers() {
+        assert_eq!(ambiguity_readings("MKTAY").unwrap(), vec!["MKTAY"]);
+        // X and the stop codon carry no residue identity, so they are not expanded either.
+        assert_eq!(ambiguity_readings("MXT*A").unwrap(), vec!["MXT*A"]);
     }
 
-    /// SDM12 gives Asp and Asn separate classes, so nothing is substituted and B/J/Z/U/O
-    /// hash as themselves, the same way X already does.
+    /// Codes multiply, so two in one window give four readings and three give eight.
     #[test]
-    fn test_validate_and_resolve_keeps_codes_verbatim_for_split_reduced_alphabets() {
-        let aa = AminoAcidAmbiguity::new();
+    fn test_ambiguity_readings_multiply() {
+        assert_eq!(ambiguity_readings("BZ").unwrap(), vec!["DE", "DQ", "NE", "NQ"]);
+        assert_eq!(ambiguity_readings("BJZ").unwrap().len(), 8);
+    }
 
-        for moltype in ["wwmj5", "sdm12", "mmseqs12", "wass14", "hsdm17", "uniprot18"] {
-            let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
-            assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
-            assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");
+    /// Past four codes in one window the expansion is refused rather than indexed under an
+    /// arbitrary subset of its readings.
+    #[test]
+    fn test_ambiguity_readings_refuses_runaway_expansion() {
+        assert_eq!(ambiguity_readings("BBBB").unwrap().len(), MAX_AMBIGUITY_READINGS);
+        assert_eq!(ambiguity_readings("BBBBB"), None);
+    }
+
+    /// Every reading must be a real sequence over the canonical residues: the point is that
+    /// each is a k-mer the source could actually have had.
+    #[test]
+    fn test_ambiguity_readings_are_canonical() {
+        let aa = AminoAcidAmbiguity::new();
+        for reading in ambiguity_readings("ACBJZ").unwrap() {
+            assert!(aa.validate_sequence(&reading).is_ok(), "{reading}");
+            for c in reading.chars() {
+                assert!(STANDARD_AA.contains(&c), "{reading}: {c} is not canonical");
+            }
         }
     }
 }

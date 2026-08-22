@@ -126,20 +126,14 @@ mod tests {
         }
     }
 
-    /// Coarser alphabets must collapse more of the fragment than finer ones. This is the
-    /// property that makes them useful for remote-homology search, and it fails loudly if
-    /// an alphabet is wired to the wrong table.
+    /// A coarser alphabet must collapse the fragment at least as hard as any finer one.
+    /// Checked over every ordered pair rather than a sliding chain, so a table wired to the
+    /// wrong alphabet cannot hide between two neighbours that happen to be consistent.
     #[test]
-    fn test_distinct_symbol_count_decreases_with_alphabet_size() {
+    fn test_coarser_alphabets_collapse_at_least_as_much() {
         use std::collections::HashSet;
 
-        let mut previous = 21;
-        for alphabet in [
-            ReducedAlphabet::Uniprot18,
-            ReducedAlphabet::Hsdm17,
-            ReducedAlphabet::Sdm12,
-            ReducedAlphabet::Gbmr4,
-        ] {
+        let distinct = |alphabet: &ReducedAlphabet| -> usize {
             let sketch = ProteinSketch::from_protein_sequence(
                 "ced9_fragment",
                 CED9_FRAGMENT,
@@ -148,22 +142,34 @@ mod tests {
                 &alphabet.to_moltype(),
             )
             .unwrap();
-            let distinct: HashSet<char> = sketch.get_moltype_sequence().unwrap().chars().collect();
+            sketch.get_moltype_sequence().unwrap().chars().collect::<HashSet<char>>().len()
+        };
 
+        for coarse in ReducedAlphabet::all() {
+            // No alphabet can use more symbols on this fragment than it has classes.
             assert!(
-                distinct.len() < previous,
-                "{}: {} distinct symbols, expected fewer than {previous}",
-                alphabet.name(),
-                distinct.len()
-            );
-            assert!(
-                distinct.len() <= alphabet.size(),
+                distinct(coarse) <= coarse.size(),
                 "{}: {} distinct symbols exceeds its {} classes",
-                alphabet.name(),
-                distinct.len(),
-                alphabet.size()
+                coarse.name(),
+                distinct(coarse),
+                coarse.size()
             );
-            previous = distinct.len();
+
+            for fine in ReducedAlphabet::all() {
+                if coarse.size() >= fine.size() {
+                    continue;
+                }
+                assert!(
+                    distinct(coarse) <= distinct(fine),
+                    "{} ({} classes) uses {} symbols, more than {} ({} classes) at {}",
+                    coarse.name(),
+                    coarse.size(),
+                    distinct(coarse),
+                    fine.name(),
+                    fine.size(),
+                    distinct(fine)
+                );
+            }
         }
     }
 

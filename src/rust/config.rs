@@ -223,7 +223,7 @@ mod tests {
     #[test]
     fn test_config_creation() {
         let config =
-            IndexConfig::new(5, 5, "protein", PathBuf::from("/tmp/test.db"), false).unwrap();
+            IndexConfig::new(5, 5, "protein20", PathBuf::from("/tmp/test.db"), false).unwrap();
 
         assert_eq!(config.ksize.get(), 5);
         assert_eq!(config.scaled.get(), 5);
@@ -238,7 +238,7 @@ mod tests {
         let config = IndexConfig::new(
             0, // Invalid ksize
             5,
-            "protein",
+            "protein20",
             PathBuf::from("/tmp/test.db"),
             false,
         );
@@ -248,7 +248,7 @@ mod tests {
         let config = IndexConfig::new(
             5,
             100, // Too large scaled value
-            "protein",
+            "protein20",
             PathBuf::from("/tmp/test.db"),
             false,
         );
@@ -267,7 +267,7 @@ mod tests {
 
     #[test]
     fn test_config_builder() {
-        let config = IndexConfigBuilder::new(5, 5, "protein", PathBuf::from("/tmp/test.db"))
+        let config = IndexConfigBuilder::new(5, 5, "protein20", PathBuf::from("/tmp/test.db"))
             .unwrap()
             .store_raw_sequences(true)
             .num_threads(4)
