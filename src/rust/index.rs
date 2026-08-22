@@ -402,9 +402,9 @@ impl ProteomeIndex {
     /// Moltype of indexes built with the pre-rename `hp` encoding.
     ///
     /// `hp` used sourmash's built-in HP encoder, which hashes lowercase `h`/`p`. It shares
-    /// the Lehninger partition with `reduced_hp_lehninger2` but none of its hashes, because
+    /// the Lehninger partition with `hp_lehninger2` but none of its hashes, because
     /// a pre-encoded custom table is uppercased to `H`/`P` before hashing. `hp` is now a
-    /// spelling of `reduced_hp_lehninger2`, so such an index would sketch queries on the
+    /// spelling of `hp_lehninger2`, so such an index would sketch queries on the
     /// uppercase path and quietly match nothing at all. Refusing to open it is the only
     /// honest option; there is no conversion short of rebuilding.
     const LEGACY_BUILTIN_HP_MOLTYPE: &'static str = "hp";
@@ -416,10 +416,10 @@ impl ProteomeIndex {
         Err(IndexError::ValidationError {
             message: format!(
                 "This index was built with the old `hp` encoding, whose k-mer hashes are not \
-                 compatible with `reduced_hp_lehninger2` (same amino-acid partition, but \
+                 compatible with `hp_lehninger2` (same amino-acid partition, but \
                  sourmash hashed it as lowercase h/p where kmerseek now hashes uppercase \
                  H/P). Searching it would silently return no matches. Rebuild the index with \
-                 --encoding reduced_hp_lehninger2 --ksize {}",
+                 --encoding hp_lehninger2 --ksize {}",
                 metadata.ksize
             ),
         })
@@ -1880,7 +1880,7 @@ impl ProteomeIndex {
     /// # use kmerseek::ProteomeIndex;
     /// # use tempfile::tempdir;
     /// # let dir = tempdir().unwrap();
-    /// # let index = ProteomeIndex::new(dir.path().join("test.db"), 10, 1, "protein", false).unwrap();
+    /// # let index = ProteomeIndex::new(dir.path().join("test.db"), 10, 1, "protein20", false).unwrap();
     /// # let fasta_path = dir.path().join("test.fasta");
     /// # std::fs::write(&fasta_path, ">test\nACDEFGHIKLMNPQRSTVWY").unwrap();
     ///
@@ -2266,7 +2266,7 @@ mod tests {
         // HP encoding collapses 20 aa to 2 letters (h/p), so multiple original k-mers
         // can produce the same hash. We store all positions together in sorted order.
         // These hashes changed when `hp` stopped meaning sourmash's built-in HP encoder and
-        // became a spelling of reduced_hp_lehninger2. The partition is the same either way --
+        // became a spelling of hp_lehninger2. The partition is the same either way --
         // note the collisions below are unchanged -- but sourmash hashed the encoded sequence
         // as lowercase h/p, while a pre-encoded custom table is uppercased to H/P first.
         let expected_positions: HashMap<u64, Vec<usize>> = [
@@ -2630,7 +2630,7 @@ mod tests {
             let reopened = ProteomeIndex::open_for_search(&db_path)?;
             assert!(!reopened.remove_low_complexity());
             assert_eq!(reopened.ksize(), 5);
-            assert_eq!(reopened.moltype(), "reduced_hp_lehninger2");
+            assert_eq!(reopened.moltype(), "hp_lehninger2");
             // No version was ever stamped on these.
             assert_eq!(reopened.kmerseek_version(), None);
         }
@@ -2684,7 +2684,7 @@ mod tests {
         assert_eq!(loaded.signature_count(), 2);
         assert_eq!(loaded.ksize(), 5);
         assert_eq!(loaded.scaled(), 1);
-        assert_eq!(loaded.moltype(), "reduced_hp_lehninger2");
+        assert_eq!(loaded.moltype(), "hp_lehninger2");
 
         // Counts are per-process build state, not persisted, so a fresh load
         // starts at zero rather than inheriting the writer's totals.
@@ -2710,7 +2710,7 @@ mod tests {
         assert_eq!(ksize, 7);
         assert_eq!(scaled, 1);
         // Stored under its current name, not the "dayhoff" spelling it was created with.
-        assert_eq!(moltype, "reduced_dayhoff6");
+        assert_eq!(moltype, "dayhoff6");
 
         Ok(())
     }
@@ -3492,8 +3492,8 @@ mod tests {
         let db_path2 = temp_dir.path().join("test2.db");
 
         // Create two indices with the same parameters
-        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", false).unwrap();
-        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", false).unwrap();
+        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein20", false).unwrap();
+        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein20", false).unwrap();
 
         // Add the same signatures to both indices
         let sig1_1 = index1.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
@@ -3516,7 +3516,8 @@ mod tests {
 
         // Test that different indices are not equivalent
         let index3 =
-            ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein20", false)
+                .unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
     }
 
@@ -3530,7 +3531,7 @@ mod tests {
 
         let temp_dir = tempdir().unwrap();
         let index =
-            ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein", true).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein20", true).unwrap();
         // 3 k-mers seen once, 1 seen twice, 1 seen three times: 5 unique, 8 total.
         let spectrum: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
 
@@ -3542,11 +3543,11 @@ mod tests {
 
         assert_eq!(
             contents,
-            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 mode_seqs_per_kmer=1 moltype=protein ksize=10\n\
+            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 mode_seqs_per_kmer=1 moltype=protein20 ksize=10\n\
              moltype,ksize,occurrences,n_kmers\n\
-             protein,10,1,3\n\
-             protein,10,2,1\n\
-             protein,10,3,1\n"
+             protein20,10,1,3\n\
+             protein20,10,2,1\n\
+             protein20,10,3,1\n"
         );
     }
 
@@ -3637,9 +3638,7 @@ mod tests {
     fn test_ambiguity_codes_index_deterministically() {
         let temp_dir = tempdir().unwrap();
 
-        for (i, moltype) in
-            ["protein", "dayhoff", "hp", "reduced_hp_pbotc_1st_ed2"].iter().enumerate()
-        {
+        for (i, moltype) in ["protein", "dayhoff", "hp", "hp_pbotc_1st_ed2"].iter().enumerate() {
             let index =
                 ProteomeIndex::new(temp_dir.path().join(format!("d{i}.db")), 5, 1, moltype, true)
                     .unwrap();
@@ -3670,7 +3669,7 @@ mod tests {
         let with_d = "MTRCTADNSLTNPAYRRRTMDTGEMKEFLGIK";
         let with_n = "MTRCTADNSLTNPAYRRRTMNTGEMKEFLGIK";
 
-        for (i, moltype) in ["dayhoff", "hp", "reduced_hp_pbotc_1st_ed2"].iter().enumerate() {
+        for (i, moltype) in ["dayhoff", "hp", "hp_pbotc_1st_ed2"].iter().enumerate() {
             let index =
                 ProteomeIndex::new(temp_dir.path().join(format!("a{i}.db")), 5, 1, moltype, true)
                     .unwrap();
@@ -3702,12 +3701,12 @@ mod tests {
         let error = ProteomeIndex::reject_legacy_builtin_hp(&metadata("hp"))
             .expect_err("an `hp` index must be refused");
         let message = error.to_string();
-        assert!(message.contains("reduced_hp_lehninger2"), "{message}");
+        assert!(message.contains("hp_lehninger2"), "{message}");
         assert!(message.contains("Rebuild the index"), "{message}");
         assert!(message.contains("--ksize 10"), "{message}");
 
         // Every other moltype passes through, including the renamed HP alphabets.
-        for moltype in ["protein", "reduced_dayhoff6", "reduced_hp_lehninger2", "reduced_sdm12"] {
+        for moltype in ["protein", "dayhoff6", "hp_lehninger2", "sdm12"] {
             assert!(
                 ProteomeIndex::reject_legacy_builtin_hp(&metadata(moltype)).is_ok(),
                 "{moltype}"
@@ -3809,9 +3808,9 @@ mod tests {
         // The moltype in the filename is the normalized name, so passing a pre-rename
         // spelling still produces a file named after the current alphabet.
         let test_cases = vec![
-            (16, 5, "hp", "test.fasta.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
-            (10, 1, "protein", "test.fasta.protein.k10.scaled1.kmerseek.rocksdb"),
-            (8, 100, "dayhoff", "test.fasta.reduced_dayhoff6.k8.scaled100.kmerseek.rocksdb"),
+            (16, 5, "hp", "test.fasta.hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
+            (10, 1, "protein", "test.fasta.protein20.k10.scaled1.kmerseek.rocksdb"),
+            (8, 100, "dayhoff", "test.fasta.dayhoff6.k8.scaled100.kmerseek.rocksdb"),
         ];
 
         for (ksize, scaled, moltype, expected) in test_cases {
@@ -3839,9 +3838,9 @@ mod tests {
         // The fourth field is the normalized moltype that ends up in the filename: pre-rename
         // spellings are rewritten to the current alphabet name when the index is created.
         let test_cases = vec![
-            (16, 5, "hp", "reduced_hp_lehninger2", "BCL2 with hp encoding, k=16, scaled=5"),
-            (10, 1, "protein", "protein", "BCL2 with protein encoding, k=10, scaled=1"),
-            (8, 100, "dayhoff", "reduced_dayhoff6", "BCL2 with dayhoff encoding, k=8, scaled=100"),
+            (16, 5, "hp", "hp_lehninger2", "BCL2 with hp encoding, k=16, scaled=5"),
+            (10, 1, "protein20", "protein20", "BCL2 with the full alphabet, k=10, scaled=1"),
+            (8, 100, "dayhoff", "dayhoff6", "BCL2 with dayhoff encoding, k=8, scaled=100"),
         ];
 
         for (ksize, scaled, moltype, stored_moltype, description) in test_cases {
@@ -3900,8 +3899,8 @@ mod tests {
         let db_path2 = temp_dir.path().join("index2.db");
 
         // Create two indices with the same parameters
-        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", false).unwrap();
-        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", false).unwrap();
+        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein20", false).unwrap();
+        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein20", false).unwrap();
 
         // Add the same protein sequences to both indices
         let sequences = vec![
@@ -3929,7 +3928,8 @@ mod tests {
 
         // Create a third index with different parameters
         let index3 =
-            ProteomeIndex::new(temp_dir.path().join("index3.db"), 10, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("index3.db"), 10, 1, "protein20", false)
+                .unwrap();
 
         // Test that different indices are not equivalent
         let are_equivalent_3 = index1.is_equivalent_to(&index3).unwrap();
@@ -3937,7 +3937,8 @@ mod tests {
 
         // Test with different sequences
         let index4 =
-            ProteomeIndex::new(temp_dir.path().join("index4.db"), 5, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("index4.db"), 5, 1, "protein20", false)
+                .unwrap();
         let sig4 = index4.create_protein_signature("DIFFERENTSEQUENCE", "different").unwrap();
         index4.store_signatures(vec![sig4]).unwrap();
 
@@ -3951,15 +3952,15 @@ mod tests {
 
         // Test with various filename patterns
         let test_cases = vec![
-            ("simple.fasta", "simple.fasta.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
+            ("simple.fasta", "simple.fasta.hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (
                 "complex-name_with.underscores.fasta.gz",
-                "complex-name_with.underscores.fasta.gz.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
+                "complex-name_with.underscores.fasta.gz.hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
             ),
-            ("no_extension", "no_extension.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
+            ("no_extension", "no_extension.hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (
                 "multiple.dots.in.name.fasta",
-                "multiple.dots.in.name.fasta.reduced_hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
+                "multiple.dots.in.name.fasta.hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
             ),
         ];
 
@@ -3974,10 +3975,10 @@ mod tests {
         // Test with different molecular types
         // Pre-rename spellings normalize, so the filename names the current alphabet.
         let moltype_cases = vec![
-            ("hp", "test.fasta.reduced_hp_lehninger2.k8.scaled10.kmerseek.rocksdb"),
-            ("protein", "test.fasta.protein.k8.scaled10.kmerseek.rocksdb"),
-            ("dayhoff", "test.fasta.reduced_dayhoff6.k8.scaled10.kmerseek.rocksdb"),
-            ("raw", "test.fasta.raw.k8.scaled10.kmerseek.rocksdb"),
+            ("hp", "test.fasta.hp_lehninger2.k8.scaled10.kmerseek.rocksdb"),
+            ("protein", "test.fasta.protein20.k8.scaled10.kmerseek.rocksdb"),
+            ("dayhoff", "test.fasta.dayhoff6.k8.scaled10.kmerseek.rocksdb"),
+            ("raw", "test.fasta.protein20.k8.scaled10.kmerseek.rocksdb"),
         ];
 
         for (moltype, expected) in moltype_cases {

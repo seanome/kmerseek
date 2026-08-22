@@ -21,9 +21,9 @@ pub enum HpAlphabet {
     LehningerCNonpolar,
     LehningerHpc,
     PBotC1stEd,
-    ShuffledControl,
-    /// Seeded shuffled control; seed must be 1-10.
-    Shuffled(u64),
+    RandomControl,
+    /// Seeded random control; seed must be 1-10.
+    Random(u64),
 }
 
 impl HpAlphabet {
@@ -36,18 +36,20 @@ impl HpAlphabet {
             Self::LehningerCNonpolar => &LEHNINGER_C_NONPOLAR_HP,
             Self::LehningerHpc => &LEHNINGER_HPC,
             Self::PBotC1stEd => &PBOTC_1ST_ED_HP,
-            Self::ShuffledControl => &SHUFFLED_CONTROL_HP,
-            Self::Shuffled(1) => &SHUFFLED_HP_1,
-            Self::Shuffled(2) => &SHUFFLED_HP_2,
-            Self::Shuffled(3) => &SHUFFLED_HP_3,
-            Self::Shuffled(4) => &SHUFFLED_HP_4,
-            Self::Shuffled(5) => &SHUFFLED_HP_5,
-            Self::Shuffled(6) => &SHUFFLED_HP_6,
-            Self::Shuffled(7) => &SHUFFLED_HP_7,
-            Self::Shuffled(8) => &SHUFFLED_HP_8,
-            Self::Shuffled(9) => &SHUFFLED_HP_9,
-            Self::Shuffled(10) => &SHUFFLED_HP_10,
-            Self::Shuffled(n) => panic!("shuffled seed {n} not pre-computed (only 1-10 supported)"),
+            Self::RandomControl => &RANDOM_CONTROL_HP,
+            Self::Random(1) => &RANDOM_HP_1,
+            Self::Random(2) => &RANDOM_HP_2,
+            Self::Random(3) => &RANDOM_HP_3,
+            Self::Random(4) => &RANDOM_HP_4,
+            Self::Random(5) => &RANDOM_HP_5,
+            Self::Random(6) => &RANDOM_HP_6,
+            Self::Random(7) => &RANDOM_HP_7,
+            Self::Random(8) => &RANDOM_HP_8,
+            Self::Random(9) => &RANDOM_HP_9,
+            Self::Random(10) => &RANDOM_HP_10,
+            Self::Random(n) => {
+                panic!("random-control seed {n} not pre-computed (only 1-10 supported)")
+            }
         }
     }
 
@@ -61,18 +63,20 @@ impl HpAlphabet {
             Self::LehningerCNonpolar => "lehninger_c_nonpolar",
             Self::LehningerHpc => "lehninger_hpc",
             Self::PBotC1stEd => "pbotc_1st_ed",
-            Self::ShuffledControl => "shuffled_control",
-            Self::Shuffled(1) => "shuffled_control_1",
-            Self::Shuffled(2) => "shuffled_control_2",
-            Self::Shuffled(3) => "shuffled_control_3",
-            Self::Shuffled(4) => "shuffled_control_4",
-            Self::Shuffled(5) => "shuffled_control_5",
-            Self::Shuffled(6) => "shuffled_control_6",
-            Self::Shuffled(7) => "shuffled_control_7",
-            Self::Shuffled(8) => "shuffled_control_8",
-            Self::Shuffled(9) => "shuffled_control_9",
-            Self::Shuffled(10) => "shuffled_control_10",
-            Self::Shuffled(n) => panic!("shuffled seed {n} not pre-computed (only 1-10 supported)"),
+            Self::RandomControl => "random_control",
+            Self::Random(1) => "random_control_1",
+            Self::Random(2) => "random_control_2",
+            Self::Random(3) => "random_control_3",
+            Self::Random(4) => "random_control_4",
+            Self::Random(5) => "random_control_5",
+            Self::Random(6) => "random_control_6",
+            Self::Random(7) => "random_control_7",
+            Self::Random(8) => "random_control_8",
+            Self::Random(9) => "random_control_9",
+            Self::Random(10) => "random_control_10",
+            Self::Random(n) => {
+                panic!("random-control seed {n} not pre-computed (only 1-10 supported)")
+            }
         }
     }
 
@@ -85,7 +89,7 @@ impl HpAlphabet {
             HpAlphabet::LehningerCNonpolar,
             HpAlphabet::LehningerHpc,
             HpAlphabet::PBotC1stEd,
-            HpAlphabet::ShuffledControl,
+            HpAlphabet::RandomControl,
         ]
     }
 
@@ -97,61 +101,68 @@ impl HpAlphabet {
         }
     }
 
-    /// Moltype string stored in the index (e.g. `"reduced_hp_thomas_dill2"`).
+    /// Moltype string stored in the index (e.g. `"hp_thomas_dill2"`).
     ///
-    /// The trailing digit is the class count, so these read the same way as the
-    /// multi-letter alphabets in [`crate::reduced_alphabets`] (`reduced_sdm12`,
-    /// `reduced_gbmr4`): every alphabet states its size in its name.
+    /// The `hp_` prefix keeps the family greppable; the trailing digit is the class count,
+    /// so these read the same way as the multi-letter alphabets in
+    /// [`crate::reduced_alphabets`] (`sdm12`, `gbmr4`). Every alphabet states its size.
     pub fn to_moltype(&self) -> String {
         match self {
             // The seed goes after the class count, so "…control2_3" is seed 3 of a
             // 2-class control and never reads as class count 23.
-            Self::Shuffled(n) => format!("reduced_hp_shuffled_control2_{n}"),
-            _ => format!("reduced_hp_{}{}", self.name(), self.size()),
+            Self::Random(n) => format!("hp_random_control2_{n}"),
+            _ => format!("hp_{}{}", self.name(), self.size()),
         }
     }
 
-    /// The moltype string this alphabet used before class counts were part of the name.
-    ///
-    /// Still accepted by [`Self::from_moltype`] so that indexes and CSVs written before
-    /// the rename keep opening; nothing writes it any more.
-    pub fn legacy_moltype(&self) -> String {
-        format!("hp_{}", self.name())
-    }
-
-    /// Parse from a moltype string, current or legacy. Returns `None` for `"hp"`
-    /// (sourmash built-in) and for unrecognized strings.
+    /// Parse from a moltype string, current or older. Returns `None` for unrecognized
+    /// strings.
     pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
-        Self::from_current_moltype(s).or_else(|| Self::from_legacy_moltype(s))
+        Self::from_current_moltype(s).or_else(|| Self::from_older_moltype(s))
     }
 
-    /// Parse `"reduced_hp_<name><size>"`, e.g. `"reduced_hp_lehninger2"`.
+    /// Parse `"hp_<name><size>"`, e.g. `"hp_lehninger2"` or `"hp_lehninger_hpc3"`.
     fn from_current_moltype(s: &str) -> Option<HpAlphabet> {
-        let name = s.strip_prefix("reduced_hp_")?;
         if let Some(a) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
             return Some(*a);
         }
-        let seed = name.strip_prefix("shuffled_control2_")?.parse().ok()?;
-        Some(HpAlphabet::Shuffled(seed))
+        let seed = s.strip_prefix("hp_random_control2_")?.parse().ok()?;
+        Some(HpAlphabet::Random(seed))
     }
 
-    /// Parse the pre-rename `"hp_<name>"` form, e.g. `"hp_lehninger"`.
+    /// Parse the spellings used before the names were settled, so that indexes and command
+    /// lines written against any of them keep working:
     ///
-    /// Bare `"hp"` is included: it used to select sourmash's built-in HP encoder, which
-    /// applies this same Lehninger partition, so it is now just another spelling of
-    /// [`Self::Lehninger`]. The hashes differ (sourmash hashed lowercase h/p, this table is
-    /// uppercased to H/P first), which is why indexes built under the old `hp` are refused
-    /// on open rather than reinterpreted -- see `ProteomeIndex::reject_legacy_builtin_hp`.
-    fn from_legacy_moltype(s: &str) -> Option<HpAlphabet> {
+    ///   - `"hp"` — sourmash's built-in HP moltype, which applies this same Lehninger
+    ///     partition. Its *hashes* differ (sourmash hashed lowercase h/p, this table is
+    ///     uppercased to H/P first), which is why indexes built that way are refused on open
+    ///     rather than reinterpreted; see `ProteomeIndex::reject_legacy_builtin_hp`.
+    ///   - `"hp_<name>"` — before the class count was part of the name.
+    ///   - `"reduced_hp_<name><size>"` — before the redundant `reduced_` prefix was dropped.
+    ///   - any of the above with `shuffled_control` — before the negative control was renamed
+    ///     to `random_control`.
+    fn from_older_moltype(s: &str) -> Option<HpAlphabet> {
+        let s = s.strip_prefix("reduced_").unwrap_or(s);
+        let s = s.replace("shuffled_control", "random_control");
+
         if s == "hp" {
             return Some(HpAlphabet::Lehninger);
         }
+        if let Some(a) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
+            return Some(*a);
+        }
+        if let Some(seed) = s.strip_prefix("hp_random_control2_").and_then(|seed| seed.parse().ok())
+        {
+            return Some(HpAlphabet::Random(seed));
+        }
+
+        // Oldest form: "hp_<name>" carrying no class count.
         let name = s.strip_prefix("hp_")?;
         if let Some(a) = Self::all_named().iter().find(|a| a.name() == name) {
             return Some(*a);
         }
-        let seed = name.strip_prefix("shuffled_control_")?.parse().ok()?;
-        Some(HpAlphabet::Shuffled(seed))
+        let seed = name.strip_prefix("random_control_")?.parse().ok()?;
+        Some(HpAlphabet::Random(seed))
     }
 }
 
@@ -305,7 +316,7 @@ static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFILMPVWY", b"DEGHKNQRST"));
 
 // -----------------------------------------------------------------------------
-// Shuffled negative control.
+// Random negative control.
 //
 // Partition generated by shuffling the 20 canonical amino acids and
 // splitting at the midpoint. It scrambles the hydrophobicity signal
@@ -319,26 +330,26 @@ static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
 // For the supplementary figure, consider running multiple independent
 // shuffles (e.g. 10 different seeds) and reporting the distribution of
 // AUCs rather than a single point — this makes the negative control
-// statistically robust. See `shuffled_hp()` below.
+// statistically robust. See `random_hp()` below.
 // -----------------------------------------------------------------------------
-static SHUFFLED_CONTROL_HP: LazyLock<HashMap<u8, u8>> =
+static RANDOM_CONTROL_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ADGKLMQRWY", b"CEFHINPSTV"));
 
-// Seeded shuffled controls — 10 independent random partitions for null-distribution estimation.
-static SHUFFLED_HP_1: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(1));
-static SHUFFLED_HP_2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(2));
-static SHUFFLED_HP_3: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(3));
-static SHUFFLED_HP_4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(4));
-static SHUFFLED_HP_5: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(5));
-static SHUFFLED_HP_6: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(6));
-static SHUFFLED_HP_7: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(7));
-static SHUFFLED_HP_8: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(8));
-static SHUFFLED_HP_9: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(9));
-static SHUFFLED_HP_10: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| shuffled_hp(10));
+// Seeded random controls — 10 independent random partitions for null-distribution estimation.
+static RANDOM_HP_1: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(1));
+static RANDOM_HP_2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(2));
+static RANDOM_HP_3: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(3));
+static RANDOM_HP_4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(4));
+static RANDOM_HP_5: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(5));
+static RANDOM_HP_6: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(6));
+static RANDOM_HP_7: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(7));
+static RANDOM_HP_8: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(8));
+static RANDOM_HP_9: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(9));
+static RANDOM_HP_10: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(10));
 
 /// Generate a seeded random HP partition for negative-control runs.
 /// Pass multiple seeds to characterize the null distribution.
-pub fn shuffled_hp(seed: u64) -> HashMap<u8, u8> {
+pub fn random_hp(seed: u64) -> HashMap<u8, u8> {
     use rand::rngs::StdRng;
     use rand::seq::SliceRandom;
     use rand::SeedableRng;
@@ -575,41 +586,41 @@ mod tests {
     }
 
     #[test]
-    fn shuffled_hp_deterministic() {
-        let a = shuffled_hp(42);
-        let b = shuffled_hp(42);
-        assert_eq!(a, b, "shuffled_hp must be deterministic for the same seed");
+    fn random_hp_deterministic() {
+        let a = random_hp(42);
+        let b = random_hp(42);
+        assert_eq!(a, b, "random_hp must be deterministic for the same seed");
     }
 
     #[test]
-    fn shuffled_hp_covers_all_residues() {
-        let m = shuffled_hp(0);
+    fn random_hp_covers_all_residues() {
+        let m = random_hp(0);
         assert_eq!(m.len(), 21);
         for &r in ALL_RESIDUES {
-            assert!(m.contains_key(&r), "shuffled_hp missing residue {}", r as char);
+            assert!(m.contains_key(&r), "random_hp missing residue {}", r as char);
             let v = m[&r];
             assert!(v == b'h' || v == b'p');
         }
     }
 
     #[test]
-    fn shuffled_hp_differs_by_seed() {
-        let a = shuffled_hp(1);
-        let b = shuffled_hp(2);
+    fn random_hp_differs_by_seed() {
+        let a = random_hp(1);
+        let b = random_hp(2);
         // Two different seeds should produce different partitions
         // (astronomically unlikely to collide with 20 elements)
-        assert_ne!(a, b, "shuffled_hp with different seeds should differ");
+        assert_ne!(a, b, "random_hp with different seeds should differ");
     }
 
     #[test]
-    fn shuffled_control_static_matches_documented_partition() {
+    fn random_control_static_matches_documented_partition() {
         // h: ADGKLMQRWY  p: CEFHINPSTV — frozen in static for reproducibility.
-        let t = HpAlphabet::ShuffledControl.table();
+        let t = HpAlphabet::RandomControl.table();
         for &r in b"ADGKLMQRWY" {
-            assert_eq!(t[&r], b'h', "ShuffledControl: {} should be h", r as char);
+            assert_eq!(t[&r], b'h', "RandomControl: {} should be h", r as char);
         }
         for &r in b"CEFHINPSTV" {
-            assert_eq!(t[&r], b'p', "ShuffledControl: {} should be p", r as char);
+            assert_eq!(t[&r], b'p', "RandomControl: {} should be p", r as char);
         }
     }
 
@@ -627,14 +638,14 @@ mod tests {
     #[test]
     fn moltype_ends_in_class_count() {
         let expected = [
-            (HpAlphabet::Lehninger, "reduced_hp_lehninger2"),
-            (HpAlphabet::ThomasDill, "reduced_hp_thomas_dill2"),
-            (HpAlphabet::KyteDoolittle, "reduced_hp_kyte_doolittle2"),
-            (HpAlphabet::ThomasDillNoC, "reduced_hp_thomas_dill_no_c2"),
-            (HpAlphabet::LehningerCNonpolar, "reduced_hp_lehninger_c_nonpolar2"),
-            (HpAlphabet::LehningerHpc, "reduced_hp_lehninger_hpc3"),
-            (HpAlphabet::PBotC1stEd, "reduced_hp_pbotc_1st_ed2"),
-            (HpAlphabet::ShuffledControl, "reduced_hp_shuffled_control2"),
+            (HpAlphabet::Lehninger, "hp_lehninger2"),
+            (HpAlphabet::ThomasDill, "hp_thomas_dill2"),
+            (HpAlphabet::KyteDoolittle, "hp_kyte_doolittle2"),
+            (HpAlphabet::ThomasDillNoC, "hp_thomas_dill_no_c2"),
+            (HpAlphabet::LehningerCNonpolar, "hp_lehninger_c_nonpolar2"),
+            (HpAlphabet::LehningerHpc, "hp_lehninger_hpc3"),
+            (HpAlphabet::PBotC1stEd, "hp_pbotc_1st_ed2"),
+            (HpAlphabet::RandomControl, "hp_random_control2"),
         ];
 
         for (alphabet, moltype) in expected {
@@ -666,41 +677,89 @@ mod tests {
     /// Seeded controls put the seed after the class count, so seed 3 of a 2-class control
     /// cannot be misread as a 23-class alphabet.
     #[test]
-    fn seeded_shuffled_control_moltype_separates_count_from_seed() {
-        assert_eq!(HpAlphabet::Shuffled(3).to_moltype(), "reduced_hp_shuffled_control2_3");
-        assert_eq!(
-            HpAlphabet::from_moltype("reduced_hp_shuffled_control2_3"),
-            Some(HpAlphabet::Shuffled(3))
-        );
-        assert_eq!(
-            HpAlphabet::from_moltype("reduced_hp_shuffled_control2_10"),
-            Some(HpAlphabet::Shuffled(10))
-        );
+    fn seeded_random_control_moltype_separates_count_from_seed() {
+        assert_eq!(HpAlphabet::Random(3).to_moltype(), "hp_random_control2_3");
+        assert_eq!(HpAlphabet::from_moltype("hp_random_control2_3"), Some(HpAlphabet::Random(3)));
+        assert_eq!(HpAlphabet::from_moltype("hp_random_control2_10"), Some(HpAlphabet::Random(10)));
     }
 
-    /// Indexes built before the rename store `hp_<name>`, so those strings must still
-    /// resolve to the same alphabet and therefore to the same hashes.
+    /// Every spelling these alphabets have ever had must still resolve to the same variant,
+    /// so indexes and Nextflow configs written against any of them keep working. Only the
+    /// first column is written back out.
     #[test]
-    fn legacy_moltypes_still_parse_to_the_same_alphabet() {
-        for alphabet in HpAlphabet::all_named() {
-            let legacy = alphabet.legacy_moltype();
-            assert!(legacy.starts_with("hp_"), "{legacy}");
-            assert_eq!(HpAlphabet::from_moltype(&legacy), Some(*alphabet), "{legacy}");
-            // The legacy spelling is accepted but never written back out.
-            assert_ne!(alphabet.to_moltype(), legacy);
+    fn older_moltype_spellings_still_parse_to_the_same_alphabet() {
+        let spellings = [
+            (HpAlphabet::Lehninger, "hp_lehninger2", "hp_lehninger", "reduced_hp_lehninger2"),
+            (
+                HpAlphabet::ThomasDill,
+                "hp_thomas_dill2",
+                "hp_thomas_dill",
+                "reduced_hp_thomas_dill2",
+            ),
+            (
+                HpAlphabet::KyteDoolittle,
+                "hp_kyte_doolittle2",
+                "hp_kyte_doolittle",
+                "reduced_hp_kyte_doolittle2",
+            ),
+            (
+                HpAlphabet::ThomasDillNoC,
+                "hp_thomas_dill_no_c2",
+                "hp_thomas_dill_no_c",
+                "reduced_hp_thomas_dill_no_c2",
+            ),
+            (
+                HpAlphabet::LehningerCNonpolar,
+                "hp_lehninger_c_nonpolar2",
+                "hp_lehninger_c_nonpolar",
+                "reduced_hp_lehninger_c_nonpolar2",
+            ),
+            (
+                HpAlphabet::LehningerHpc,
+                "hp_lehninger_hpc3",
+                "hp_lehninger_hpc",
+                "reduced_hp_lehninger_hpc3",
+            ),
+            (
+                HpAlphabet::PBotC1stEd,
+                "hp_pbotc_1st_ed2",
+                "hp_pbotc_1st_ed",
+                "reduced_hp_pbotc_1st_ed2",
+            ),
+            (
+                HpAlphabet::RandomControl,
+                "hp_random_control2",
+                "hp_shuffled_control",
+                "reduced_hp_shuffled_control2",
+            ),
+        ];
+
+        for (alphabet, current, oldest, with_reduced_prefix) in spellings {
+            assert_eq!(alphabet.to_moltype(), current);
+            for spelling in [current, oldest, with_reduced_prefix] {
+                assert_eq!(HpAlphabet::from_moltype(spelling), Some(alphabet), "{spelling}");
+            }
         }
 
+        // Seeded controls, under every spelling the seed suffix has had.
         for seed in 1..=10 {
-            assert_eq!(
-                HpAlphabet::from_moltype(&format!("hp_shuffled_control_{seed}")),
-                Some(HpAlphabet::Shuffled(seed))
-            );
+            for spelling in [
+                format!("hp_random_control2_{seed}"),
+                format!("hp_shuffled_control_{seed}"),
+                format!("reduced_hp_shuffled_control2_{seed}"),
+            ] {
+                assert_eq!(
+                    HpAlphabet::from_moltype(&spelling),
+                    Some(HpAlphabet::Random(seed)),
+                    "{spelling}"
+                );
+            }
         }
     }
 
     #[test]
     fn from_moltype_rejects_unrelated_strings() {
-        for moltype in ["protein", "dayhoff", "reduced_sdm12", "reduced_hp_", "reduced_hp_nope2"] {
+        for moltype in ["protein", "dayhoff6", "sdm12", "hp_", "hp_nope2"] {
             assert_eq!(HpAlphabet::from_moltype(moltype), None, "{moltype}");
         }
     }
@@ -711,6 +770,6 @@ mod tests {
     #[test]
     fn bare_hp_parses_as_lehninger() {
         assert_eq!(HpAlphabet::from_moltype("hp"), Some(HpAlphabet::Lehninger));
-        assert_eq!(HpAlphabet::from_moltype("hp").unwrap().to_moltype(), "reduced_hp_lehninger2");
+        assert_eq!(HpAlphabet::from_moltype("hp").unwrap().to_moltype(), "hp_lehninger2");
     }
 }

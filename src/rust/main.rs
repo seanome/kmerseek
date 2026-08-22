@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::IndexResult;
 use kmerseek::hp_alphabets::HpAlphabet;
+use kmerseek::types::MolType;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
 
@@ -29,14 +30,13 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         ksize: u32,
 
-        /// Protein encoding method
-        #[arg(short, long, default_value = "protein")]
-        encoding: ProteinEncoding,
+        /// Reduced amino acid alphabet to index with
+        #[arg(short = 'a', long, alias = "encoding", default_value = "protein20")]
+        alphabet: ProteinAlphabet,
 
-        /// Seed for reduced_hp_shuffled_control2 (1-10). Produces moltype
-        /// reduced_hp_shuffled_control2_N.
-        #[arg(long)]
-        shuffled_seed: Option<u64>,
+        /// Seed for hp_random_control2 (1-10). Produces alphabet hp_random_control2_N.
+        #[arg(long, alias = "shuffled-seed")]
+        random_seed: Option<u64>,
 
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
@@ -82,13 +82,13 @@ enum Commands {
         #[arg(short, long)]
         ksize: Option<u32>,
 
-        /// Protein encoding method (must match the database)
-        #[arg(short, long, default_value = "protein")]
-        encoding: ProteinEncoding,
+        /// Reduced amino acid alphabet (must match the database)
+        #[arg(short = 'a', long, alias = "encoding", default_value = "protein20")]
+        alphabet: ProteinAlphabet,
 
-        /// Seed for hp_shuffled_control (1-10). Must match the seed used during indexing.
-        #[arg(long)]
-        shuffled_seed: Option<u64>,
+        /// Seed for hp_random_control2 (1-10). Must match the seed used during indexing.
+        #[arg(long, alias = "shuffled-seed")]
+        random_seed: Option<u64>,
 
         /// Minimum containment threshold (0.0 = show all matches)
         #[arg(long, default_value = "0.0")]
@@ -145,85 +145,87 @@ enum Commands {
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
-enum ProteinEncoding {
-    /// Raw protein encoding (20 amino acids)
+enum ProteinAlphabet {
+    /// The full 20-letter amino acid alphabet: no reduction
+    #[value(name = "protein20", aliases = ["protein", "raw"])]
     Protein,
-    /// Dayhoff encoding, 6 classes
-    #[value(name = "reduced-dayhoff6", aliases = ["reduced_dayhoff6", "dayhoff"])]
+    /// Dayhoff, 6 classes
+    #[value(name = "dayhoff6", alias = "dayhoff")]
     Dayhoff,
-    /// HP Lehninger, 2 classes. Also selected by the pre-rename spellings `hp_lehninger` and
-    /// `hp`; indexes built with the old sourmash-backed `hp` must be rebuilt (their hashes
-    /// differ)
-    #[value(name = "reduced-hp-lehninger2", aliases = ["reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger", "hp"])]
+    /// HP Lehninger, 2 classes. Also accepts the older spellings `hp_lehninger` and `hp`;
+    /// note that indexes built with the old sourmash-backed `hp` must be rebuilt, since it
+    /// hashed the same partition differently
+    #[value(name = "hp_lehninger2", aliases = ["hp-lehninger2", "reduced_hp_lehninger2", "hp_lehninger", "hp-lehninger", "hp"])]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
-    #[value(name = "reduced-hp-thomas-dill2", aliases = ["reduced_hp_thomas_dill2", "hp_thomas_dill", "hp-thomas-dill"])]
+    #[value(name = "hp_thomas_dill2", aliases = ["hp-thomas-dill2", "reduced_hp_thomas_dill2", "hp_thomas_dill", "hp-thomas-dill"])]
     HpThomasDill,
     /// HP Kyte-Doolittle 1982 binarized at hydropathy > 0 (W=p, Y=p)
-    #[value(name = "reduced-hp-kyte-doolittle2", aliases = ["reduced_hp_kyte_doolittle2", "hp_kyte_doolittle", "hp-kyte-doolittle"])]
+    #[value(name = "hp_kyte_doolittle2", aliases = ["hp-kyte-doolittle2", "reduced_hp_kyte_doolittle2", "hp_kyte_doolittle", "hp-kyte-doolittle"])]
     HpKyteDoolittle,
     /// HP Thomas-Dill with C reassigned to polar (isolation variant)
-    #[value(name = "reduced-hp-thomas-dill-no-c2", aliases = ["reduced_hp_thomas_dill_no_c2", "hp_thomas_dill_no_c", "hp-thomas-dill-no-c"])]
+    #[value(name = "hp_thomas_dill_no_c2", aliases = ["hp-thomas-dill-no-c2", "reduced_hp_thomas_dill_no_c2", "hp_thomas_dill_no_c", "hp-thomas-dill-no-c"])]
     HpThomasDillNoC,
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
-    #[value(name = "reduced-hp-lehninger-c-nonpolar2", aliases = ["reduced_hp_lehninger_c_nonpolar2", "hp_lehninger_c_nonpolar", "hp-lehninger-c-nonpolar"])]
+    #[value(name = "hp_lehninger_c_nonpolar2", aliases = ["hp-lehninger-c-nonpolar2", "reduced_hp_lehninger_c_nonpolar2", "hp_lehninger_c_nonpolar", "hp-lehninger-c-nonpolar"])]
     HpLehningerCNonpolar,
     /// HPC Lehninger 3-letter: hydrophobic/polar/cystine, C split into its own class
-    #[value(name = "reduced-hp-lehninger-hpc3", aliases = ["reduced_hp_lehninger_hpc3", "hp_lehninger_hpc", "hp-lehninger-hpc"])]
+    #[value(name = "hp_lehninger_hpc3", aliases = ["hp-lehninger-hpc3", "reduced_hp_lehninger_hpc3", "hp_lehninger_hpc", "hp-lehninger-hpc"])]
     HpLehningerHpc,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
-    #[value(name = "reduced-hp-pbotc-1st-ed2", aliases = ["reduced_hp_pbotc_1st_ed2", "hp_pbotc_1st_ed", "hp-pbotc-1st-ed"])]
+    #[value(name = "hp_pbotc_1st_ed2", aliases = ["hp-pbotc-1st-ed2", "reduced_hp_pbotc_1st_ed2", "hp_pbotc_1st_ed", "hp-pbotc-1st-ed"])]
     HpPBotC1stEd,
-    /// HP shuffled negative control (scrambled hydrophobicity signal)
-    #[value(name = "reduced-hp-shuffled-control2", aliases = ["reduced_hp_shuffled_control2", "hp_shuffled_control", "hp-shuffled-control"])]
-    HpShuffledControl,
+    /// HP negative control, 2 classes: the h/p split is randomized, scrambling the
+    /// hydrophobicity signal. Use --random-seed for independent replicates
+    #[value(name = "hp_random_control2", aliases = ["hp-random-control2", "reduced_hp_shuffled_control2", "hp_shuffled_control", "hp-shuffled-control"])]
+    HpRandomControl,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
-    #[value(alias = "reduced_gbmr4")]
+    #[value(name = "gbmr4", alias = "reduced_gbmr4")]
     ReducedGbmr4,
     /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
-    #[value(alias = "reduced_wwmj5")]
+    #[value(name = "wwmj5", alias = "reduced_wwmj5")]
     ReducedWwmj5,
     /// GBMR7, 7 classes (Solis & Rackovsky 2000)
-    #[value(alias = "reduced_gbmr7")]
+    #[value(name = "gbmr7", alias = "reduced_gbmr7")]
     ReducedGbmr7,
     /// SDM12, 12 classes (Prlic et al. 2000; best AUC in Peterson et al. 2009)
-    #[value(alias = "reduced_sdm12")]
+    #[value(name = "sdm12", alias = "reduced_sdm12")]
     ReducedSdm12,
     /// MMSEQS12, 12 classes (Steinegger & Soding 2018)
-    #[value(alias = "reduced_mmseqs12")]
+    #[value(name = "mmseqs12", alias = "reduced_mmseqs12")]
     ReducedMmseqs12,
     /// WASS14, 14 classes, hydrophobicity-clustered (Ieremie et al. 2024)
-    #[value(alias = "reduced_wass14")]
+    #[value(name = "wass14", alias = "reduced_wass14")]
     ReducedWass14,
     /// HSDM17, 17 classes (Prlic et al. 2000; best precision in Peterson et al. 2009)
-    #[value(alias = "reduced_hsdm17")]
+    #[value(name = "hsdm17", alias = "reduced_hsdm17")]
     ReducedHsdm17,
     /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
-    #[value(alias = "reduced_uniprot18")]
+    #[value(name = "uniprot18", alias = "reduced_uniprot18")]
     ReducedUniprot18,
 }
 
-impl From<ProteinEncoding> for &'static str {
-    fn from(encoding: ProteinEncoding) -> Self {
+impl From<ProteinAlphabet> for &'static str {
+    fn from(encoding: ProteinAlphabet) -> Self {
         match encoding {
-            ProteinEncoding::Protein => "protein",
-            ProteinEncoding::Dayhoff => "reduced_dayhoff6",
-            ProteinEncoding::HpLehninger => "reduced_hp_lehninger2",
-            ProteinEncoding::HpThomasDill => "reduced_hp_thomas_dill2",
-            ProteinEncoding::HpKyteDoolittle => "reduced_hp_kyte_doolittle2",
-            ProteinEncoding::HpThomasDillNoC => "reduced_hp_thomas_dill_no_c2",
-            ProteinEncoding::HpLehningerCNonpolar => "reduced_hp_lehninger_c_nonpolar2",
-            ProteinEncoding::HpLehningerHpc => "reduced_hp_lehninger_hpc3",
-            ProteinEncoding::HpPBotC1stEd => "reduced_hp_pbotc_1st_ed2",
-            ProteinEncoding::HpShuffledControl => "reduced_hp_shuffled_control2",
-            ProteinEncoding::ReducedGbmr4 => "reduced_gbmr4",
-            ProteinEncoding::ReducedWwmj5 => "reduced_wwmj5",
-            ProteinEncoding::ReducedGbmr7 => "reduced_gbmr7",
-            ProteinEncoding::ReducedSdm12 => "reduced_sdm12",
-            ProteinEncoding::ReducedMmseqs12 => "reduced_mmseqs12",
-            ProteinEncoding::ReducedWass14 => "reduced_wass14",
-            ProteinEncoding::ReducedHsdm17 => "reduced_hsdm17",
-            ProteinEncoding::ReducedUniprot18 => "reduced_uniprot18",
+            ProteinAlphabet::Protein => "protein20",
+            ProteinAlphabet::Dayhoff => "dayhoff6",
+            ProteinAlphabet::HpLehninger => "hp_lehninger2",
+            ProteinAlphabet::HpThomasDill => "hp_thomas_dill2",
+            ProteinAlphabet::HpKyteDoolittle => "hp_kyte_doolittle2",
+            ProteinAlphabet::HpThomasDillNoC => "hp_thomas_dill_no_c2",
+            ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
+            ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
+            ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
+            ProteinAlphabet::HpRandomControl => "hp_random_control2",
+            ProteinAlphabet::ReducedGbmr4 => "gbmr4",
+            ProteinAlphabet::ReducedWwmj5 => "wwmj5",
+            ProteinAlphabet::ReducedGbmr7 => "gbmr7",
+            ProteinAlphabet::ReducedSdm12 => "sdm12",
+            ProteinAlphabet::ReducedMmseqs12 => "mmseqs12",
+            ProteinAlphabet::ReducedWass14 => "wass14",
+            ProteinAlphabet::ReducedHsdm17 => "hsdm17",
+            ProteinAlphabet::ReducedUniprot18 => "uniprot18",
         }
     }
 }
@@ -238,8 +240,8 @@ fn main() -> IndexResult<()> {
             input,
             output,
             ksize,
-            encoding,
-            shuffled_seed,
+            alphabet,
+            random_seed,
             progress_interval,
             kmer_stats_out,
             stats_only,
@@ -251,13 +253,13 @@ fn main() -> IndexResult<()> {
             let scaled: u32 = 1;
 
             // Resolve effective moltype: seeded shuffled control -> "hp_shuffled_control_N".
-            let effective_moltype: String = match (encoding, shuffled_seed) {
-                (ProteinEncoding::HpShuffledControl, Some(seed)) => {
-                    assert!((1..=10).contains(&seed), "--shuffled-seed must be 1-10, got {seed}");
-                    HpAlphabet::Shuffled(seed).to_moltype()
+            let effective_moltype: String = match (alphabet, random_seed) {
+                (ProteinAlphabet::HpRandomControl, Some(seed)) => {
+                    assert!((1..=10).contains(&seed), "--random-seed must be 1-10, got {seed}");
+                    HpAlphabet::Random(seed).to_moltype()
                 }
                 _ => {
-                    let s: &'static str = encoding.into();
+                    let s: &'static str = alphabet.into();
                     s.to_string()
                 }
             };
@@ -295,7 +297,7 @@ fn main() -> IndexResult<()> {
 
             eprintln!("\n-------\nK-mer size: {}", ksize);
             eprintln!("Scaled: {}", scaled);
-            eprintln!("Encoding: {}", effective_moltype);
+            eprintln!("Alphabet: {}", effective_moltype);
             eprintln!("Progress interval: {}", progress_interval);
             eprintln!("Remove low-complexity k-mers: {}", remove_low_complexity);
             eprintln!("-------\n");
@@ -352,8 +354,8 @@ fn main() -> IndexResult<()> {
             target,
             output,
             ksize,
-            encoding,
-            shuffled_seed: _,
+            alphabet,
+            random_seed: _,
             threshold,
             min_shared_kmers,
             max_query_pvalue,
@@ -378,9 +380,9 @@ fn main() -> IndexResult<()> {
             // command handler much easier to read. It validates that user-provided parameters
             // match the database, or uses detected values if not provided. This is idiomatic
             // Rust - we extract complex logic into well-named methods for clarity.
-            let (final_ksize, final_scaled, final_encoding) = validate_and_assign_parameters(
+            let (final_ksize, final_scaled, final_alphabet) = validate_and_assign_parameters(
                 ksize,
-                encoding,
+                alphabet,
                 detected_ksize,
                 detected_scaled,
                 &detected_moltype,
@@ -389,7 +391,7 @@ fn main() -> IndexResult<()> {
             eprintln!("\n---\nUsing parameters:");
             eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
-            eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            eprintln!("  Alphabet: {:?} (detected: {})", final_alphabet, detected_moltype);
             // --max-pvalue predates region scoring, so honour it as whole-query filtering only:
             // a region floor of infinity can never be cleared (the check is a strict >),
             // leaving the query scope as the only decider, the same as before region scoring
@@ -537,7 +539,7 @@ fn main() -> IndexResult<()> {
                             name,
                             final_ksize,
                             final_scaled,
-                            final_encoding.into(),
+                            final_alphabet.into(),
                         )?;
                         sig.set_remove_low_complexity(remove_low_complexity);
                         sig.add_protein(&sequence, true)?;
@@ -628,7 +630,7 @@ fn main() -> IndexResult<()> {
                         .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
 
                     let mut query_sig =
-                        ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
+                        ProteinSketch::new(name, final_ksize, final_scaled, final_alphabet.into())?;
                     query_sig.set_remove_low_complexity(remove_low_complexity);
                     query_sig.add_protein(&sequence, true)?;
                     batch.push(query_sig);
@@ -744,9 +746,9 @@ fn main() -> IndexResult<()> {
 }
 
 fn assign_encoding(
-    encoding: ProteinEncoding,
+    alphabet: ProteinAlphabet,
     detected_moltype: &str,
-) -> kmerseek::errors::IndexResult<ProteinEncoding> {
+) -> kmerseek::errors::IndexResult<ProteinAlphabet> {
     // Convert detected moltype string to enum
     // WHY: We need to compare the user-provided encoding with the detected encoding.
     // The detected encoding comes from the database as a string, so we convert it to
@@ -754,46 +756,41 @@ fn assign_encoding(
     // Indexes built before class counts were added to the HP names store the old
     // "hp_<name>" moltype. HpAlphabet::from_moltype() still parses those, so normalizing
     // here lets the match below deal only in current names.
-    let canonical = match detected_moltype {
-        "dayhoff" => "reduced_dayhoff6".to_string(),
-        other => HpAlphabet::from_moltype(other)
-            .map(|alphabet| alphabet.to_moltype())
-            .unwrap_or_else(|| other.to_string()),
-    };
+    let canonical = MolType::new(detected_moltype)
+        .map(|moltype| moltype.get().to_string())
+        .unwrap_or_else(|_| detected_moltype.to_string());
 
-    let detected_encoding = match canonical.as_str() {
-        "protein" => ProteinEncoding::Protein,
-        "reduced_dayhoff6" => ProteinEncoding::Dayhoff,
-        "reduced_hp_lehninger2" => ProteinEncoding::HpLehninger,
-        "reduced_hp_thomas_dill2" => ProteinEncoding::HpThomasDill,
-        "reduced_hp_kyte_doolittle2" => ProteinEncoding::HpKyteDoolittle,
-        "reduced_hp_thomas_dill_no_c2" => ProteinEncoding::HpThomasDillNoC,
-        "reduced_hp_lehninger_c_nonpolar2" => ProteinEncoding::HpLehningerCNonpolar,
-        "reduced_hp_lehninger_hpc3" => ProteinEncoding::HpLehningerHpc,
-        "reduced_hp_pbotc_1st_ed2" => ProteinEncoding::HpPBotC1stEd,
-        "reduced_hp_shuffled_control2" => ProteinEncoding::HpShuffledControl,
+    let detected_alphabet = match canonical.as_str() {
+        "protein20" => ProteinAlphabet::Protein,
+        "dayhoff6" => ProteinAlphabet::Dayhoff,
+        "hp_lehninger2" => ProteinAlphabet::HpLehninger,
+        "hp_thomas_dill2" => ProteinAlphabet::HpThomasDill,
+        "hp_kyte_doolittle2" => ProteinAlphabet::HpKyteDoolittle,
+        "hp_thomas_dill_no_c2" => ProteinAlphabet::HpThomasDillNoC,
+        "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
+        "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
+        "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
+        "hp_random_control2" => ProteinAlphabet::HpRandomControl,
         // Seeded shuffled controls carry the seed in the moltype; map them back to
         // HpShuffledControl so the encoding path picks them up via
         // HpAlphabet::from_moltype(), which parses the numeric suffix.
-        s if s.starts_with("reduced_hp_shuffled_control2_") => ProteinEncoding::HpShuffledControl,
-        "reduced_gbmr4" => ProteinEncoding::ReducedGbmr4,
-        "reduced_wwmj5" => ProteinEncoding::ReducedWwmj5,
-        "reduced_gbmr7" => ProteinEncoding::ReducedGbmr7,
-        "reduced_sdm12" => ProteinEncoding::ReducedSdm12,
-        "reduced_mmseqs12" => ProteinEncoding::ReducedMmseqs12,
-        "reduced_wass14" => ProteinEncoding::ReducedWass14,
-        "reduced_hsdm17" => ProteinEncoding::ReducedHsdm17,
-        "reduced_uniprot18" => ProteinEncoding::ReducedUniprot18,
+        s if s.starts_with("hp_random_control2_") => ProteinAlphabet::HpRandomControl,
+        "gbmr4" => ProteinAlphabet::ReducedGbmr4,
+        "wwmj5" => ProteinAlphabet::ReducedWwmj5,
+        "gbmr7" => ProteinAlphabet::ReducedGbmr7,
+        "sdm12" => ProteinAlphabet::ReducedSdm12,
+        "mmseqs12" => ProteinAlphabet::ReducedMmseqs12,
+        "wass14" => ProteinAlphabet::ReducedWass14,
+        "hsdm17" => ProteinAlphabet::ReducedHsdm17,
+        "uniprot18" => ProteinAlphabet::ReducedUniprot18,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown encoding in database: {}. Expected one of: protein, reduced_dayhoff6, \
-                     reduced_hp_lehninger2, reduced_hp_thomas_dill2, reduced_hp_kyte_doolittle2, \
-                     reduced_hp_thomas_dill_no_c2, reduced_hp_lehninger_c_nonpolar2, \
-                     reduced_hp_lehninger_hpc3, reduced_hp_pbotc_1st_ed2, \
-                     reduced_hp_shuffled_control2 (or reduced_hp_shuffled_control2_N for seeded \
-                     variants), reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, reduced_sdm12, \
-                     reduced_mmseqs12, reduced_wass14, reduced_hsdm17, reduced_uniprot18",
+                    "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
+                     hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
+                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
+                     hp_random_control2 (or hp_random_control2_N for seeded variants), \
+                     gbmr4, wwmj5, gbmr7, sdm12, mmseqs12, wass14, hsdm17, uniprot18",
                     detected_moltype
                 ),
             });
@@ -807,18 +804,20 @@ fn assign_encoding(
     // a default value, we can't distinguish "user specified" from "using default",
     // so we only error if it's clearly wrong (not the default and doesn't match).
     // In practice, users should not specify --encoding and let it autodetect.
-    if encoding != detected_encoding && encoding != ProteinEncoding::Protein {
+    if alphabet != detected_alphabet && alphabet != ProteinAlphabet::Protein {
         // User explicitly provided a non-default encoding that doesn't match
         return Err(kmerseek::errors::IndexError::ValidationError {
             message: format!(
-                "Encoding mismatch: database has encoding={}, but you specified --encoding={:?}.\n\
-                The encoding must match the database. Remove --encoding to use the database value ({:?}).",
-                detected_moltype, encoding, detected_encoding
+                "Alphabet mismatch: database was built with {}, but you specified \
+                 --alphabet={:?}.\n\
+                 The alphabet must match the database. Remove --alphabet to use the database \
+                 value ({:?}).",
+                detected_moltype, alphabet, detected_alphabet
             ),
         });
     }
 
-    Ok(detected_encoding)
+    Ok(detected_alphabet)
 }
 
 /// Validate and assign search parameters from user input and database detection
@@ -837,14 +836,14 @@ fn assign_encoding(
 /// * `detected_moltype` - Moltype detected from database (as string)
 ///
 /// # Returns
-/// Tuple of (final_ksize, final_scaled, final_encoding) or ValidationError if mismatch
+/// Tuple of (final_ksize, final_scaled, final_alphabet) or ValidationError if mismatch
 fn validate_and_assign_parameters(
     user_ksize: Option<u32>,
-    user_encoding: ProteinEncoding,
+    user_encoding: ProteinAlphabet,
     detected_ksize: u32,
     detected_scaled: u32,
     detected_moltype: &str,
-) -> IndexResult<(u32, u32, ProteinEncoding)> {
+) -> IndexResult<(u32, u32, ProteinAlphabet)> {
     // Validate and assign ksize: use detected if not provided, error if mismatch
     // WHY: The database parameters are authoritative. If the user explicitly provides
     // a ksize that doesn't match, that's an error (they're trying to search with wrong
@@ -887,7 +886,7 @@ fn validate_and_assign_parameters(
     let final_scaled = 1;
 
     // Validate and assign encoding
-    let final_encoding = assign_encoding(user_encoding, detected_moltype)?;
+    let final_alphabet = assign_encoding(user_encoding, detected_moltype)?;
 
-    Ok((final_ksize, final_scaled, final_encoding))
+    Ok((final_ksize, final_scaled, final_alphabet))
 }

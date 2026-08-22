@@ -110,14 +110,21 @@ impl ReducedAlphabet {
         ]
     }
 
-    /// Moltype string stored in the index (e.g. `"reduced_sdm12"`).
+    /// Moltype string stored in the index (e.g. `"sdm12"`).
+    ///
+    /// These are the names the source papers use, digit included, so a moltype is directly
+    /// citeable: searching for SDM12 or GBMR4 finds the paper it came from.
     pub fn to_moltype(&self) -> String {
-        format!("reduced_{}", self.name())
+        self.name().to_string()
     }
 
     /// Parse from a moltype string. Returns `None` for unrecognized strings.
+    ///
+    /// The `reduced_` prefix these briefly carried is accepted so that indexes and command
+    /// lines written against it keep working; it was dropped because every value of
+    /// `--encoding` except `protein` is a reduced alphabet, so the prefix said nothing.
     pub fn from_moltype(s: &str) -> Option<ReducedAlphabet> {
-        let name = s.strip_prefix("reduced_")?;
+        let name = s.strip_prefix("reduced_").unwrap_or(s);
         Self::all().iter().find(|a| a.name() == name).copied()
     }
 }
@@ -329,21 +336,26 @@ mod tests {
         }
     }
 
+    /// The moltype is the paper's own name, and the `reduced_` prefix these briefly carried
+    /// still parses so older indexes keep opening.
     #[test]
     fn test_moltype_round_trip() {
         for alphabet in ReducedAlphabet::all() {
             let moltype = alphabet.to_moltype();
+            assert_eq!(moltype, alphabet.name());
             assert_eq!(ReducedAlphabet::from_moltype(&moltype), Some(*alphabet));
+            assert_eq!(
+                ReducedAlphabet::from_moltype(&format!("reduced_{moltype}")),
+                Some(*alphabet)
+            );
         }
-        assert_eq!(ReducedAlphabet::from_moltype("reduced_sdm12"), Some(ReducedAlphabet::Sdm12));
-        assert_eq!(ReducedAlphabet::from_moltype("reduced_hsdm17"), Some(ReducedAlphabet::Hsdm17));
+        assert_eq!(ReducedAlphabet::from_moltype("sdm12"), Some(ReducedAlphabet::Sdm12));
+        assert_eq!(ReducedAlphabet::from_moltype("hsdm17"), Some(ReducedAlphabet::Hsdm17));
     }
 
     #[test]
     fn test_from_moltype_rejects_other_moltypes() {
-        for moltype in
-            ["protein", "dayhoff", "hp", "hp_lehninger", "reduced_", "sdm12", "reduced_nope"]
-        {
+        for moltype in ["protein", "dayhoff6", "hp", "hp_lehninger2", "reduced_", "nope"] {
             assert_eq!(ReducedAlphabet::from_moltype(moltype), None, "{moltype}");
         }
     }

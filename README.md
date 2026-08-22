@@ -42,7 +42,7 @@ carry little discriminative signal. Pass `--remove-low-complexity` at index time
 drop them:
 
 ```bash
-kmerseek index -i proteome.fasta --ksize 10 --encoding hp --remove-low-complexity
+kmerseek index -i proteome.fasta --ksize 10 --alphabet hp_lehninger2 --remove-low-complexity
 ```
 
 Two independent checks run per k-mer: the **raw amino-acid** window (any encoding),
@@ -120,7 +120,7 @@ database (`hp` encoding, k=17, scaled=1, every hit shown):
 
 ```bash
 kmerseek search -q ced9.fasta -t bcl2_family.rocksdb -o results.csv \
-    --encoding hp --ksize 17 --scaled 1
+    --alphabet hp_lehninger2 --ksize 17
 
 python scripts/visualize_hits.py \
     --csv results.csv \
@@ -144,81 +144,94 @@ the others) -- use it to tame proteome-scale searches where a gene can have doze
 distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
 
-## Encoding Names
+## Alphabets
 
-Every reduced alphabet's moltype ends in the number of classes it collapses the 20
-amino acids into, so the name states how much chemistry it discards:
+Pick one with `--alphabet` (`-a`). Every name ends in the number of classes it collapses
+the 20 amino acids into, so a filename or a results CSV says how much reduction happened:
 
-| Moltype | Classes | Previously |
-|---------|:---:|---|
-| `reduced_dayhoff6` | 6 | `dayhoff` |
-| `reduced_hp_lehninger2` | 2 | `hp_lehninger`, `hp` |
-| `reduced_hp_<name>2` / `3` | 2 or 3 | `hp_<name>` |
-| `reduced_gbmr4` ... `reduced_uniprot18` | 4-18 | new |
+| Alphabet | Classes | Source |
+|---|:---:|---|
+| `protein20` | 20 | the full alphabet, no reduction |
+| `dayhoff6` | 6 | Dayhoff |
+| `hp_lehninger2` | 2 | Lehninger, the HP default |
+| `hp_thomas_dill2` | 2 | Thomas & Dill 1996 |
+| `hp_kyte_doolittle2` | 2 | Kyte & Doolittle 1982 |
+| `hp_thomas_dill_no_c2` | 2 | Thomas-Dill, C reassigned to polar |
+| `hp_lehninger_c_nonpolar2` | 2 | Lehninger, C reassigned to hydrophobic |
+| `hp_lehninger_hpc3` | 3 | Lehninger, C given its own class |
+| `hp_pbotc_1st_ed2` | 2 | Physical Biology of the Cell, 1st ed |
+| `hp_random_control2` | 2 | negative control, randomized h/p split |
+| `gbmr4` | 4 | Solis & Rackovsky 2000 |
+| `wwmj5` | 5 | Wang & Wang 1999 |
+| `gbmr7` | 7 | Solis & Rackovsky 2000 |
+| `sdm12` | 12 | Prlic et al. 2000 |
+| `mmseqs12` | 12 | Steinegger & Soding 2018 |
+| `wass14` | 14 | Ieremie et al. 2024 |
+| `hsdm17` | 17 | Prlic et al. 2000 |
+| `uniprot18` | 18 | Ieremie et al. 2024 |
 
-`protein` (the full 20-letter alphabet, also spelled `raw`) keeps its name -- it does not
-reduce anything.
+The two-and-three-class alphabets keep an `hp_` prefix because they are one family that
+differs only on borderline residues, and grouping them makes a sweep easy to write. The
+multi-letter ones use the names their papers use, digit included, so `sdm12` and `gbmr4`
+are directly citeable.
 
-The old spellings are still accepted on the command line and are normalized to the
-current name, so `--encoding hp_thomas_dill` and `--encoding hp` still work and are
-recorded under the current name.
+Seeded negative controls put the seed after the class count:
+`hp_random_control2_3` is seed 3 of a 2-class control, not a 23-class alphabet. Use
+`--random-seed 1..10` to get independent replicates.
+
+### Older spellings
+
+These all still work on the command line and in existing indexes, and are normalized to
+the current name on read:
+
+| Older | Now |
+|---|---|
+| `protein`, `raw` | `protein20` |
+| `dayhoff` | `dayhoff6` |
+| `hp_<name>` without a class count | `hp_<name>2` |
+| a `reduced_` prefix on anything | the same name without it |
+| `shuffled_control` | `random_control` |
+| `--encoding` | `--alphabet` |
+| `--shuffled-seed` | `--random-seed` |
+
+Nothing writes the older names any more.
 
 ### Indexes built before the rename
 
-Most keep working: `dayhoff` and the `hp_<name>` alphabets resolve to the same hash
-function and the same table as before, so their k-mer hashes are unchanged and existing
-databases are searchable as-is.
+Most keep working. `dayhoff`, `protein` and the `hp_<name>` alphabets resolve to the same
+hash function and the same table as before, so their k-mer hashes are unchanged and
+existing databases are searchable as-is.
 
 The one exception is `hp`. It used to select sourmash's built-in HP encoder, which applies
 the same Lehninger partition but hashes the encoded sequence as lowercase `h`/`p`, where
 kmerseek's own tables are uppercased to `H`/`P` first. The two share no k-mer hashes at
-all. `hp` is now a spelling of `reduced_hp_lehninger2`, so an index built under the old
-`hp` would sketch queries on the uppercase path and match nothing. kmerseek refuses to
-open such an index and tells you to rebuild it:
+all. `hp` is now a spelling of `hp_lehninger2`, so an index built under the old `hp` would
+sketch queries on the uppercase path and match nothing. kmerseek refuses to open such an
+index and tells you to rebuild it:
 
 ```
 This index was built with the old `hp` encoding, whose k-mer hashes are not compatible
-with `reduced_hp_lehninger2` ... Rebuild the index with --encoding reduced_hp_lehninger2
+with `hp_lehninger2` ... Rebuild the index with --alphabet hp_lehninger2
 ```
 
-Rebuilding reproduces the same hits -- the amino-acid partition never changed, only the
+Rebuilding reproduces the same hits: the amino-acid partition never changed, only the
 bytes that get hashed.
 
 ## HP Alphabet Variants
 
-`--encoding hp` collapses the 20 canonical amino acids down to hydrophobic (`h`)
+`--alphabet hp_lehninger2` collapses the 20 canonical amino acids down to hydrophobic (`h`)
 / polar (`p`) before k-mer extraction. The alphabets below (see
 `src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
 the five borderline ones -- **C, G, P, W, Y** (bolded). Lehninger is the current
-default, spelled `reduced_hp_lehninger2`; the others are selectable via the same
-`reduced_hp_<name>2` pattern (e.g. `reduced_hp_thomas_dill2`) for the alphabet
+default, spelled `hp_lehninger2`; the others are selectable via the same
+`hp_<name>2` pattern (e.g. `hp_thomas_dill2`) for the alphabet
 robustness sweep.
 
-The trailing digit is the class count, matching the multi-letter alphabets in the
-next section, so every moltype states its size. These were previously named
-`hp_<name>` without the count. The old spellings are still accepted on the command
-line and in existing indexes, and are normalized to the current name on read, so a
-database built before the rename keeps working; nothing writes them any more.
-
-`reduced_hp_lehninger_hpc3` is a 3-letter variant: it keeps Lehninger's H/P split for
+`hp_lehninger_hpc3` is a 3-letter variant: it keeps Lehninger's H/P split for
 every residue except cysteine, which gets its own third symbol `c` (cystine)
-instead of being folded into `h` the way `reduced_hp_lehninger_c_nonpolar2` does --
+instead of being folded into `h` the way `hp_lehninger_c_nonpolar2` does --
 disulfide-bond formation is a distinct chemistry from ordinary hydrophobic
 packing.
-
-| Moltype | Classes | Previously |
-|---------|:---:|---|
-| `reduced_hp_lehninger2` | 2 | `hp_lehninger`, `hp` |
-| `reduced_hp_thomas_dill2` | 2 | `hp_thomas_dill` |
-| `reduced_hp_kyte_doolittle2` | 2 | `hp_kyte_doolittle` |
-| `reduced_hp_thomas_dill_no_c2` | 2 | `hp_thomas_dill_no_c` |
-| `reduced_hp_lehninger_c_nonpolar2` | 2 | `hp_lehninger_c_nonpolar` |
-| `reduced_hp_lehninger_hpc3` | 3 | `hp_lehninger_hpc` |
-| `reduced_hp_pbotc_1st_ed2` | 2 | `hp_pbotc_1st_ed` |
-| `reduced_hp_shuffled_control2` | 2 | `hp_shuffled_control` |
-
-Seeded controls put the seed after the class count -- `reduced_hp_shuffled_control2_3`
-is seed 3 of a 2-class control, not a 23-class alphabet.
 
 | AA | Lehninger (current) | Thomas-Dill/PBotC 2nd | Kyte-Doolittle | TD−C | Leh+C | Leh HPC (3-letter) | PBotC 1st |
 |----|:---:|:---:|:---:|:---:|:---:|:---:|:---:|
@@ -248,8 +261,7 @@ is seed 3 of a 2-class control, not a 23-class alphabet.
 The HP alphabets above answer one question per residue. The alphabets in this section
 (see `src/rust/reduced_alphabets.rs`) keep 4 to 18 classes, so they discard less
 chemistry per position while still collapsing the substitutions that proteins tolerate
-most often. They follow the same naming rule: the number in the moltype is the class
-count.
+most often.
 
 Peterson et al. (2009) benchmarked over 150 published clustering schemes against DALI
 fold assignments and found that reduced alphabets beat the full 20-letter alphabet,
@@ -259,14 +271,14 @@ Where the two papers overlap, their partitions are identical.
 
 | Moltype | Classes | Clusters | Source |
 |---------|:---:|---|---|
-| `reduced_gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
-| `reduced_wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
-| `reduced_gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
-| `reduced_sdm12` | 12 | `A` `D` `KER` `N` `TSQ` `YF` `LIVM` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
-| `reduced_mmseqs12` | 12 | `AST` `LM` `IV` `KR` `EQ` `ND` `FY` `C` `G` `H` `P` `W` | Steinegger & Soding 2018 |
-| `reduced_wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
-| `reduced_hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
-| `reduced_uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
+| `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
+| `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
+| `gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
+| `sdm12` | 12 | `A` `D` `KER` `N` `TSQ` `YF` `LIVM` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
+| `mmseqs12` | 12 | `AST` `LM` `IV` `KR` `EQ` `ND` `FY` `C` `G` `H` `P` `W` | Steinegger & Soding 2018 |
+| `wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
+| `hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
+| `uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
 
 GBMR4, SDM12 and HSDM17 were the top performers in Peterson et al. on recall at 0.01
 errors per query, AUC and mean pooled precision respectively. Each is a refinement of
@@ -278,18 +290,18 @@ shows `LIVM` as `l` and can be read against the source residues directly.
 
 Class count and k-size trade off against each other, so a k that works for `hp` is
 usually too long here. Searching CED-9 against the 25-sequence BCL-2 test file at k=10
-finds the same 21 targets under `hp` and `reduced_gbmr4`, but `hp` reports 1673 matched
-regions against GBMR4's 294; `reduced_sdm12` finds nothing at k=10 and 17 targets in 110
+finds the same 21 targets under `hp` and `gbmr4`, but `hp` reports 1673 matched
+regions against GBMR4's 294; `sdm12` finds nothing at k=10 and 17 targets in 110
 regions at k=5.
 
 ### Ambiguity codes
 
-Under `reduced_dayhoff6` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
+Under `dayhoff6` and the named HP tables, B (Asx), J (Xle) and Z (Glx) are replaced
 by a fixed representative, because both residues each code stands for land in the same
 class either way. Most of these alphabets split at least one of those pairs -- SDM12 and
 HSDM17 give Asp and Asn separate classes -- so under them B/J/Z, along with U (Sec) and
-O (Pyl), are kept and hashed as themselves, the way X already is. Only `reduced_gbmr4`
-and `reduced_gbmr7` collapse all three pairs and so still substitute.
+O (Pyl), are kept and hashed as themselves, the way X already is. Only `gbmr4`
+and `gbmr7` collapse all three pairs and so still substitute.
 
 ## Using the Builder Pattern
 

@@ -2,6 +2,7 @@ use serde::{Deserialize, Serialize};
 use std::fmt;
 
 use crate::hp_alphabets::HpAlphabet;
+use crate::reduced_alphabets::ReducedAlphabet;
 
 /// A type-safe wrapper for k-mer sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -93,23 +94,22 @@ impl MolType {
         if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
             return Ok(MolType(alphabet.to_moltype()));
         }
+        if let Some(alphabet) = ReducedAlphabet::from_moltype(moltype) {
+            return Ok(MolType(alphabet.to_moltype()));
+        }
         match moltype {
-            // Dayhoff carries its class count too; the bare name is the pre-rename
-            // spelling and normalizes to it.
-            "dayhoff" => Ok(MolType("reduced_dayhoff6".to_string())),
-            // `raw` is a synonym for `protein` in encoding.rs; both keep their own name so
-            // generated filenames stay stable.
-            "protein" | "raw" => Ok(MolType(moltype.to_string())),
-            s if s.starts_with("reduced_") => Ok(MolType(moltype.to_string())),
+            // Every alphabet states its class count, the unreduced one included: `protein`
+            // and its synonym `raw` are the older spellings of the full 20-letter alphabet,
+            // and `dayhoff` of the 6-class one.
+            "protein20" | "protein" | "raw" => Ok(MolType("protein20".to_string())),
+            "dayhoff6" | "dayhoff" => Ok(MolType("dayhoff6".to_string())),
             _ => Err(format!(
-                "Invalid molecular type: {}. Must be one of: protein, reduced_dayhoff6, hp, \
-                 reduced_hp_lehninger2, reduced_hp_thomas_dill2, reduced_hp_kyte_doolittle2, \
-                 reduced_hp_thomas_dill_no_c2, reduced_hp_lehninger_c_nonpolar2, \
-                 reduced_hp_lehninger_hpc3, reduced_hp_pbotc_1st_ed2, \
-                 reduced_hp_shuffled_control2, reduced_gbmr4, reduced_wwmj5, reduced_gbmr7, \
-                 reduced_sdm12, reduced_mmseqs12, reduced_wass14, reduced_hsdm17, \
-                 reduced_uniprot18 (the pre-rename hp_<name> and dayhoff spellings are \
-                 still accepted)",
+                "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \
+                 hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
+                 hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
+                 hp_random_control2, gbmr4, wwmj5, gbmr7, sdm12, mmseqs12, wass14, hsdm17, \
+                 uniprot18 (older spellings -- protein, raw, hp, dayhoff, hp_<name> without \
+                 a class count, a reduced_ prefix, shuffled_control -- are still accepted)",
                 moltype
             )),
         }
@@ -204,7 +204,7 @@ mod tests {
 
     #[test]
     fn test_moltype_validation() {
-        assert!(MolType::new("protein").is_ok());
+        assert!(MolType::new("protein20").is_ok());
         assert!(MolType::new("dayhoff").is_ok());
         assert!(MolType::new("hp").is_ok());
         assert!(MolType::new("invalid").is_err());
@@ -217,15 +217,15 @@ mod tests {
     #[test]
     fn test_moltype_normalizes_legacy_hp_names() {
         let expected = [
-            ("hp_lehninger", "reduced_hp_lehninger2"),
-            ("hp_thomas_dill", "reduced_hp_thomas_dill2"),
-            ("hp_kyte_doolittle", "reduced_hp_kyte_doolittle2"),
-            ("hp_thomas_dill_no_c", "reduced_hp_thomas_dill_no_c2"),
-            ("hp_lehninger_c_nonpolar", "reduced_hp_lehninger_c_nonpolar2"),
-            ("hp_lehninger_hpc", "reduced_hp_lehninger_hpc3"),
-            ("hp_pbotc_1st_ed", "reduced_hp_pbotc_1st_ed2"),
-            ("hp_shuffled_control", "reduced_hp_shuffled_control2"),
-            ("hp_shuffled_control_4", "reduced_hp_shuffled_control2_4"),
+            ("hp_lehninger", "hp_lehninger2"),
+            ("hp_thomas_dill", "hp_thomas_dill2"),
+            ("hp_kyte_doolittle", "hp_kyte_doolittle2"),
+            ("hp_thomas_dill_no_c", "hp_thomas_dill_no_c2"),
+            ("hp_lehninger_c_nonpolar", "hp_lehninger_c_nonpolar2"),
+            ("hp_lehninger_hpc", "hp_lehninger_hpc3"),
+            ("hp_pbotc_1st_ed", "hp_pbotc_1st_ed2"),
+            ("hp_shuffled_control", "hp_random_control2"),
+            ("hp_shuffled_control_4", "hp_random_control2_4"),
         ];
 
         for (legacy, current) in expected {
@@ -241,24 +241,32 @@ mod tests {
     /// keep matching (see `test_dayhoff_rename_preserves_hashes`).
     #[test]
     fn test_moltype_normalizes_legacy_dayhoff() {
-        assert_eq!(MolType::new("dayhoff").unwrap().get(), "reduced_dayhoff6");
-        assert_eq!(MolType::new("reduced_dayhoff6").unwrap().get(), "reduced_dayhoff6");
-        assert_eq!(MolType::new("dayhoff").unwrap(), MolType::new("reduced_dayhoff6").unwrap());
+        assert_eq!(MolType::new("dayhoff").unwrap().get(), "dayhoff6");
+        assert_eq!(MolType::new("dayhoff6").unwrap().get(), "dayhoff6");
+        assert_eq!(MolType::new("dayhoff").unwrap(), MolType::new("dayhoff6").unwrap());
     }
 
     /// `hp` is now the pre-rename spelling of the Lehninger 2-class alphabet.
     #[test]
     fn test_moltype_normalizes_builtin_hp_to_lehninger2() {
-        assert_eq!(MolType::new("hp").unwrap().get(), "reduced_hp_lehninger2");
-        assert_eq!(MolType::new("hp").unwrap(), MolType::new("reduced_hp_lehninger2").unwrap());
+        assert_eq!(MolType::new("hp").unwrap().get(), "hp_lehninger2");
+        assert_eq!(MolType::new("hp").unwrap(), MolType::new("hp_lehninger2").unwrap());
     }
 
     /// `protein` and its synonym `raw` are the full 20-letter alphabet and keep their names,
     /// as do the alphabets that already carry a class count.
     #[test]
     fn test_moltype_leaves_current_names_alone() {
-        for moltype in ["protein", "raw", "reduced_sdm12", "reduced_gbmr4", "reduced_uniprot18"] {
+        for moltype in ["protein20", "dayhoff6", "hp_lehninger2", "sdm12", "gbmr4", "uniprot18"] {
             assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
+        }
+    }
+
+    /// The full alphabet carries its count too, so `protein` and `raw` are older spellings.
+    #[test]
+    fn test_moltype_normalizes_protein_and_raw() {
+        for moltype in ["protein", "raw", "protein20"] {
+            assert_eq!(MolType::new(moltype).unwrap().get(), "protein20", "{moltype}");
         }
     }
 }

@@ -17,14 +17,9 @@ mod tests {
     fn test_custom_hp_kmer_positions_match_minhash() {
         let seq = "NSQLAGKRILVTQADTFMGPTLCEVFAEMGNTLSGFLNYCSFNLNLQTLRHYVLAKILNKH";
         let ksize = 10;
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test_seq",
-            seq,
-            ksize,
-            1,
-            "reduced_hp_kyte_doolittle2",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle2")
+                .unwrap();
 
         let minhash_set = sketch.mins_as_set();
         assert!(!minhash_set.is_empty(), "minhash should not be empty");
@@ -58,14 +53,9 @@ mod tests {
     #[test]
     fn test_custom_hp_encoded_sequence_contains_hp_chars() {
         let seq = "MKTAYIAKQRFLVS";
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test_hp_enc",
-            seq,
-            8,
-            1,
-            "reduced_hp_kyte_doolittle2",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle2")
+                .unwrap();
 
         let enc = sketch
             .get_moltype_sequence()
@@ -85,14 +75,9 @@ mod tests {
     #[test]
     fn test_custom_hp_encoded_sequence_differs_from_raw() {
         let seq = "MKTAYIAKQRFLVS";
-        let sketch = ProteinSketch::from_protein_sequence(
-            "test_hp_diff",
-            seq,
-            8,
-            1,
-            "reduced_hp_kyte_doolittle2",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle2")
+                .unwrap();
 
         let raw = sketch.get_raw_sequence().expect("raw_sequence should be Some");
         let enc = sketch.get_moltype_sequence().expect("encoded_sequence should be Some");
@@ -127,14 +112,9 @@ mod tests {
 
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
 
-        let sketch = ProteinSketch::from_protein_sequence(
-            "self_test",
-            seq,
-            8,
-            1,
-            "reduced_hp_kyte_doolittle2",
-        )
-        .unwrap();
+        let sketch =
+            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle2")
+                .unwrap();
 
         let shared_hashes = sketch.mins_as_set();
         assert!(!shared_hashes.is_empty(), "self-hit must share hashes");
@@ -155,13 +135,13 @@ mod tests {
         let ksize = 8;
 
         let alphabets = [
-            "reduced_hp_kyte_doolittle2",
-            "reduced_hp_thomas_dill2",
-            "reduced_hp_lehninger2",
-            "reduced_hp_thomas_dill_no_c2",
-            "reduced_hp_lehninger_c_nonpolar2",
-            "reduced_hp_lehninger_hpc3",
-            "reduced_hp_pbotc_1st_ed2",
+            "hp_kyte_doolittle2",
+            "hp_thomas_dill2",
+            "hp_lehninger2",
+            "hp_thomas_dill_no_c2",
+            "hp_lehninger_c_nonpolar2",
+            "hp_lehninger_hpc3",
+            "hp_pbotc_1st_ed2",
         ];
 
         for moltype in alphabets {
@@ -241,8 +221,7 @@ mod tests {
 
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
         let sketch =
-            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "reduced_hp_kyte_doolittle2")
-                .unwrap();
+            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle2").unwrap();
 
         let empty: HashSet<u64> = HashSet::new();
         let regions = find_matched_regions(&sketch, &sketch, &empty);
@@ -261,11 +240,9 @@ mod tests {
         let seq_b = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"; // all-cys: likely different HP pattern
 
         let sketch_a =
-            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "reduced_hp_kyte_doolittle2")
-                .unwrap();
+            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle2").unwrap();
         let sketch_b =
-            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "reduced_hp_kyte_doolittle2")
-                .unwrap();
+            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle2").unwrap();
 
         let shared = sketch_a
             .mins_as_set()
@@ -277,35 +254,39 @@ mod tests {
         let _regions = find_matched_regions(&sketch_a, &sketch_b, &shared);
     }
 
-    /// An index built before the HP rename stores `hp_<name>`; a query sketched afterwards
-    /// uses `reduced_hp_<name>2`. Both must resolve to the same table and therefore the same
-    /// hashes, otherwise every pre-rename index would silently stop matching.
+    /// An index built before the HP names settled stores an older spelling; a query sketched
+    /// afterwards uses the current one. Both must resolve to the same table and therefore
+    /// the same hashes, otherwise every older index would silently stop matching.
     #[test]
-    fn test_legacy_and_current_moltype_names_sketch_identically() {
+    fn test_older_and_current_moltype_names_sketch_identically() {
         use crate::hp_alphabets::HpAlphabet;
 
         let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
 
         for alphabet in HpAlphabet::all_named() {
-            let legacy = alphabet.legacy_moltype();
             let current = alphabet.to_moltype();
+            // The two spellings this alphabet had before: no class count, and with the
+            // redundant `reduced_` prefix.
+            let older = [format!("hp_{}", alphabet.name()), format!("reduced_{current}")];
 
-            let from_legacy =
-                ProteinSketch::from_protein_sequence("x", seq, 8, 1, &legacy).unwrap();
             let from_current =
                 ProteinSketch::from_protein_sequence("x", seq, 8, 1, &current).unwrap();
 
-            assert_eq!(
-                from_legacy.mins_as_set(),
-                from_current.mins_as_set(),
-                "{legacy} and {current} produced different hashes"
-            );
-            // The legacy spelling is normalized away, so nothing downstream sees two names.
-            assert_eq!(from_legacy.moltype().get(), current, "{legacy} was not normalized");
+            for spelling in older {
+                let from_older =
+                    ProteinSketch::from_protein_sequence("x", seq, 8, 1, &spelling).unwrap();
+                assert_eq!(
+                    from_older.mins_as_set(),
+                    from_current.mins_as_set(),
+                    "{spelling} and {current} produced different hashes"
+                );
+                // Older spellings are normalized away, so nothing downstream sees two names.
+                assert_eq!(from_older.moltype().get(), current, "{spelling} was not normalized");
+            }
         }
     }
 
-    /// Renaming `dayhoff` to `reduced_dayhoff6` must not change a single hash: both names
+    /// Renaming `dayhoff` to `dayhoff6` must not change a single hash: both names
     /// resolve to sourmash's Murmur64Dayhoff and its own encoder, so existing dayhoff
     /// indexes stay searchable. This is the guarantee that `hp` cannot make, because the
     /// built-in HP path hashes lowercase h/p while the custom tables hash uppercase H/P.
@@ -314,15 +295,14 @@ mod tests {
         let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
 
         let legacy = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "dayhoff").unwrap();
-        let current =
-            ProteinSketch::from_protein_sequence("x", seq, 8, 1, "reduced_dayhoff6").unwrap();
+        let current = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "dayhoff6").unwrap();
 
         assert_eq!(legacy.mins_as_set(), current.mins_as_set());
         assert_eq!(legacy.get_moltype_sequence(), current.get_moltype_sequence());
-        assert_eq!(legacy.moltype().get(), "reduced_dayhoff6");
+        assert_eq!(legacy.moltype().get(), "dayhoff6");
     }
 
-    /// `hp` is now a spelling of `reduced_hp_lehninger2`, not a separate encoding: same
+    /// `hp` is now a spelling of `hp_lehninger2`, not a separate encoding: same
     /// partition, same hashes, same stored name. Before the merge the two shared a partition
     /// but no hashes, because sourmash's built-in HP encoder hashes lowercase h/p while a
     /// pre-encoded custom table is uppercased to H/P first. `hp` now takes the custom path
@@ -332,11 +312,10 @@ mod tests {
         let seq = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
 
         let bare = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp").unwrap();
-        let named =
-            ProteinSketch::from_protein_sequence("x", seq, 8, 1, "reduced_hp_lehninger2").unwrap();
+        let named = ProteinSketch::from_protein_sequence("x", seq, 8, 1, "hp_lehninger2").unwrap();
 
         assert_eq!(bare.mins_as_set(), named.mins_as_set());
         assert_eq!(bare.get_moltype_sequence(), named.get_moltype_sequence());
-        assert_eq!(bare.moltype().get(), "reduced_hp_lehninger2");
+        assert_eq!(bare.moltype().get(), "hp_lehninger2");
     }
 }

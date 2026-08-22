@@ -346,7 +346,8 @@ mod tests {
         let stable: StableSignature = small.into();
         assert_eq!(stable.get_name(), "small_seq");
         assert_eq!(stable.get_location(), "small.fasta");
-        assert_eq!(stable.moltype, "protein");
+        // `protein` normalizes to the name that states its class count.
+        assert_eq!(stable.moltype, "protein20");
         // From uses the minhash ksize (protein k=5 * PROTEIN_TO_MINHASH_RATIO=3).
         assert_eq!(stable.ksize, 15);
         assert_eq!(stable.minhash.mins().len(), SEQ_MINS);

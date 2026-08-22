@@ -488,7 +488,10 @@ impl ProteinSketch {
             efficient_data_with_sequence.set_raw_sequence(sequence.to_string());
 
             let moltype_str = self.moltype.to_string();
-            if moltype_str != "protein" {
+            // The full alphabet encodes to itself, so storing an "encoded" copy would just
+            // duplicate the raw sequence. MolType normalizes `protein`/`raw` to `protein20`,
+            // so this one name covers all three spellings.
+            if moltype_str != "protein20" {
                 let encoded_sequence = if let Some(table) = custom_table {
                     // Custom alphabets: apply the table directly, keeping its lowercase
                     // symbols so output matches built-in hp/dayhoff (which sourmash encodes
@@ -667,7 +670,7 @@ mod tests {
         "hpphhhhpppphphhppphppphppphhhhphphhhhpphhphpppphphhpphhphphphhhphphphhpphhphpp";
 
     fn protein_sketch() -> ProteinSketch {
-        ProteinSketch::from_protein_sequence("p1", SEQ, 5, 1, "protein").unwrap()
+        ProteinSketch::from_protein_sequence("p1", SEQ, 5, 1, "protein20").unwrap()
     }
 
     #[test]
@@ -677,7 +680,7 @@ mod tests {
         assert_eq!(s.scaled(), 1);
         assert_eq!(s.minhash_ksize(), 15); // 5 * PROTEIN_TO_MINHASH_RATIO
                                            // `hp` normalizes to the current name for the Lehninger 2-class alphabet.
-        assert_eq!(s.moltype().to_string(), "reduced_hp_lehninger2");
+        assert_eq!(s.moltype().to_string(), "hp_lehninger2");
         assert_eq!(s.signature().minhash.mins().len(), 0);
         assert!(!s.has_efficient_data());
         assert!(s.get_efficient_data().is_none());
@@ -738,7 +741,7 @@ mod tests {
         // Default (off): the raw poly-E homopolymer k-mer is kept, matching
         // legacy behavior. The 7 overlapping "EEEEE" windows (positions 10-16
         // within FKBP8_POLY_E) collapse to a single hash entry with 7 positions.
-        let mut off = ProteinSketch::new("off", 5, 1, "protein").unwrap();
+        let mut off = ProteinSketch::new("off", 5, 1, "protein20").unwrap();
         off.add_protein(FKBP8_POLY_E, false).unwrap();
         assert!(off.kmer_positions().contains_key(&POLY_E_HASH));
         assert_eq!(off.kmer_positions()[&POLY_E_HASH].len(), 7);
@@ -746,7 +749,7 @@ mod tests {
 
         // Opted in: the raw poly-E k-mer is dropped, even though this is
         // "protein" moltype (no HP encoding involved at all).
-        let mut on = ProteinSketch::new("on", 5, 1, "protein").unwrap();
+        let mut on = ProteinSketch::new("on", 5, 1, "protein20").unwrap();
         on.set_remove_low_complexity(true);
         on.add_protein(FKBP8_POLY_E, false).unwrap();
         assert!(!on.kmer_positions().contains_key(&POLY_E_HASH));
@@ -764,12 +767,12 @@ mod tests {
         // Lehninger partition, which places G in the h class. It is not a raw
         // amino-acid homopolymer, so only the HP-encoded check can catch it --
         // exactly the branch this test covers.
-        let mut off = ProteinSketch::new("off", 5, 1, "reduced_hp_lehninger2").unwrap();
+        let mut off = ProteinSketch::new("off", 5, 1, "hp_lehninger2").unwrap();
         off.add_protein(TEST_PROTEIN, false).unwrap();
         assert_eq!(off.kmer_positions().len(), 14);
         assert_eq!(off.low_complexity_counts(), (0, 0), "counters stay 0 when removal is off");
 
-        let mut on = ProteinSketch::new("on", 5, 1, "reduced_hp_lehninger2").unwrap();
+        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger2").unwrap();
         on.set_remove_low_complexity(true);
         on.add_protein(TEST_PROTEIN, false).unwrap();
         assert_eq!(on.kmer_positions().len(), 13);
@@ -783,7 +786,7 @@ mod tests {
     /// already a raw homopolymer.
     #[test]
     fn test_remove_low_complexity_counts_raw_and_encoded_together() {
-        let mut on = ProteinSketch::new("on", 5, 1, "reduced_hp_lehninger2").unwrap();
+        let mut on = ProteinSketch::new("on", 5, 1, "hp_lehninger2").unwrap();
         on.set_remove_low_complexity(true);
         on.add_protein(FKBP8_POLY_E, false).unwrap();
 
@@ -834,7 +837,7 @@ mod tests {
         let a = protein_sketch();
         let b = protein_sketch();
         assert!(a.is_compatible(&b));
-        assert!(!a.is_compatible(&ProteinSketch::new("c", 6, 1, "protein").unwrap()));
+        assert!(!a.is_compatible(&ProteinSketch::new("c", 6, 1, "protein20").unwrap()));
         assert!(!a.is_compatible(&ProteinSketch::new("d", 5, 1, "hp").unwrap()));
 
         let mins = a.mins_as_set();
@@ -845,7 +848,7 @@ mod tests {
 
     #[test]
     fn test_set_and_get_efficient_data() {
-        let mut s = ProteinSketch::new("n", 5, 1, "protein").unwrap();
+        let mut s = ProteinSketch::new("n", 5, 1, "protein20").unwrap();
         assert!(!s.has_efficient_data());
         let store =
             ProteinSketchStore::new("n".into(), vec![1, 2], None, HashMap::new(), None, None);

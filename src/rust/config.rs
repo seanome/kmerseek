@@ -227,7 +227,8 @@ mod tests {
 
         assert_eq!(config.ksize.get(), 5);
         assert_eq!(config.scaled.get(), 5);
-        assert_eq!(config.moltype.get(), "protein");
+        // `protein` normalizes to the name that states its class count.
+        assert_eq!(config.moltype.get(), "protein20");
         assert!(!config.store_raw_sequences);
     }
 

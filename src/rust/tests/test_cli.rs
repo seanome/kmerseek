@@ -84,8 +84,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
 fn test_cli_index_different_encodings() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
 
-    for encoding in ["protein", "dayhoff", "hp", "reduced_gbmr4", "reduced_sdm12", "reduced_hsdm17"]
-    {
+    for encoding in ["protein", "dayhoff", "hp", "gbmr4", "sdm12", "hsdm17"] {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", encoding));
 
         let mut cmd = Command::cargo_bin("kmerseek")?;
@@ -301,11 +300,10 @@ fn test_cli_remove_low_complexity_auto_filename_does_not_collide(
 
     // `--encoding hp` is stored under the alphabet's current name, so that is what the
     // generated filename carries.
-    let kept_all =
-        temp_dir.path().join("ced9.fasta.reduced_hp_lehninger2.k8.scaled1.kmerseek.rocksdb");
+    let kept_all = temp_dir.path().join("ced9.fasta.hp_lehninger2.k8.scaled1.kmerseek.rocksdb");
     let removed = temp_dir
         .path()
-        .join("ced9.fasta.reduced_hp_lehninger2.k8.scaled1.nolowcomplexity.kmerseek.rocksdb");
+        .join("ced9.fasta.hp_lehninger2.k8.scaled1.nolowcomplexity.kmerseek.rocksdb");
     assert!(kept_all.exists(), "index keeping every k-mer should keep its historical name");
     assert!(removed.exists(), "index with removal should get its own name");
 
@@ -454,7 +452,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
             assert_eq!(record.ksize, 12, "Ksize should be 12");
             assert_eq!(record.scaled, 1, "Scaled should be 1");
             assert_eq!(
-                record.moltype, "reduced_hp_lehninger2",
+                record.moltype, "hp_lehninger2",
                 "Moltype should be the normalized name for the hp alphabet"
             );
 

@@ -2672,7 +2672,7 @@ mod tests {
         assert_eq!(bcl2_result.ksize, ksize);
         assert_eq!(bcl2_result.scaled, scaled);
         // Results carry the normalized moltype, not the spelling the index was created with.
-        assert_eq!(bcl2_result.moltype, "reduced_hp_lehninger2");
+        assert_eq!(bcl2_result.moltype, "hp_lehninger2");
 
         // Verify we have intersecting k-mers
         assert!(

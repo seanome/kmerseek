@@ -105,14 +105,14 @@ impl AminoAcidAmbiguity {
     /// WHY only for alphabets that collapse each ambiguous pair: under Dayhoff or a named HP
     /// table a code like B encodes identically whether it is read as Asp or Asn, so
     /// substituting a representative is lossless. Three groups of moltypes are excluded:
-    ///   - `protein`/`raw` keep the full 20-letter alphabet, so there is no such equivalence
+    ///   - `protein20` (spelled `protein` or `raw` in older indexes) keeps all 20 residues, so there is no such equivalence
     ///     to exploit — picking Asp would assert a residue the source never claimed.
-    ///   - `reduced_hp_shuffled_control2[_1..10]` are HP tables too, but their partition is randomized
+    ///   - `hp_random_control2[_1..10]` are HP tables too, but their partition is randomized
     ///     rather than biochemically derived, so the two alternatives can land on opposite
-    ///     sides (see `test_shuffled_control_does_not_preserve_ambiguity_equivalence`). These
+    ///     sides (see `test_random_control_does_not_preserve_ambiguity_equivalence`). These
     ///     are excluded by name rather than by the equivalence check below, because a control
     ///     should not start substituting on the seeds where the shuffle happens to agree.
-    ///   - the `reduced_*` alphabets that split an ambiguous pair across classes, which is
+    ///   - the multi-letter alphabets that split an ambiguous pair across classes, which is
     ///     most of them (`preserves_ambiguity_equivalence`).
     ///
     /// All of them keep the original code and hash it as itself, consistent with how X is
@@ -122,10 +122,10 @@ impl AminoAcidAmbiguity {
         sequence: &'a str,
         moltype: &str,
     ) -> IndexResult<Cow<'a, str>> {
-        let reduces_alphabet = !matches!(moltype, "protein" | "raw")
+        let reduces_alphabet = !matches!(moltype, "protein20" | "protein" | "raw")
             && !matches!(
                 HpAlphabet::from_moltype(moltype),
-                Some(HpAlphabet::ShuffledControl | HpAlphabet::Shuffled(_))
+                Some(HpAlphabet::RandomControl | HpAlphabet::Random(_))
             )
             && preserves_ambiguity_equivalence(moltype);
 
@@ -221,7 +221,7 @@ mod tests {
     /// encode identically under every biochemically-derived alphabet, otherwise picking a
     /// representative would silently commit to one reading.
     ///
-    /// `hp_shuffled_control` is deliberately exempt — it is a negative control whose partition
+    /// `hp_random_control2` is deliberately exempt — it is a negative control whose partition
     /// is randomized, so it has no reason to respect biochemical equivalence, and is asserted
     /// separately below so that a real alphabet breaking equivalence still fails this test.
     #[test]
@@ -244,7 +244,7 @@ mod tests {
             }
 
             for alphabet in HpAlphabet::all_named() {
-                if matches!(alphabet, HpAlphabet::ShuffledControl) {
+                if matches!(alphabet, HpAlphabet::RandomControl) {
                     continue;
                 }
                 let table = alphabet.table();
@@ -261,18 +261,18 @@ mod tests {
     }
 
     /// Documents the one alphabet where substituting a representative is *not* lossless.
-    /// The shuffled control randomizes the partition, so D/N, I/L and E/Q land on opposite
+    /// The random control randomizes the partition, so D/N, I/L and E/Q land on opposite
     /// sides. Substitution there is still deterministic, which is what matters for a control.
     #[test]
-    fn test_shuffled_control_does_not_preserve_ambiguity_equivalence() {
+    fn test_random_control_does_not_preserve_ambiguity_equivalence() {
         use crate::hp_alphabets::HpAlphabet;
 
-        let table = HpAlphabet::ShuffledControl.table();
+        let table = HpAlphabet::RandomControl.table();
         for (code, pair) in [('B', "DN"), ('J', "IL"), ('Z', "EQ")] {
             let codes: Vec<u8> = pair.bytes().map(|b| *table.get(&b).unwrap()).collect();
             assert_ne!(
                 codes[0], codes[1],
-                "{code}: shuffled control unexpectedly preserves {pair} equivalence"
+                "{code}: random control unexpectedly preserves {pair} equivalence"
             );
         }
     }
@@ -328,15 +328,15 @@ mod tests {
     fn test_validate_and_resolve_keeps_codes_verbatim_for_protein() {
         let aa = AminoAcidAmbiguity::new();
 
-        // Under `protein` there is no equivalence to exploit, so nothing is substituted.
-        let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "protein").unwrap();
+        // Under protein20 there is no equivalence to exploit, so nothing is substituted.
+        let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "protein20").unwrap();
         assert_eq!(resolved.as_ref(), "ACDEFXBZJUO");
         assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
     }
 
-    /// `raw` is a synonym for `protein` in encoding.rs (get_hash_function_from_moltype and
+    /// `raw` is a synonym for `protein20` in encoding.rs (get_hash_function_from_moltype and
     /// get_encoding_fn_from_moltype both treat them identically), so it must be exempt from
-    /// substitution for the same reason `protein` is.
+    /// substitution for the same reason `protein20` is.
     #[test]
     fn test_validate_and_resolve_keeps_codes_verbatim_for_raw() {
         let aa = AminoAcidAmbiguity::new();
@@ -346,14 +346,14 @@ mod tests {
         assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
     }
 
-    /// The shuffled-control HP alphabets randomize the h/p partition, so a fixed representative
-    /// is not lossless there (test_shuffled_control_does_not_preserve_ambiguity_equivalence).
+    /// The random-control HP alphabets randomize the h/p partition, so a fixed representative
+    /// is not lossless there (test_random_control_does_not_preserve_ambiguity_equivalence).
     /// Both the base control and a seeded variant must keep codes verbatim, not substitute.
     #[test]
-    fn test_validate_and_resolve_keeps_codes_verbatim_for_shuffled_control() {
+    fn test_validate_and_resolve_keeps_codes_verbatim_for_random_control() {
         let aa = AminoAcidAmbiguity::new();
 
-        for moltype in ["reduced_hp_shuffled_control2", "reduced_hp_shuffled_control2_1"] {
+        for moltype in ["hp_random_control2", "hp_random_control2_1"] {
             let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
             assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
             assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");
@@ -422,7 +422,7 @@ mod tests {
         let aa = AminoAcidAmbiguity::new();
 
         assert_eq!(
-            aa.validate_and_resolve("ACDEFXBZJUO", "reduced_gbmr4").unwrap().as_ref(),
+            aa.validate_and_resolve("ACDEFXBZJUO", "gbmr4").unwrap().as_ref(),
             "ACDEFXDEICK"
         );
     }
@@ -433,14 +433,7 @@ mod tests {
     fn test_validate_and_resolve_keeps_codes_verbatim_for_split_reduced_alphabets() {
         let aa = AminoAcidAmbiguity::new();
 
-        for moltype in [
-            "reduced_wwmj5",
-            "reduced_sdm12",
-            "reduced_mmseqs12",
-            "reduced_wass14",
-            "reduced_hsdm17",
-            "reduced_uniprot18",
-        ] {
+        for moltype in ["wwmj5", "sdm12", "mmseqs12", "wass14", "hsdm17", "uniprot18"] {
             let resolved = aa.validate_and_resolve("ACDEFXBZJUO", moltype).unwrap();
             assert_eq!(resolved.as_ref(), "ACDEFXBZJUO", "{moltype}");
             assert!(matches!(resolved, Cow::Borrowed(_)), "{moltype}: should not allocate");
