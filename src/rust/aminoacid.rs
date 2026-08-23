@@ -14,12 +14,15 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 
 /// The two residues each ambiguity code stands for.
 ///
-///   - B (Asx) = Asp or Asn
-///   - J (Xle) = Ile or Leu
-///   - Z (Glx) = Glu or Gln
+///   - `B` (Asx) is `D` (Asp, aspartate) or `N` (Asn, asparagine)
+///   - `J` (Xle) is `I` (Ile, isoleucine) or `L` (Leu, leucine)
+///   - `Z` (Glx) is `E` (Glu, glutamate) or `Q` (Gln, glutamine)
+///
+/// These appear when the source method could not tell the pair apart, most often because
+/// Asn and Gln deamidate to Asp and Glu during acid hydrolysis.
 ///
 /// A code is never resolved to one of the pair. Every k-mer window covering it is indexed
-/// under *both* readings instead (`ambiguity_readings`), so a search matches whichever
+/// under *both* readings instead (`disambiguate_kmer`), so a search matches whichever
 /// residue the query holds. Picking one would assert a residue the source never
 /// claimed, and which reading is safe depends on the alphabet: SDM12 and HSDM17 give Asp
 /// and Asn separate classes, so under them the two readings are different k-mers.
@@ -28,8 +31,8 @@ pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
 
 /// Most ambiguity codes allowed in one k-mer window.
 ///
-/// A code doubles the readings of any window it falls in, so a window holding `n` codes
-/// expands to `2^n`: four codes give sixteen readings.
+/// Disambiguating a code doubles the readings of any window it falls in, so a window
+/// holding `n` codes yields `2^n` readings: four codes give sixteen.
 ///
 /// A window holding more than this is dropped rather than indexed under part of its
 /// readings, because then whether a query matched would depend on which subset was kept.
@@ -48,13 +51,14 @@ fn alternatives(code: u8) -> Option<[u8; 2]> {
         .map(|(_, [first, second])| [*first as u8, *second as u8])
 }
 
-/// Whether `residues` contains any ambiguity code, and so needs expanding.
+/// Whether `residues` contains any ambiguity code, and so needs disambiguating.
 pub fn has_ambiguity_codes(residues: &[u8]) -> bool {
     residues.iter().any(|b| alternatives(*b).is_some())
 }
 
-/// Every reading of `kmer`, with each ambiguity code replaced by both residues it stands
-/// for. A k-mer with no ambiguity codes yields itself.
+/// Disambiguate one k-mer: every reading of `kmer`, with each ambiguity code replaced by
+/// both residues it stands for (`B` becomes `D` and `N`, `J` becomes `I` and `L`, `Z`
+/// becomes `E` and `Q`). A k-mer with no ambiguity codes yields itself.
 ///
 /// Returns `None` when the window carries more than [`MAX_AMBIGUITY_CODES_PER_WINDOW`]
 /// codes.
@@ -62,7 +66,7 @@ pub fn has_ambiguity_codes(residues: &[u8]) -> bool {
 /// WHY bytes rather than `&str`: callers hash the result, and hashing reads bytes. Going
 /// through `String` would add a UTF-8 validation per reading and a panic path for input
 /// that validation has already ruled out.
-pub fn ambiguity_readings(kmer: &[u8]) -> Option<Vec<Vec<u8>>> {
+pub fn disambiguate_kmer(kmer: &[u8]) -> Option<Vec<Vec<u8>>> {
     let codes = kmer.iter().filter(|b| alternatives(**b).is_some()).count();
     if codes > MAX_AMBIGUITY_CODES_PER_WINDOW {
         return None;
@@ -156,7 +160,7 @@ impl AminoAcidAmbiguity {
     /// class to fall into and rewriting U as C would assert a residue the source never had.
     ///
     /// The ambiguity codes B, J and Z are never resolved here. They stay in the sequence and
-    /// every k-mer covering one is indexed under both readings; see `ambiguity_readings`.
+    /// every k-mer covering one is indexed under both readings; see `disambiguate_kmer`.
     pub fn validate_and_resolve<'a>(
         &self,
         sequence: &'a str,
@@ -356,11 +360,11 @@ mod tests {
         }
     }
 
-    /// Expansion readable as strings; the function itself works in bytes so that hashing
-    /// does not pay for UTF-8 validation.
+    /// Disambiguation readable as strings; the function itself works in bytes so that
+    /// hashing does not pay for UTF-8 validation.
     fn readings(kmer: &str) -> Option<Vec<String>> {
         Some(
-            ambiguity_readings(kmer.as_bytes())?
+            disambiguate_kmer(kmer.as_bytes())?
                 .into_iter()
                 .map(|reading| String::from_utf8(reading).expect("input is ASCII"))
                 .collect(),
@@ -372,16 +376,16 @@ mod tests {
     /// SDM12 or HSDM17 -- where Asp and Asn are separate classes -- the two readings are
     /// different k-mers.
     #[test]
-    fn test_ambiguity_readings_expands_each_code_to_both_residues() {
+    fn test_disambiguation_yields_both_residues_of_each_code() {
         assert_eq!(readings("MKBTA").unwrap(), vec!["MKDTA", "MKNTA"]);
         assert_eq!(readings("MKJTA").unwrap(), vec!["MKITA", "MKLTA"]);
         assert_eq!(readings("MKZTA").unwrap(), vec!["MKETA", "MKQTA"]);
     }
 
-    /// A window free of ambiguity codes yields itself, so the expansion path adds no k-mers
-    /// in the common case.
+    /// A window free of ambiguity codes yields itself, so disambiguation adds no k-mers in
+    /// the common case.
     #[test]
-    fn test_ambiguity_readings_passes_through_unambiguous_kmers() {
+    fn test_disambiguation_passes_through_unambiguous_kmers() {
         assert_eq!(readings("MKTAY").unwrap(), vec!["MKTAY"]);
         // X and the stop codon carry no residue identity, so they are not expanded either.
         assert_eq!(readings("MXT*A").unwrap(), vec!["MXT*A"]);
@@ -389,15 +393,15 @@ mod tests {
 
     /// Codes multiply, so two in one window give four readings and three give eight.
     #[test]
-    fn test_ambiguity_readings_multiply() {
+    fn test_disambiguation_multiplies_with_each_code() {
         assert_eq!(readings("BZ").unwrap(), vec!["DE", "DQ", "NE", "NQ"]);
         assert_eq!(readings("BJZ").unwrap().len(), 8);
     }
 
-    /// Past four codes in one window the expansion is refused rather than indexed under an
-    /// arbitrary subset of its readings.
+    /// Past four codes in one window, disambiguation is refused rather than indexed under
+    /// an arbitrary subset of its readings.
     #[test]
-    fn test_ambiguity_readings_refuses_runaway_expansion() {
+    fn test_disambiguation_refuses_runaway_growth() {
         assert_eq!(readings("BBBB").unwrap().len(), MAX_AMBIGUITY_READINGS);
         assert_eq!(readings("BBBBB"), None);
     }
@@ -405,7 +409,7 @@ mod tests {
     /// Every reading must be a sequence over the canonical residues, since each stands for a
     /// k-mer the source could have held.
     #[test]
-    fn test_ambiguity_readings_are_canonical() {
+    fn test_disambiguated_readings_are_canonical() {
         let aa = AminoAcidAmbiguity::new();
         for reading in readings("ACBJZ").unwrap() {
             assert!(aa.validate_sequence(&reading).is_ok(), "{reading}");

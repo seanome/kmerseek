@@ -1,4 +1,4 @@
-use crate::encoding::get_hash_function_from_moltype;
+use crate::hash_functions::get_hash_function_from_moltype;
 use crate::signature::StableSignature;
 use crate::types::MolType;
 use crate::SEED;
@@ -391,9 +391,10 @@ impl ProteinSketch {
     /// This is ~3.4× faster to build and ~2.5× smaller to serialize, with identical
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
-        use crate::aminoacid::{ambiguity_readings, has_ambiguity_codes};
-        use crate::encoding::{
-            alphabet_table, encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype,
+        use crate::alphabets::alphabet_table;
+        use crate::aminoacid::{disambiguate_kmer, has_ambiguity_codes};
+        use crate::hash_functions::{
+            encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype,
         };
         use crate::kmer::is_homopolymer_kmer;
         use sourmash::_hash_murmur;
@@ -416,12 +417,13 @@ impl ProteinSketch {
         // inserts unconditionally. `remove_low_complexity` defaults to false,
         // and the branch below keeps every k-mer.
         if has_ambiguity_codes(sequence.as_bytes()) && !self.remove_low_complexity {
-            // B, J and Z each stand for two residues. Rather than committing to one, index
-            // every window under both readings, so a query carrying either residue matches.
+            // B, J and Z each stand for two residues (B is Asp or Asn, J is Ile or Leu, Z
+            // is Glu or Gln). Rather than committing to one, index every window under both
+            // readings, so a query carrying either residue matches.
             // sourmash's add_protein windows and hashes internally and cannot do this, so
             // hash window by window here. This branch has to come first: a table-backed
             // alphabet would otherwise pre-encode the whole sequence in one go below and
-            // never expand.
+            // never disambiguate.
             let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
             let residues = sequence.as_bytes();
             let mut scratch = Vec::with_capacity(ksize);
@@ -432,7 +434,7 @@ impl ProteinSketch {
                     self.signature.minhash.add_hash(hashval);
                     continue;
                 }
-                let Some(readings) = ambiguity_readings(kmer) else {
+                let Some(readings) = disambiguate_kmer(kmer) else {
                     continue;
                 };
                 for reading in readings {
@@ -524,7 +526,7 @@ impl ProteinSketch {
                 }
                 continue;
             }
-            let Some(readings) = ambiguity_readings(kmer) else {
+            let Some(readings) = disambiguate_kmer(kmer) else {
                 continue;
             };
             for reading in readings {

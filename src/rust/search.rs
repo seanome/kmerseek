@@ -2818,7 +2818,7 @@ mod tests {
     /// differently, and the position bookkeeping has to hold for all of them, not just one.
     #[test]
     fn test_region_shared_kmer_count_exact_at_scaled_one_all_alphabets() {
-        use crate::hp_alphabets::HpAlphabet;
+        use crate::alphabets::HpAlphabet;
 
         // Real sequence (already used elsewhere in this codebase for HP-alphabet regression
         // tests, see test_hp_encoding.rs) - self-hit so every alphabet reliably finds a region.

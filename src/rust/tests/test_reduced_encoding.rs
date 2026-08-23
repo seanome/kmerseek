@@ -9,7 +9,7 @@
 /// that fragment run through each paper's published partition.
 #[cfg(test)]
 mod tests {
-    use crate::reduced_alphabets::ReducedAlphabet;
+    use crate::alphabets::ReducedAlphabet;
     use crate::sketch::ProteinSketch;
 
     /// CED-9 (P41958) residues 121-181, spanning the BH1 region.

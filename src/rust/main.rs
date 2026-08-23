@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use kmerseek::alphabets::HpAlphabet;
 use kmerseek::errors::IndexResult;
-use kmerseek::hp_alphabets::HpAlphabet;
 use kmerseek::types::MolType;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;

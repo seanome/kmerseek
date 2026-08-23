@@ -1,9 +1,7 @@
 use anyhow::Result;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
-use std::collections::HashMap;
 
-use crate::hp_alphabets::HpAlphabet;
-use crate::reduced_alphabets::ReducedAlphabet;
+use crate::alphabets::{alphabet_table, SOURMASH_HP_MOLTYPE};
 
 const MURMUR64PROTEIN: &str = "Murmur64Protein";
 const MURMUR64DAYHOFF: &str = "Murmur64Dayhoff";
@@ -29,9 +27,10 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
         // Dayhoff has no table of ours; sourmash encodes and hashes it. This arm has to come
         // before the table lookup below, which assumes a pre-encoded sequence.
         "dayhoff6" => Ok(HashFunctions::Murmur64Dayhoff),
-        // Lehninger is sourmash's own aa_to_hp partition, so sourmash encodes and hashes it.
-        // Sketches are then byte-identical to sourmash's for the same sequence.
-        "hp_lehninger2" => Ok(HashFunctions::Murmur64Hp),
+        // Lehninger is sourmash's own aa_to_hp partition, so sourmash encodes and hashes it
+        // and sketches are byte-identical to sourmash's. Its own moltype, bare "hp", is read
+        // here too so that data sourmash labelled stays usable.
+        "hp_lehninger2" | SOURMASH_HP_MOLTYPE => Ok(HashFunctions::Murmur64Hp),
         // Every other alphabet pre-encodes through its own table, so the hash function sees
         // an already-encoded sequence and hashes it as protein.
         s if alphabet_table(s).is_some() => Ok(HashFunctions::Murmur64Protein),
@@ -98,7 +97,7 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
         // get_hash_function_from_moltype: dayhoff is encoded by sourmash, not pre-encoded.
         "dayhoff6" => Ok(aa_to_dayhoff),
         // Encoded by sourmash, like dayhoff6 above.
-        "hp_lehninger2" => Ok(aa_to_hp),
+        "hp_lehninger2" | SOURMASH_HP_MOLTYPE => Ok(aa_to_hp),
         // Table-backed alphabets cannot be expressed as a fn(u8) -> u8; return identity here
         // so callers that only need one don't crash. encode_by_moltype and add_protein apply
         // the table themselves.
@@ -109,21 +108,6 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
             moltype
         )),
     }
-}
-
-/// The residue-to-class table for alphabets kmerseek encodes itself.
-///
-/// Returns `None` for the three alphabets sourmash encodes: `protein20` (no reduction),
-/// `dayhoff6`, and `hp_lehninger2` (sourmash's own `aa_to_hp` partition). Those are hashed
-/// by sourmash directly; everything else is pre-encoded through the table returned here.
-pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
-    if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
-        if alphabet.uses_sourmash_encoder() {
-            return None;
-        }
-        return Some(alphabet.table());
-    }
-    ReducedAlphabet::from_moltype(moltype).map(|alphabet| alphabet.table())
 }
 
 /// Encode a sequence using the specified moltype.
@@ -143,7 +127,7 @@ pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
 ///
 /// # Example
 /// ```
-/// use kmerseek::encoding::encode_by_moltype;
+/// use kmerseek::hash_functions::encode_by_moltype;
 ///
 /// let sequence = "MKTAYIAKQR";
 /// let encoded = encode_by_moltype(sequence, "hp_lehninger2").unwrap();
@@ -181,7 +165,7 @@ pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
 ///
 /// # Example
 /// ```
-/// use kmerseek::encoding::encode_with_fn;
+/// use kmerseek::hash_functions::encode_with_fn;
 /// use sourmash::encodings::aa_to_hp;
 ///
 /// let sequence = "MKTAYIAKQR";

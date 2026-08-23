@@ -5,8 +5,8 @@ use tempfile::tempdir;
 
 use approx::assert_relative_eq;
 
-use crate::hp_alphabets::HpAlphabet;
-use crate::reduced_alphabets::ReducedAlphabet;
+use crate::alphabets::HpAlphabet;
+use crate::alphabets::ReducedAlphabet;
 use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 

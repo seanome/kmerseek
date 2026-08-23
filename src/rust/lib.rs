@@ -1,14 +1,13 @@
+pub mod alphabets;
 pub mod aminoacid;
 pub mod config;
-pub mod encoding;
 pub mod errors;
-pub mod hp_alphabets;
+pub mod hash_functions;
 pub mod index;
 pub mod io;
 pub mod iterators;
 pub mod kmer;
 pub mod metrics;
-pub mod reduced_alphabets;
 pub mod search;
 pub mod signature;
 pub mod significance;

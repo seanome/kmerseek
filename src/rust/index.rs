@@ -20,8 +20,8 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage};
 
 use crate::aminoacid::AminoAcidAmbiguity;
-use crate::encoding::get_hash_function_from_moltype;
 use crate::errors::{IndexError, IndexResult};
+use crate::hash_functions::get_hash_function_from_moltype;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::MolType;
@@ -3148,7 +3148,7 @@ mod tests {
         // The k-mer count is the number of *readings*, not the number of windows: each
         // ambiguity code doubles the windows covering it. For "ACDEFXBZJ" at k=5 the five
         // windows ACDEF, CDEFX, DEFXB, EFXBZ and FXBZJ carry 0, 0, 1, 2 and 3 codes, so they
-        // expand to 1 + 1 + 2 + 4 + 8 = 16 readings.
+        // disambiguate to 1 + 1 + 2 + 4 + 8 = 16 readings.
         let valid_sequences =
             [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 16)];
 
@@ -3238,9 +3238,9 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            // Expanding a code adds k-mers only where the alphabet keeps the two readings
+            // Disambiguating a code adds k-mers only where the alphabet keeps the two readings
             // apart. Dayhoff puts both members of every ambiguous pair in one class, so the
-            // expanded windows hash identically and the count is unchanged.
+            // disambiguated windows hash identically and the count is unchanged.
             assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
             // Check that the ambiguous k-mer is resolved correctly
             if sequence == "PLANTANDANIMALGENBMES" {
@@ -3303,7 +3303,7 @@ mod tests {
 
             let protein_signature = result.unwrap();
             // Both readings of every ambiguous pair land on the same side of the HP split,
-            // so the expanded windows hash identically and the count is unchanged.
+            // so the disambiguated windows hash identically and the count is unchanged.
             assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
             // Check that the ambiguous k-mer is resolved correctly
             if sequence == "PLANTANDANIMALGENBMES" {

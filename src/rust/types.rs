@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::hp_alphabets::HpAlphabet;
-use crate::reduced_alphabets::ReducedAlphabet;
+use crate::alphabets::HpAlphabet;
+use crate::alphabets::ReducedAlphabet;
 
 /// A type-safe wrapper for k-mer sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -84,11 +84,19 @@ pub struct MolType(pub String);
 
 impl MolType {
     /// Create a molecular type, rejecting anything that is not a known alphabet.
+    ///
+    /// sourmash's bare `hp` is accepted and stored as `hp_lehninger2`, the name for the same
+    /// partition. Normalizing here rather than at each call site keeps a single spelling in
+    /// indexes and results: `find_matched_regions` asserts query and target moltypes are
+    /// equal, and two names for one alphabet would abort the search.
     pub fn new(moltype: &str) -> Result<Self, String> {
-        let known = matches!(moltype, "protein20" | "dayhoff6")
-            || HpAlphabet::from_moltype(moltype).is_some()
-            || ReducedAlphabet::from_moltype(moltype).is_some();
-        if known {
+        if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
+            return Ok(MolType(alphabet.to_moltype()));
+        }
+        if let Some(alphabet) = ReducedAlphabet::from_moltype(moltype) {
+            return Ok(MolType(alphabet.to_moltype()));
+        }
+        if matches!(moltype, "protein20" | "dayhoff6") {
             return Ok(MolType(moltype.to_string()));
         }
         Err(format!(
@@ -96,7 +104,7 @@ impl MolType {
              hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
              hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
              hp_random_control2, gbmr4, wwmj5, gbmr7, sdm12, mmseqs12, wass14, hsdm17, \
-             uniprot18",
+             uniprot18 (sourmash's `hp` is also read, as hp_lehninger2)",
             moltype
         ))
     }
@@ -203,5 +211,14 @@ mod tests {
         for moltype in ["protein20", "dayhoff6", "hp_lehninger2", "sdm12", "gbmr4", "uniprot18"] {
             assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
         }
+    }
+
+    /// sourmash labels this partition `hp`. kmerseek reads that name and stores it under its
+    /// own, so a sourmash-labelled index stays usable and only one spelling reaches the rest
+    /// of the code.
+    #[test]
+    fn test_moltype_reads_sourmash_hp_as_lehninger2() {
+        assert_eq!(MolType::new("hp").unwrap().get(), "hp_lehninger2");
+        assert_eq!(MolType::new("hp").unwrap(), MolType::new("hp_lehninger2").unwrap());
     }
 }

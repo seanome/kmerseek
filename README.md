@@ -177,12 +177,16 @@ gives independent replicates.
 
 ### Indexes built before this change
 
-Only the current names parse. An index recording `protein`, `dayhoff`, `hp`, or an
-`hp_<name>` without its class count fails to open:
+Only the current names parse, with one exception. An index recording `protein`,
+`dayhoff`, or an `hp_<name>` without its class count fails to open:
 
 ```
-Unknown alphabet in database: hp
+Unknown alphabet in database: dayhoff
 ```
+
+The exception is sourmash's bare `hp`. kmerseek reads it as `hp_lehninger2`, which names
+the same partition and uses the same hash function, so a sourmash-labelled index or
+signature stays usable.
 
 The k-mers inside are still valid. Every alphabet hashes as it did before: `protein20`
 and `dayhoff6` use the same sourmash hash functions as `protein` and `dayhoff`,
@@ -259,70 +263,69 @@ file at k=10 finds the same 21 targets under `hp_lehninger2` and `gbmr4`, but
 `hp_lehninger2` reports 1673 matched regions against GBMR4's 294. `sdm12` finds nothing
 at k=10, and 17 targets in 110 regions at k=5.
 
-### Ambiguity codes
+### Amino acid disambiguation
 
-B (Asx), J (Xle) and Z (Glx) each stand for two residues. Every k-mer covering one is
-indexed under both readings, so a query holding either residue matches. kmerseek does not
-pick a representative: under `sdm12` and `hsdm17`, Asp and Asn fall in different classes,
-so choosing one would assert a residue the source never had.
+Three one-letter codes stand for a pair of residues rather than a single one, because the
+method that produced the sequence could not tell the pair apart. Asn and Gln deamidate to
+Asp and Glu during acid hydrolysis, and Ile and Leu have the same mass:
 
-Whether that adds k-mers depends on the alphabet, because the two readings do not always
-encode differently. Under `dayhoff6` Asp and Asn are both class `c`, and under the HP
-tables both are polar, so the two readings of a window produce the same encoded k-mer and
-the same hash. Nothing is added. Under `protein20`, `sdm12` and `hsdm17` they encode
-differently, so each affected window contributes two k-mers instead of one.
+| code | name | stands for |
+|---|---|---|
+| `B` | Asx | `D` (Asp, aspartate) **or** `N` (Asn, asparagine) |
+| `J` | Xle | `I` (Ile, isoleucine) **or** `L` (Leu, leucine) |
+| `Z` | Glx | `E` (Glu, glutamate) **or** `Q` (Gln, glutamine) |
 
-`PLANTANDANIMALGENBMES` is 21 residues with a B at index 17, so at k=5 it has 17
-windows and four of them span the B. Those four, with both readings and what each
+kmerseek indexes every k-mer covering one of these under **both** readings, so a query
+holding either residue matches. It does not pick one: under `sdm12` and `hsdm17`, Asp and
+Asn fall in different classes, so choosing `D` for a `B` would assert a residue the source
+never had.
+
+Whether disambiguating adds k-mers depends on the alphabet, because the two readings do
+not always encode differently. Under `dayhoff6` Asp and Asn are both class `c`, and under
+the HP tables both are polar, so the two readings of a window produce the same encoded
+k-mer and the same hash. Under `protein20`, `sdm12` and `hsdm17` they encode differently,
+so the window yields two k-mers instead of one.
+
+`PLANTANDANIMALGENBMES` is 21 residues with a `B` at index 17, so at k=5 it has 17
+windows and four of them span the `B`. Those four, with both readings and what each
 encodes to:
 
-| window | residues | readings | `dayhoff6` | `hp_lehninger2` |
+| window | residues | readings (`B` as `D`, `B` as `N`) | `dayhoff6` | `hp_lehninger2` |
 |---|---|---|---|---|
 | 13 | `LGENB` | `LGEND` `LGENN` | `ebccc` `ebccc` | `hhppp` `hhppp` |
 | 14 | `GENBM` | `GENDM` `GENNM` | `bccce` `bccce` | `hppph` `hppph` |
 | 15 | `ENBME` | `ENDME` `ENNME` | `cccec` `cccec` | `ppphp` `ppphp` |
 | 16 | `NBMES` | `NDMES` `NNMES` | `ccecb` `ccecb` | `pphpp` `pphpp` |
 
-Under `dayhoff6` and `hp_lehninger2` the two readings encode to the same string, so
-the window still yields one k-mer. Under `protein20`, `sdm12` and `hsdm17` they encode
-differently, so the window yields two k-mers instead of one.
+Where each k-mer count comes from:
 
-| alphabet | distinct k-mers |
-|---|---|
-| `protein20` | 21 |
-| `sdm12` | 21 |
-| `hsdm17` | 21 |
-| `dayhoff6` | 17 |
-| `hp_lehninger2` | 14 |
+| alphabet | k-mers with `B` resolved to one residue | k-mers with `B` disambiguated |
+|---|---|---|
+| `protein20` | 17 | 21 |
+| `sdm12` | 17 | 21 |
+| `hsdm17` | 17 | 21 |
+| `dayhoff6` | 17 | 17 |
+| `hp_lehninger2` | 14 | 14 |
 
-Where each count comes from:
+- `protein20`, `sdm12` and `hsdm17` keep `D` and `N` in different classes, so each of the
+  four `B`-windows becomes two k-mers: 17 + 4 = 21.
+- `dayhoff6` puts both in class `c`, so the four windows stay one k-mer each: 17.
+- `hp_lehninger2` starts at 14 rather than 17, for a reason that has nothing to do with
+  the `B`. With only two symbols, three pairs of ordinary windows already encode
+  identically: `PLANT` and `ALGEN` are both `hhhpp`, `ANTAN` and `ANDAN` are both
+  `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
+  at 14.
 
-- `protein20` has 17 k-mers before expansion, one per window, all distinct. Expanding
-  B into D and N turns each of the four B-windows into two k-mers, adding 4. That gives
-  21 k-mers.
-- `sdm12` and `hsdm17` behave the same way, 17 k-mers before expansion and 21 after,
-  because they also keep Asp and Asn in separate classes.
-- `dayhoff6` has 17 k-mers before expansion. Expanding B adds none, because `LGEND` and
-  `LGENN` both encode to `ebccc`. It stays at 17 k-mers.
-- `hp_lehninger2` has 14 k-mers before expansion, not 17. With only two symbols, three
-  pairs of ordinary windows already encode identically: `PLANT` and `ALGEN` are both
-  `hhhpp`, `ANTAN` and `ANDAN` are both `hpphp`, `NTAND` and `NBMES` are both `pphpp`.
-  Expanding B adds none, for the same reason as `dayhoff6`. It stays at 14 k-mers.
+Disambiguating a code doubles the readings of every window it falls in, so a window
+holding *n* codes yields 2^*n* readings. kmerseek disambiguates a window holding at most
+4 codes, which is 16 readings. A window with more is dropped: indexing only part of its
+readings would make matching depend on which subset was kept, which is worse than losing
+that one window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window
+with five codes should not arise.
 
-So the only alphabets where de-ambiguating B changes the k-mer count are the ones that
-encode D and N differently. The gap between 17 and 14 is HP collapsing distinct
-residues, which would be there with or without the B.
-
-An ambiguity code doubles the readings of every window it falls in, so a window holding
-*n* codes expands to 2^*n*. kmerseek indexes a window holding at most 4 codes, which is
-16 readings. A window with more is dropped: indexing only part of its readings would make
-matching depend on which subset was kept, which is worse than not indexing that one
-window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window with
-five codes should not arise.
-
-U (Sec) and O (Pyl) are handled differently. They are specific residues rather than
-ambiguities, so each takes its closest canonical analogue, C and K, under a reduced
-alphabet. Under `protein20` they are kept as themselves.
+`U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
+specific residues rather than ambiguities, so each takes its closest canonical analogue,
+`C` and `K`, under a reduced alphabet. Under `protein20` they are kept as themselves.
 
 ## Using the Builder Pattern
 
