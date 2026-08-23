@@ -272,10 +272,34 @@ tables both are polar, so the two readings of a window produce the same encoded 
 the same hash. Nothing is added. Under `protein20`, `sdm12` and `hsdm17` they encode
 differently, so each affected window contributes two k-mers instead of one.
 
-Worked example. `PLANTANDANIMALGENBMES` is 21 residues with a B at position 18, and at
-k=5 it has 17 windows. Four of them span the B. Under `protein20` those four each expand
-to two readings, giving 17 + 4 = 21 k-mers. Under `dayhoff6` and the HP tables the pairs
-collapse and the count is whatever the alphabet would have produced without the B.
+`PLANTANDANIMALGENBMES` is 21 residues with a B at index 17, so at k=5 it has 17
+windows and four of them span the B. Those four, with both readings and what each
+encodes to:
+
+| window | residues | readings | `dayhoff6` | `hp_lehninger2` |
+|---|---|---|---|---|
+| 13 | `LGENB` | `LGEND` `LGENN` | `ebccc` `ebccc` | `hhppp` `hhppp` |
+| 14 | `GENBM` | `GENDM` `GENNM` | `bccce` `bccce` | `hppph` `hppph` |
+| 15 | `ENBME` | `ENDME` `ENNME` | `cccec` `cccec` | `ppphp` `ppphp` |
+| 16 | `NBMES` | `NDMES` `NNMES` | `ccecb` `ccecb` | `pphpp` `pphpp` |
+
+Under `dayhoff6` and `hp_lehninger2` the two readings encode to the same string, so
+they hash to one k-mer. Under `protein20`, `sdm12` and `hsdm17` they differ, so each
+of those four windows contributes two.
+
+| alphabet | distinct k-mers |
+|---|---|
+| `protein20` | 21 |
+| `sdm12` | 21 |
+| `hsdm17` | 21 |
+| `dayhoff6` | 17 |
+| `hp_lehninger2` | 14 |
+
+21 is 17 windows plus the 4 that doubled. 17 is the four collapsing back, with no two
+windows colliding. 14 is lower for a reason unrelated to the ambiguity code: HP has
+only two symbols, so three pairs of ordinary windows collide as well — `PLANT` and
+`ALGEN` are both `hhhpp`, `ANTAN` and `ANDAN` are both `hpphp`, `NTAND` and `NBMES`
+are both `pphpp`.
 
 An ambiguity code doubles the readings of every window it falls in, so a window holding
 *n* codes expands to 2^*n*. kmerseek indexes a window holding at most 4 codes, which is
