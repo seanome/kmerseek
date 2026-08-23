@@ -284,8 +284,8 @@ encodes to:
 | 16 | `NBMES` | `NDMES` `NNMES` | `ccecb` `ccecb` | `pphpp` `pphpp` |
 
 Under `dayhoff6` and `hp_lehninger2` the two readings encode to the same string, so
-they hash to one k-mer. Under `protein20`, `sdm12` and `hsdm17` they differ, so each
-of those four windows contributes two.
+the window still yields one k-mer. Under `protein20`, `sdm12` and `hsdm17` they encode
+differently, so the window yields two k-mers instead of one.
 
 | alphabet | distinct k-mers |
 |---|---|
@@ -295,11 +295,23 @@ of those four windows contributes two.
 | `dayhoff6` | 17 |
 | `hp_lehninger2` | 14 |
 
-21 is 17 windows plus the 4 that doubled. 17 is the four collapsing back, with no two
-windows colliding. 14 is lower for a reason unrelated to the ambiguity code: HP has
-only two symbols, so three pairs of ordinary windows collide as well — `PLANT` and
-`ALGEN` are both `hhhpp`, `ANTAN` and `ANDAN` are both `hpphp`, `NTAND` and `NBMES`
-are both `pphpp`.
+Where each count comes from:
+
+- `protein20` has 17 k-mers before expansion, one per window, all distinct. Expanding
+  B into D and N turns each of the four B-windows into two k-mers, adding 4. That gives
+  21 k-mers.
+- `sdm12` and `hsdm17` behave the same way, 17 k-mers before expansion and 21 after,
+  because they also keep Asp and Asn in separate classes.
+- `dayhoff6` has 17 k-mers before expansion. Expanding B adds none, because `LGEND` and
+  `LGENN` both encode to `ebccc`. It stays at 17 k-mers.
+- `hp_lehninger2` has 14 k-mers before expansion, not 17. With only two symbols, three
+  pairs of ordinary windows already encode identically: `PLANT` and `ALGEN` are both
+  `hhhpp`, `ANTAN` and `ANDAN` are both `hpphp`, `NTAND` and `NBMES` are both `pphpp`.
+  Expanding B adds none, for the same reason as `dayhoff6`. It stays at 14 k-mers.
+
+So the only alphabets where de-ambiguating B changes the k-mer count are the ones that
+encode D and N differently. The gap between 17 and 14 is HP collapsing distinct
+residues, which would be there with or without the B.
 
 An ambiguity code doubles the readings of every window it falls in, so a window holding
 *n* codes expands to 2^*n*. kmerseek indexes a window holding at most 4 codes, which is
