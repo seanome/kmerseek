@@ -3193,9 +3193,9 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            // One ambiguity code sits 4 residues from the end of a 21-residue sequence, so 5
-            // of the 17 windows at k=5 cover it and each of those is indexed under both
-            // readings: 17 + 5 = 22 readings, of which 21 are distinct under this alphabet.
+            // 21 residues at k=5 gives 17 windows, and the B at position 18 falls in four
+            // of them. Under this alphabet the two readings encode differently, so those
+            // four windows contribute two k-mers each: 17 + 4 = 21.
             assert_eq!(
                 protein_signature.kmer_positions().len(),
                 expected_kmers,

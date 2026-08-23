@@ -28,10 +28,13 @@ pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
 
 /// Most ambiguity codes allowed in one k-mer window.
 ///
-/// Each code doubles the number of readings, so four codes give sixteen. A window carrying
-/// more is skipped rather than indexed under a subset of its readings. SwissProt holds
-/// roughly 900 non-canonical residues in 207.6 M, so windows near this bound are rare and
-/// windows past it should not occur.
+/// A code doubles the readings of any window it falls in, so a window holding `n` codes
+/// expands to `2^n`: four codes give sixteen readings.
+///
+/// A window holding more than this is dropped rather than indexed under part of its
+/// readings, because then whether a query matched would depend on which subset was kept.
+/// Losing one window is the smaller cost. SwissProt holds roughly 900 non-canonical
+/// residues in 207.6 M, so a window with five codes should not arise.
 pub const MAX_AMBIGUITY_CODES_PER_WINDOW: usize = 4;
 
 /// Readings a single window can expand into, derived from [`MAX_AMBIGUITY_CODES_PER_WINDOW`].

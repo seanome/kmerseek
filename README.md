@@ -266,14 +266,23 @@ indexed under both readings, so a query holding either residue matches. kmerseek
 pick a representative: under `sdm12` and `hsdm17`, Asp and Asn fall in different classes,
 so choosing one would assert a residue the source never had.
 
-How much this adds depends on the alphabet. Under `dayhoff6` and the HP tables both
-readings of every pair encode the same, so they hash alike and the k-mer count is
-unchanged. Under `protein20`, `sdm12` and `hsdm17` the readings differ and the count
-grows: a 21-residue sequence with one B goes from 17 k-mers to 21 at k=5.
+Whether that adds k-mers depends on the alphabet, because the two readings do not always
+encode differently. Under `dayhoff6` Asp and Asn are both class `c`, and under the HP
+tables both are polar, so the two readings of a window produce the same encoded k-mer and
+the same hash. Nothing is added. Under `protein20`, `sdm12` and `hsdm17` they encode
+differently, so each affected window contributes two k-mers instead of one.
 
-A window is capped at 16 readings, which allows four codes. Past that it is skipped
-rather than indexed under some of its readings. SwissProt holds about 900 non-canonical
-residues in 207.6 M, so the cap should not be reached in practice.
+Worked example. `PLANTANDANIMALGENBMES` is 21 residues with a B at position 18, and at
+k=5 it has 17 windows. Four of them span the B. Under `protein20` those four each expand
+to two readings, giving 17 + 4 = 21 k-mers. Under `dayhoff6` and the HP tables the pairs
+collapse and the count is whatever the alphabet would have produced without the B.
+
+An ambiguity code doubles the readings of every window it falls in, so a window holding
+*n* codes expands to 2^*n*. kmerseek indexes a window holding at most 4 codes, which is
+16 readings. A window with more is dropped: indexing only part of its readings would make
+matching depend on which subset was kept, which is worse than not indexing that one
+window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window with
+five codes should not arise.
 
 U (Sec) and O (Pyl) are handled differently. They are specific residues rather than
 ambiguities, so each takes its closest canonical analogue, C and K, under a reduced
