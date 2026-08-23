@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 
-use crate::alphabets::{alphabet_table, SOURMASH_HP_MOLTYPE};
+use crate::alphabets::{alphabet_table, canonical_moltype};
 
 const MURMUR64PROTEIN: &str = "Murmur64Protein";
 const MURMUR64DAYHOFF: &str = "Murmur64Dayhoff";
@@ -22,15 +22,14 @@ const MURMUR64HP: &str = "Murmur64Hp";
 /// * `Ok(HashFunctions)` if the `moltype` is valid
 /// * `Err(...)` if the `moltype` is unrecognized
 pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, anyhow::Error> {
-    match moltype {
+    match canonical_moltype(moltype) {
         "protein20" => Ok(HashFunctions::Murmur64Protein),
         // Dayhoff has no table of ours; sourmash encodes and hashes it. This arm has to come
         // before the table lookup below, which assumes a pre-encoded sequence.
         "dayhoff6" => Ok(HashFunctions::Murmur64Dayhoff),
         // Lehninger is sourmash's own aa_to_hp partition, so sourmash encodes and hashes it
-        // and sketches are byte-identical to sourmash's. Its own moltype, bare "hp", is read
-        // here too so that data sourmash labelled stays usable.
-        "hp_lehninger2" | SOURMASH_HP_MOLTYPE => Ok(HashFunctions::Murmur64Hp),
+        // and sketches are byte-identical to sourmash's.
+        "hp_lehninger2" => Ok(HashFunctions::Murmur64Hp),
         // Every other alphabet pre-encodes through its own table, so the hash function sees
         // an already-encoded sequence and hashes it as protein.
         s if alphabet_table(s).is_some() => Ok(HashFunctions::Murmur64Protein),
@@ -91,13 +90,13 @@ pub fn get_moltype_from_hash_function(
 ///    the specified `moltype`.
 /// * `Err(...)` - An error if the `moltype` is unrecognized.
 pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyhow::Error> {
-    match moltype {
+    match canonical_moltype(moltype) {
         "protein20" => Ok(|b| b),
         // Before the table lookup below, for the same reason as in
         // get_hash_function_from_moltype: dayhoff is encoded by sourmash, not pre-encoded.
         "dayhoff6" => Ok(aa_to_dayhoff),
         // Encoded by sourmash, like dayhoff6 above.
-        "hp_lehninger2" | SOURMASH_HP_MOLTYPE => Ok(aa_to_hp),
+        "hp_lehninger2" => Ok(aa_to_hp),
         // Table-backed alphabets cannot be expressed as a fn(u8) -> u8; return identity here
         // so callers that only need one don't crash. encode_by_moltype and add_protein apply
         // the table themselves.

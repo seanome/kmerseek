@@ -175,23 +175,38 @@ Seeded negative controls put the seed after the class count, so `hp_random_contr
 is seed 3 of a 2-class control rather than a 23-class alphabet. `--random-seed 1..10`
 gives independent replicates.
 
+### sourmash compatibility
+
+sourmash writes three moltypes, and kmerseek reads all three, storing each under its own
+name for the same alphabet:
+
+| sourmash | kmerseek | hash function |
+|---|---|---|
+| `protein` | `protein20` | `Murmur64Protein` |
+| `dayhoff` | `dayhoff6` | `Murmur64Dayhoff` |
+| `hp` | `hp_lehninger2` | `Murmur64Hp` |
+
+These three are the alphabets sourmash encodes itself, so kmerseek hands the sequence
+straight to it rather than pre-encoding. A sketch or index carrying a sourmash name
+therefore holds hashes kmerseek can read as-is, on the command line and from stored
+index metadata:
+
+```
+Alphabet: HpLehninger (detected: hp)
+Total matches: 21
+```
+
 ### Indexes built before this change
 
-Only the current names parse, with one exception. An index recording `protein`,
-`dayhoff`, or an `hp_<name>` without its class count fails to open:
+kmerseek's own earlier spellings have no sourmash equivalent and no interop argument, so
+they are not read: `raw`, and `hp_<name>` without its class count. An index recording one
+fails to open:
 
 ```
-Unknown alphabet in database: dayhoff
+Unknown alphabet in database: hp_thomas_dill
 ```
 
-The exception is sourmash's bare `hp`. kmerseek reads it as `hp_lehninger2`, which names
-the same partition and uses the same hash function, so a sourmash-labelled index or
-signature stays usable.
-
-The k-mers inside are still valid. Every alphabet hashes as it did before: `protein20`
-and `dayhoff6` use the same sourmash hash functions as `protein` and `dayhoff`,
-`hp_lehninger2` uses the same one as `hp`, and each `hp_<name>2` uses the same table as
-`hp_<name>`. Only the recorded name changed, so rebuilding produces the same hits.
+No hash function changed, so rebuilding under the current name gives the same hits.
 
 ## HP Alphabet Variants
 

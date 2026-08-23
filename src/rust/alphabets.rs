@@ -40,11 +40,24 @@ pub enum HpAlphabet {
     Random(u64),
 }
 
-/// sourmash's moltype for the Lehninger hydrophobic/polar partition.
+/// Translate a sourmash moltype into the kmerseek name for the same alphabet.
 ///
-/// kmerseek writes `hp_lehninger2`, but reads this too: it names the same partition and the
-/// same hash function, so data labelled with it is compatible.
-pub const SOURMASH_HP_MOLTYPE: &str = "hp";
+/// sourmash writes `protein`, `dayhoff` and `hp`. Each names a partition kmerseek also has,
+/// and kmerseek hashes all three through sourmash's own hash function rather than
+/// pre-encoding them, so a sketch or index carrying one of these names holds hashes
+/// kmerseek can read directly. Reading the names keeps that data usable.
+///
+/// Every other string passes through unchanged, including kmerseek's own earlier spellings
+/// (`raw`, `hp_<name>` without a class count). Those were never sourmash's and have no
+/// interop argument, so they are rejected further along.
+pub fn canonical_moltype(moltype: &str) -> &str {
+    match moltype {
+        "protein" => "protein20",
+        "dayhoff" => "dayhoff6",
+        "hp" => "hp_lehninger2",
+        other => other,
+    }
+}
 
 impl HpAlphabet {
     pub fn table(&self) -> &'static HashMap<u8, u8> {
@@ -137,14 +150,9 @@ impl HpAlphabet {
 
     /// Parse from a moltype string. Returns `None` for unrecognized strings.
     ///
-    /// Bare `"hp"` is accepted as a spelling of [`Self::Lehninger`] and normalized away on
-    /// the way in. That is sourmash's own moltype for this partition, and kmerseek hashes
-    /// `hp_lehninger2` through sourmash's `Murmur64Hp`, so a sketch or index labelled `hp`
-    /// holds hashes this alphabet can read. Accepting the name keeps that data usable.
+    /// Takes kmerseek names only. sourmash's `hp` reaches [`Self::Lehninger`] through
+    /// [`canonical_moltype`], which every entry point applies first.
     pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
-        if s == SOURMASH_HP_MOLTYPE {
-            return Some(HpAlphabet::Lehninger);
-        }
         if let Some(alphabet) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
             return Some(*alphabet);
         }
@@ -1120,6 +1128,7 @@ mod multi_letter_tests {
 /// `dayhoff6`, and `hp_lehninger2` (sourmash's own `aa_to_hp` partition). Those are hashed
 /// by sourmash directly; everything else is pre-encoded through the table returned here.
 pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
+    let moltype = canonical_moltype(moltype);
     if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
         if alphabet.uses_sourmash_encoder() {
             return None;
@@ -1127,4 +1136,39 @@ pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
         return Some(alphabet.table());
     }
     ReducedAlphabet::from_moltype(moltype).map(|alphabet| alphabet.table())
+}
+
+#[cfg(test)]
+mod sourmash_compat_tests {
+    use super::*;
+
+    /// sourmash's three moltypes name partitions kmerseek also has, and kmerseek hashes all
+    /// three through sourmash's own hash function, so data carrying these names is readable.
+    #[test]
+    fn sourmash_moltypes_map_to_the_same_alphabet() {
+        assert_eq!(canonical_moltype("protein"), "protein20");
+        assert_eq!(canonical_moltype("dayhoff"), "dayhoff6");
+        assert_eq!(canonical_moltype("hp"), "hp_lehninger2");
+    }
+
+    /// kmerseek's own names pass through untouched.
+    #[test]
+    fn kmerseek_names_pass_through() {
+        for moltype in
+            ["protein20", "dayhoff6", "hp_lehninger2", "hp_thomas_dill2", "sdm12", "gbmr4"]
+        {
+            assert_eq!(canonical_moltype(moltype), moltype, "{moltype}");
+        }
+    }
+
+    /// Spellings that were never sourmash's get no compatibility path; they are rejected
+    /// further along rather than quietly mapped.
+    #[test]
+    fn earlier_kmerseek_spellings_are_not_translated() {
+        for moltype in ["raw", "hp_lehninger", "hp_thomas_dill", "reduced_sdm12"] {
+            assert_eq!(canonical_moltype(moltype), moltype, "{moltype}");
+            assert!(HpAlphabet::from_moltype(moltype).is_none(), "{moltype}");
+            assert!(ReducedAlphabet::from_moltype(moltype).is_none(), "{moltype}");
+        }
+    }
 }

@@ -146,16 +146,16 @@ enum Commands {
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
 enum ProteinAlphabet {
-    /// The full 20-letter amino acid alphabet: no reduction
-    #[value(name = "protein20")]
+    /// The full 20-letter amino acid alphabet: no reduction. Also accepts sourmash's
+    /// name for it, `protein`
+    #[value(name = "protein20", alias = "protein")]
     Protein,
-    /// Dayhoff, 6 classes
-    #[value(name = "dayhoff6")]
+    /// Dayhoff, 6 classes. Also accepts sourmash's name for it, `dayhoff`
+    #[value(name = "dayhoff6", alias = "dayhoff")]
     Dayhoff,
-    /// HP Lehninger, 2 classes. Also accepts the older spellings `hp_lehninger` and `hp`;
-    /// note that indexes built with the old sourmash-backed `hp` must be rebuilt, since it
-    /// hashed the same partition differently
-    #[value(name = "hp_lehninger2", alias = "hp-lehninger2")]
+    /// HP Lehninger, 2 classes. Also accepts sourmash's name for it, `hp`, which is the
+    /// same partition hashed the same way
+    #[value(name = "hp_lehninger2", aliases = ["hp-lehninger2", "hp"])]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
     #[value(name = "hp_thomas_dill2", alias = "hp-thomas-dill2")]
