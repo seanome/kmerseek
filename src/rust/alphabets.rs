@@ -6,8 +6,9 @@
 //! come from the fold-recognition literature.
 //!
 //! An alphabet is a partition of the 20 canonical residues, stored as a residue-to-class
-//! table. [`alphabet_table`] looks one up by moltype. It returns `None` for the three
-//! alphabets sourmash encodes for us, which [`crate::hash_functions`] handles instead.
+//! table. [`alphabet_table`] looks one up by name. It returns `None` for `protein20`,
+//! `dayhoff6` and `hp_lehninger2`, the three sourmash encodes itself; those go through
+//! [`crate::hash_functions`] instead.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -46,14 +47,14 @@ pub enum HpAlphabet {
 
 /// Translate a sourmash moltype into the kmerseek name for the same alphabet.
 ///
-/// sourmash writes `protein`, `dayhoff` and `hp`. Each names a partition kmerseek also has,
-/// and kmerseek hashes all three through sourmash's own hash function rather than
-/// pre-encoding them, so a sketch or index carrying one of these names holds hashes
-/// kmerseek can read directly. Reading the names keeps that data usable.
+/// sourmash calls an alphabet a moltype, and writes three: `protein`, `dayhoff` and `hp`.
+/// Each names a partition kmerseek also has. kmerseek hashes all three through sourmash's
+/// own hash function rather than pre-encoding them, so a sketch or index carrying one of
+/// these names already holds hashes kmerseek can read.
 ///
 /// Every other string passes through unchanged, including kmerseek's own earlier spellings
-/// (`raw`, `hp_<name>` without a class count). Those were never sourmash's and have no
-/// interop argument, so they are rejected further along.
+/// (`raw`, `hp_<name>` without a class count). Those were never sourmash names, so there is
+/// nothing to stay compatible with and they are rejected further along.
 pub fn canonical_moltype(moltype: &str) -> &str {
     match moltype {
         "protein" => "protein20",
@@ -925,9 +926,9 @@ static WWMJ5: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(WWMJ5_C
 // -----------------------------------------------------------------------------
 // GBMR7 — Solis & Rackovsky (2000), 7 classes.
 //
-// Same maximum-mutual-information construction as GBMR4 at a finer level. Note that
-// it is not a refinement of GBMR4: the large AEFIKLMQRVWY class mixes residues that
-// GBMR4 keeps on opposite sides of its hydrophobic/polar split.
+// Same maximum-mutual-information construction as GBMR4 at a finer level, but not a
+// refinement of it: the large AEFIKLMQRVWY class mixes residues that GBMR4 keeps on
+// opposite sides of its hydrophobic/polar split.
 // -----------------------------------------------------------------------------
 const GBMR7_CLUSTERS: &[&str] = &["DN", "AEFIKLMQRVWY", "CH", "T", "S", "G", "P"];
 static GBMR7: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(GBMR7_CLUSTERS));

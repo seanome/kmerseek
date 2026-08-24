@@ -177,8 +177,8 @@ gives independent replicates.
 
 ### sourmash compatibility
 
-sourmash writes three moltypes, and kmerseek reads all three, storing each under its own
-name for the same alphabet:
+sourmash calls an alphabet a moltype, and writes three of them. kmerseek reads all
+three, storing each under the kmerseek name for the same alphabet:
 
 | sourmash | kmerseek | hash function |
 |---|---|---|
@@ -198,9 +198,9 @@ Total matches: 21
 
 ### Indexes built before this change
 
-kmerseek's own earlier spellings have no sourmash equivalent and no interop argument, so
-they are not read: `raw`, and `hp_<name>` without its class count. An index recording one
-fails to open:
+kmerseek's own earlier spellings are not read, since they were never sourmash names and
+so have nothing to stay compatible with: `raw`, and `hp_<name>` without its class count.
+An index recording one fails to open:
 
 ```
 Unknown alphabet in database: hp_thomas_dill
@@ -286,11 +286,11 @@ Asp and Glu during acid hydrolysis, and Ile and Leu have the same mass:
 
 | code | name | stands for |
 |---|---|---|
-| `B` | Asx | `D` (Asp, aspartate) **or** `N` (Asn, asparagine) |
-| `J` | Xle | `I` (Ile, isoleucine) **or** `L` (Leu, leucine) |
-| `Z` | Glx | `E` (Glu, glutamate) **or** `Q` (Gln, glutamine) |
+| `B` | Asx | `D` (Asp, aspartate) or `N` (Asn, asparagine) |
+| `J` | Xle | `I` (Ile, isoleucine) or `L` (Leu, leucine) |
+| `Z` | Glx | `E` (Glu, glutamate) or `Q` (Gln, glutamine) |
 
-kmerseek indexes every k-mer covering one of these under **both** readings, so a query
+kmerseek indexes every k-mer covering one of these under both readings, so a query
 holding either residue matches. It does not pick one: under `sdm12` and `hsdm17`, Asp and
 Asn fall in different classes, so choosing `D` for a `B` would assert a residue the source
 never had.
@@ -354,7 +354,7 @@ let index = ProteomeIndex::builder()
     .path("/path/to/database.db")
     .ksize(5)
     .scaled(1)
-    .moltype("protein")
+    .moltype("protein20")
     .build()?;
 
 // With auto filename generation
@@ -362,7 +362,7 @@ let index = ProteomeIndex::builder()
     .path("/path/to/base")
     .ksize(5)
     .scaled(1)
-    .moltype("protein")
+    .moltype("protein20")
     .build_with_auto_filename()?;
 
 // With raw sequence storage
@@ -370,7 +370,7 @@ let index = ProteomeIndex::builder()
     .path("/path/to/database.db")
     .ksize(5)
     .scaled(1)
-    .moltype("protein")
+    .moltype("protein20")
     .store_raw_sequences(true)
     .build()?;
 
@@ -379,7 +379,7 @@ let index = ProteomeIndex::builder()
     .path("/path/to/database.db")
     .ksize(5)
     .scaled(1)
-    .moltype("hp")
+    .moltype("hp_lehninger2")
     .remove_low_complexity(true)
     .build()?;
 ```
