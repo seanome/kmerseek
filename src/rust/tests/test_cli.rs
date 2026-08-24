@@ -137,8 +137,8 @@ fn test_cli_index_rejects_zero_ksize() -> Result<(), Box<dyn std::error::Error>>
         output_path.to_str().unwrap(),
         "--ksize",
         "0",
-        "--encoding",
-        "hp",
+        "--alphabet",
+        "hp_lehninger2",
     ]);
 
     cmd.assert()

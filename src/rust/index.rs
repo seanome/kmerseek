@@ -24,8 +24,8 @@ use crate::errors::{IndexError, IndexResult};
 use crate::hash_functions::get_hash_function_from_moltype;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
-use crate::types::MolType;
 use crate::types::KmerSize;
+use crate::types::MolType;
 
 /// Schema version for the on-disk index format.
 /// Increment this constant whenever the stored format changes in a backward-incompatible way
