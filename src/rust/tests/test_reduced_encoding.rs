@@ -1,4 +1,4 @@
-/// End-to-end tests for the multi-letter reduced alphabets in `crate::reduced_alphabets`.
+/// End-to-end tests for the multi-letter reduced alphabets in [`crate::alphabets`].
 ///
 /// These share the pre-encoding path with the custom HP alphabets, so they are exposed to
 /// the same two bugs that `test_hp_encoding` guards against: kmer_positions hashed in a

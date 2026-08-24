@@ -212,7 +212,7 @@ No hash function changed, so rebuilding under the current name gives the same hi
 
 `--alphabet hp_lehninger2` collapses the 20 canonical amino acids down to hydrophobic (`h`)
 / polar (`p`) before k-mer extraction. The alphabets below (see
-`src/rust/hp_alphabets.rs`) all agree on 15 of the 20 residues and differ only on
+`src/rust/alphabets.rs`) all agree on 15 of the 20 residues and differ only on
 the five borderline ones: C, G, P, W and Y. `hp_lehninger2` is the one sourmash's own HP
 encoding uses; the others follow the same `hp_<name>2` pattern and exist for the alphabet
 robustness sweep.
@@ -243,7 +243,7 @@ other 19 residues and gives cysteine its own symbol `c`.
 ## Multi-Letter Reduced Alphabets
 
 The HP alphabets above answer one question per residue. The alphabets in this section
-(see `src/rust/reduced_alphabets.rs`) keep 4 to 18 classes, so they discard less
+(see `src/rust/alphabets.rs`) keep 4 to 18 classes, so they discard less
 chemistry per position while still collapsing the substitutions that proteins tolerate
 most often.
 

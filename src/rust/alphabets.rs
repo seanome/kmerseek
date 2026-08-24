@@ -12,6 +12,10 @@
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
+/// The 20 canonical residues, sorted. Every alphabet here must cover all of these and
+/// nothing else, whichever family it belongs to.
+const CANONICAL_AA: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
+
 // ----------------------------------------------------------------------------
 // HP alphabets: two classes, or three where cysteine is split out.
 // HP alphabet mappings for the Kmerseek robustness sweep.
@@ -368,8 +372,6 @@ pub fn random_hp(seed: u64) -> HashMap<u8, u8> {
 mod hp_tests {
     use super::*;
 
-    const ALL_RESIDUES: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
-
     fn all_named_alphabets() -> &'static [HpAlphabet] {
         HpAlphabet::all_named()
     }
@@ -380,7 +382,7 @@ mod hp_tests {
             let t = alpha.table();
             // 20 amino acids + 1 stop codon
             assert_eq!(t.len(), 21, "alphabet {:?} has wrong table size", alpha);
-            for &r in ALL_RESIDUES {
+            for &r in CANONICAL_AA {
                 assert!(t.contains_key(&r), "alphabet {:?} missing residue {}", alpha, r as char);
             }
         }
@@ -389,7 +391,7 @@ mod hp_tests {
     #[test]
     fn all_mappings_are_h_p_or_c() {
         for alpha in all_named_alphabets() {
-            for &r in ALL_RESIDUES {
+            for &r in CANONICAL_AA {
                 let encoded = alpha.table()[&r];
                 assert!(
                     encoded == b'h' || encoded == b'p' || encoded == b'c',
@@ -601,7 +603,7 @@ mod hp_tests {
     fn random_hp_covers_all_residues() {
         let m = random_hp(0);
         assert_eq!(m.len(), 21);
-        for &r in ALL_RESIDUES {
+        for &r in CANONICAL_AA {
             assert!(m.contains_key(&r), "random_hp missing residue {}", r as char);
             let v = m[&r];
             assert!(v == b'h' || v == b'p');
@@ -759,10 +761,6 @@ mod hp_tests {
 //   reduced amino acid alphabets. Bioinformatics 40(2):btae061.
 //   doi:10.1093/bioinformatics/btae061. Table 1.
 // ----------------------------------------------------------------------------
-
-/// The 20 canonical residues, sorted. Every alphabet below must cover all of these and
-/// nothing else.
-const CANONICAL_AA: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
 
 /// Reduced alphabets with more than the two or three classes of an HP table.
 ///

@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 
+use crate::alphabets::canonical_moltype;
 use crate::errors::{IndexError, IndexResult};
 
 /// Standard amino acids and their properties
@@ -166,7 +167,9 @@ impl AminoAcidAmbiguity {
         sequence: &'a str,
         moltype: &str,
     ) -> IndexResult<Cow<'a, str>> {
-        let reduces_alphabet = moltype != "protein20";
+        // Canonicalized like every other entry point: sourmash's `protein` names the same
+        // alphabet as `protein20`, and the two must not resolve U and O differently.
+        let reduces_alphabet = canonical_moltype(moltype) != "protein20";
 
         // Validate first, recording where the kept region ends and where substitution first
         // becomes necessary. Almost every sequence needs neither (roughly 900 of SwissProt's
@@ -322,18 +325,6 @@ mod tests {
         assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
     }
 
-    /// `raw` is a synonym for `protein20` in encoding.rs (get_hash_function_from_moltype and
-    /// get_encoding_fn_from_moltype both treat them identically), so it must be exempt from
-    /// substitution for the same reason `protein20` is.
-    #[test]
-    fn test_validate_and_resolve_keeps_codes_verbatim_for_raw() {
-        let aa = AminoAcidAmbiguity::new();
-
-        let resolved = aa.validate_and_resolve("ACDEFXBZJUO", "protein20").unwrap();
-        assert_eq!(resolved.as_ref(), "ACDEFXBZJUO");
-        assert!(matches!(resolved, Cow::Borrowed(_)), "unchanged input should not allocate");
-    }
-
     #[test]
     fn test_validate_and_resolve_is_deterministic() {
         let aa = AminoAcidAmbiguity::new();
@@ -417,5 +408,34 @@ mod tests {
                 assert!(STANDARD_AA.contains(&c), "{reading}: {c} is not canonical");
             }
         }
+    }
+
+    /// sourmash's names must resolve identically to kmerseek's for the same alphabet.
+    /// Before canonicalizing here, `protein` counted as a reducing alphabet and rewrote U
+    /// and O to C and K, while `protein20` left them alone: two names, two sequences, two
+    /// sets of k-mers.
+    #[test]
+    fn test_validate_and_resolve_treats_sourmash_names_identically() {
+        let aa = AminoAcidAmbiguity::new();
+
+        for (sourmash, kmerseek) in
+            [("protein", "protein20"), ("dayhoff", "dayhoff6"), ("hp", "hp_lehninger2")]
+        {
+            assert_eq!(
+                aa.validate_and_resolve("ACDEFXBZJUO", sourmash).unwrap(),
+                aa.validate_and_resolve("ACDEFXBZJUO", kmerseek).unwrap(),
+                "{sourmash} and {kmerseek} should resolve the same"
+            );
+        }
+
+        // The full alphabet keeps U and O; a reduced one takes their analogues.
+        assert_eq!(
+            aa.validate_and_resolve("ACDEFXBZJUO", "protein").unwrap().as_ref(),
+            "ACDEFXBZJUO"
+        );
+        assert_eq!(
+            aa.validate_and_resolve("ACDEFXBZJUO", "dayhoff").unwrap().as_ref(),
+            "ACDEFXBZJCK"
+        );
     }
 }
