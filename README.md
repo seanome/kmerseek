@@ -331,13 +331,8 @@ Where each k-mer count comes from:
   `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
   at 14.
 
-Disambiguating a code doubles the readings of every window it falls in, so a window
-holding *n* codes yields 2^*n* readings. kmerseek disambiguates a window holding at most
-4 codes, which is 16 readings. A window with more is dropped: indexing only part of its
-readings would make matching depend on which subset was kept, which is worse than losing
-that one window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window
-with five codes should not arise.
-
+Disambiguating a residue doubles the readings of every window it falls in, so a window
+containing *n* ambiguous residues yields 2^*n* disambiguated k-mers. kmerseek disambiguates a k-mer with at most 10% ambiguous residues, or up to ceil(ksize/10) ambiguous amino acids. A window with more is dropped: indexing only part of its k-mers would make matching depend on which subset was kept, which is worse than losing that one window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window with many should not arise.
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,
 `C` and `K`, under a reduced alphabet. Under `protein20` they are kept as themselves.
