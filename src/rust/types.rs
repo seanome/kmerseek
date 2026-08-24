@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
-use crate::alphabets::{canonical_moltype, HpAlphabet, ReducedAlphabet};
+use crate::alphabets::{canonical_moltype, Alphabet};
 
 /// A type-safe wrapper for k-mer sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -89,15 +89,8 @@ impl MolType {
     /// single spelling in indexes and results: `find_matched_regions` asserts query and
     /// target moltypes are equal, and two names for one alphabet would abort the search.
     pub fn new(moltype: &str) -> Result<Self, String> {
-        let moltype = canonical_moltype(moltype);
-        if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
+        if let Some(alphabet) = Alphabet::from_moltype(canonical_moltype(moltype)) {
             return Ok(MolType(alphabet.to_moltype()));
-        }
-        if let Some(alphabet) = ReducedAlphabet::from_moltype(moltype) {
-            return Ok(MolType(alphabet.to_moltype()));
-        }
-        if matches!(moltype, "protein20" | "dayhoff6") {
-            return Ok(MolType(moltype.to_string()));
         }
         Err(format!(
             "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \

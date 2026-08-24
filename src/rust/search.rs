@@ -2818,14 +2818,14 @@ mod tests {
     /// differently, and the position bookkeeping has to hold for all of them, not just one.
     #[test]
     fn test_region_shared_kmer_count_exact_at_scaled_one_all_alphabets() {
-        use crate::alphabets::HpAlphabet;
+        use crate::alphabets::Alphabet;
 
         // Real sequence (already used elsewhere in this codebase for HP-alphabet regression
         // tests, see test_hp_encoding.rs) - self-hit so every alphabet reliably finds a region.
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQADTFMGPTLCEVFAEMG";
         let ksize = 8;
 
-        for alpha in HpAlphabet::all_named() {
+        for alpha in Alphabet::hp_family() {
             let moltype = alpha.to_moltype();
             let sketch = ProteinSketch::from_protein_sequence("self", seq, ksize, 1, &moltype)
                 .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));

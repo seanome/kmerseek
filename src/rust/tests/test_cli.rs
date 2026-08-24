@@ -5,8 +5,7 @@ use tempfile::tempdir;
 
 use approx::assert_relative_eq;
 
-use crate::alphabets::HpAlphabet;
-use crate::alphabets::ReducedAlphabet;
+use crate::alphabets::Alphabet;
 use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
 
@@ -89,11 +88,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     // Every alphabet, not a sample: a wrong table or hash function shows up as an indexing
     // failure. Built from the alphabet lists rather than hardcoded, so a newly added
     // alphabet is covered without editing this test.
-    let alphabets: Vec<String> = ["protein20".to_string(), "dayhoff6".to_string()]
-        .into_iter()
-        .chain(HpAlphabet::all_named().iter().map(HpAlphabet::to_moltype))
-        .chain(ReducedAlphabet::all().iter().map(ReducedAlphabet::to_moltype))
-        .collect();
+    let alphabets: Vec<String> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
     assert_eq!(alphabets.len(), 18, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {

@@ -1,14 +1,16 @@
-//! Every reduced amino acid alphabet kmerseek can index with.
+//! Every alphabet kmerseek can index with, as one [`Alphabet`] enum.
 //!
-//! Two families live here. The HP tables split the 20 residues into hydrophobic and polar,
-//! differing only on the borderline residues C, G, P, W and Y, plus one three-class variant
-//! that gives cysteine its own symbol. The multi-letter alphabets keep 4 to 18 classes and
-//! come from the fold-recognition literature.
+//! An alphabet is a partition of the 20 canonical residues into classes, stored as a
+//! residue-to-class table. `protein20` is the degenerate case that keeps all 20.
 //!
-//! An alphabet is a partition of the 20 canonical residues, stored as a residue-to-class
-//! table. [`alphabet_table`] looks one up by name. It returns `None` for `protein20`,
-//! `dayhoff6` and `hp_lehninger2`, the three sourmash encodes itself; those go through
-//! [`crate::hash_functions`] instead.
+//! Two families make up most of the list. The HP tables split the residues into
+//! hydrophobic and polar, differing only on the borderline residues C, G, P, W and Y, plus
+//! one three-class variant that gives cysteine its own symbol. The multi-letter alphabets
+//! keep 4 to 18 classes and come from the fold-recognition literature.
+//!
+//! [`alphabet_table`] gives the table to pre-encode a sequence with. It returns `None` for
+//! `protein20`, `dayhoff6` and `hp_lehninger2`, which sourmash encodes itself; those go
+//! through [`crate::hash_functions`] instead.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -25,25 +27,6 @@ const CANONICAL_AA: &[u8] = b"ACDEFGHIKLMNPQRSTVWY";
 // hydrophobic (h) and polar (p) classes. The alphabets differ on
 // borderline residues — principally C, G, P, W, and Y.
 // ----------------------------------------------------------------------------
-
-/// HP alphabet variants evaluated in the robustness sweep.
-///
-/// See module docs for motivation. The default production alphabet is
-/// determined by the sweep results (see Supplementary Figure N of the
-/// Kmerseek paper).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum HpAlphabet {
-    Lehninger,
-    ThomasDill,
-    KyteDoolittle,
-    ThomasDillNoC,
-    LehningerCNonpolar,
-    LehningerHpc,
-    PBotC1stEd,
-    RandomControl,
-    /// Seeded random control; seed must be 1-10.
-    Random(u64),
-}
 
 /// Translate a sourmash moltype into the kmerseek name for the same alphabet.
 ///
@@ -64,115 +47,225 @@ pub fn canonical_moltype(moltype: &str) -> &str {
     }
 }
 
-impl HpAlphabet {
-    pub fn table(&self) -> &'static HashMap<u8, u8> {
-        match self {
-            Self::Lehninger => &LEHNINGER_HP,
-            Self::ThomasDill => &THOMAS_DILL_HP,
-            Self::KyteDoolittle => &KYTE_DOOLITTLE_HP,
-            Self::ThomasDillNoC => &THOMAS_DILL_NO_C_HP,
-            Self::LehningerCNonpolar => &LEHNINGER_C_NONPOLAR_HP,
-            Self::LehningerHpc => &LEHNINGER_HPC,
-            Self::PBotC1stEd => &PBOTC_1ST_ED_HP,
-            Self::RandomControl => &RANDOM_CONTROL_HP,
-            Self::Random(1) => &RANDOM_HP_1,
-            Self::Random(2) => &RANDOM_HP_2,
-            Self::Random(3) => &RANDOM_HP_3,
-            Self::Random(4) => &RANDOM_HP_4,
-            Self::Random(5) => &RANDOM_HP_5,
-            Self::Random(6) => &RANDOM_HP_6,
-            Self::Random(7) => &RANDOM_HP_7,
-            Self::Random(8) => &RANDOM_HP_8,
-            Self::Random(9) => &RANDOM_HP_9,
-            Self::Random(10) => &RANDOM_HP_10,
-            Self::Random(n) => {
-                panic!("random-control seed {n} not pre-computed (only 1-10 supported)")
-            }
-        }
-    }
+/// Every alphabet kmerseek can index with.
+///
+/// Each variant is named for its moltype, so `Sdm12` is `sdm12` and `HpLehninger2` is
+/// `hp_lehninger2`. The trailing digit is the class count, and [`Self::size`] returns it.
+///
+/// Three of these are encoded by sourmash rather than by a table here, which
+/// [`Self::uses_sourmash_encoder`] reports: `protein20`, `dayhoff6` and `hp_lehninger2`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Alphabet {
+    /// All 20 residues, no reduction.
+    Protein20,
+    /// Dayhoff's six groups.
+    Dayhoff6,
 
-    /// Short identifier used in output filenames and Nextflow traces.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Lehninger => "lehninger",
-            Self::ThomasDill => "thomas_dill",
-            Self::KyteDoolittle => "kyte_doolittle",
-            Self::ThomasDillNoC => "thomas_dill_no_c",
-            Self::LehningerCNonpolar => "lehninger_c_nonpolar",
-            Self::LehningerHpc => "lehninger_hpc",
-            Self::PBotC1stEd => "pbotc_1st_ed",
-            Self::RandomControl => "random_control",
-            Self::Random(1) => "random_control_1",
-            Self::Random(2) => "random_control_2",
-            Self::Random(3) => "random_control_3",
-            Self::Random(4) => "random_control_4",
-            Self::Random(5) => "random_control_5",
-            Self::Random(6) => "random_control_6",
-            Self::Random(7) => "random_control_7",
-            Self::Random(8) => "random_control_8",
-            Self::Random(9) => "random_control_9",
-            Self::Random(10) => "random_control_10",
-            Self::Random(n) => {
-                panic!("random-control seed {n} not pre-computed (only 1-10 supported)")
-            }
-        }
-    }
+    /// Lehninger's hydrophobic/polar split, which is also sourmash's `aa_to_hp`.
+    HpLehninger2,
+    /// Thomas & Dill 1996: C hydrophobic, G and P polar.
+    HpThomasDill2,
+    /// Kyte & Doolittle 1982, split at hydropathy > 0: W and Y polar.
+    HpKyteDoolittle2,
+    /// Thomas-Dill with C moved to polar.
+    HpThomasDillNoC2,
+    /// Lehninger with C moved to hydrophobic.
+    HpLehningerCNonpolar2,
+    /// Lehninger with C in a third class of its own.
+    HpLehningerHpc3,
+    /// Physical Biology of the Cell, 1st edition.
+    HpPBotC1stEd2,
+    /// Negative control: the h/p split is randomized, scrambling the hydrophobicity signal.
+    HpRandomControl2,
+    /// One of ten pre-computed random controls, for a null distribution. Seed must be 1-10.
+    HpRandomControl2Seed(u64),
 
-    pub fn all_named() -> &'static [HpAlphabet] {
+    /// Solis & Rackovsky 2000, 4 classes.
+    Gbmr4,
+    /// Wang & Wang 1999, 5 classes.
+    Wwmj5,
+    /// Solis & Rackovsky 2000, 7 classes.
+    Gbmr7,
+    /// Prlic et al. 2000 structure-derived matrix, 12 classes.
+    Sdm12,
+    /// Steinegger & Soding 2018, 12 classes.
+    Mmseqs12,
+    /// Ieremie et al. 2024, 14 classes, clustered on hydrophobicity.
+    Wass14,
+    /// Prlic et al. 2000 homologous structure-derived matrix, 17 classes.
+    Hsdm17,
+    /// Ieremie et al. 2024, 18 classes, learned by a protein language model.
+    Uniprot18,
+}
+
+impl Alphabet {
+    /// Every alphabet that has a fixed moltype, so not the seeded random controls.
+    pub fn all() -> &'static [Alphabet] {
         &[
-            HpAlphabet::Lehninger,
-            HpAlphabet::ThomasDill,
-            HpAlphabet::KyteDoolittle,
-            HpAlphabet::ThomasDillNoC,
-            HpAlphabet::LehningerCNonpolar,
-            HpAlphabet::LehningerHpc,
-            HpAlphabet::PBotC1stEd,
-            HpAlphabet::RandomControl,
+            Alphabet::Protein20,
+            Alphabet::Dayhoff6,
+            Alphabet::HpLehninger2,
+            Alphabet::HpThomasDill2,
+            Alphabet::HpKyteDoolittle2,
+            Alphabet::HpThomasDillNoC2,
+            Alphabet::HpLehningerCNonpolar2,
+            Alphabet::HpLehningerHpc3,
+            Alphabet::HpPBotC1stEd2,
+            Alphabet::HpRandomControl2,
+            Alphabet::Gbmr4,
+            Alphabet::Wwmj5,
+            Alphabet::Gbmr7,
+            Alphabet::Sdm12,
+            Alphabet::Mmseqs12,
+            Alphabet::Wass14,
+            Alphabet::Hsdm17,
+            Alphabet::Uniprot18,
         ]
     }
 
-    /// Number of classes this alphabet partitions the 20 residues into.
+    /// The moltype for alphabets that have a fixed one. `None` for a seeded random control,
+    /// whose moltype carries its seed and so cannot be a `&'static str`.
+    fn fixed_moltype(&self) -> Option<&'static str> {
+        Some(match self {
+            Self::Protein20 => "protein20",
+            Self::Dayhoff6 => "dayhoff6",
+            Self::HpLehninger2 => "hp_lehninger2",
+            Self::HpThomasDill2 => "hp_thomas_dill2",
+            Self::HpKyteDoolittle2 => "hp_kyte_doolittle2",
+            Self::HpThomasDillNoC2 => "hp_thomas_dill_no_c2",
+            Self::HpLehningerCNonpolar2 => "hp_lehninger_c_nonpolar2",
+            Self::HpLehningerHpc3 => "hp_lehninger_hpc3",
+            Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
+            Self::HpRandomControl2 => "hp_random_control2",
+            Self::Gbmr4 => "gbmr4",
+            Self::Wwmj5 => "wwmj5",
+            Self::Gbmr7 => "gbmr7",
+            Self::Sdm12 => "sdm12",
+            Self::Mmseqs12 => "mmseqs12",
+            Self::Wass14 => "wass14",
+            Self::Hsdm17 => "hsdm17",
+            Self::Uniprot18 => "uniprot18",
+            Self::HpRandomControl2Seed(_) => return None,
+        })
+    }
+
+    /// The moltype stored in an index, e.g. `"sdm12"` or `"hp_thomas_dill2"`.
+    ///
+    /// A seeded control puts its seed after the class count, so `hp_random_control2_3` is
+    /// seed 3 of a 2-class control rather than a 23-class alphabet.
+    pub fn to_moltype(&self) -> String {
+        match self {
+            Self::HpRandomControl2Seed(seed) => format!("hp_random_control2_{seed}"),
+            fixed => fixed.fixed_moltype().expect("only the seeded control lacks one").to_string(),
+        }
+    }
+
+    /// Parse a moltype. Returns `None` for anything unrecognized.
+    ///
+    /// Takes kmerseek names only. sourmash's `protein`, `dayhoff` and `hp` arrive here
+    /// through [`canonical_moltype`], which every entry point applies first.
+    pub fn from_moltype(moltype: &str) -> Option<Alphabet> {
+        if let Some(alphabet) = Self::all().iter().find(|a| a.fixed_moltype() == Some(moltype)) {
+            return Some(*alphabet);
+        }
+        let seed = moltype.strip_prefix("hp_random_control2_")?.parse().ok()?;
+        Some(Self::HpRandomControl2Seed(seed))
+    }
+
+    /// Number of classes this alphabet collapses the 20 residues into, which is the number
+    /// its moltype ends in.
     pub fn size(&self) -> usize {
         match self {
-            Self::LehningerHpc => 3,
+            Self::Protein20 => 20,
+            Self::Dayhoff6 => 6,
+            Self::HpLehningerHpc3 => 3,
+            Self::Gbmr4 => 4,
+            Self::Wwmj5 => 5,
+            Self::Gbmr7 => 7,
+            Self::Sdm12 | Self::Mmseqs12 => 12,
+            Self::Wass14 => 14,
+            Self::Hsdm17 => 17,
+            Self::Uniprot18 => 18,
             _ => 2,
         }
     }
 
-    /// Moltype string stored in the index (e.g. `"hp_thomas_dill2"`).
+    /// Whether sourmash encodes this alphabet rather than kmerseek pre-encoding it.
     ///
-    /// The `hp_` prefix keeps the family greppable; the trailing digit is the class count,
-    /// so these read the same way as the multi-letter alphabets in
-    /// the multi-letter alphabets below (`sdm12`, `gbmr4`). Every alphabet states its size.
-    pub fn to_moltype(&self) -> String {
-        match self {
-            // The seed goes after the class count, so "…control2_3" is seed 3 of a
-            // 2-class control and never reads as class count 23.
-            Self::Random(n) => format!("hp_random_control2_{n}"),
-            _ => format!("hp_{}{}", self.name(), self.size()),
-        }
-    }
-
-    /// Parse from a moltype string. Returns `None` for unrecognized strings.
-    ///
-    /// Takes kmerseek names only. sourmash's `hp` reaches [`Self::Lehninger`] through
-    /// [`canonical_moltype`], which every entry point applies first.
-    pub fn from_moltype(s: &str) -> Option<HpAlphabet> {
-        if let Some(alphabet) = Self::all_named().iter().find(|a| a.to_moltype() == s) {
-            return Some(*alphabet);
-        }
-        let seed = s.strip_prefix("hp_random_control2_")?.parse().ok()?;
-        Some(HpAlphabet::Random(seed))
-    }
-
-    /// Whether sourmash encodes this alphabet itself.
-    ///
-    /// Lehninger is sourmash's own `aa_to_hp` partition, so `hp_lehninger2` is sketched
-    /// through sourmash's Murmur64Hp rather than pre-encoded here. That keeps its hashes
-    /// identical to sourmash's for the same sequence. The other HP tables have no sourmash
-    /// equivalent and are pre-encoded.
+    /// True for `protein20` (no reduction), `dayhoff6`, and `hp_lehninger2`, which is
+    /// sourmash's own `aa_to_hp` partition. Sketches for these are byte-identical to
+    /// sourmash's, which is what makes sourmash's own moltypes readable. Everything else
+    /// has no sourmash equivalent and goes through [`Self::partition`].
     pub fn uses_sourmash_encoder(&self) -> bool {
-        matches!(self, Self::Lehninger)
+        matches!(self, Self::Protein20 | Self::Dayhoff6 | Self::HpLehninger2)
+    }
+
+    /// The residue-to-class table. `None` for `protein20`, which does not reduce, and for
+    /// `dayhoff6`, whose table lives in sourmash.
+    ///
+    /// This is the partition itself, so `hp_lehninger2` has one even though sourmash does
+    /// its encoding. Use [`alphabet_table`] for the table to pre-encode with.
+    pub fn partition(&self) -> Option<&'static HashMap<u8, u8>> {
+        Some(match self {
+            Self::Protein20 | Self::Dayhoff6 => return None,
+            Self::HpLehninger2 => &LEHNINGER_HP,
+            Self::HpThomasDill2 => &THOMAS_DILL_HP,
+            Self::HpKyteDoolittle2 => &KYTE_DOOLITTLE_HP,
+            Self::HpThomasDillNoC2 => &THOMAS_DILL_NO_C_HP,
+            Self::HpLehningerCNonpolar2 => &LEHNINGER_C_NONPOLAR_HP,
+            Self::HpLehningerHpc3 => &LEHNINGER_HPC,
+            Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
+            Self::HpRandomControl2 => &RANDOM_CONTROL_HP,
+            Self::HpRandomControl2Seed(1) => &RANDOM_HP_1,
+            Self::HpRandomControl2Seed(2) => &RANDOM_HP_2,
+            Self::HpRandomControl2Seed(3) => &RANDOM_HP_3,
+            Self::HpRandomControl2Seed(4) => &RANDOM_HP_4,
+            Self::HpRandomControl2Seed(5) => &RANDOM_HP_5,
+            Self::HpRandomControl2Seed(6) => &RANDOM_HP_6,
+            Self::HpRandomControl2Seed(7) => &RANDOM_HP_7,
+            Self::HpRandomControl2Seed(8) => &RANDOM_HP_8,
+            Self::HpRandomControl2Seed(9) => &RANDOM_HP_9,
+            Self::HpRandomControl2Seed(10) => &RANDOM_HP_10,
+            Self::HpRandomControl2Seed(seed) => {
+                panic!("random-control seed {seed} not pre-computed (only 1-10 supported)")
+            }
+            Self::Gbmr4 => &GBMR4,
+            Self::Wwmj5 => &WWMJ5,
+            Self::Gbmr7 => &GBMR7,
+            Self::Sdm12 => &SDM12,
+            Self::Mmseqs12 => &MMSEQS12,
+            Self::Wass14 => &WASS14,
+            Self::Hsdm17 => &HSDM17,
+            Self::Uniprot18 => &UNIPROT18,
+        })
+    }
+
+    /// The residue clusters in the order the source paper lists them. `None` for the HP
+    /// family and the two sourmash-encoded alphabets, which are not defined that way.
+    pub fn clusters(&self) -> Option<&'static [&'static str]> {
+        Some(match self {
+            Self::Gbmr4 => GBMR4_CLUSTERS,
+            Self::Wwmj5 => WWMJ5_CLUSTERS,
+            Self::Gbmr7 => GBMR7_CLUSTERS,
+            Self::Sdm12 => SDM12_CLUSTERS,
+            Self::Mmseqs12 => MMSEQS12_CLUSTERS,
+            Self::Wass14 => WASS14_CLUSTERS,
+            Self::Hsdm17 => HSDM17_CLUSTERS,
+            Self::Uniprot18 => UNIPROT18_CLUSTERS,
+            _ => return None,
+        })
+    }
+
+    /// The alphabets defined by residue clusters, meaning the multi-letter ones.
+    pub fn multi_letter() -> impl Iterator<Item = &'static Alphabet> {
+        Self::all().iter().filter(|a| a.clusters().is_some())
+    }
+
+    /// The HP family: two classes, or three where cysteine is split out.
+    pub fn hp_family() -> impl Iterator<Item = &'static Alphabet> {
+        Self::all()
+            .iter()
+            .filter(|a| a.fixed_moltype().is_some_and(|moltype| moltype.starts_with("hp_")))
     }
 }
 
@@ -369,18 +462,24 @@ pub fn random_hp(seed: u64) -> HashMap<u8, u8> {
     build_hp(&residues[..10], &residues[10..])
 }
 
+/// The partition of an alphabet that has one, for tests that compare tables directly.
+#[cfg(test)]
+fn test_partition(alphabet: Alphabet) -> &'static HashMap<u8, u8> {
+    alphabet.partition().expect("these alphabets all reduce")
+}
+
 #[cfg(test)]
 mod hp_tests {
     use super::*;
 
-    fn all_named_alphabets() -> &'static [HpAlphabet] {
-        HpAlphabet::all_named()
+    fn all_named_alphabets() -> Vec<Alphabet> {
+        Alphabet::hp_family().copied().collect()
     }
 
     #[test]
     fn all_alphabets_cover_20_residues() {
         for alpha in all_named_alphabets() {
-            let t = alpha.table();
+            let t = test_partition(alpha);
             // 20 amino acids + 1 stop codon
             assert_eq!(t.len(), 21, "alphabet {:?} has wrong table size", alpha);
             for &r in CANONICAL_AA {
@@ -393,7 +492,7 @@ mod hp_tests {
     fn all_mappings_are_h_p_or_c() {
         for alpha in all_named_alphabets() {
             for &r in CANONICAL_AA {
-                let encoded = alpha.table()[&r];
+                let encoded = test_partition(alpha)[&r];
                 assert!(
                     encoded == b'h' || encoded == b'p' || encoded == b'c',
                     "alphabet {:?} residue {} mapped to unexpected byte {}",
@@ -409,7 +508,7 @@ mod hp_tests {
     fn stop_codon_passes_through() {
         for alpha in all_named_alphabets() {
             assert_eq!(
-                alpha.table()[&b'*'],
+                test_partition(alpha)[&b'*'],
                 b'*',
                 "alphabet {:?} does not pass through stop codon",
                 alpha
@@ -425,41 +524,41 @@ mod hp_tests {
     fn cysteine_placement() {
         // C = polar in Lehninger (polar uncharged group) and ThomasDillNoC (by construction).
         assert_eq!(
-            HpAlphabet::Lehninger.table()[&b'C'],
+            test_partition(Alphabet::HpLehninger2)[&b'C'],
             b'p',
             "Lehninger: C polar (Nelson & Cox 2021, Ch. 3)"
         );
         assert_eq!(
-            HpAlphabet::ThomasDillNoC.table()[&b'C'],
+            test_partition(Alphabet::HpThomasDillNoC2)[&b'C'],
             b'p',
             "ThomasDillNoC: C polar by construction"
         );
 
         // C = hydrophobic in ThomasDill, KyteDoolittle, LehningerCNonpolar, PBotC1stEd.
         assert_eq!(
-            HpAlphabet::ThomasDill.table()[&b'C'],
+            test_partition(Alphabet::HpThomasDill2)[&b'C'],
             b'h',
             "ThomasDill: C hydrophobic (Thomas & Dill 1996, Fig. 3)"
         );
         assert_eq!(
-            HpAlphabet::KyteDoolittle.table()[&b'C'],
+            test_partition(Alphabet::HpKyteDoolittle2)[&b'C'],
             b'h',
             "KyteDoolittle: C hydrophobic (hydropathy +2.5, Kyte & Doolittle 1982)"
         );
         assert_eq!(
-            HpAlphabet::LehningerCNonpolar.table()[&b'C'],
+            test_partition(Alphabet::HpLehningerCNonpolar2)[&b'C'],
             b'h',
             "LehningerCNonpolar: C hydrophobic by construction"
         );
         assert_eq!(
-            HpAlphabet::PBotC1stEd.table()[&b'C'],
+            test_partition(Alphabet::HpPBotC1stEd2)[&b'C'],
             b'h',
             "PBotC1stEd: C borderline-h (Phillips et al. 2008, Fig. 8.30)"
         );
 
         // C = its own third class (cystine) in LehningerHpc, distinct from h/p.
         assert_eq!(
-            HpAlphabet::LehningerHpc.table()[&b'C'],
+            test_partition(Alphabet::HpLehningerHpc3)[&b'C'],
             b'c',
             "LehningerHpc: C is cystine, its own class distinct from h/p"
         );
@@ -469,39 +568,39 @@ mod hp_tests {
     fn glycine_placement() {
         // G = hydrophobic in Lehninger (nonpolar aliphatic) and LehningerCNonpolar.
         assert_eq!(
-            HpAlphabet::Lehninger.table()[&b'G'],
+            test_partition(Alphabet::HpLehninger2)[&b'G'],
             b'h',
             "Lehninger: G nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)"
         );
         assert_eq!(
-            HpAlphabet::LehningerCNonpolar.table()[&b'G'],
+            test_partition(Alphabet::HpLehningerCNonpolar2)[&b'G'],
             b'h',
             "LehningerCNonpolar: G inherits Lehninger placement"
         );
         assert_eq!(
-            HpAlphabet::LehningerHpc.table()[&b'G'],
+            test_partition(Alphabet::HpLehningerHpc3)[&b'G'],
             b'h',
             "LehningerHpc: G inherits Lehninger placement"
         );
 
         // G = polar in ThomasDill, KyteDoolittle, ThomasDillNoC, PBotC1stEd.
         assert_eq!(
-            HpAlphabet::ThomasDill.table()[&b'G'],
+            test_partition(Alphabet::HpThomasDill2)[&b'G'],
             b'p',
             "ThomasDill: G polar (Thomas & Dill 1996, Fig. 3)"
         );
         assert_eq!(
-            HpAlphabet::KyteDoolittle.table()[&b'G'],
+            test_partition(Alphabet::HpKyteDoolittle2)[&b'G'],
             b'p',
             "KyteDoolittle: G polar (hydropathy -0.4, Kyte & Doolittle 1982)"
         );
         assert_eq!(
-            HpAlphabet::ThomasDillNoC.table()[&b'G'],
+            test_partition(Alphabet::HpThomasDillNoC2)[&b'G'],
             b'p',
             "ThomasDillNoC: G polar (inherits ThomasDill)"
         );
         assert_eq!(
-            HpAlphabet::PBotC1stEd.table()[&b'G'],
+            test_partition(Alphabet::HpPBotC1stEd2)[&b'G'],
             b'p',
             "PBotC1stEd: G polar (Phillips et al. 2008, Fig. 8.30)"
         );
@@ -511,39 +610,39 @@ mod hp_tests {
     fn proline_placement() {
         // P = hydrophobic in Lehninger (nonpolar aliphatic), LehningerCNonpolar, PBotC1stEd.
         assert_eq!(
-            HpAlphabet::Lehninger.table()[&b'P'],
+            test_partition(Alphabet::HpLehninger2)[&b'P'],
             b'h',
             "Lehninger: P nonpolar aliphatic (Nelson & Cox 2021, Ch. 3)"
         );
         assert_eq!(
-            HpAlphabet::LehningerCNonpolar.table()[&b'P'],
+            test_partition(Alphabet::HpLehningerCNonpolar2)[&b'P'],
             b'h',
             "LehningerCNonpolar: P inherits Lehninger placement"
         );
         assert_eq!(
-            HpAlphabet::PBotC1stEd.table()[&b'P'],
+            test_partition(Alphabet::HpPBotC1stEd2)[&b'P'],
             b'h',
             "PBotC1stEd: P hydrophobic (Phillips et al. 2008, Fig. 8.30; moved to p in 2nd ed)"
         );
         assert_eq!(
-            HpAlphabet::LehningerHpc.table()[&b'P'],
+            test_partition(Alphabet::HpLehningerHpc3)[&b'P'],
             b'h',
             "LehningerHpc: P inherits Lehninger placement"
         );
 
         // P = polar in ThomasDill, KyteDoolittle, ThomasDillNoC.
         assert_eq!(
-            HpAlphabet::ThomasDill.table()[&b'P'],
+            test_partition(Alphabet::HpThomasDill2)[&b'P'],
             b'p',
             "ThomasDill: P polar (Thomas & Dill 1996, Fig. 3)"
         );
         assert_eq!(
-            HpAlphabet::KyteDoolittle.table()[&b'P'],
+            test_partition(Alphabet::HpKyteDoolittle2)[&b'P'],
             b'p',
             "KyteDoolittle: P polar (hydropathy -1.6, Kyte & Doolittle 1982)"
         );
         assert_eq!(
-            HpAlphabet::ThomasDillNoC.table()[&b'P'],
+            test_partition(Alphabet::HpThomasDillNoC2)[&b'P'],
             b'p',
             "ThomasDillNoC: P polar (inherits ThomasDill)"
         );
@@ -553,21 +652,21 @@ mod hp_tests {
     fn tryptophan_placement() {
         // W = polar in KyteDoolittle only (hydropathy -0.9 due to indole NH).
         assert_eq!(
-            HpAlphabet::KyteDoolittle.table()[&b'W'],
+            test_partition(Alphabet::HpKyteDoolittle2)[&b'W'],
             b'p',
             "KyteDoolittle: W polar (hydropathy -0.9, Kyte & Doolittle 1982)"
         );
 
         // W = hydrophobic in all other named alphabets.
         for alpha in [
-            HpAlphabet::Lehninger,
-            HpAlphabet::ThomasDill,
-            HpAlphabet::ThomasDillNoC,
-            HpAlphabet::LehningerCNonpolar,
-            HpAlphabet::LehningerHpc,
-            HpAlphabet::PBotC1stEd,
+            Alphabet::HpLehninger2,
+            Alphabet::HpThomasDill2,
+            Alphabet::HpThomasDillNoC2,
+            Alphabet::HpLehningerCNonpolar2,
+            Alphabet::HpLehningerHpc3,
+            Alphabet::HpPBotC1stEd2,
         ] {
-            assert_eq!(alpha.table()[&b'W'], b'h', "{:?}: W hydrophobic (aromatic)", alpha);
+            assert_eq!(test_partition(alpha)[&b'W'], b'h', "{:?}: W hydrophobic (aromatic)", alpha);
         }
     }
 
@@ -575,21 +674,21 @@ mod hp_tests {
     fn tyrosine_placement() {
         // Y = polar in KyteDoolittle only (hydropathy -1.3 due to hydroxyl).
         assert_eq!(
-            HpAlphabet::KyteDoolittle.table()[&b'Y'],
+            test_partition(Alphabet::HpKyteDoolittle2)[&b'Y'],
             b'p',
             "KyteDoolittle: Y polar (hydropathy -1.3, Kyte & Doolittle 1982)"
         );
 
         // Y = hydrophobic in all other named alphabets.
         for alpha in [
-            HpAlphabet::Lehninger,
-            HpAlphabet::ThomasDill,
-            HpAlphabet::ThomasDillNoC,
-            HpAlphabet::LehningerCNonpolar,
-            HpAlphabet::LehningerHpc,
-            HpAlphabet::PBotC1stEd,
+            Alphabet::HpLehninger2,
+            Alphabet::HpThomasDill2,
+            Alphabet::HpThomasDillNoC2,
+            Alphabet::HpLehningerCNonpolar2,
+            Alphabet::HpLehningerHpc3,
+            Alphabet::HpPBotC1stEd2,
         ] {
-            assert_eq!(alpha.table()[&b'Y'], b'h', "{:?}: Y hydrophobic (aromatic)", alpha);
+            assert_eq!(test_partition(alpha)[&b'Y'], b'h', "{:?}: Y hydrophobic (aromatic)", alpha);
         }
     }
 
@@ -623,7 +722,7 @@ mod hp_tests {
     #[test]
     fn random_control_static_matches_documented_partition() {
         // h: ADGKLMQRWY  p: CEFHINPSTV — frozen in static for reproducibility.
-        let t = HpAlphabet::RandomControl.table();
+        let t = test_partition(Alphabet::HpRandomControl2);
         for &r in b"ADGKLMQRWY" {
             assert_eq!(t[&r], b'h', "RandomControl: {} should be h", r as char);
         }
@@ -634,7 +733,7 @@ mod hp_tests {
 
     #[test]
     fn all_alphabet_names_are_unique() {
-        let names: Vec<_> = HpAlphabet::all_named().iter().map(|a| a.name()).collect();
+        let names: Vec<_> = Alphabet::hp_family().map(|a| a.to_moltype()).collect();
         let mut sorted = names.clone();
         sorted.sort_unstable();
         sorted.dedup();
@@ -646,19 +745,19 @@ mod hp_tests {
     #[test]
     fn moltype_ends_in_class_count() {
         let expected = [
-            (HpAlphabet::Lehninger, "hp_lehninger2"),
-            (HpAlphabet::ThomasDill, "hp_thomas_dill2"),
-            (HpAlphabet::KyteDoolittle, "hp_kyte_doolittle2"),
-            (HpAlphabet::ThomasDillNoC, "hp_thomas_dill_no_c2"),
-            (HpAlphabet::LehningerCNonpolar, "hp_lehninger_c_nonpolar2"),
-            (HpAlphabet::LehningerHpc, "hp_lehninger_hpc3"),
-            (HpAlphabet::PBotC1stEd, "hp_pbotc_1st_ed2"),
-            (HpAlphabet::RandomControl, "hp_random_control2"),
+            (Alphabet::HpLehninger2, "hp_lehninger2"),
+            (Alphabet::HpThomasDill2, "hp_thomas_dill2"),
+            (Alphabet::HpKyteDoolittle2, "hp_kyte_doolittle2"),
+            (Alphabet::HpThomasDillNoC2, "hp_thomas_dill_no_c2"),
+            (Alphabet::HpLehningerCNonpolar2, "hp_lehninger_c_nonpolar2"),
+            (Alphabet::HpLehningerHpc3, "hp_lehninger_hpc3"),
+            (Alphabet::HpPBotC1stEd2, "hp_pbotc_1st_ed2"),
+            (Alphabet::HpRandomControl2, "hp_random_control2"),
         ];
 
         for (alphabet, moltype) in expected {
             assert_eq!(alphabet.to_moltype(), moltype);
-            assert_eq!(HpAlphabet::from_moltype(moltype), Some(alphabet));
+            assert_eq!(Alphabet::from_moltype(moltype), Some(alphabet));
         }
     }
 
@@ -666,18 +765,17 @@ mod hp_tests {
     /// otherwise the name lies about what the index stores.
     #[test]
     fn class_count_matches_distinct_table_symbols() {
-        for alphabet in HpAlphabet::all_named() {
-            let symbols: std::collections::HashSet<u8> = alphabet
-                .table()
+        for alphabet in Alphabet::hp_family() {
+            let symbols: std::collections::HashSet<u8> = test_partition(*alphabet)
                 .iter()
                 .filter(|(residue, _)| **residue != b'*')
                 .map(|(_, symbol)| *symbol)
                 .collect();
-            assert_eq!(symbols.len(), alphabet.size(), "{}", alphabet.name());
+            assert_eq!(symbols.len(), alphabet.size(), "{}", alphabet.to_moltype());
             assert!(
                 alphabet.to_moltype().ends_with(&alphabet.size().to_string()),
                 "{}",
-                alphabet.name()
+                alphabet.to_moltype()
             );
         }
     }
@@ -686,15 +784,23 @@ mod hp_tests {
     /// cannot be misread as a 23-class alphabet.
     #[test]
     fn seeded_random_control_moltype_separates_count_from_seed() {
-        assert_eq!(HpAlphabet::Random(3).to_moltype(), "hp_random_control2_3");
-        assert_eq!(HpAlphabet::from_moltype("hp_random_control2_3"), Some(HpAlphabet::Random(3)));
-        assert_eq!(HpAlphabet::from_moltype("hp_random_control2_10"), Some(HpAlphabet::Random(10)));
+        assert_eq!(Alphabet::HpRandomControl2Seed(3).to_moltype(), "hp_random_control2_3");
+        assert_eq!(
+            Alphabet::from_moltype("hp_random_control2_3"),
+            Some(Alphabet::HpRandomControl2Seed(3))
+        );
+        assert_eq!(
+            Alphabet::from_moltype("hp_random_control2_10"),
+            Some(Alphabet::HpRandomControl2Seed(10))
+        );
     }
 
     #[test]
-    fn from_moltype_rejects_unrelated_strings() {
-        for moltype in ["protein", "dayhoff6", "sdm12", "hp_", "hp_nope2"] {
-            assert_eq!(HpAlphabet::from_moltype(moltype), None, "{moltype}");
+    fn from_moltype_rejects_unknown_strings() {
+        // `protein` and `hp` are sourmash spellings; they reach an Alphabet only through
+        // canonical_moltype, not from_moltype. The rest are simply not alphabets.
+        for moltype in ["protein", "hp", "dayhoff", "raw", "hp_", "hp_nope2", "reduced_sdm12"] {
+            assert_eq!(Alphabet::from_moltype(moltype), None, "{moltype}");
         }
     }
 
@@ -713,18 +819,18 @@ mod hp_tests {
             "the three groups must partition the canonical residues"
         );
 
-        for alphabet in HpAlphabet::all_named() {
+        for alphabet in Alphabet::hp_family() {
             // The randomized control is a negative control, so it has no reason to agree.
-            if matches!(alphabet, HpAlphabet::RandomControl) {
+            if matches!(alphabet, Alphabet::HpRandomControl2) {
                 continue;
             }
-            let table = alphabet.table();
+            let table = test_partition(*alphabet);
             for &residue in ALWAYS_HYDROPHOBIC {
                 assert_eq!(
                     table[&residue],
                     b'h',
                     "{}: {} should be hydrophobic in every scheme",
-                    alphabet.name(),
+                    alphabet.to_moltype(),
                     residue as char
                 );
             }
@@ -733,7 +839,7 @@ mod hp_tests {
                     table[&residue],
                     b'p',
                     "{}: {} should be polar in every scheme",
-                    alphabet.name(),
+                    alphabet.to_moltype(),
                     residue as char
                 );
             }
@@ -762,107 +868,6 @@ mod hp_tests {
 //   reduced amino acid alphabets. Bioinformatics 40(2):btae061.
 //   doi:10.1093/bioinformatics/btae061. Table 1.
 // ----------------------------------------------------------------------------
-
-/// Reduced alphabets with more than the two or three classes of an HP table.
-///
-/// The numeric suffix in each name is the number of classes, following the convention
-/// of both source papers.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum ReducedAlphabet {
-    /// Solis & Rackovsky (2000), 4 classes. Top recall at 0.01 EPQ in Peterson et al.
-    Gbmr4,
-    /// Wang & Wang (1999), 5 classes, derived from the Miyazawa-Jernigan matrix.
-    Wwmj5,
-    /// Solis & Rackovsky (2000), 7 classes.
-    Gbmr7,
-    /// Prlic et al. (2000) structure-derived substitution matrix, 12 classes.
-    /// Top AUC in Peterson et al.
-    Sdm12,
-    /// Steinegger & Soding (2018), 12 classes, from MMseqs2 sequence clustering.
-    Mmseqs12,
-    /// Ieremie et al. (2024), 14 classes, clustered on hydrophobicity.
-    Wass14,
-    /// Prlic et al. (2000) homologous structure-derived matrix, 17 classes.
-    /// Top mean pooled precision in Peterson et al.
-    Hsdm17,
-    /// Ieremie et al. (2024), 18 classes, from clusters learned by a protein language
-    /// model trained on the full alphabet.
-    Uniprot18,
-}
-
-impl ReducedAlphabet {
-    pub fn table(&self) -> &'static HashMap<u8, u8> {
-        match self {
-            Self::Gbmr4 => &GBMR4,
-            Self::Wwmj5 => &WWMJ5,
-            Self::Gbmr7 => &GBMR7,
-            Self::Sdm12 => &SDM12,
-            Self::Mmseqs12 => &MMSEQS12,
-            Self::Wass14 => &WASS14,
-            Self::Hsdm17 => &HSDM17,
-            Self::Uniprot18 => &UNIPROT18,
-        }
-    }
-
-    /// The residue clusters, in the order given by the source paper.
-    pub fn clusters(&self) -> &'static [&'static str] {
-        match self {
-            Self::Gbmr4 => GBMR4_CLUSTERS,
-            Self::Wwmj5 => WWMJ5_CLUSTERS,
-            Self::Gbmr7 => GBMR7_CLUSTERS,
-            Self::Sdm12 => SDM12_CLUSTERS,
-            Self::Mmseqs12 => MMSEQS12_CLUSTERS,
-            Self::Wass14 => WASS14_CLUSTERS,
-            Self::Hsdm17 => HSDM17_CLUSTERS,
-            Self::Uniprot18 => UNIPROT18_CLUSTERS,
-        }
-    }
-
-    /// Number of classes, matching the numeric suffix in the alphabet's name.
-    pub fn size(&self) -> usize {
-        self.clusters().len()
-    }
-
-    /// Short identifier used in output filenames and Nextflow traces.
-    pub fn name(&self) -> &'static str {
-        match self {
-            Self::Gbmr4 => "gbmr4",
-            Self::Wwmj5 => "wwmj5",
-            Self::Gbmr7 => "gbmr7",
-            Self::Sdm12 => "sdm12",
-            Self::Mmseqs12 => "mmseqs12",
-            Self::Wass14 => "wass14",
-            Self::Hsdm17 => "hsdm17",
-            Self::Uniprot18 => "uniprot18",
-        }
-    }
-
-    pub fn all() -> &'static [ReducedAlphabet] {
-        &[
-            ReducedAlphabet::Gbmr4,
-            ReducedAlphabet::Wwmj5,
-            ReducedAlphabet::Gbmr7,
-            ReducedAlphabet::Sdm12,
-            ReducedAlphabet::Mmseqs12,
-            ReducedAlphabet::Wass14,
-            ReducedAlphabet::Hsdm17,
-            ReducedAlphabet::Uniprot18,
-        ]
-    }
-
-    /// Moltype string stored in the index (e.g. `"sdm12"`).
-    ///
-    /// These are the names the source papers use, digit included, so a moltype is directly
-    /// citeable: searching for SDM12 or GBMR4 finds the paper it came from.
-    pub fn to_moltype(&self) -> String {
-        self.name().to_string()
-    }
-
-    /// Parse from a moltype string. Returns `None` for unrecognized strings.
-    pub fn from_moltype(s: &str) -> Option<ReducedAlphabet> {
-        Self::all().iter().find(|a| a.name() == s).copied()
-    }
-}
 
 /// Build a residue-to-symbol table from a list of clusters.
 ///
@@ -994,57 +999,57 @@ static UNIPROT18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(UNI
 mod multi_letter_tests {
     use super::*;
 
-    fn encode_canonical(alphabet: ReducedAlphabet) -> String {
-        let table = alphabet.table();
+    fn encode_canonical(alphabet: Alphabet) -> String {
+        let table = test_partition(alphabet);
         CANONICAL_AA.iter().map(|r| *table.get(r).expect("canonical residue") as char).collect()
     }
 
     #[test]
     fn test_gbmr4_partition() {
         // ADKERNTSQ -> a, YFLIVMCWH -> y, G -> g, P -> p
-        assert_eq!(encode_canonical(ReducedAlphabet::Gbmr4), "ayaaygyyayyapaaaayyy");
+        assert_eq!(encode_canonical(Alphabet::Gbmr4), "ayaaygyyayyapaaaayyy");
     }
 
     #[test]
     fn test_wwmj5_partition() {
         // CMFILVWY -> c, ATH -> a, GP -> g, DE -> d, SNQRK -> s
-        assert_eq!(encode_canonical(ReducedAlphabet::Wwmj5), "acddcgacsccsgsssaccc");
+        assert_eq!(encode_canonical(Alphabet::Wwmj5), "acddcgacsccsgsssaccc");
     }
 
     #[test]
     fn test_gbmr7_partition() {
         // DN -> d, AEFIKLMQRVWY -> a, CH -> c, T -> t, S -> s, G -> g, P -> p
-        assert_eq!(encode_canonical(ReducedAlphabet::Gbmr7), "acdaagcaaaadpaastaaa");
+        assert_eq!(encode_canonical(Alphabet::Gbmr7), "acdaagcaaaadpaastaaa");
     }
 
     #[test]
     fn test_sdm12_partition() {
         // A a | D d | KER k | N n | TSQ t | YF y | LIVM l | C c | W w | H h | G g | P p
-        assert_eq!(encode_canonical(ReducedAlphabet::Sdm12), "acdkyghlkllnptkttlwy");
+        assert_eq!(encode_canonical(Alphabet::Sdm12), "acdkyghlkllnptkttlwy");
     }
 
     #[test]
     fn test_mmseqs12_partition() {
         // AST a | LM l | IV i | KR k | EQ e | ND n | FY f | C c | G g | H h | P p | W w
-        assert_eq!(encode_canonical(ReducedAlphabet::Mmseqs12), "acnefghikllnpekaaiwf");
+        assert_eq!(encode_canonical(Alphabet::Mmseqs12), "acnefghikllnpekaaiwf");
     }
 
     #[test]
     fn test_wass14_partition() {
         // WM w | DI d | P p | C c | AV a | K k | T t | RE r | G g | L l | Y y | SH s | F f | NQ n
-        assert_eq!(encode_canonical(ReducedAlphabet::Wass14), "acdrfgsdklwnpnrstawy");
+        assert_eq!(encode_canonical(Alphabet::Wass14), "acdrfgsdklwnpnrstawy");
     }
 
     #[test]
     fn test_hsdm17_partition() {
         // KE k | LIV l | every other residue on its own
-        assert_eq!(encode_canonical(ReducedAlphabet::Hsdm17), "acdkfghlklmnpqrstlwy");
+        assert_eq!(encode_canonical(Alphabet::Hsdm17), "acdkfghlklmnpqrstlwy");
     }
 
     #[test]
     fn test_uniprot18_partition() {
         // EP e | HL h | every other residue on its own
-        assert_eq!(encode_canonical(ReducedAlphabet::Uniprot18), "acdefghikhmneqrstvwy");
+        assert_eq!(encode_canonical(Alphabet::Uniprot18), "acdefghikhmneqrstvwy");
     }
 
     /// `build_reduced` asserts full coverage and distinct symbols, so constructing every
@@ -1052,12 +1057,12 @@ mod multi_letter_tests {
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
         let expected_sizes = [4usize, 5, 7, 12, 12, 14, 17, 18];
-        for (alphabet, expected) in ReducedAlphabet::all().iter().zip(expected_sizes) {
-            let table = alphabet.table();
+        for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
+            let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.
-            assert_eq!(table.len(), 21, "{}", alphabet.name());
-            assert_eq!(table.get(&b'*'), Some(&b'*'), "{}", alphabet.name());
-            assert_eq!(alphabet.size(), expected, "{}", alphabet.name());
+            assert_eq!(table.len(), 21, "{}", alphabet.to_moltype());
+            assert_eq!(table.get(&b'*'), Some(&b'*'), "{}", alphabet.to_moltype());
+            assert_eq!(alphabet.size(), expected, "{}", alphabet.to_moltype());
         }
     }
 
@@ -1065,29 +1070,28 @@ mod multi_letter_tests {
     /// papers and every downstream filename refer to these alphabets.
     #[test]
     fn test_name_suffix_matches_class_count() {
-        for alphabet in ReducedAlphabet::all() {
-            let digits: String = alphabet.name().chars().filter(|c| c.is_ascii_digit()).collect();
-            assert_eq!(digits.parse::<usize>().unwrap(), alphabet.size(), "{}", alphabet.name());
+        for alphabet in Alphabet::multi_letter() {
+            let digits: String =
+                alphabet.to_moltype().chars().filter(|c| c.is_ascii_digit()).collect();
+            assert_eq!(
+                digits.parse::<usize>().unwrap(),
+                alphabet.size(),
+                "{}",
+                alphabet.to_moltype()
+            );
         }
     }
 
     /// The moltype is the paper's own name, digit included.
     #[test]
     fn test_moltype_round_trip() {
-        for alphabet in ReducedAlphabet::all() {
+        for alphabet in Alphabet::multi_letter() {
             let moltype = alphabet.to_moltype();
-            assert_eq!(moltype, alphabet.name());
-            assert_eq!(ReducedAlphabet::from_moltype(&moltype), Some(*alphabet));
+            assert_eq!(moltype, alphabet.to_moltype());
+            assert_eq!(Alphabet::from_moltype(&moltype), Some(*alphabet));
         }
-        assert_eq!(ReducedAlphabet::from_moltype("sdm12"), Some(ReducedAlphabet::Sdm12));
-        assert_eq!(ReducedAlphabet::from_moltype("hsdm17"), Some(ReducedAlphabet::Hsdm17));
-    }
-
-    #[test]
-    fn test_from_moltype_rejects_other_moltypes() {
-        for moltype in ["protein20", "dayhoff6", "hp_lehninger2", "reduced_sdm12", "nope"] {
-            assert_eq!(ReducedAlphabet::from_moltype(moltype), None, "{moltype}");
-        }
+        assert_eq!(Alphabet::from_moltype("sdm12"), Some(Alphabet::Sdm12));
+        assert_eq!(Alphabet::from_moltype("hsdm17"), Some(Alphabet::Hsdm17));
     }
 
     /// GBMR4, SDM12 and HSDM17 appear in both source papers, and Peterson et al. note
@@ -1096,12 +1100,9 @@ mod multi_letter_tests {
     /// finer alphabet must therefore share one in the coarser alphabet too.
     #[test]
     fn test_hsdm17_refines_sdm12_refines_gbmr4() {
-        let chain = [
-            (ReducedAlphabet::Hsdm17, ReducedAlphabet::Sdm12),
-            (ReducedAlphabet::Sdm12, ReducedAlphabet::Gbmr4),
-        ];
+        let chain = [(Alphabet::Hsdm17, Alphabet::Sdm12), (Alphabet::Sdm12, Alphabet::Gbmr4)];
         for (finer, coarser) in chain {
-            let (fine, coarse) = (finer.table(), coarser.table());
+            let (fine, coarse) = (test_partition(finer), test_partition(coarser));
             for &a in CANONICAL_AA {
                 for &b in CANONICAL_AA {
                     if fine[&a] == fine[&b] {
@@ -1109,10 +1110,10 @@ mod multi_letter_tests {
                             coarse[&a],
                             coarse[&b],
                             "{} groups {} with {} but {} splits them",
-                            finer.name(),
+                            finer.to_moltype(),
                             a as char,
                             b as char,
-                            coarser.name()
+                            coarser.to_moltype()
                         );
                     }
                 }
@@ -1121,20 +1122,16 @@ mod multi_letter_tests {
     }
 }
 
-/// The residue-to-class table for alphabets kmerseek encodes itself.
+/// The table to pre-encode a sequence with before hashing.
 ///
-/// Returns `None` for the three alphabets sourmash encodes: `protein20` (no reduction),
-/// `dayhoff6`, and `hp_lehninger2` (sourmash's own `aa_to_hp` partition). Those are hashed
-/// by sourmash directly; everything else is pre-encoded through the table returned here.
+/// `None` for the three alphabets sourmash encodes itself, which [`crate::hash_functions`]
+/// routes to sourmash instead.
 pub fn alphabet_table(moltype: &str) -> Option<&'static HashMap<u8, u8>> {
-    let moltype = canonical_moltype(moltype);
-    if let Some(alphabet) = HpAlphabet::from_moltype(moltype) {
-        if alphabet.uses_sourmash_encoder() {
-            return None;
-        }
-        return Some(alphabet.table());
+    let alphabet = Alphabet::from_moltype(canonical_moltype(moltype))?;
+    if alphabet.uses_sourmash_encoder() {
+        return None;
     }
-    ReducedAlphabet::from_moltype(moltype).map(|alphabet| alphabet.table())
+    alphabet.partition()
 }
 
 #[cfg(test)]
@@ -1166,8 +1163,8 @@ mod sourmash_compat_tests {
     fn earlier_kmerseek_spellings_are_not_translated() {
         for moltype in ["raw", "hp_lehninger", "hp_thomas_dill", "reduced_sdm12"] {
             assert_eq!(canonical_moltype(moltype), moltype, "{moltype}");
-            assert!(HpAlphabet::from_moltype(moltype).is_none(), "{moltype}");
-            assert!(ReducedAlphabet::from_moltype(moltype).is_none(), "{moltype}");
+            assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
+            assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
         }
     }
 }

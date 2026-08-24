@@ -9,7 +9,7 @@
 /// that fragment run through each paper's published partition.
 #[cfg(test)]
 mod tests {
-    use crate::alphabets::ReducedAlphabet;
+    use crate::alphabets::Alphabet;
     use crate::sketch::ProteinSketch;
 
     /// CED-9 (P41958) residues 121-181, spanning the BH1 region.
@@ -22,7 +22,7 @@ mod tests {
     fn test_reduced_alphabets_kmer_positions_match_minhash() {
         let ksize = 10;
 
-        for alphabet in ReducedAlphabet::all() {
+        for alphabet in Alphabet::multi_letter() {
             let moltype = alphabet.to_moltype();
             let sketch = ProteinSketch::from_protein_sequence(
                 "ced9_fragment",
@@ -60,22 +60,10 @@ mod tests {
     #[test]
     fn test_encoded_sequence_matches_published_partition() {
         let expected = [
-            (
-                ReducedAlphabet::Gbmr4,
-                "ayyaaayaaayaayyaayyaypayayayyaayyaaygaaaaaaypyaygayygyyayggyy",
-            ),
-            (
-                ReducedAlphabet::Sdm12,
-                "tlykkkhaknyktycktllalpkltytlytdllktlgnattdtcpltygkllglltyggyl",
-            ),
-            (
-                ReducedAlphabet::Hsdm17,
-                "tlfkkkhaknfktfckqllalprlsfslyqdllrtlgnaqtdqcpmsygrllgllsfggfl",
-            ),
-            (
-                ReducedAlphabet::Uniprot18,
-                "tifekkhaenfetfceqhhaverisfshyqdvvrtvgnaqtdqcemsygrhighisfggfv",
-            ),
+            (Alphabet::Gbmr4, "ayyaaayaaayaayyaayyaypayayayyaayyaaygaaaaaaypyaygayygyyayggyy"),
+            (Alphabet::Sdm12, "tlykkkhaknyktycktllalpkltytlytdllktlgnattdtcpltygkllglltyggyl"),
+            (Alphabet::Hsdm17, "tlfkkkhaknfktfckqllalprlsfslyqdllrtlgnaqtdqcpmsygrllgllsfggfl"),
+            (Alphabet::Uniprot18, "tifekkhaenfetfceqhhaverisfshyqdvvrtvgnaqtdqcemsygrhighisfggfv"),
         ];
 
         for (alphabet, want) in expected {
@@ -99,10 +87,11 @@ mod tests {
     /// so the class count in the name is what the index stores.
     #[test]
     fn test_encoded_sequence_uses_only_alphabet_symbols() {
-        for alphabet in ReducedAlphabet::all() {
+        for alphabet in Alphabet::multi_letter() {
             let moltype = alphabet.to_moltype();
             let symbols: Vec<char> = alphabet
                 .clusters()
+                .expect("a multi-letter alphabet is defined by its clusters")
                 .iter()
                 .map(|c| c.chars().next().unwrap().to_ascii_lowercase())
                 .collect();
@@ -133,7 +122,7 @@ mod tests {
     fn test_coarser_alphabets_collapse_at_least_as_much() {
         use std::collections::HashSet;
 
-        let distinct = |alphabet: &ReducedAlphabet| -> usize {
+        let distinct = |alphabet: &Alphabet| -> usize {
             let sketch = ProteinSketch::from_protein_sequence(
                 "ced9_fragment",
                 CED9_FRAGMENT,
@@ -145,27 +134,27 @@ mod tests {
             sketch.get_moltype_sequence().unwrap().chars().collect::<HashSet<char>>().len()
         };
 
-        for coarse in ReducedAlphabet::all() {
+        for coarse in Alphabet::multi_letter() {
             // No alphabet can use more symbols on this fragment than it has classes.
             assert!(
                 distinct(coarse) <= coarse.size(),
                 "{}: {} distinct symbols exceeds its {} classes",
-                coarse.name(),
+                coarse.to_moltype(),
                 distinct(coarse),
                 coarse.size()
             );
 
-            for fine in ReducedAlphabet::all() {
+            for fine in Alphabet::multi_letter() {
                 if coarse.size() >= fine.size() {
                     continue;
                 }
                 assert!(
                     distinct(coarse) <= distinct(fine),
                     "{} ({} classes) uses {} symbols, more than {} ({} classes) at {}",
-                    coarse.name(),
+                    coarse.to_moltype(),
                     coarse.size(),
                     distinct(coarse),
-                    fine.name(),
+                    fine.to_moltype(),
                     fine.size(),
                     distinct(fine)
                 );
@@ -178,7 +167,7 @@ mod tests {
     fn test_find_matched_regions_self_hit() {
         use crate::search::find_matched_regions;
 
-        for alphabet in ReducedAlphabet::all() {
+        for alphabet in Alphabet::multi_letter() {
             let moltype = alphabet.to_moltype();
             let sketch = ProteinSketch::from_protein_sequence(
                 "ced9_fragment",
@@ -202,8 +191,7 @@ mod tests {
     /// HSDM17 keeps apart but SDM12 merges into its TSQ and acidic classes.
     #[test]
     fn test_alphabets_produce_distinct_sketches() {
-        let sketches: Vec<(String, std::collections::HashSet<u64>)> = ReducedAlphabet::all()
-            .iter()
+        let sketches: Vec<(String, std::collections::HashSet<u64>)> = Alphabet::multi_letter()
             .map(|alphabet| {
                 let moltype = alphabet.to_moltype();
                 let sketch = ProteinSketch::from_protein_sequence(

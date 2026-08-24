@@ -1,5 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use kmerseek::alphabets::HpAlphabet;
+use kmerseek::alphabets::Alphabet;
 use kmerseek::errors::IndexResult;
 use kmerseek::types::MolType;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
@@ -256,7 +256,7 @@ fn main() -> IndexResult<()> {
             let effective_moltype: String = match (alphabet, random_seed) {
                 (ProteinAlphabet::HpRandomControl, Some(seed)) => {
                     assert!((1..=10).contains(&seed), "--random-seed must be 1-10, got {seed}");
-                    HpAlphabet::Random(seed).to_moltype()
+                    Alphabet::HpRandomControl2Seed(seed).to_moltype()
                 }
                 _ => {
                     let s: &'static str = alphabet.into();
@@ -754,7 +754,7 @@ fn assign_encoding(
     // The detected encoding comes from the database as a string, so we convert it to
     // the enum type for comparison.
     // Indexes built before class counts were added to the HP names store the old
-    // "hp_<name>" moltype. HpAlphabet::from_moltype() still parses those, so normalizing
+    // "hp_<name>" moltype. Alphabet::from_moltype() still parses those, so normalizing
     // here lets the match below deal only in current names.
     let canonical = MolType::new(detected_moltype)
         .map(|moltype| moltype.get().to_string())
@@ -773,7 +773,7 @@ fn assign_encoding(
         "hp_random_control2" => ProteinAlphabet::HpRandomControl,
         // Seeded shuffled controls carry the seed in the moltype; map them back to
         // HpShuffledControl so the encoding path picks them up via
-        // HpAlphabet::from_moltype(), which parses the numeric suffix.
+        // Alphabet::from_moltype(), which parses the numeric suffix.
         s if s.starts_with("hp_random_control2_") => ProteinAlphabet::HpRandomControl,
         "gbmr4" => ProteinAlphabet::ReducedGbmr4,
         "wwmj5" => ProteinAlphabet::ReducedWwmj5,
