@@ -342,7 +342,7 @@ fn test_cli_remove_low_complexity_auto_filename_does_not_collide(
         cmd.assert().success();
     }
 
-    // `--encoding hp` is stored under the alphabet's current name, so that is what the
+    // `--alphabet hp_lehninger2` is stored under that name, so that is what the
     // generated filename carries.
     let kept_all = temp_dir.path().join("ced9.fasta.hp_lehninger2.k8.scaled1.kmerseek.rocksdb");
     let removed = temp_dir

@@ -803,7 +803,7 @@ fn assign_encoding(
     // where searches would produce incorrect results. However, since encoding has
     // a default value, we can't distinguish "user specified" from "using default",
     // so we only error if it's clearly wrong (not the default and doesn't match).
-    // In practice, users should not specify --encoding and let it autodetect.
+    // In practice, users should not specify --alphabet and let it autodetect.
     if alphabet != detected_alphabet && alphabet != ProteinAlphabet::Protein {
         // User explicitly provided a non-default encoding that doesn't match
         return Err(kmerseek::errors::IndexError::ValidationError {

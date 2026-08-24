@@ -447,7 +447,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
             {
                 let bench_name = format!("search_one_{moltype}_k{ksize}");
                 c.bench_function(&bench_name, |b| {
-                    b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default()))
+                    b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default(), 1))
                 });
             }
 
@@ -459,7 +459,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
                     b.iter(|| {
                         queries
                             .iter()
-                            .map(|q| searcher.search_one(q, &SearchFilters::default()))
+                            .map(|q| searcher.search_one(q, &SearchFilters::default(), n_queries))
                             .collect::<Vec<_>>()
                     })
                 });
@@ -532,7 +532,7 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
             query_sig.add_protein(&query_seq.1, true).unwrap();
             let search_name = format!("search_one_hp_k{ksize}");
             group.bench_function(&search_name, |b| {
-                b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default()))
+                b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default(), 1))
             });
         }
     }
