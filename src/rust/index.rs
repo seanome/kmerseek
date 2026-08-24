@@ -25,6 +25,7 @@ use crate::hash_functions::get_hash_function_from_moltype;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::MolType;
+use crate::types::KmerSize;
 
 /// Schema version for the on-disk index format.
 /// Increment this constant whenever the stored format changes in a backward-incompatible way
@@ -280,6 +281,12 @@ impl ProteomeIndex {
             .get()
             .to_string();
         let moltype = moltype.as_str();
+        // Validate before opening RocksDB, so a bad size fails fast instead of
+        // leaving an empty database behind.
+        KmerSize::new(ksize).map_err(|message| IndexError::ConfigurationError {
+            field: "ksize".to_string(),
+            message,
+        })?;
 
         // Create RocksDB options optimized for large datasets
         let opts = Self::create_rocksdb_options(true);
@@ -2058,6 +2065,52 @@ mod tests {
     use std::collections::{BTreeMap, HashMap};
     use std::fs::File;
     use std::path::PathBuf;
+
+    /// A zero k-mer size reached `add_protein` and panicked on integer underflow.
+    /// It is rejected at construction now, before RocksDB is even opened.
+    #[test]
+    fn test_new_rejects_zero_ksize_without_creating_database() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("rejected.db");
+
+        // `.err()` rather than `unwrap_err()`: ProteomeIndex holds a RocksDB
+        // handle and does not implement Debug, which unwrap_err() would require.
+        let err = ProteomeIndex::new(&db_path, 0, 1, "protein", false)
+            .err()
+            .expect("a zero k-mer size should be rejected");
+        assert!(
+            err.to_string().contains("K-mer size must be greater than 0"),
+            "unexpected error: {err}"
+        );
+        assert!(!db_path.exists(), "a rejected k-mer size should leave no database behind");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_new_rejects_oversized_ksize() -> Result<()> {
+        let dir = tempdir()?;
+        let err = ProteomeIndex::new(dir.path().join("big.db"), 101, 1, "protein", false)
+            .err()
+            .expect("an oversized k-mer size should be rejected");
+        assert!(err.to_string().contains("K-mer size too large"), "unexpected error: {err}");
+
+        Ok(())
+    }
+
+    /// k=1 and k=100 are the boundaries next to the rejected 0 and 101, so they
+    /// should construct normally rather than being rejected.
+    #[test]
+    fn test_new_accepts_boundary_ksizes() -> Result<()> {
+        let dir = tempdir()?;
+        let small = ProteomeIndex::new(dir.path().join("small.db"), 1, 1, "protein", false)?;
+        assert_eq!(small.ksize(), 1);
+
+        let large = ProteomeIndex::new(dir.path().join("large.db"), 100, 1, "protein", false)?;
+        assert_eq!(large.ksize(), 100);
+
+        Ok(())
+    }
 
     /// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
     /// than unit tests with all the moltype testing. Also, it's a lot of tests!
