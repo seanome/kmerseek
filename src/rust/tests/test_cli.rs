@@ -299,18 +299,24 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
         ]);
         search_cmd.assert().success();
 
-        let csv = std::fs::read_to_string(&csv_path)?;
-        let mut lines = csv.lines();
-        let header: Vec<&str> = lines.next().expect("header row").split(',').collect();
+        // Parsed with a real CSV reader, not split(','): some FASTA descriptions
+        // hold a comma, so the writer quotes those fields and a naive split
+        // shifts every column after them.
+        let mut reader = csv::Reader::from_path(&csv_path)?;
+        let header = reader.headers()?.clone();
         let col = header
             .iter()
-            .position(|h| *h == "remove_low_complexity")
+            .position(|h| h == "remove_low_complexity")
             .expect("remove_low_complexity column");
         // It sits with the other run metadata rather than at the end.
-        assert_eq!(header[col - 1], "moltype");
+        assert_eq!(&header[col - 1], "moltype");
 
-        let first = lines.next().expect("at least one result row");
-        assert_eq!(first.split(',').nth(col), Some(expected));
+        let mut rows = 0;
+        for record in reader.records() {
+            assert_eq!(&record?[col], expected);
+            rows += 1;
+        }
+        assert_eq!(rows, 362, "ced9 against the 25-sequence bcl2 index at k=12");
     }
 
     Ok(())
