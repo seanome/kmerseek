@@ -196,16 +196,6 @@ Alphabet: HpLehninger (detected: hp)
 Total matches: 21
 ```
 
-### Indexes built before this change
-
-kmerseek's own earlier spellings are not read, since they were never sourmash names and
-so have nothing to stay compatible with: `raw`, and `hp_<name>` without its class count.
-An index recording one fails to open:
-
-```
-Unknown alphabet in database: hp_thomas_dill
-```
-
 No hash function changed, so rebuilding under the current name gives the same hits.
 
 ## HP Alphabet Variants
