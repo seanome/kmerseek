@@ -337,4 +337,50 @@ mod tests {
         assert_eq!(encoded.len(), sequence.len());
         Ok(())
     }
+
+    /// Each hash function sourmash writes maps back to the kmerseek name for the same
+    /// alphabet, which is what lets an index sourmash produced open under our naming.
+    #[test]
+    fn test_get_moltype_from_hash_function_each_supported_variant() -> Result<()> {
+        assert_eq!(get_moltype_from_hash_function(HashFunctions::Murmur64Protein)?, "protein20");
+        assert_eq!(get_moltype_from_hash_function(HashFunctions::Murmur64Dayhoff)?, "dayhoff6");
+        assert_eq!(get_moltype_from_hash_function(HashFunctions::Murmur64Hp)?, "hp_lehninger2");
+        Ok(())
+    }
+
+    /// DNA is a hash function sourmash writes that kmerseek has no alphabet for, so it
+    /// has to be refused rather than read as some protein alphabet.
+    #[test]
+    fn test_get_moltype_from_hash_function_rejects_dna() {
+        let err = get_moltype_from_hash_function(HashFunctions::Murmur64Dna)
+            .expect_err("DNA has no protein alphabet to map to");
+        assert_eq!(
+            err.to_string(),
+            "Invalid hash function: DNA, only Sourmash HashFunctions::Murmur64 with \
+             'protein', 'dayhoff', or 'hp' are supported"
+        );
+    }
+
+    /// Table-backed alphabets are applied by `encode_by_moltype` itself, since a table
+    /// cannot be expressed as a `fn(u8) -> u8`. Without that branch they would fall
+    /// through to the identity and encode to the input unchanged.
+    #[test]
+    fn test_encode_by_moltype_applies_the_reduced_table() -> Result<()> {
+        // SDM12 writes each class as its first residue in lowercase, so KER is k,
+        // TSQ is t, YF is y and LIVM is l.
+        assert_eq!(encode_by_moltype("MKTAYIAKQR", "sdm12")?, "lktaylaktk");
+        // The HP family reaches the same branch: h is ACFILMVWY, p is DEGHKNPQRST.
+        assert_eq!(encode_by_moltype("MKTAYIAKQR", "hp_thomas_dill2")?, "hpphhhhppp");
+        Ok(())
+    }
+
+    /// The table is keyed on uppercase residues, and anything it does not hold passes
+    /// through unchanged so the encoded sequence keeps the length of its input.
+    #[test]
+    fn test_encode_by_moltype_uppercases_input_and_keeps_unknown_residues() -> Result<()> {
+        assert_eq!(encode_by_moltype("mktayiakqr", "sdm12")?, "lktaylaktk");
+        // X (any residue) and Z (Glx) are not in the 20-residue table.
+        assert_eq!(encode_by_moltype("MXKZ", "sdm12")?, "lXkZ");
+        Ok(())
+    }
 }

@@ -780,6 +780,43 @@ mod hp_tests {
         }
     }
 
+    /// Each of the ten seeds must resolve to the table built from that same seed. A
+    /// mis-wired arm here would silently encode a control run under a neighbour's
+    /// partition, which no downstream result would reveal.
+    #[test]
+    fn seeded_random_controls_resolve_to_their_own_table() {
+        let mut seen: Vec<&HashMap<u8, u8>> = Vec::new();
+        for seed in 1..=10 {
+            let alphabet = Alphabet::HpRandomControl2Seed(seed);
+            // The seeded control is the one alphabet with no fixed name, since its
+            // name carries the seed.
+            assert_eq!(alphabet.fixed_moltype(), None);
+            assert_eq!(alphabet.to_moltype(), format!("hp_random_control2_{seed}"));
+            assert_eq!(alphabet.size(), 2);
+
+            let table = test_partition(alphabet);
+            assert_eq!(*table, random_hp(seed), "seed {seed} does not use its own table");
+            assert!(!seen.contains(&table), "seed {seed} repeats an earlier partition");
+            seen.push(table);
+        }
+        assert_eq!(seen.len(), 10);
+    }
+
+    /// protein20 does not reduce and dayhoff6's table lives in sourmash, so neither has
+    /// a partition of ours to hand back.
+    #[test]
+    fn sourmash_encoded_alphabets_have_no_partition_of_ours() {
+        for (alphabet, size) in [(Alphabet::Protein20, 20), (Alphabet::Dayhoff6, 6)] {
+            assert_eq!(alphabet.partition(), None, "{}", alphabet.to_moltype());
+            assert_eq!(alphabet.size(), size);
+            assert!(alphabet.uses_sourmash_encoder());
+        }
+        // hp_lehninger2 is the third sourmash encodes, but it keeps a partition because
+        // the table is ours to compare against.
+        assert!(Alphabet::HpLehninger2.uses_sourmash_encoder());
+        assert!(Alphabet::HpLehninger2.partition().is_some());
+    }
+
     /// Seeded controls put the seed after the class count, so seed 3 of a 2-class control
     /// cannot be misread as a 23-class alphabet.
     #[test]
