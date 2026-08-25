@@ -401,7 +401,7 @@ impl ProteinSketch {
         use crate::alphabets::alphabet_table;
         use crate::aminoacid::{disambiguate_kmer, has_ambiguity_codes};
         use crate::hash_functions::{
-            encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype,
+            encode_by_alphabet, encode_with_fn, get_encoding_fn_from_moltype,
         };
         use crate::kmer::is_homopolymer_kmer;
         use sourmash::_hash_murmur;
@@ -569,7 +569,7 @@ impl ProteinSketch {
                         })
                         .collect::<String>()
                 } else {
-                    encode_by_moltype(sequence, &moltype_str)?
+                    encode_by_alphabet(sequence, &moltype_str)?
                 };
                 efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
             }

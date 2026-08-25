@@ -98,7 +98,7 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
         // Encoded by sourmash, like dayhoff6 above.
         "hp_lehninger2" => Ok(aa_to_hp),
         // Table-backed alphabets cannot be expressed as a fn(u8) -> u8; return identity here
-        // so callers that only need one don't crash. encode_by_moltype and add_protein apply
+        // so callers that only need one don't crash. encode_by_alphabet and add_protein apply
         // the table themselves.
         s if alphabet_table(s).is_some() => Ok(|b| b),
         _ => Err(anyhow::anyhow!(
@@ -126,13 +126,13 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
 ///
 /// # Example
 /// ```
-/// use kmerseek::hash_functions::encode_by_moltype;
+/// use kmerseek::hash_functions::encode_by_alphabet;
 ///
 /// let sequence = "MKTAYIAKQR";
-/// let encoded = encode_by_moltype(sequence, "hp_lehninger2").unwrap();
+/// let encoded = encode_by_alphabet(sequence, "hp_lehninger2").unwrap();
 /// // encoded will be the HP-encoded version
 /// ```
-pub fn encode_by_moltype(sequence: &str, moltype: &str) -> Result<String> {
+pub fn encode_by_alphabet(sequence: &str, moltype: &str) -> Result<String> {
     // Table-backed alphabets cannot be expressed as a fn(u8) -> u8, so they are applied
     // here directly. Without this the HP family would encode to the identity.
     if let Some(table) = alphabet_table(moltype) {
@@ -252,7 +252,7 @@ mod tests {
         }
 
         // A table-backed alphabet cannot be a fn(u8) -> u8, so it falls back to the
-        // identity here; encode_by_moltype applies the table instead.
+        // identity here; encode_by_alphabet applies the table instead.
         if let Ok(td_fn) = get_encoding_fn_from_moltype("hp_thomas_dill2") {
             assert_eq!(td_fn(b'A'), b'A');
         } else {
@@ -269,22 +269,22 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_by_moltype_protein() -> Result<()> {
-        let encoded = encode_by_moltype(TEST_KMER, "protein20")?;
+    fn test_encode_by_alphabet_protein() -> Result<()> {
+        let encoded = encode_by_alphabet(TEST_KMER, "protein20")?;
         assert_eq!(encoded, TEST_KMER);
         Ok(())
     }
 
     #[test]
-    fn test_encode_by_moltype_dayhoff() -> Result<()> {
-        let encoded = encode_by_moltype(TEST_KMER, "dayhoff6")?;
+    fn test_encode_by_alphabet_dayhoff() -> Result<()> {
+        let encoded = encode_by_alphabet(TEST_KMER, "dayhoff6")?;
         assert_eq!(encoded, "eeeecbbeeec");
         Ok(())
     }
 
     #[test]
-    fn test_encode_by_moltype_hp() -> Result<()> {
-        let encoded = encode_by_moltype(TEST_KMER, "hp_lehninger2")?;
+    fn test_encode_by_alphabet_hp() -> Result<()> {
+        let encoded = encode_by_alphabet(TEST_KMER, "hp_lehninger2")?;
         assert_eq!(encoded, "hhhhphhhhhp");
         Ok(())
     }
@@ -311,17 +311,17 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_by_moltype_sequence() -> Result<()> {
+    fn test_encode_by_alphabet_sequence() -> Result<()> {
         let sequence = "MKTAYIAKQR";
-        let encoded = encode_by_moltype(sequence, "protein20")?;
+        let encoded = encode_by_alphabet(sequence, "protein20")?;
         assert_eq!(encoded, sequence);
         Ok(())
     }
 
     #[test]
-    fn test_encode_by_moltype_sequence_hp() -> Result<()> {
+    fn test_encode_by_alphabet_sequence_hp() -> Result<()> {
         let sequence = "MKTAYIAKQR";
-        let encoded = encode_by_moltype(sequence, "hp_lehninger2")?;
+        let encoded = encode_by_alphabet(sequence, "hp_lehninger2")?;
         // Verify the encoding produces the correct length and uses only 'h' and 'p'
         assert_eq!(encoded.len(), sequence.len());
         assert!(encoded.chars().all(|c| c == 'h' || c == 'p'));
@@ -329,9 +329,9 @@ mod tests {
     }
 
     #[test]
-    fn test_encode_by_moltype_sequence_dayhoff() -> Result<()> {
+    fn test_encode_by_alphabet_sequence_dayhoff() -> Result<()> {
         let sequence = "MKTAYIAKQR";
-        let encoded = encode_by_moltype(sequence, "dayhoff6")?;
+        let encoded = encode_by_alphabet(sequence, "dayhoff6")?;
         // Dayhoff encoding should produce a different string
         assert_ne!(encoded, sequence);
         assert_eq!(encoded.len(), sequence.len());
@@ -361,26 +361,26 @@ mod tests {
         );
     }
 
-    /// Table-backed alphabets are applied by `encode_by_moltype` itself, since a table
+    /// Table-backed alphabets are applied by `encode_by_alphabet` itself, since a table
     /// cannot be expressed as a `fn(u8) -> u8`. Without that branch they would fall
     /// through to the identity and encode to the input unchanged.
     #[test]
-    fn test_encode_by_moltype_applies_the_reduced_table() -> Result<()> {
+    fn test_encode_by_alphabet_applies_the_reduced_table() -> Result<()> {
         // SDM12 writes each class as its first residue in lowercase, so KER is k,
         // TSQ is t, YF is y and LIVM is l.
-        assert_eq!(encode_by_moltype("MKTAYIAKQR", "sdm12")?, "lktaylaktk");
+        assert_eq!(encode_by_alphabet("MKTAYIAKQR", "sdm12")?, "lktaylaktk");
         // The HP family reaches the same branch: h is ACFILMVWY, p is DEGHKNPQRST.
-        assert_eq!(encode_by_moltype("MKTAYIAKQR", "hp_thomas_dill2")?, "hpphhhhppp");
+        assert_eq!(encode_by_alphabet("MKTAYIAKQR", "hp_thomas_dill2")?, "hpphhhhppp");
         Ok(())
     }
 
     /// The table is keyed on uppercase residues, and anything it does not hold passes
     /// through unchanged so the encoded sequence keeps the length of its input.
     #[test]
-    fn test_encode_by_moltype_uppercases_input_and_keeps_unknown_residues() -> Result<()> {
-        assert_eq!(encode_by_moltype("mktayiakqr", "sdm12")?, "lktaylaktk");
+    fn test_encode_by_alphabet_uppercases_input_and_keeps_unknown_residues() -> Result<()> {
+        assert_eq!(encode_by_alphabet("mktayiakqr", "sdm12")?, "lktaylaktk");
         // X (any residue) and Z (Glx) are not in the 20-residue table.
-        assert_eq!(encode_by_moltype("MXKZ", "sdm12")?, "lXkZ");
+        assert_eq!(encode_by_alphabet("MXKZ", "sdm12")?, "lXkZ");
         Ok(())
     }
 }

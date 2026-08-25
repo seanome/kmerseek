@@ -4,7 +4,7 @@
 ///        the uppercase H/P hashes stored by sourmash's ReadingFrame::new_protein.
 ///
 /// Bug 2: encoded_sequence was storing raw amino acids instead of HP-encoded h/p codes,
-///        because encode_by_moltype returned the identity function for custom HP alphabets.
+///        because encode_by_alphabet returned the identity function for custom HP alphabets.
 
 #[cfg(test)]
 mod tests {

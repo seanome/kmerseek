@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kmerseek::hash_functions::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
+use kmerseek::hash_functions::{encode_by_alphabet, encode_with_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
 use std::fs;
 use std::fs::File;
@@ -178,7 +178,7 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
 
                     // Encode kmer
                     let encoded =
-                        encode_by_moltype(&TEST_PROTEIN[..ksize as usize], moltype).unwrap();
+                        encode_by_alphabet(&TEST_PROTEIN[..ksize as usize], moltype).unwrap();
 
                     // Record end time
                     let end_time = Instant::now();
