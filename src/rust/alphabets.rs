@@ -82,10 +82,14 @@ pub enum Alphabet {
 
     /// Solis & Rackovsky 2000, 4 classes.
     Gbmr4,
+    /// Ball, Hill & Scott 2014, 4 classes on polarity and charge.
+    Polarity4,
     /// Wang & Wang 1999, 5 classes.
     Wwmj5,
     /// Solis & Rackovsky 2000, 7 classes.
     Gbmr7,
+    /// Jain, Jain & Jain 2014, 8 classes, one per side-chain functional group.
+    FuncGroups8,
     /// Prlic et al. 2000 structure-derived matrix, 12 classes.
     Sdm12,
     /// Steinegger & Soding 2018, 12 classes.
@@ -113,8 +117,10 @@ impl Alphabet {
             Alphabet::HpPBotC1stEd2,
             Alphabet::HpRandomControl2,
             Alphabet::Gbmr4,
+            Alphabet::Polarity4,
             Alphabet::Wwmj5,
             Alphabet::Gbmr7,
+            Alphabet::FuncGroups8,
             Alphabet::Sdm12,
             Alphabet::Mmseqs12,
             Alphabet::Wass14,
@@ -138,8 +144,10 @@ impl Alphabet {
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
             Self::HpRandomControl2 => "hp_random_control2",
             Self::Gbmr4 => "gbmr4",
+            Self::Polarity4 => "polarity4",
             Self::Wwmj5 => "wwmj5",
             Self::Gbmr7 => "gbmr7",
+            Self::FuncGroups8 => "funcgroups8",
             Self::Sdm12 => "sdm12",
             Self::Mmseqs12 => "mmseqs12",
             Self::Wass14 => "wass14",
@@ -179,9 +187,10 @@ impl Alphabet {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
             Self::HpLehningerHpc3 => 3,
-            Self::Gbmr4 => 4,
+            Self::Gbmr4 | Self::Polarity4 => 4,
             Self::Wwmj5 => 5,
             Self::Gbmr7 => 7,
+            Self::FuncGroups8 => 8,
             Self::Sdm12 | Self::Mmseqs12 => 12,
             Self::Wass14 => 14,
             Self::Hsdm17 => 17,
@@ -230,8 +239,10 @@ impl Alphabet {
                 panic!("random-control seed {seed} not pre-computed (only 1-10 supported)")
             }
             Self::Gbmr4 => &GBMR4,
+            Self::Polarity4 => &POLARITY4,
             Self::Wwmj5 => &WWMJ5,
             Self::Gbmr7 => &GBMR7,
+            Self::FuncGroups8 => &FUNCGROUPS8,
             Self::Sdm12 => &SDM12,
             Self::Mmseqs12 => &MMSEQS12,
             Self::Wass14 => &WASS14,
@@ -245,8 +256,10 @@ impl Alphabet {
     pub fn clusters(&self) -> Option<&'static [&'static str]> {
         Some(match self {
             Self::Gbmr4 => GBMR4_CLUSTERS,
+            Self::Polarity4 => POLARITY4_CLUSTERS,
             Self::Wwmj5 => WWMJ5_CLUSTERS,
             Self::Gbmr7 => GBMR7_CLUSTERS,
+            Self::FuncGroups8 => FUNCGROUPS8_CLUSTERS,
             Self::Sdm12 => SDM12_CLUSTERS,
             Self::Mmseqs12 => MMSEQS12_CLUSTERS,
             Self::Wass14 => WASS14_CLUSTERS,
@@ -894,7 +907,9 @@ mod hp_tests {
 // SDM12 and HSDM17 as the best performers on recall, AUC and mean pooled precision
 // respectively. Ieremie et al. (2024) reused those three and added GBMR7, WWMJ5,
 // MMSEQS12, WASS14 and UNIPROT18 when testing how alphabet reduction affects protein
-// language models. Where the two papers overlap, their partitions agree.
+// language models. Rannon & Burstein (2026) added FUNCGROUPS8 and POLARITY4, and
+// reused the MMSEQS12 partition under its Linclust name. Where the papers overlap,
+// their partitions agree.
 //
 // References:
 //   Peterson, E. L., Kondev, J., Theriot, J. A. & Phillips, R. (2009). Reduced amino
@@ -904,6 +919,11 @@ mod hp_tests {
 //   Ieremie, I., Ewing, R. M. & Niranjan, M. (2024). Protein language models meet
 //   reduced amino acid alphabets. Bioinformatics 40(2):btae061.
 //   doi:10.1093/bioinformatics/btae061. Table 1.
+//
+//   Rannon, E. & Burstein, D. (2026). Optimizing protein tokenization: reduced amino
+//   acid alphabets for efficient and accurate protein language models. bioRxiv.
+//   doi:10.64898/2026.02.08.701987. Table 1, which credits FUNCGROUPS8 to Jain, Jain
+//   & Jain (2014) and POLARITY4 to Ball, Hill & Scott (2014).
 // ----------------------------------------------------------------------------
 
 /// Build a residue-to-symbol table from a list of clusters.
@@ -956,6 +976,17 @@ const GBMR4_CLUSTERS: &[&str] = &["ADKERNTSQ", "YFLIVMCWH", "G", "P"];
 static GBMR4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(GBMR4_CLUSTERS));
 
 // -----------------------------------------------------------------------------
+// POLARITY4 — Ball, Hill & Scott (2014), 4 classes.
+//
+// The textbook split: non-polar, polar uncharged, negatively charged, positively
+// charged. Same class count as GBMR4 but a different partition, since it keeps G and P
+// with the non-polar residues and separates the acidic from the basic ones instead of
+// pooling both into one polar class. Best on stability regression in Rannon & Burstein.
+// -----------------------------------------------------------------------------
+const POLARITY4_CLUSTERS: &[&str] = &["GAVLIFWMP", "STCYNQ", "DE", "HKR"];
+static POLARITY4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(POLARITY4_CLUSTERS));
+
+// -----------------------------------------------------------------------------
 // WWMJ5 — Wang & Wang (1999), 5 classes.
 //
 // Derived by minimizing the mismatch within the Miyazawa-Jernigan contact potential
@@ -974,6 +1005,19 @@ static WWMJ5: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(WWMJ5_C
 // -----------------------------------------------------------------------------
 const GBMR7_CLUSTERS: &[&str] = &["DN", "AEFIKLMQRVWY", "CH", "T", "S", "G", "P"];
 static GBMR7: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(GBMR7_CLUSTERS));
+
+// -----------------------------------------------------------------------------
+// FUNCGROUPS8 — Jain, Jain & Jain (2014), 8 classes.
+//
+// One class per side-chain functional group, so the grouping is chemical rather than
+// fitted to any structural or substitution data. Sulfur puts C with M, and the ring in
+// histidine and proline puts both with W. In Rannon & Burstein it gave over 1.5x input
+// compression for 2.5-5.5% loss on enzyme and transporter classification, and the best
+// solubility AUROC of the five alphabets they trained.
+// -----------------------------------------------------------------------------
+const FUNCGROUPS8_CLUSTERS: &[&str] = &["GVALI", "ST", "CM", "FY", "WHP", "NQ", "DE", "KR"];
+static FUNCGROUPS8: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(FUNCGROUPS8_CLUSTERS));
 
 // -----------------------------------------------------------------------------
 // SDM12 — Prlic et al. (2000) structure-derived matrix, 12 classes.
@@ -1048,6 +1092,12 @@ mod multi_letter_tests {
     }
 
     #[test]
+    fn test_polarity4_partition() {
+        // GAVLIFWMP -> g, STCYNQ -> s, DE -> d, HKR -> h
+        assert_eq!(encode_canonical(Alphabet::Polarity4), "gsddgghghggsgshssggs");
+    }
+
+    #[test]
     fn test_wwmj5_partition() {
         // CMFILVWY -> c, ATH -> a, GP -> g, DE -> d, SNQRK -> s
         assert_eq!(encode_canonical(Alphabet::Wwmj5), "acddcgacsccsgsssaccc");
@@ -1057,6 +1107,12 @@ mod multi_letter_tests {
     fn test_gbmr7_partition() {
         // DN -> d, AEFIKLMQRVWY -> a, CH -> c, T -> t, S -> s, G -> g, P -> p
         assert_eq!(encode_canonical(Alphabet::Gbmr7), "acdaagcaaaadpaastaaa");
+    }
+
+    #[test]
+    fn test_funcgroups8_partition() {
+        // GVALI -> g, ST -> s, CM -> c, FY -> f, WHP -> w, NQ -> n, DE -> d, KR -> k
+        assert_eq!(encode_canonical(Alphabet::FuncGroups8), "gcddfgwgkgcnwnkssgwf");
     }
 
     #[test]
@@ -1093,7 +1149,7 @@ mod multi_letter_tests {
     /// table is itself the check that no cluster list drifts out of shape.
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
-        let expected_sizes = [4usize, 5, 7, 12, 12, 14, 17, 18];
+        let expected_sizes = [4usize, 4, 5, 7, 8, 12, 12, 14, 17, 18];
         for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
             let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.
@@ -1129,6 +1185,23 @@ mod multi_letter_tests {
         }
         assert_eq!(Alphabet::from_moltype("sdm12"), Some(Alphabet::Sdm12));
         assert_eq!(Alphabet::from_moltype("hsdm17"), Some(Alphabet::Hsdm17));
+    }
+
+    /// Two 4-class alphabets are only worth carrying if they actually disagree. GBMR4
+    /// splits on hydrophobicity with G and P alone, POLARITY4 on charge with G and P in
+    /// the non-polar class, so they place the borderline residues differently.
+    #[test]
+    fn test_gbmr4_and_polarity4_are_different_partitions() {
+        let (gbmr4, polarity4) =
+            (test_partition(Alphabet::Gbmr4), test_partition(Alphabet::Polarity4));
+        assert_eq!(Alphabet::Gbmr4.size(), Alphabet::Polarity4.size());
+        // GBMR4 keeps G and P each in a class of its own; POLARITY4 folds both into the
+        // non-polar class with the aliphatics.
+        assert_ne!(gbmr4[&b'G'], gbmr4[&b'A']);
+        assert_eq!(polarity4[&b'G'], polarity4[&b'A']);
+        // GBMR4 pools acidic and basic into one polar class; POLARITY4 splits them.
+        assert_eq!(gbmr4[&b'D'], gbmr4[&b'K']);
+        assert_ne!(polarity4[&b'D'], polarity4[&b'K']);
     }
 
     /// GBMR4, SDM12 and HSDM17 appear in both source papers, and Peterson et al. note

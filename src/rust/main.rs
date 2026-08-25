@@ -182,12 +182,18 @@ enum ProteinAlphabet {
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
     #[value(name = "gbmr4")]
     ReducedGbmr4,
+    /// POLARITY4, 4 classes on polarity and charge (Ball, Hill & Scott 2014)
+    #[value(name = "polarity4")]
+    ReducedPolarity4,
     /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
     #[value(name = "wwmj5")]
     ReducedWwmj5,
     /// GBMR7, 7 classes (Solis & Rackovsky 2000)
     #[value(name = "gbmr7")]
     ReducedGbmr7,
+    /// FUNCGROUPS8, 8 classes, one per side-chain functional group (Jain et al. 2014)
+    #[value(name = "funcgroups8")]
+    ReducedFuncGroups8,
     /// SDM12, 12 classes (Prlic et al. 2000; best AUC in Peterson et al. 2009)
     #[value(name = "sdm12")]
     ReducedSdm12,
@@ -219,8 +225,10 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
             ProteinAlphabet::HpRandomControl => "hp_random_control2",
             ProteinAlphabet::ReducedGbmr4 => "gbmr4",
+            ProteinAlphabet::ReducedPolarity4 => "polarity4",
             ProteinAlphabet::ReducedWwmj5 => "wwmj5",
             ProteinAlphabet::ReducedGbmr7 => "gbmr7",
+            ProteinAlphabet::ReducedFuncGroups8 => "funcgroups8",
             ProteinAlphabet::ReducedSdm12 => "sdm12",
             ProteinAlphabet::ReducedMmseqs12 => "mmseqs12",
             ProteinAlphabet::ReducedWass14 => "wass14",
@@ -776,8 +784,10 @@ fn assign_encoding(
         // Alphabet::from_moltype(), which parses the numeric suffix.
         s if s.starts_with("hp_random_control2_") => ProteinAlphabet::HpRandomControl,
         "gbmr4" => ProteinAlphabet::ReducedGbmr4,
+        "polarity4" => ProteinAlphabet::ReducedPolarity4,
         "wwmj5" => ProteinAlphabet::ReducedWwmj5,
         "gbmr7" => ProteinAlphabet::ReducedGbmr7,
+        "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
         "sdm12" => ProteinAlphabet::ReducedSdm12,
         "mmseqs12" => ProteinAlphabet::ReducedMmseqs12,
         "wass14" => ProteinAlphabet::ReducedWass14,
@@ -790,7 +800,8 @@ fn assign_encoding(
                      hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
                      hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
                      hp_random_control2 (or hp_random_control2_N for seeded variants), \
-                     gbmr4, wwmj5, gbmr7, sdm12, mmseqs12, wass14, hsdm17, uniprot18",
+                     gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
+                     wass14, hsdm17, uniprot18",
                     detected_moltype
                 ),
             });

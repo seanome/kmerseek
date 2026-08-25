@@ -159,8 +159,10 @@ the 20 amino acids into, so a filename or a results CSV says how much reduction 
 | `hp_pbotc_1st_ed2` | 2 | Physical Biology of the Cell, 1st ed |
 | `hp_random_control2` | 2 | negative control, randomized h/p split |
 | `gbmr4` | 4 | Solis & Rackovsky 2000 |
+| `polarity4` | 4 | Ball, Hill & Scott 2014 |
 | `wwmj5` | 5 | Wang & Wang 1999 |
 | `gbmr7` | 7 | Solis & Rackovsky 2000 |
+| `funcgroups8` | 8 | Jain, Jain & Jain 2014 |
 | `sdm12` | 12 | Prlic et al. 2000 |
 | `mmseqs12` | 12 | Steinegger & Soding 2018 |
 | `wass14` | 14 | Ieremie et al. 2024 |
@@ -170,6 +172,8 @@ the 20 amino acids into, so a filename or a results CSV says how much reduction 
 The two- and three-class alphabets share an `hp_` prefix. They differ only on borderline
 residues, so grouping them keeps a sweep easy to write and to grep. The multi-letter ones
 use the names their papers use, digit included, so `sdm12` and `gbmr4` can be looked up.
+Two have no name in their source and are named for what they group on: `polarity4` and
+`funcgroups8`.
 
 Seeded negative controls put the seed after the class count, so `hp_random_control2_3`
 is seed 3 of a 2-class control rather than a 23-class alphabet. `--random-seed 1..10`
@@ -241,13 +245,17 @@ Peterson et al. (2009) benchmarked over 150 published clustering schemes against
 fold assignments and found that reduced alphabets beat the full 20-letter alphabet,
 with the best results at 9-12 classes. Ieremie et al. (2024) reused their top three and
 added five more when testing how alphabet reduction affects protein language models.
-Where the two papers overlap, their partitions are identical.
+Rannon & Burstein (2026) added `funcgroups8` and `polarity4`, and used the `mmseqs12`
+partition under its Linclust name. Where the papers overlap, their partitions are
+identical.
 
 | Moltype | Classes | Clusters | Source |
 |---------|:---:|---|---|
 | `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
+| `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
 | `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
 | `gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
+| `funcgroups8` | 8 | `GVALI` `ST` `CM` `FY` `WHP` `NQ` `DE` `KR` | Jain, Jain & Jain 2014 |
 | `sdm12` | 12 | `A` `D` `KER` `N` `TSQ` `YF` `LIVM` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
 | `mmseqs12` | 12 | `AST` `LM` `IV` `KR` `EQ` `ND` `FY` `C` `G` `H` `P` `W` | Steinegger & Soding 2018 |
 | `wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
@@ -258,6 +266,18 @@ GBMR4, SDM12 and HSDM17 were the top performers in Peterson et al. on recall at 
 errors per query, AUC and mean pooled precision respectively. Each is a refinement of
 the previous one: going from GBMR4 to SDM12 to HSDM17 only splits classes, never moves
 a residue across an existing boundary (`test_hsdm17_refines_sdm12_refines_gbmr4`).
+
+`funcgroups8` and `polarity4` come from a different kind of benchmark. Rannon & Burstein
+(2026) trained one protein language model per alphabet and measured downstream tasks.
+`funcgroups8` gave over 1.5x input compression for 2.5-5.5% loss on enzyme and transporter
+classification, and the best solubility AUROC of any alphabet they tried; `polarity4` had
+the lowest RMSE on stability regression. Those results are about tokenization for language
+models rather than k-mer search, so they say which partitions are worth trying here, not
+which will win.
+
+`polarity4` is a second 4-class alphabet, not a variant of `gbmr4`. It keeps G and P with
+the non-polar residues and splits acidic from basic, where GBMR4 isolates G and P and pools
+every charged residue into one class (`test_gbmr4_and_polarity4_are_different_partitions`).
 
 Each class is written as its first residue in lowercase, so an SDM12-encoded sequence
 shows `LIVM` as `l` and can be read against the source residues directly.
