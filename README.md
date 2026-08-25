@@ -143,41 +143,94 @@ distinct hits. See
 
 ## Alphabets
 
-Pick one with `--alphabet` (`-a`). Every name ends in the number of classes it collapses
-the 20 amino acids into, so a filename or a results CSV says how much reduction happened:
+Pick one with `--alphabet` (`-a`). An alphabet is a partition of the 20 amino acids into
+classes, applied to each residue before k-mers are extracted. Every name ends in the
+number of classes, so a filename or a results CSV says how much reduction happened. The
+partitions live in `src/rust/alphabets.rs`.
 
-| Alphabet | Classes | Source |
-|---|:---:|---|
-| `protein20` | 20 | the full alphabet, no reduction |
-| `dayhoff6` | 6 | Dayhoff |
-| `hp_lehninger2` | 2 | Lehninger, the HP default |
-| `hp_thomas_dill2` | 2 | Thomas & Dill 1996 |
-| `hp_kyte_doolittle2` | 2 | Kyte & Doolittle 1982 |
-| `hp_thomas_dill_no_c2` | 2 | Thomas-Dill, C reassigned to polar |
-| `hp_lehninger_c_nonpolar2` | 2 | Lehninger, C reassigned to hydrophobic |
-| `hp_lehninger_hpc3` | 3 | Lehninger, C given its own class |
-| `hp_pbotc_1st_ed2` | 2 | Physical Biology of the Cell, 1st ed |
-| `hp_random_control2` | 2 | negative control, randomized h/p split |
-| `gbmr4` | 4 | Solis & Rackovsky 2000 |
-| `polarity4` | 4 | Ball, Hill & Scott 2014 |
-| `wwmj5` | 5 | Wang & Wang 1999 |
-| `gbmr7` | 7 | Solis & Rackovsky 2000 |
-| `funcgroups8` | 8 | Jain, Jain & Jain 2014 |
-| `sdm12` | 12 | Prlic et al. 2000 |
-| `mmseqs12` | 12 | Steinegger & Soding 2018 |
-| `wass14` | 14 | Ieremie et al. 2024 |
-| `hsdm17` | 17 | Prlic et al. 2000 |
-| `uniprot18` | 18 | Ieremie et al. 2024 |
+| Alphabet | Classes | Clusters | Source |
+|---|:---:|---|---|
+| `hp_lehninger2` | 2 | `AFGILMPVWY` `CDEHKNQRST` | Lehninger; also sourmash's `hp` |
+| `hp_thomas_dill2` | 2 | `ACFILMVWY` `DEGHKNPQRST` | Thomas & Dill 1996 |
+| `hp_kyte_doolittle2` | 2 | `ACFILMV` `DEGHKNPQRSTWY` | Kyte & Doolittle 1982, split at hydropathy > 0 |
+| `hp_thomas_dill_no_c2` | 2 | `AFILMVWY` `CDEGHKNPQRST` | Thomas-Dill with C moved to polar |
+| `hp_lehninger_c_nonpolar2` | 2 | `ACFGILMPVWY` `DEHKNQRST` | Lehninger with C moved to hydrophobic |
+| `hp_pbotc_1st_ed2` | 2 | `ACFILMPVWY` `DEGHKNQRST` | Physical Biology of the Cell, 1st ed |
+| `hp_lehninger_hpc3` | 3 | `AFGILMPVWY` `DEHKNQRST` `C` | Lehninger with C in a class of its own |
+| `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
+| `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
+| `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
+| `dayhoff6` | 6 | `C` `AGPST` `DENQ` `HKR` `ILMV` `FWY` | Dayhoff; also sourmash's `dayhoff` |
+| `gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
+| `funcgroups8` | 8 | `GVALI` `ST` `CM` `FY` `WHP` `NQ` `DE` `KR` | Jain, Jain & Jain 2014 |
+| `sdm12` | 12 | `A` `D` `KER` `N` `TSQ` `YF` `LIVM` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
+| `mmseqs12` | 12 | `AST` `LM` `IV` `KR` `EQ` `ND` `FY` `C` `G` `H` `P` `W` | Steinegger & Soding 2018 |
+| `wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
+| `hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
+| `uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
+| `protein20` | 20 | each residue its own class | no reduction |
 
-The two- and three-class alphabets share an `hp_` prefix. They differ only on borderline
-residues, so grouping them keeps a sweep easy to write and to grep. The multi-letter ones
-use the names their papers use, digit included, so `sdm12` and `gbmr4` can be looked up.
-Two have no name in their source and are named for what they group on: `polarity4` and
-`funcgroups8`.
+Clusters are listed in the order their classes are numbered. The `hp_` alphabets write
+their classes as `h` and `p`, and `hp_lehninger_hpc3` adds `c` for cysteine. Every other
+alphabet writes a class as its first residue in lowercase, so an SDM12-encoded sequence
+shows the `LIVM` class as `l` and can be read against the source residues directly.
 
-Seeded negative controls put the seed after the class count, so `hp_random_control2_3`
-is seed 3 of a 2-class control rather than a 23-class alphabet. `--random-seed 1..10`
-gives independent replicates.
+The two- and three-class alphabets share an `hp_` prefix because they differ only on
+borderline residues, which keeps a sweep easy to write and to grep. The rest use the
+names their papers use, digit included, so `sdm12` and `gbmr4` can be looked up.
+`polarity4` and `funcgroups8` have no name in their source and are named for what they
+group on.
+
+### The HP family
+
+`AFILMV` is hydrophobic and `DEHKNQRST` is polar in every scheme, which a test pins.
+The schemes differ only on C, G, P, W and Y, so they answer the same question about a
+residue and disagree about five borderline cases.
+
+Cysteine is the one they disagree about most, because its thiol side chain is nonpolar
+but its disulfide bonding is a chemistry of its own. `hp_lehninger_c_nonpolar2` folds it
+into `h`; `hp_lehninger_hpc3` gives it a third class instead, keeping Lehninger's split
+for the other 19 residues.
+
+### Choosing a class count
+
+Peterson et al. (2009) benchmarked over 150 published clustering schemes against DALI
+fold assignments and found that reduced alphabets beat the full 20-letter alphabet, with
+the best results at 9-12 classes. GBMR4, SDM12 and HSDM17 were their top performers on
+recall at 0.01 errors per query, AUC and mean pooled precision respectively. Each is a
+refinement of the previous one: going from GBMR4 to SDM12 to HSDM17 only splits classes,
+never moves a residue across an existing boundary
+(`test_hsdm17_refines_sdm12_refines_gbmr4`).
+
+Ieremie et al. (2024) reused those three and added five more when testing how alphabet
+reduction affects protein language models. Rannon & Burstein (2026) added `funcgroups8`
+and `polarity4`, and used the `mmseqs12` partition under its Linclust name: `funcgroups8`
+gave over 1.5x input compression for 2.5-5.5% loss on enzyme and transporter
+classification and the best solubility AUROC of the five alphabets they trained, and
+`polarity4` had the lowest RMSE on stability regression. Those are language-model
+results rather than search results, so they say which partitions are worth trying here,
+not which will win. Where the papers overlap, their partitions are identical.
+
+Two alphabets of the same size need not be related. `polarity4` keeps G and P with the
+non-polar residues and splits acidic from basic, where `gbmr4` isolates G and P and pools
+every charged residue into one class
+(`test_gbmr4_and_polarity4_are_different_partitions`).
+
+Class count and k-size trade off against each other, so a k that suits a 2-class alphabet
+is usually too long for a finer one. Searching CED-9 against the 25-sequence BCL-2 test
+file:
+
+| Alphabet | k=10 targets / matched regions | k=5 targets / matched regions |
+|---|---|---|
+| `hp_lehninger2` | 21 / 1673 | none |
+| `gbmr4` | 21 / 294 | 14 / 22234 |
+| `polarity4` | 14 / 153 | 15 / 9884 |
+| `funcgroups8` | 2 / 3 | 18 / 982 |
+| `sdm12` | none | 17 / 110 |
+
+At k=10, `gbmr4` finds the same 21 targets as `hp_lehninger2` in a fraction of the
+matched regions, the selectivity gain Peterson et al. describe, while the finer
+alphabets have almost nothing left. At k=5 that reverses.
 
 ### sourmash compatibility
 
@@ -199,94 +252,6 @@ index metadata:
 Alphabet: HpLehninger (detected: hp)
 Total matches: 21
 ```
-
-No hash function changed, so rebuilding under the current name gives the same hits.
-
-## HP Alphabet Variants
-
-`--alphabet hp_lehninger2` collapses the 20 canonical amino acids down to hydrophobic (`h`)
-/ polar (`p`) before k-mer extraction. The alphabets below (see
-`src/rust/alphabets.rs`) all agree on 15 of the 20 residues and differ only on
-the five borderline ones: C, G, P, W and Y. `hp_lehninger2` is the one sourmash's own HP
-encoding uses; the others follow the same `hp_<name>2` pattern and exist for the alphabet
-robustness sweep.
-
-Cysteine is the residue the schemes disagree about most, because its thiol side chain is
-nonpolar but its disulfide bonding is a chemistry of its own. `hp_lehninger_c_nonpolar2`
-folds it into `h`; `hp_lehninger_hpc3` gives it a third class instead.
-
-Alphabet / Scheme | Hydrophobic (`h`) | Polar (`p`)
--- | -- | --
-Lehninger (default) | `AFILMV` GPWY | `DEHKNQRST` C
-Thomas-Dill / PBotC 2nd | `AFILMV` CWY | `DEHKNQRST` GP
-Kyte-Doolittle | `AFILMV` C | `DEHKNQRST` GPWY
-TD−C | `AFILMV` WY | `DEHKNQRST` CGP
-Leh+C | `AFILMV` CGPWY | `DEHKNQRST`
-PBotC 1st | `AFILMV` CPWY | `DEHKNQRST` G
-
-The residues in backticks are fixed across every scheme: `AFILMV` is always hydrophobic
-and `DEHKNQRST` always polar. The schemes differ only in where they put C, G, P, W and Y.
-
-`hp_lehninger_hpc3` has three classes rather than two. It keeps Lehninger's split for the
-other 19 residues and gives cysteine its own symbol `c`.
-
-| Alphabet / Scheme | Hydrophobic (`h`) | Polar (`p`) | Cystine (`c`) |
-| -- | -- | -- | -- |
-| Leh HPC | `AFILMV` GPWY | `DEHKNQRST` | C |
-
-## Multi-Letter Reduced Alphabets
-
-The HP alphabets above answer one question per residue. The alphabets in this section
-(see `src/rust/alphabets.rs`) keep 4 to 18 classes, so they discard less
-chemistry per position while still collapsing the substitutions that proteins tolerate
-most often.
-
-Peterson et al. (2009) benchmarked over 150 published clustering schemes against DALI
-fold assignments and found that reduced alphabets beat the full 20-letter alphabet,
-with the best results at 9-12 classes. Ieremie et al. (2024) reused their top three and
-added five more when testing how alphabet reduction affects protein language models.
-Rannon & Burstein (2026) added `funcgroups8` and `polarity4`, and used the `mmseqs12`
-partition under its Linclust name. Where the papers overlap, their partitions are
-identical.
-
-| Moltype | Classes | Clusters | Source |
-|---------|:---:|---|---|
-| `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
-| `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
-| `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
-| `gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
-| `funcgroups8` | 8 | `GVALI` `ST` `CM` `FY` `WHP` `NQ` `DE` `KR` | Jain, Jain & Jain 2014 |
-| `sdm12` | 12 | `A` `D` `KER` `N` `TSQ` `YF` `LIVM` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
-| `mmseqs12` | 12 | `AST` `LM` `IV` `KR` `EQ` `ND` `FY` `C` `G` `H` `P` `W` | Steinegger & Soding 2018 |
-| `wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
-| `hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
-| `uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
-
-GBMR4, SDM12 and HSDM17 were the top performers in Peterson et al. on recall at 0.01
-errors per query, AUC and mean pooled precision respectively. Each is a refinement of
-the previous one: going from GBMR4 to SDM12 to HSDM17 only splits classes, never moves
-a residue across an existing boundary (`test_hsdm17_refines_sdm12_refines_gbmr4`).
-
-`funcgroups8` and `polarity4` come from a different kind of benchmark. Rannon & Burstein
-(2026) trained one protein language model per alphabet and measured downstream tasks.
-`funcgroups8` gave over 1.5x input compression for 2.5-5.5% loss on enzyme and transporter
-classification, and the best solubility AUROC of any alphabet they tried; `polarity4` had
-the lowest RMSE on stability regression. Those results are about tokenization for language
-models rather than k-mer search, so they say which partitions are worth trying here, not
-which will win.
-
-`polarity4` is a second 4-class alphabet, not a variant of `gbmr4`. It keeps G and P with
-the non-polar residues and splits acidic from basic, where GBMR4 isolates G and P and pools
-every charged residue into one class (`test_gbmr4_and_polarity4_are_different_partitions`).
-
-Each class is written as its first residue in lowercase, so an SDM12-encoded sequence
-shows `LIVM` as `l` and can be read against the source residues directly.
-
-Class count and k-size trade off against each other, so a k that suits a 2-class
-alphabet is usually too long here. Searching CED-9 against the 25-sequence BCL-2 test
-file at k=10 finds the same 21 targets under `hp_lehninger2` and `gbmr4`, but
-`hp_lehninger2` reports 1673 matched regions against GBMR4's 294. `sdm12` finds nothing
-at k=10, and 17 targets in 110 regions at k=5.
 
 ### Amino acid disambiguation
 
@@ -342,7 +307,13 @@ Where each k-mer count comes from:
   at 14.
 
 Disambiguating a residue doubles the readings of every window it falls in, so a window
-containing *n* ambiguous residues yields 2^*n* disambiguated k-mers. kmerseek disambiguates a k-mer with at most 10% ambiguous residues, or up to ceil(ksize/10) ambiguous amino acids. A window with more is dropped: indexing only part of its k-mers would make matching depend on which subset was kept, which is worse than losing that one window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window with many should not arise.
+containing *n* ambiguous residues yields 2^*n* disambiguated k-mers. kmerseek
+disambiguates a window that is at most 10% ambiguous, meaning up to `ceil(ksize / 10)`
+ambiguous residues. A window with more is dropped: indexing only part of its k-mers
+would make matching depend on which subset was kept, which is worse than losing that one
+window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window over
+the cap should not arise.
+
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,
 `C` and `K`, under a reduced alphabet. Under `protein20` they are kept as themselves.
