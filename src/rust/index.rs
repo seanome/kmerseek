@@ -3199,11 +3199,12 @@ mod tests {
         )?;
 
         // The k-mer count is the number of *readings*, not the number of windows: each
-        // ambiguity code doubles the windows covering it. For "ACDEFXBZJ" at k=5 the five
-        // windows ACDEF, CDEFX, DEFXB, EFXBZ and FXBZJ carry 0, 0, 1, 2 and 3 codes, so they
-        // disambiguate to 1 + 1 + 2 + 4 + 8 = 16 readings.
+        // ambiguity code doubles the windows covering it, up to a tenth of the window
+        // rounded up, which is one code at k=5. For "ACDEFXBZJ" the five windows ACDEF,
+        // CDEFX, DEFXB, EFXBZ and FXBZJ carry 0, 0, 1, 2 and 3 codes, so the first three
+        // give 1 + 1 + 2 = 4 readings and the last two are over the cap and dropped.
         let valid_sequences =
-            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 16)];
+            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 4)];
 
         for (sequence, expected_kmers) in valid_sequences {
             let protein_signature = index.create_protein_signature(sequence, "test_protein")?;

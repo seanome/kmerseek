@@ -30,19 +30,25 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
     [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
 
-/// Most ambiguity codes allowed in one k-mer window.
+/// How much of a window may be ambiguity codes: one code per this many residues.
+const RESIDUES_PER_AMBIGUITY_CODE: usize = 10;
+
+/// Most ambiguity codes allowed in a window of `ksize` residues, which is a tenth of the
+/// window rounded up. Rounding up rather than down keeps a single code legal at every
+/// k-size, including the ones below ten.
 ///
 /// Disambiguating a code doubles the readings of any window it falls in, so a window
-/// holding `n` codes yields `2^n` readings: four codes give sixteen.
+/// holding `n` codes yields `2^n` readings. Scaling the cap with `ksize` keeps that growth
+/// tied to how much of the window is actually ambiguous, rather than to a fixed count that
+/// a long k-mer would hit for the same 10% and a short one would never reach.
 ///
-/// A window holding more than this is dropped rather than indexed under part of its
-/// readings, because then whether a query matched would depend on which subset was kept.
-/// Losing one window is the smaller cost. SwissProt holds roughly 900 non-canonical
-/// residues in 207.6 M, so a window with five codes should not arise.
-pub const MAX_AMBIGUITY_CODES_PER_WINDOW: usize = 4;
-
-/// Readings a single window can expand into, derived from [`MAX_AMBIGUITY_CODES_PER_WINDOW`].
-pub const MAX_AMBIGUITY_READINGS: usize = 1 << MAX_AMBIGUITY_CODES_PER_WINDOW;
+/// A window holding more is dropped rather than indexed under part of its readings, because
+/// then whether a query matched would depend on which subset was kept. Losing one window is
+/// the smaller cost. SwissProt holds roughly 900 non-canonical residues in 207.6 M, so a
+/// window over the cap should not arise.
+pub fn max_ambiguity_codes(ksize: usize) -> usize {
+    ksize.div_ceil(RESIDUES_PER_AMBIGUITY_CODE)
+}
 
 /// The residues `code` stands for, or `None` if it is not an ambiguity code.
 fn alternatives(code: u8) -> Option<[u8; 2]> {
@@ -61,15 +67,15 @@ pub fn has_ambiguity_codes(residues: &[u8]) -> bool {
 /// both residues it stands for (`B` becomes `D` and `N`, `J` becomes `I` and `L`, `Z`
 /// becomes `E` and `Q`). A k-mer with no ambiguity codes yields itself.
 ///
-/// Returns `None` when the window carries more than [`MAX_AMBIGUITY_CODES_PER_WINDOW`]
-/// codes.
+/// Returns `None` when the window carries more codes than [`max_ambiguity_codes`] allows
+/// for its length.
 ///
 /// WHY bytes rather than `&str`: callers hash the result, and hashing reads bytes. Going
 /// through `String` would add a UTF-8 validation per reading and a panic path for input
 /// that validation has already ruled out.
 pub fn disambiguate_kmer(kmer: &[u8]) -> Option<Vec<Vec<u8>>> {
     let codes = kmer.iter().filter(|b| alternatives(**b).is_some()).count();
-    if codes > MAX_AMBIGUITY_CODES_PER_WINDOW {
+    if codes > max_ambiguity_codes(kmer.len()) {
         return None;
     }
 
@@ -382,19 +388,49 @@ mod tests {
         assert_eq!(readings("MXT*A").unwrap(), vec!["MXT*A"]);
     }
 
+    /// Human BCL-2 (UniProt P10415) residues 1-30. The tests below write some of its
+    /// residues as the ambiguity code that stands for them -- Asp10 as B, Glu13 as Z,
+    /// Ile14 as J -- so the real fragment is one of the readings that comes back.
+    const BCL2_1_30: &str = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEW";
+
     /// Codes multiply, so two in one window give four readings and three give eight.
     #[test]
     fn test_disambiguation_multiplies_with_each_code() {
-        assert_eq!(readings("BZ").unwrap(), vec!["DE", "DQ", "NE", "NQ"]);
-        assert_eq!(readings("BJZ").unwrap().len(), 8);
+        // Residues 1-20, two codes: four readings, the first of which is the real fragment.
+        let two_codes = "MAHAGRTGYBNRZIVMKYIH";
+        assert_eq!(
+            readings(two_codes).unwrap(),
+            vec![
+                &BCL2_1_30[..20],
+                "MAHAGRTGYDNRQIVMKYIH",
+                "MAHAGRTGYNNREIVMKYIH",
+                "MAHAGRTGYNNRQIVMKYIH",
+            ]
+        );
+        // All 30 residues, so the cap has room for a third code: eight readings.
+        let three_codes = "MAHAGRTGYBNRZJVMKYIHYKLSQRGYEW";
+        let readings = readings(three_codes).unwrap();
+        assert_eq!(readings.len(), 8);
+        assert_eq!(readings[0], BCL2_1_30);
     }
 
-    /// Past four codes in one window, disambiguation is refused rather than indexed under
-    /// an arbitrary subset of its readings.
+    /// The cap is a tenth of the window rounded up, so every k-size admits one code and a
+    /// longer window admits proportionally more.
+    #[test]
+    fn test_max_ambiguity_codes_is_a_tenth_of_the_window() {
+        assert_eq!(max_ambiguity_codes(5), 1);
+        assert_eq!(max_ambiguity_codes(10), 1);
+        assert_eq!(max_ambiguity_codes(11), 2);
+        assert_eq!(max_ambiguity_codes(20), 2);
+        assert_eq!(max_ambiguity_codes(30), 3);
+    }
+
+    /// Past the cap, disambiguation is refused rather than indexed under an arbitrary
+    /// subset of its readings. A 20-residue window takes two codes and refuses a third.
     #[test]
     fn test_disambiguation_refuses_runaway_growth() {
-        assert_eq!(readings("BBBB").unwrap().len(), MAX_AMBIGUITY_READINGS);
-        assert_eq!(readings("BBBBB"), None);
+        assert_eq!(readings("MAHAGRTGYBNRZIVMKYIH").unwrap().len(), 4);
+        assert_eq!(readings("MAHAGRTGYBNRZJVMKYIH"), None);
     }
 
     /// Every reading must be a sequence over the canonical residues, since each stands for a
@@ -402,7 +438,8 @@ mod tests {
     #[test]
     fn test_disambiguated_readings_are_canonical() {
         let aa = AminoAcidAmbiguity::new();
-        for reading in readings("ACBJZ").unwrap() {
+        // Three codes in thirty residues, which is exactly the cap.
+        for reading in readings("MAHAGRTGYBNRZJVMKYIHYKLSQRGYEW").unwrap() {
             assert!(aa.validate_sequence(&reading).is_ok(), "{reading}");
             for c in reading.chars() {
                 assert!(STANDARD_AA.contains(&c), "{reading}: {c} is not canonical");
