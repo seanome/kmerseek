@@ -88,8 +88,8 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     // Every alphabet, not a sample: a wrong table or hash function shows up as an indexing
     // failure. Built from the alphabet lists rather than hardcoded, so a newly added
     // alphabet is covered without editing this test.
-    let alphabets: Vec<String> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
-    assert_eq!(alphabets.len(), 20, "every alphabet must be exercised here");
+    let alphabets: Vec<&str> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
+    assert_eq!(alphabets.len(), 19, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));

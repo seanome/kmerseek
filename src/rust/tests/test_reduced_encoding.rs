@@ -29,7 +29,7 @@ mod tests {
                 CED9_FRAGMENT,
                 ksize,
                 1,
-                &moltype,
+                moltype,
             )
             .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
 
@@ -73,14 +73,9 @@ mod tests {
 
         for (alphabet, want) in expected {
             let moltype = alphabet.to_moltype();
-            let sketch = ProteinSketch::from_protein_sequence(
-                "ced9_fragment",
-                CED9_FRAGMENT,
-                8,
-                1,
-                &moltype,
-            )
-            .unwrap();
+            let sketch =
+                ProteinSketch::from_protein_sequence("ced9_fragment", CED9_FRAGMENT, 8, 1, moltype)
+                    .unwrap();
             let got = sketch
                 .get_moltype_sequence()
                 .unwrap_or_else(|| panic!("{moltype}: encoded_sequence is None"));
@@ -101,14 +96,9 @@ mod tests {
                 .map(|c| c.chars().next().unwrap().to_ascii_lowercase())
                 .collect();
 
-            let sketch = ProteinSketch::from_protein_sequence(
-                "ced9_fragment",
-                CED9_FRAGMENT,
-                8,
-                1,
-                &moltype,
-            )
-            .unwrap();
+            let sketch =
+                ProteinSketch::from_protein_sequence("ced9_fragment", CED9_FRAGMENT, 8, 1, moltype)
+                    .unwrap();
             let encoded = sketch.get_moltype_sequence().unwrap();
 
             for ch in encoded.chars() {
@@ -133,7 +123,7 @@ mod tests {
                 CED9_FRAGMENT,
                 8,
                 1,
-                &alphabet.to_moltype(),
+                alphabet.to_moltype(),
             )
             .unwrap();
             sketch.get_moltype_sequence().unwrap().chars().collect::<HashSet<char>>().len()
@@ -174,14 +164,9 @@ mod tests {
 
         for alphabet in Alphabet::multi_letter() {
             let moltype = alphabet.to_moltype();
-            let sketch = ProteinSketch::from_protein_sequence(
-                "ced9_fragment",
-                CED9_FRAGMENT,
-                8,
-                1,
-                &moltype,
-            )
-            .unwrap();
+            let sketch =
+                ProteinSketch::from_protein_sequence("ced9_fragment", CED9_FRAGMENT, 8, 1, moltype)
+                    .unwrap();
 
             let shared_hashes = sketch.mins_as_set();
             assert!(!shared_hashes.is_empty(), "{moltype}: self-hit shares no hashes");
@@ -196,7 +181,7 @@ mod tests {
     /// HSDM17 keeps apart but SDM12 merges into its TSQ and acidic classes.
     #[test]
     fn test_alphabets_produce_distinct_sketches() {
-        let sketches: Vec<(String, std::collections::HashSet<u64>)> = Alphabet::multi_letter()
+        let sketches: Vec<(&str, std::collections::HashSet<u64>)> = Alphabet::multi_letter()
             .map(|alphabet| {
                 let moltype = alphabet.to_moltype();
                 let sketch = ProteinSketch::from_protein_sequence(
@@ -204,7 +189,7 @@ mod tests {
                     CED9_FRAGMENT,
                     8,
                     1,
-                    &moltype,
+                    moltype,
                 )
                 .unwrap();
                 (moltype, sketch.mins_as_set())

@@ -1,5 +1,4 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use kmerseek::alphabets::Alphabet;
 use kmerseek::errors::IndexResult;
 use kmerseek::types::MolType;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
@@ -33,10 +32,6 @@ enum Commands {
         /// Reduced amino acid alphabet to index with
         #[arg(short = 'a', long, default_value = "protein20")]
         alphabet: ProteinAlphabet,
-
-        /// Seed for hp_random_control2 (1-10). Produces alphabet hp_random_control2_N.
-        #[arg(long)]
-        random_seed: Option<u64>,
 
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
@@ -85,10 +80,6 @@ enum Commands {
         /// Reduced amino acid alphabet (must match the database)
         #[arg(short = 'a', long, default_value = "protein20")]
         alphabet: ProteinAlphabet,
-
-        /// Seed for hp_random_control2 (1-10). Must match the seed used during indexing.
-        #[arg(long)]
-        random_seed: Option<u64>,
 
         /// Minimum containment threshold (0.0 = show all matches)
         #[arg(long, default_value = "0.0")]
@@ -175,10 +166,6 @@ enum ProteinAlphabet {
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
     #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
-    /// HP negative control, 2 classes: the h/p split is randomized, scrambling the
-    /// hydrophobicity signal. Use --random-seed for independent replicates
-    #[value(name = "hp_random_control2", alias = "hp-random-control2")]
-    HpRandomControl,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
     #[value(name = "gbmr4")]
     ReducedGbmr4,
@@ -223,7 +210,6 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
             ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
             ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
-            ProteinAlphabet::HpRandomControl => "hp_random_control2",
             ProteinAlphabet::ReducedGbmr4 => "gbmr4",
             ProteinAlphabet::ReducedPolarity4 => "polarity4",
             ProteinAlphabet::ReducedWwmj5 => "wwmj5",
@@ -249,7 +235,6 @@ fn main() -> IndexResult<()> {
             output,
             ksize,
             alphabet,
-            random_seed,
             progress_interval,
             kmer_stats_out,
             stats_only,
@@ -260,17 +245,7 @@ fn main() -> IndexResult<()> {
             // Scaled factor is always 1 (captures all k-mers)
             let scaled: u32 = 1;
 
-            // Resolve effective moltype: seeded shuffled control -> "hp_shuffled_control_N".
-            let effective_moltype: String = match (alphabet, random_seed) {
-                (ProteinAlphabet::HpRandomControl, Some(seed)) => {
-                    assert!((1..=10).contains(&seed), "--random-seed must be 1-10, got {seed}");
-                    Alphabet::HpRandomControl2Seed(seed).to_moltype()
-                }
-                _ => {
-                    let s: &'static str = alphabet.into();
-                    s.to_string()
-                }
-            };
+            let effective_moltype: &'static str = alphabet.into();
 
             // Determine output path
             let output_path = if let Some(output) = output {
@@ -286,7 +261,7 @@ fn main() -> IndexResult<()> {
                     &input,
                     ksize,
                     scaled,
-                    &effective_moltype,
+                    effective_moltype,
                     true, // Always store raw sequences
                 )?;
                 // Must match the real index, so the generated name carries the
@@ -315,7 +290,7 @@ fn main() -> IndexResult<()> {
                 &output_path,
                 ksize,
                 scaled,
-                &effective_moltype,
+                effective_moltype,
                 true, // Always store raw sequences
             )?;
             index.set_remove_low_complexity(remove_low_complexity);
@@ -363,7 +338,6 @@ fn main() -> IndexResult<()> {
             output,
             ksize,
             alphabet,
-            random_seed: _,
             threshold,
             min_shared_kmers,
             max_query_pvalue,
@@ -778,11 +752,6 @@ fn assign_encoding(
         "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
         "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
         "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
-        "hp_random_control2" => ProteinAlphabet::HpRandomControl,
-        // Seeded shuffled controls carry the seed in the moltype; map them back to
-        // HpShuffledControl so the encoding path picks them up via
-        // Alphabet::from_moltype(), which parses the numeric suffix.
-        s if s.starts_with("hp_random_control2_") => ProteinAlphabet::HpRandomControl,
         "gbmr4" => ProteinAlphabet::ReducedGbmr4,
         "polarity4" => ProteinAlphabet::ReducedPolarity4,
         "wwmj5" => ProteinAlphabet::ReducedWwmj5,
@@ -799,7 +768,6 @@ fn assign_encoding(
                     "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
                      hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
                      hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-                     hp_random_control2 (or hp_random_control2_N for seeded variants), \
                      gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
                      wass14, hsdm17, uniprot18",
                     detected_moltype

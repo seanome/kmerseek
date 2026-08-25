@@ -90,13 +90,13 @@ impl MolType {
     /// target moltypes are equal, and two names for one alphabet would abort the search.
     pub fn new(moltype: &str) -> Result<Self, String> {
         if let Some(alphabet) = Alphabet::from_moltype(canonical_moltype(moltype)) {
-            return Ok(MolType(alphabet.to_moltype()));
+            return Ok(MolType(alphabet.to_moltype().to_string()));
         }
         Err(format!(
             "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \
              hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
              hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-             hp_random_control2, gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, \
+             gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, \
              mmseqs12, wass14, hsdm17, uniprot18 (sourmash's protein, dayhoff and hp are \
              also read)",
             moltype

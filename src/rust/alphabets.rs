@@ -75,10 +75,6 @@ pub enum Alphabet {
     HpLehningerHpc3,
     /// Physical Biology of the Cell, 1st edition.
     HpPBotC1stEd2,
-    /// Negative control: the h/p split is randomized, scrambling the hydrophobicity signal.
-    HpRandomControl2,
-    /// One of ten pre-computed random controls, for a null distribution. Seed must be 1-10.
-    HpRandomControl2Seed(u64),
 
     /// Solis & Rackovsky 2000, 4 classes.
     Gbmr4,
@@ -103,7 +99,7 @@ pub enum Alphabet {
 }
 
 impl Alphabet {
-    /// Every alphabet that has a fixed moltype, so not the seeded random controls.
+    /// Every alphabet kmerseek can index with.
     pub fn all() -> &'static [Alphabet] {
         &[
             Alphabet::Protein20,
@@ -115,7 +111,6 @@ impl Alphabet {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
-            Alphabet::HpRandomControl2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
             Alphabet::Wwmj5,
@@ -129,10 +124,9 @@ impl Alphabet {
         ]
     }
 
-    /// The moltype for alphabets that have a fixed one. `None` for a seeded random control,
-    /// whose moltype carries its seed and so cannot be a `&'static str`.
-    fn fixed_moltype(&self) -> Option<&'static str> {
-        Some(match self {
+    /// The moltype stored in an index, e.g. `"sdm12"` or `"hp_thomas_dill2"`.
+    pub fn to_moltype(&self) -> &'static str {
+        match self {
             Self::Protein20 => "protein20",
             Self::Dayhoff6 => "dayhoff6",
             Self::HpLehninger2 => "hp_lehninger2",
@@ -142,7 +136,6 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => "hp_lehninger_c_nonpolar2",
             Self::HpLehningerHpc3 => "hp_lehninger_hpc3",
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
-            Self::HpRandomControl2 => "hp_random_control2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
             Self::Wwmj5 => "wwmj5",
@@ -153,18 +146,6 @@ impl Alphabet {
             Self::Wass14 => "wass14",
             Self::Hsdm17 => "hsdm17",
             Self::Uniprot18 => "uniprot18",
-            Self::HpRandomControl2Seed(_) => return None,
-        })
-    }
-
-    /// The moltype stored in an index, e.g. `"sdm12"` or `"hp_thomas_dill2"`.
-    ///
-    /// A seeded control puts its seed after the class count, so `hp_random_control2_3` is
-    /// seed 3 of a 2-class control rather than a 23-class alphabet.
-    pub fn to_moltype(&self) -> String {
-        match self {
-            Self::HpRandomControl2Seed(seed) => format!("hp_random_control2_{seed}"),
-            fixed => fixed.fixed_moltype().expect("only the seeded control lacks one").to_string(),
         }
     }
 
@@ -173,11 +154,7 @@ impl Alphabet {
     /// Takes kmerseek names only. sourmash's `protein`, `dayhoff` and `hp` arrive here
     /// through [`canonical_moltype`], which every entry point applies first.
     pub fn from_moltype(moltype: &str) -> Option<Alphabet> {
-        if let Some(alphabet) = Self::all().iter().find(|a| a.fixed_moltype() == Some(moltype)) {
-            return Some(*alphabet);
-        }
-        let seed = moltype.strip_prefix("hp_random_control2_")?.parse().ok()?;
-        Some(Self::HpRandomControl2Seed(seed))
+        Self::all().iter().find(|a| a.to_moltype() == moltype).copied()
     }
 
     /// Number of classes this alphabet collapses the 20 residues into, which is the number
@@ -224,20 +201,6 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => &LEHNINGER_C_NONPOLAR_HP,
             Self::HpLehningerHpc3 => &LEHNINGER_HPC,
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
-            Self::HpRandomControl2 => &RANDOM_CONTROL_HP,
-            Self::HpRandomControl2Seed(1) => &RANDOM_HP_1,
-            Self::HpRandomControl2Seed(2) => &RANDOM_HP_2,
-            Self::HpRandomControl2Seed(3) => &RANDOM_HP_3,
-            Self::HpRandomControl2Seed(4) => &RANDOM_HP_4,
-            Self::HpRandomControl2Seed(5) => &RANDOM_HP_5,
-            Self::HpRandomControl2Seed(6) => &RANDOM_HP_6,
-            Self::HpRandomControl2Seed(7) => &RANDOM_HP_7,
-            Self::HpRandomControl2Seed(8) => &RANDOM_HP_8,
-            Self::HpRandomControl2Seed(9) => &RANDOM_HP_9,
-            Self::HpRandomControl2Seed(10) => &RANDOM_HP_10,
-            Self::HpRandomControl2Seed(seed) => {
-                panic!("random-control seed {seed} not pre-computed (only 1-10 supported)")
-            }
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
             Self::Wwmj5 => &WWMJ5,
@@ -276,9 +239,7 @@ impl Alphabet {
 
     /// The HP family: two classes, or three where cysteine is split out.
     pub fn hp_family() -> impl Iterator<Item = &'static Alphabet> {
-        Self::all()
-            .iter()
-            .filter(|a| a.fixed_moltype().is_some_and(|moltype| moltype.starts_with("hp_")))
+        Self::all().iter().filter(|a| a.to_moltype().starts_with("hp_"))
     }
 }
 
@@ -430,50 +391,6 @@ static LEHNINGER_HPC: LazyLock<HashMap<u8, u8>> =
 // -----------------------------------------------------------------------------
 static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFILMPVWY", b"DEGHKNQRST"));
-
-// -----------------------------------------------------------------------------
-// Random negative control.
-//
-// Partition generated by shuffling the 20 canonical amino acids and
-// splitting at the midpoint. It scrambles the hydrophobicity signal
-// while maintaining a 10/10 split. By design, it mixes strongly
-// hydrophobic residues (I, V, F) into p and polar/charged residues
-// (D, K, R, Q) into h.
-//
-//   h: A D G K L M Q R W Y       (10 residues)
-//   p: C E F H I N P S T V       (10 residues)
-//
-// For the supplementary figure, consider running multiple independent
-// shuffles (e.g. 10 different seeds) and reporting the distribution of
-// AUCs rather than a single point — this makes the negative control
-// statistically robust. See `random_hp()` below.
-// -----------------------------------------------------------------------------
-static RANDOM_CONTROL_HP: LazyLock<HashMap<u8, u8>> =
-    LazyLock::new(|| build_hp(b"ADGKLMQRWY", b"CEFHINPSTV"));
-
-// Seeded random controls — 10 independent random partitions for null-distribution estimation.
-static RANDOM_HP_1: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(1));
-static RANDOM_HP_2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(2));
-static RANDOM_HP_3: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(3));
-static RANDOM_HP_4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(4));
-static RANDOM_HP_5: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(5));
-static RANDOM_HP_6: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(6));
-static RANDOM_HP_7: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(7));
-static RANDOM_HP_8: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(8));
-static RANDOM_HP_9: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(9));
-static RANDOM_HP_10: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| random_hp(10));
-
-/// Generate a seeded random HP partition for negative-control runs.
-/// Pass multiple seeds to characterize the null distribution.
-pub fn random_hp(seed: u64) -> HashMap<u8, u8> {
-    use rand::rngs::StdRng;
-    use rand::seq::SliceRandom;
-    use rand::SeedableRng;
-    let mut residues: Vec<u8> = b"ACDEFGHIKLMNPQRSTVWY".to_vec();
-    let mut rng = StdRng::seed_from_u64(seed);
-    residues.shuffle(&mut rng);
-    build_hp(&residues[..10], &residues[10..])
-}
 
 /// The partition of an alphabet that has one, for tests that compare tables directly.
 #[cfg(test)]
@@ -706,45 +623,6 @@ mod hp_tests {
     }
 
     #[test]
-    fn random_hp_deterministic() {
-        let a = random_hp(42);
-        let b = random_hp(42);
-        assert_eq!(a, b, "random_hp must be deterministic for the same seed");
-    }
-
-    #[test]
-    fn random_hp_covers_all_residues() {
-        let m = random_hp(0);
-        assert_eq!(m.len(), 21);
-        for &r in CANONICAL_AA {
-            assert!(m.contains_key(&r), "random_hp missing residue {}", r as char);
-            let v = m[&r];
-            assert!(v == b'h' || v == b'p');
-        }
-    }
-
-    #[test]
-    fn random_hp_differs_by_seed() {
-        let a = random_hp(1);
-        let b = random_hp(2);
-        // Two different seeds should produce different partitions
-        // (astronomically unlikely to collide with 20 elements)
-        assert_ne!(a, b, "random_hp with different seeds should differ");
-    }
-
-    #[test]
-    fn random_control_static_matches_documented_partition() {
-        // h: ADGKLMQRWY  p: CEFHINPSTV — frozen in static for reproducibility.
-        let t = test_partition(Alphabet::HpRandomControl2);
-        for &r in b"ADGKLMQRWY" {
-            assert_eq!(t[&r], b'h', "RandomControl: {} should be h", r as char);
-        }
-        for &r in b"CEFHINPSTV" {
-            assert_eq!(t[&r], b'p', "RandomControl: {} should be p", r as char);
-        }
-    }
-
-    #[test]
     fn all_alphabet_names_are_unique() {
         let names: Vec<_> = Alphabet::hp_family().map(|a| a.to_moltype()).collect();
         let mut sorted = names.clone();
@@ -765,7 +643,6 @@ mod hp_tests {
             (Alphabet::HpLehningerCNonpolar2, "hp_lehninger_c_nonpolar2"),
             (Alphabet::HpLehningerHpc3, "hp_lehninger_hpc3"),
             (Alphabet::HpPBotC1stEd2, "hp_pbotc_1st_ed2"),
-            (Alphabet::HpRandomControl2, "hp_random_control2"),
         ];
 
         for (alphabet, moltype) in expected {
@@ -793,28 +670,6 @@ mod hp_tests {
         }
     }
 
-    /// Each of the ten seeds must resolve to the table built from that same seed. A
-    /// mis-wired arm here would silently encode a control run under a neighbour's
-    /// partition, which no downstream result would reveal.
-    #[test]
-    fn seeded_random_controls_resolve_to_their_own_table() {
-        let mut seen: Vec<&HashMap<u8, u8>> = Vec::new();
-        for seed in 1..=10 {
-            let alphabet = Alphabet::HpRandomControl2Seed(seed);
-            // The seeded control is the one alphabet with no fixed name, since its
-            // name carries the seed.
-            assert_eq!(alphabet.fixed_moltype(), None);
-            assert_eq!(alphabet.to_moltype(), format!("hp_random_control2_{seed}"));
-            assert_eq!(alphabet.size(), 2);
-
-            let table = test_partition(alphabet);
-            assert_eq!(*table, random_hp(seed), "seed {seed} does not use its own table");
-            assert!(!seen.contains(&table), "seed {seed} repeats an earlier partition");
-            seen.push(table);
-        }
-        assert_eq!(seen.len(), 10);
-    }
-
     /// protein20 does not reduce and dayhoff6's table lives in sourmash, so neither has
     /// a partition of ours to hand back.
     #[test]
@@ -830,21 +685,6 @@ mod hp_tests {
         assert!(Alphabet::HpLehninger2.partition().is_some());
     }
 
-    /// Seeded controls put the seed after the class count, so seed 3 of a 2-class control
-    /// cannot be misread as a 23-class alphabet.
-    #[test]
-    fn seeded_random_control_moltype_separates_count_from_seed() {
-        assert_eq!(Alphabet::HpRandomControl2Seed(3).to_moltype(), "hp_random_control2_3");
-        assert_eq!(
-            Alphabet::from_moltype("hp_random_control2_3"),
-            Some(Alphabet::HpRandomControl2Seed(3))
-        );
-        assert_eq!(
-            Alphabet::from_moltype("hp_random_control2_10"),
-            Some(Alphabet::HpRandomControl2Seed(10))
-        );
-    }
-
     #[test]
     fn from_moltype_rejects_unknown_strings() {
         // `protein` and `hp` are sourmash spellings; they reach an Alphabet only through
@@ -854,9 +694,9 @@ mod hp_tests {
         }
     }
 
-    /// The claim the README's table rests on: every scheme agrees on 15 of the 20 residues
-    /// and disagrees only about C, G, P, W and Y. A new alphabet that moved one of the other
-    /// 15 would make the table wrong.
+    /// The claim the README's HP family section rests on: every scheme agrees on 15 of the
+    /// 20 residues and disagrees only about C, G, P, W and Y. A new alphabet that moved one
+    /// of the other 15 would make that section wrong.
     #[test]
     fn schemes_differ_only_on_the_five_borderline_residues() {
         const ALWAYS_HYDROPHOBIC: &[u8] = b"AFILMV";
@@ -870,10 +710,6 @@ mod hp_tests {
         );
 
         for alphabet in Alphabet::hp_family() {
-            // The randomized control is a negative control, so it has no reason to agree.
-            if matches!(alphabet, Alphabet::HpRandomControl2) {
-                continue;
-            }
             let table = test_partition(*alphabet);
             for &residue in ALWAYS_HYDROPHOBIC {
                 assert_eq!(
@@ -1181,7 +1017,7 @@ mod multi_letter_tests {
         for alphabet in Alphabet::multi_letter() {
             let moltype = alphabet.to_moltype();
             assert_eq!(moltype, alphabet.to_moltype());
-            assert_eq!(Alphabet::from_moltype(&moltype), Some(*alphabet));
+            assert_eq!(Alphabet::from_moltype(moltype), Some(*alphabet));
         }
         assert_eq!(Alphabet::from_moltype("sdm12"), Some(Alphabet::Sdm12));
         assert_eq!(Alphabet::from_moltype("hsdm17"), Some(Alphabet::Hsdm17));

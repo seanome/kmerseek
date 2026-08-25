@@ -2827,7 +2827,7 @@ mod tests {
 
         for alpha in Alphabet::hp_family() {
             let moltype = alpha.to_moltype();
-            let sketch = ProteinSketch::from_protein_sequence("self", seq, ksize, 1, &moltype)
+            let sketch = ProteinSketch::from_protein_sequence("self", seq, ksize, 1, moltype)
                 .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
 
             let shared = sketch.mins_as_set();
