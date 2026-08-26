@@ -3198,11 +3198,11 @@ mod tests {
             false,
         )?;
 
-        // The k-mer count is the number of *readings*, not the number of windows: each
-        // ambiguity code doubles the windows covering it, up to a tenth of the window
-        // rounded up, which is one code at k=5. For "ACDEFXBZJ" the five windows ACDEF,
-        // CDEFX, DEFXB, EFXBZ and FXBZJ carry 0, 0, 1, 2 and 3 codes, so the first three
-        // give 1 + 1 + 2 = 4 readings and the last two are over the cap and dropped.
+        // The k-mer count is the number of *readings*, not the number of windows: an
+        // ambiguity code doubles the windows covering it, and a window carrying a second
+        // code is dropped. For "ACDEFXBZJ" the five windows ACDEF, CDEFX, DEFXB, EFXBZ and
+        // FXBZJ carry 0, 0, 1, 2 and 3 codes, so the first three give 1 + 1 + 2 = 4
+        // readings and the last two are dropped.
         let valid_sequences =
             [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 4)];
 
