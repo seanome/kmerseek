@@ -306,13 +306,15 @@ Where each k-mer count comes from:
   `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
   at 14.
 
-Disambiguating a residue doubles the readings of every window it falls in, so a window
-containing *n* ambiguous residues yields 2^*n* disambiguated k-mers. kmerseek
-disambiguates a window that is at most 10% ambiguous, meaning up to `ceil(ksize / 10)`
-ambiguous residues. A window with more is dropped: indexing only part of its k-mers
-would make matching depend on which subset was kept, which is worse than losing that one
-window. SwissProt holds about 900 non-canonical residues in 207.6 M, so a window over
-the cap should not arise.
+A k-mer may carry at most one ambiguous residue, so disambiguating turns it into two
+k-mers and no more. A k-mer carrying a second is dropped rather than indexed under part of
+its readings, which would make matching depend on which subset was kept.
+
+Capping at one rather than allowing *n* codes and 2^*n* k-mers keeps the index from growing
+on the sequences that inform it least. A k-mer covering several codes comes from a stretch
+the source method could barely read, so most of its readings are guesses about a region
+that was never determined. SwissProt holds about 900 non-canonical residues in 207.6 M, so
+two in one k-mer should be rare.
 
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,
