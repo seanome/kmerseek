@@ -3509,10 +3509,6 @@ mod tests {
         assert!(!index1.is_equivalent_to(&index3).unwrap());
     }
 
-    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958), from
-    /// tests/testdata/fasta/ced9.fasta.
-    const CED9_PREFIX: &str = "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM";
-
     #[test]
     fn test_kmer_spectrum_csv_has_totals_comment_and_rows() {
         use std::io::Read;
