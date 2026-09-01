@@ -18,9 +18,9 @@ fn benchmark_rust_cli_performance(c: &mut Criterion) {
     for (name, file_path) in test_files.iter() {
         // Test different k-mer sizes
         for ksize in [5, 10, 15] {
-            // Test different encodings
-            for encoding in ["protein", "hp", "dayhoff"] {
-                let benchmark_name = format!("{}_{}_k{}", name, encoding, ksize);
+            // Test different alphabets
+            for alphabet in ["protein20", "hp_lehninger2", "dayhoff6"] {
+                let benchmark_name = format!("{}_{}_k{}", name, alphabet, ksize);
 
                 group.bench_function(&benchmark_name, |b| {
                     b.iter(|| {
@@ -36,8 +36,8 @@ fn benchmark_rust_cli_performance(c: &mut Criterion) {
                                 output_path.to_str().unwrap(),
                                 "--ksize",
                                 &ksize.to_string(),
-                                "--encoding",
-                                encoding,
+                                "--alphabet",
+                                alphabet,
                             ])
                             .status()
                             .expect("Failed to execute kmerseek");
@@ -67,7 +67,7 @@ fn benchmark_memory_usage(c: &mut Criterion) {
             let output = Command::new("sh")
                 .arg("-c")
                 .arg(format!(
-                    "/usr/bin/time -l kmerseek index --input {} --output {} --ksize 10 --encoding hp 2>&1",
+                    "/usr/bin/time -l kmerseek index --input {} --output {} --ksize 10 --alphabet hp_lehninger2 2>&1",
                     test_file,
                     output_path.to_str().unwrap()
                 ))
@@ -105,8 +105,8 @@ fn benchmark_output_size(c: &mut Criterion) {
                     output_path.to_str().unwrap(),
                     "--ksize",
                     "10",
-                    "--encoding",
-                    "protein",
+                    "--alphabet",
+                    "protein20",
                 ])
                 .status()
                 .expect("Failed to execute kmerseek");

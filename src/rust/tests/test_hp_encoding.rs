@@ -4,7 +4,7 @@
 ///        the uppercase H/P hashes stored by sourmash's ReadingFrame::new_protein.
 ///
 /// Bug 2: encoded_sequence was storing raw amino acids instead of HP-encoded h/p codes,
-///        because encode_by_moltype returned the identity function for custom HP alphabets.
+///        because encode_by_alphabet returned the identity function for custom HP alphabets.
 
 #[cfg(test)]
 mod tests {
@@ -39,7 +39,7 @@ mod tests {
         let seq = CED9_FRAGMENT_121_181;
         let ksize = 10;
         let sketch =
-            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let minhash_set = sketch.mins_as_set();
@@ -75,7 +75,7 @@ mod tests {
     fn test_custom_hp_encoded_sequence_contains_hp_chars() {
         let seq = CED9_FRAGMENT_121_134;
         let sketch =
-            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let enc = sketch
@@ -97,7 +97,7 @@ mod tests {
     fn test_custom_hp_encoded_sequence_differs_from_raw() {
         let seq = CED9_FRAGMENT_121_134;
         let sketch =
-            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let raw = sketch.get_raw_sequence().expect("raw_sequence should be Some");
@@ -135,7 +135,7 @@ mod tests {
         let seq = CED9_FRAGMENT_121_149;
 
         let sketch =
-            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let shared_hashes = sketch.mins_as_set();
@@ -157,13 +157,13 @@ mod tests {
         let ksize = 8;
 
         let alphabets = [
-            "hp_kyte_doolittle",
-            "hp_thomas_dill",
-            "hp_lehninger",
-            "hp_thomas_dill_no_c",
-            "hp_lehninger_c_nonpolar",
-            "hp_lehninger_hpc",
-            "hp_pbotc_1st_ed",
+            "hp_kyte_doolittle2",
+            "hp_thomas_dill2",
+            "hp_lehninger2",
+            "hp_thomas_dill_no_c2",
+            "hp_lehninger_c_nonpolar2",
+            "hp_lehninger_hpc3",
+            "hp_pbotc_1st_ed2",
         ];
 
         for moltype in alphabets {
@@ -209,7 +209,7 @@ mod tests {
         let seq = CED9_FRAGMENT_121_149;
         let ksize = 8;
 
-        for moltype in ["hp", "dayhoff"] {
+        for moltype in ["hp_lehninger2", "dayhoff6"] {
             let sketch = ProteinSketch::from_protein_sequence("test", seq, ksize, 1, moltype)
                 .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
 
@@ -243,7 +243,7 @@ mod tests {
 
         let seq = CED9_FRAGMENT_121_149;
         let sketch =
-            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle2").unwrap();
 
         let empty: HashSet<u64> = HashSet::new();
         let regions = find_matched_regions(&sketch, &sketch, &empty);
@@ -262,9 +262,9 @@ mod tests {
         let seq_b = BCL2_FRAGMENT_1_30;
 
         let sketch_a =
-            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle2").unwrap();
         let sketch_b =
-            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle2").unwrap();
 
         let shared = sketch_a
             .mins_as_set()
