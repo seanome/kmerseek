@@ -510,10 +510,65 @@ impl ProteomeIndex {
             t1.elapsed().as_secs_f32()
         );
         let t2 = Instant::now();
-        self.db.put(b"search_cache", serialized)?;
+        self.write_search_cache_bytes(&serialized)?;
         eprintln!("[save] search_cache written in {:.1}s", t2.elapsed().as_secs_f32());
 
         Ok(())
+    }
+
+    /// Largest slice written under one RocksDB key.
+    ///
+    /// RocksDB refuses any single value at or above 4 GiB -- its length is a u32 -- and
+    /// returns `Invalid argument: value is too large`. That is a format limit, so no amount
+    /// of memory or tuning avoids it. A reviewed Swiss-Prot index (483_966 targets,
+    /// 115_749_594 unique k-mers) serializes to 4.43 GB and hit it.
+    ///
+    /// 1 GiB leaves a wide margin and keeps the chunk count small: even a 100 GB cache is
+    /// 100 keys.
+    const SEARCH_CACHE_CHUNK: usize = 1 << 30;
+
+    /// Store the serialized [`SearchCache`], splitting it across keys when it is too large
+    /// for one.
+    ///
+    /// A cache that fits keeps the original single `search_cache` key and byte-for-byte
+    /// layout, so databases written by this version are still readable by older builds
+    /// whenever they would have been readable at all.
+    ///
+    /// The chunk count is written LAST. A crash midway therefore leaves a database with no
+    /// count key, which reads as "no cache" rather than as a cache that silently ends
+    /// early -- the failure that would otherwise surface much later as a truncated
+    /// inverted index and quietly missing search hits.
+    fn write_search_cache_bytes(&self, serialized: &[u8]) -> IndexResult<()> {
+        self.write_search_cache_chunked(serialized, Self::SEARCH_CACHE_CHUNK)
+    }
+
+    /// The chunk size is a parameter so the split path can be tested against a few KB
+    /// instead of the 4 GiB it takes to reach it in production.
+    fn write_search_cache_chunked(&self, serialized: &[u8], chunk_size: usize) -> IndexResult<()> {
+        if serialized.len() < chunk_size {
+            self.db.put(b"search_cache", serialized)?;
+            return Ok(());
+        }
+
+        let chunks: Vec<&[u8]> = serialized.chunks(chunk_size).collect();
+        eprintln!(
+            "[save] cache is {} bytes, above the {} byte RocksDB value limit -- writing {} chunks",
+            serialized.len(),
+            chunk_size,
+            chunks.len()
+        );
+        for (i, chunk) in chunks.iter().enumerate() {
+            self.db.put(Self::search_cache_chunk_key(i), chunk)?;
+        }
+        // Any stale single-key cache from an earlier build of the same database would
+        // otherwise win on read, because the reader prefers it.
+        self.db.delete(b"search_cache")?;
+        self.db.put(b"search_cache_chunks", chunks.len().to_string().as_bytes())?;
+        Ok(())
+    }
+
+    fn search_cache_chunk_key(i: usize) -> Vec<u8> {
+        format!("search_cache_chunk_{i}").into_bytes()
     }
 
     /// Number of k-mers listed in the "most common" / "least common" summaries.
@@ -1415,13 +1470,39 @@ impl ProteomeIndex {
     ///
     /// The caller (ProteinSearcher::load) uses this to skip loading all signatures and instead
     /// find candidates via the inverted index, loading individual signatures on demand.
+    /// Reads a cache written either as one value or as chunks; see
+    /// [`Self::write_search_cache_bytes`].
     pub fn load_search_cache(&self) -> IndexResult<Option<SearchCache>> {
         if let Some(data) = self.db.get(b"search_cache")? {
             let cache: SearchCache = bincode::deserialize(&data)?;
-            Ok(Some(cache))
-        } else {
-            Ok(None)
+            return Ok(Some(cache));
         }
+
+        let Some(count) = self.db.get(b"search_cache_chunks")? else {
+            return Ok(None);
+        };
+        let count: usize = String::from_utf8_lossy(&count).parse().map_err(|_| {
+            IndexError::CorruptIndex(format!(
+                "search_cache_chunks is not a number: {:?}",
+                String::from_utf8_lossy(&count)
+            ))
+        })?;
+
+        // A missing chunk is an error, never a short cache. Deserializing a truncated
+        // stream would either fail somewhere confusing or, worse, succeed against a
+        // partial inverted index and drop search hits with nothing to show for it.
+        let mut serialized = Vec::new();
+        for i in 0..count {
+            let chunk = self.db.get(Self::search_cache_chunk_key(i))?.ok_or_else(|| {
+                IndexError::CorruptIndex(format!(
+                    "search cache chunk {i} of {count} is missing; the index is \
+                         incomplete and must be rebuilt"
+                ))
+            })?;
+            serialized.extend_from_slice(&chunk);
+        }
+        let cache: SearchCache = bincode::deserialize(&serialized)?;
+        Ok(Some(cache))
     }
 
     /// Load a single signature from RocksDB by its MD5 sum.
@@ -4195,6 +4276,93 @@ mod tests {
         // Test that we can save state without errors
         index.save_state()?;
 
+        Ok(())
+    }
+
+    /// A cache too big for one RocksDB value survives a write/read round trip.
+    ///
+    /// The real trigger is 4 GiB; this drives the same code path with a 1 KB chunk size so
+    /// the test costs milliseconds. What it is actually checking is that reassembly
+    /// preserves byte order across chunk boundaries -- a reversed or skipped chunk still
+    /// deserializes into *something* for many payloads, so a round trip that only asserts
+    /// "no error" would pass while returning a wrong index.
+    #[test]
+    fn test_search_cache_survives_chunking() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("chunked.db"), 10, 1, "protein20", false)?;
+
+        // Big enough to need several chunks, and varied enough that a misordered
+        // reassembly cannot coincidentally match.
+        let target_list: Vec<String> = (0..500).map(|i| format!("md5-{i:08x}")).collect();
+        let inverted_index: HashMap<u64, Vec<u32>> =
+            (0..500u64).map(|i| (i * 7919, vec![i as u32, (i as u32) + 1])).collect();
+        let kmer_frequencies: HashMap<u64, usize> =
+            (0..500u64).map(|i| (i * 7919, (i as usize) % 13 + 1)).collect();
+        let cache = crate::index::SearchCache {
+            target_list: target_list.clone(),
+            inverted_index: inverted_index.clone(),
+            kmer_frequencies: kmer_frequencies.clone(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        assert!(serialized.len() > 4096, "payload must span several 1 KB chunks");
+
+        index.write_search_cache_chunked(&serialized, 1024)?;
+        let loaded = index.load_search_cache()?.expect("a chunked cache must load");
+
+        assert_eq!(loaded.target_list, target_list);
+        assert_eq!(loaded.inverted_index, inverted_index);
+        assert_eq!(loaded.kmer_frequencies, kmer_frequencies);
+        Ok(())
+    }
+
+    /// A cache that fits keeps the single-key layout, so a database written by this build
+    /// is still readable by one without the chunking support.
+    #[test]
+    fn test_small_search_cache_stays_single_key() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("small.db"), 10, 1, "protein20", false)?;
+
+        let cache = crate::index::SearchCache {
+            target_list: vec!["md5-0".to_string()],
+            inverted_index: HashMap::from([(42u64, vec![0u32])]),
+            kmer_frequencies: HashMap::from([(42u64, 1usize)]),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        index.write_search_cache_chunked(&serialized, 1 << 30)?;
+
+        assert!(index.db.get(b"search_cache")?.is_some(), "must use the original key");
+        assert!(index.db.get(b"search_cache_chunks")?.is_none(), "must not write a count");
+        assert!(index.load_search_cache()?.is_some());
+        Ok(())
+    }
+
+    /// A cache whose chunks are incomplete is an error, not a short index. Deserializing a
+    /// truncated stream can succeed against a partial inverted index and silently drop
+    /// search hits, which is far worse than refusing to open.
+    #[test]
+    fn test_missing_chunk_is_an_error_not_a_short_cache() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("torn.db"), 10, 1, "protein20", false)?;
+
+        let cache = crate::index::SearchCache {
+            target_list: (0..500).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..500u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..500u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        index.write_search_cache_chunked(&serialized, 1024)?;
+
+        index.db.delete(b"search_cache_chunk_1")?;
+        match index.load_search_cache() {
+            Ok(_) => panic!("a torn cache must not load"),
+            Err(err) => assert!(
+                err.to_string().contains("missing"),
+                "error should name the missing chunk, got: {err}"
+            ),
+        }
         Ok(())
     }
 }
