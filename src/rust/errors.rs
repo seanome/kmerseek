@@ -23,6 +23,13 @@ pub enum IndexError {
     #[error("No saved state found in database")]
     NoSavedState,
 
+    /// The database opened, but what it holds is not a usable index. Distinct from
+    /// `Database`, which is RocksDB itself refusing, and from `NoSavedState`, which means
+    /// there is legitimately nothing stored: this is a cache that is present and broken,
+    /// and the only repair is a rebuild.
+    #[error("Corrupt index: {0}")]
+    CorruptIndex(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 
