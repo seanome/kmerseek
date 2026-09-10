@@ -1,10 +1,10 @@
-/// Regression tests for HP-alphabet encoding bugs:
-///
-/// Bug 1: kmer_positions were computed with lowercase h/p hashes that never matched
-///        the uppercase H/P hashes stored by sourmash's ReadingFrame::new_protein.
-///
-/// Bug 2: encoded_sequence was storing raw amino acids instead of HP-encoded h/p codes,
-///        because encode_by_alphabet returned the identity function for custom HP alphabets.
+// Regression tests for HP-alphabet encoding bugs:
+//
+// Bug 1: kmer_positions were computed with lowercase h/p hashes that never matched
+//        the uppercase H/P hashes stored by sourmash's ReadingFrame::new_protein.
+//
+// Bug 2: encoded_sequence was storing raw amino acids instead of HP-encoded h/p codes,
+//        because encode_by_alphabet returned the identity function for custom HP alphabets.
 
 #[cfg(test)]
 mod tests {
