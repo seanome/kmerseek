@@ -9,11 +9,11 @@ pub const STANDARD_AA: [char; 20] = [
     'Y',
 ];
 
-/// Codes that carry no residue identity and so can never be reduced: X (any residue) and
+/// Amino acids that carry no residue identity and so can never be reduced: X (any residue) and
 /// the stop codon.
 pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 
-/// The two residues each ambiguity code stands for.
+/// The two residues each ambiguous residue stands for.
 ///
 ///   - `B` (Asx) is `D` (Asp, aspartate) or `N` (Asn, asparagine)
 ///   - `J` (Xle) is `I` (Ile, isoleucine) or `L` (Leu, leucine)
@@ -22,71 +22,91 @@ pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 /// These appear when the source method could not tell the pair apart, most often because
 /// Asn and Gln deamidate to Asp and Glu during acid hydrolysis.
 ///
-/// A code is never resolved to one of the pair. Every k-mer window covering it is indexed
-/// under *both* readings instead (`disambiguate_kmer`), so a search matches whichever
+/// An ambiguous residue is never resolved to one of the pair. Every k-mer window covering
+/// it is indexed under *both* readings instead (`disambiguate_kmer`), so a search matches whichever
 /// residue the query holds. Picking one would assert a residue the source never
 /// claimed, and which reading is safe depends on the alphabet: SDM12 and HSDM17 give Asp
 /// and Asn separate classes, so under them the two readings are different k-mers.
 pub const AMBIGUITY_ALTERNATIVES: [(char, [char; 2]); 3] =
     [('B', ['D', 'N']), ('J', ['I', 'L']), ('Z', ['E', 'Q'])];
 
-/// The residues `code` stands for, or `None` if it is not an ambiguity code.
-fn alternatives(code: u8) -> Option<[u8; 2]> {
+/// The residues `residue` stands for, or `None` if it is not an ambiguous residue.
+fn alternatives(residue: u8) -> Option<[u8; 2]> {
     AMBIGUITY_ALTERNATIVES
         .iter()
-        .find(|(ambiguity_code, _)| *ambiguity_code as u8 == code)
+        .find(|(ambiguous, _)| *ambiguous as u8 == residue)
         .map(|(_, [first, second])| [*first as u8, *second as u8])
 }
 
-/// Whether `residues` contains any ambiguity code, and so needs disambiguating.
-pub fn has_ambiguity_codes(residues: &[u8]) -> bool {
+/// Whether `residues` contains any ambiguous residue, and so needs disambiguating.
+pub fn has_ambiguous_residues(residues: &[u8]) -> bool {
     residues.iter().any(|b| alternatives(*b).is_some())
 }
 
-/// Disambiguate one k-mer: both readings of its ambiguity code, which is `D` and `N` for
-/// `B`, `I` and `L` for `J`, and `E` and `Q` for `Z`. A k-mer with no ambiguity code
-/// yields itself.
+/// Ceiling on how many ambiguous residues one k-mer may carry before it is dropped rather
+/// than expanded.
 ///
-/// A k-mer carrying a second code is dropped, so disambiguating at most doubles the k-mers
-/// a sequence contributes rather than growing them as `2^n`. The readings past the first
-/// code are also the ones least worth having: a k-mer covering several codes comes from a
-/// stretch the source method could barely read, so its readings are mostly guesses about a
-/// region that was never determined. Dropping it whole rather than indexing part of its
-/// readings keeps matching from depending on which subset was kept, and SwissProt holds
-/// roughly 900 non-canonical residues in 207.6 M, so two in one k-mer should be rare.
+/// This bounds memory; it expresses no view about which readings are worth keeping. `2^n`
+/// readings would otherwise grow without bound on pathological input, such as a long run of
+/// `B`. The densest window in Swiss-Prot 2026_03 holds 9 of them, so no real sequence comes
+/// near this.
+pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 16;
+
+/// Disambiguate one k-mer into every reading its ambiguous residues allow: `D` and `N` for
+/// `B`, `I` and `L` for `J`, and `E` and `Q` for `Z`. A k-mer with no ambiguous residue yields
+/// itself; one carrying `n` of them yields all `2^n` readings.
+///
+/// Indexing every reading keeps a search matching whichever residue the query holds, and
+/// keeps matching from depending on which reading was kept. Picking one would assert a
+/// residue the source never claimed, and which reading is safe depends on the alphabet:
+/// SDM12 and HSDM17 give Asp and Asn separate classes, so under them the readings are
+/// different k-mers.
+///
+/// The expansion is affordable because ambiguous residues are rare and stay sparse within
+/// window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
+/// across 146 of its 575_748 sequences. The densest window holds 9, so the worst single
+/// k-mer expands to 512 readings, and expansion grows the index by 0.0012% at k=4 and
+/// 0.034% at k=30.
 ///
 /// WHY bytes rather than `&str`: callers hash the result, and hashing reads bytes. Going
 /// through `String` would add a UTF-8 validation per reading and a panic path for input
 /// that validation has already ruled out.
 pub fn disambiguate_kmer(kmer: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let mut codes = kmer
+    let ambiguous: Vec<(usize, [u8; 2])> = kmer
         .iter()
         .enumerate()
-        .filter_map(|(position, residue)| alternatives(*residue).map(|pair| (position, pair)));
+        .filter_map(|(position, residue)| alternatives(*residue).map(|pair| (position, pair)))
+        .collect();
 
-    let Some((position, [first, second])) = codes.next() else {
-        return Some(vec![kmer.to_vec()]);
-    };
-    if codes.next().is_some() {
+    if ambiguous.len() > MAX_AMBIGUOUS_RESIDUES_PER_KMER {
         return None;
     }
 
-    let mut with_first = kmer.to_vec();
-    with_first[position] = first;
-    let mut with_second = kmer.to_vec();
-    with_second[position] = second;
-    Some(vec![with_first, with_second])
+    let mut readings = vec![kmer.to_vec()];
+    for (position, [first, second]) in ambiguous {
+        let mut expanded = Vec::with_capacity(readings.len() * 2);
+        for reading in readings {
+            let mut with_second = reading.clone();
+            with_second[position] = second;
+            let mut with_first = reading;
+            with_first[position] = first;
+            expanded.push(with_first);
+            expanded.push(with_second);
+        }
+        readings = expanded;
+    }
+    Some(readings)
 }
 
 /// Non-canonical residues paired with their closest canonical analogue.
 ///
-/// These are specific amino acids, not ambiguity codes, so they carry real chemistry that
+/// These are specific amino acids, not ambiguous residues, so they carry real chemistry that
 /// would otherwise be discarded as unknown. U (Sec, selenocysteine) is cysteine with
 /// selenium in place of sulfur; O (Pyl, pyrrolysine) is a lysine derivative. Each takes
 /// whichever side its analogue takes in the active alphabet.
 pub const NONCANONICAL_AA: [(char, char); 2] = [('U', 'C'), ('O', 'K')];
 
-/// Resolves amino acid codes that are not one of the 20 canonical residues.
+/// Resolves amino acids that are not one of the 20 canonical residues.
 #[derive(Debug, Default)]
 pub struct AminoAcidAmbiguity;
 
@@ -139,7 +159,7 @@ impl AminoAcidAmbiguity {
     /// discarded as unknown. Under `protein20` nothing is substituted, since there is no
     /// class to fall into and rewriting U as C would assert a residue the source never had.
     ///
-    /// The ambiguity codes B, J and Z are never resolved here. They stay in the sequence and
+    /// The ambiguous residues B, J and Z are never resolved here. They stay in the sequence and
     /// every k-mer covering one is indexed under both readings; see `disambiguate_kmer`.
     pub fn validate_and_resolve<'a>(
         &self,
@@ -151,9 +171,10 @@ impl AminoAcidAmbiguity {
         let reduces_alphabet = canonical_moltype(moltype) != "protein20";
 
         // Validate first, recording where the kept region ends and where substitution first
-        // becomes necessary. Almost every sequence needs neither (roughly 900 of SwissProt's
-        // 207.6 M residues are non-canonical), so building an owned copy up front would
-        // allocate and copy once per sequence only to discard it.
+        // becomes necessary. Almost every sequence needs neither (9_066 of Swiss-Prot
+        // 2026_03's 209.0 M residues are non-canonical: 8_181 X, 331 U, 276 B, 249 Z, 29 O
+        // and no J at all), so building an owned copy up front would allocate and copy once
+        // per sequence only to discard it.
         let mut end = sequence.len();
         let mut first_substitution = None;
         for (offset, c) in sequence.char_indices() {
@@ -179,8 +200,8 @@ impl AminoAcidAmbiguity {
             });
         };
 
-        // Reaching here means reduces_alphabet held. Codes with no representative -- X, the
-        // stop codon, and the ambiguity codes, which are expanded at k-mer time instead --
+        // Reaching here means reduces_alphabet held. Amino acids with no representative -- X, the
+        // stop codon, and the ambiguous residues, which are expanded at k-mer time instead --
         // copy through unchanged.
         let mut result = String::with_capacity(kept.len());
         result.push_str(&kept[..start]);
@@ -205,7 +226,7 @@ mod tests {
             assert!(aa.is_valid_aa(*c));
         }
 
-        // Test ambiguous codes
+        // Test ambiguous residues
         assert!(aa.is_valid_aa('B'));
         assert!(aa.is_valid_aa('Z'));
         assert!(aa.is_valid_aa('J'));
@@ -224,7 +245,7 @@ mod tests {
 
     #[test]
     fn test_representative_is_deterministic_and_exact() {
-        // Canonical residues and identity-free codes need no substitution.
+        // Canonical residues, X and the stop codon need no substitution.
         for c in STANDARD_AA.iter() {
             assert_eq!(AminoAcidAmbiguity::representative(*c), None, "{c}");
         }
@@ -295,7 +316,7 @@ mod tests {
     }
 
     #[test]
-    fn test_validate_and_resolve_keeps_codes_verbatim_for_protein() {
+    fn test_validate_and_resolve_keeps_ambiguous_residues_verbatim_for_protein() {
         let aa = AminoAcidAmbiguity::new();
 
         // Under protein20 there is no equivalence to exploit, so nothing is substituted.
@@ -352,7 +373,7 @@ mod tests {
         assert_eq!(readings("MKZTA").unwrap(), vec!["MKETA", "MKQTA"]);
     }
 
-    /// A window free of ambiguity codes yields itself, so disambiguation adds no k-mers in
+    /// A window free of ambiguous residues yields itself, so disambiguation adds no k-mers in
     /// the common case.
     #[test]
     fn test_disambiguation_passes_through_unambiguous_kmers() {
@@ -362,23 +383,36 @@ mod tests {
     }
 
     /// Human BCL-2 (UniProt P10415) residues 1-30. The tests below write Asp10 as the
-    /// ambiguity code that stands for it, B, so the real fragment is one of the two
+    /// ambiguous residue that stands for it, B, so the real fragment is one of the two
     /// readings that comes back.
     const BCL2_1_30: &str = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEW";
 
-    /// One code gives two readings, one of which is the real fragment. A second code in the
-    /// same k-mer is refused rather than indexed under an arbitrary subset of its readings.
+    /// Every ambiguous residue in the window expands, so `n` of them give `2^n` readings and the real
+    /// fragment is among them whichever residue the query holds.
     #[test]
-    fn test_one_code_expands_and_a_second_is_refused() {
-        // Residues 1-20 with Asp10 written as B.
+    fn test_every_code_in_the_kmer_expands() {
+        // Residues 1-20 with Asp10 written as B: one ambiguous residue, two readings.
         assert_eq!(
             readings("MAHAGRTGYBNREIVMKYIH").unwrap(),
             vec![&BCL2_1_30[..20], "MAHAGRTGYNNREIVMKYIH"]
         );
-        // The same window with Glu13 also written as Z: two codes, so nothing is indexed.
-        assert_eq!(readings("MAHAGRTGYBNRZIVMKYIH"), None);
-        // Length is not what decides it. Thirty residues with two codes is refused too.
-        assert_eq!(readings("MAHAGRTGYBNRZIVMKYIHYKLSQRGYEW"), None);
+        // The same window with Glu13 also written as Z: two ambiguous residues, so four readings.
+        let two = readings("MAHAGRTGYBNRZIVMKYIH").unwrap();
+        assert_eq!(two.len(), 4);
+        assert!(two.contains(&BCL2_1_30[..20].to_string()), "{two:?}");
+        // Length does not decide it either: the same two ambiguous residues across thirty residues.
+        let longer = readings("MAHAGRTGYBNRZIVMKYIHYKLSQRGYEW").unwrap();
+        assert_eq!(longer.len(), 4);
+        assert!(longer.contains(&BCL2_1_30.to_string()), "{longer:?}");
+    }
+
+    /// The ceiling bounds memory on pathological input. A k-mer past it is dropped whole,
+    /// rather than indexed under an arbitrary subset of its readings.
+    #[test]
+    fn test_kmer_past_the_ceiling_is_dropped() {
+        let at_ceiling = "B".repeat(MAX_AMBIGUOUS_RESIDUES_PER_KMER);
+        assert_eq!(readings(&at_ceiling).unwrap().len(), 1 << MAX_AMBIGUOUS_RESIDUES_PER_KMER);
+        assert_eq!(readings(&"B".repeat(MAX_AMBIGUOUS_RESIDUES_PER_KMER + 1)), None);
     }
 
     /// Every reading must be a sequence over the canonical residues, since each stands for a
