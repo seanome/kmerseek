@@ -20,10 +20,12 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::{FSStorage, InnerStorage};
 
 use crate::aminoacid::AminoAcidAmbiguity;
-use crate::encoding::get_hash_function_from_moltype;
 use crate::errors::{IndexError, IndexResult};
+use crate::hash_functions::get_hash_function_from_moltype;
 use crate::signature::{SignatureAccess, SEED};
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
+use crate::types::KmerSize;
+use crate::types::MolType;
 
 /// Schema version for the on-disk index format.
 /// Increment this constant whenever the stored format changes in a backward-incompatible way
@@ -255,7 +257,7 @@ impl ProteomeIndex {
     ///         .path("/path/to/database.db")
     ///         .ksize(5)
     ///         .scaled(1)
-    ///         .moltype("protein")
+    ///         .moltype("protein20")
     ///         .build()?;
     ///     Ok(())
     /// }
@@ -271,6 +273,21 @@ impl ProteomeIndex {
         moltype: &str,
         store_raw_sequences: bool,
     ) -> IndexResult<Self> {
+        // Normalize before storing: pre-rename spellings (`hp`, `dayhoff`, `hp_<name>`) must
+        // be written to metadata under their current names, or reopening the index would hit
+        // reject_legacy_builtin_hp and refuse a database this binary just wrote.
+        let moltype = MolType::new(moltype)
+            .map_err(|message| IndexError::ValidationError { message })?
+            .get()
+            .to_string();
+        let moltype = moltype.as_str();
+        // Validate before opening RocksDB, so a bad size fails fast instead of
+        // leaving an empty database behind.
+        KmerSize::new(ksize).map_err(|message| IndexError::ConfigurationError {
+            field: "ksize".to_string(),
+            message,
+        })?;
+
         // Create RocksDB options optimized for large datasets
         let opts = Self::create_rocksdb_options(true);
 
@@ -468,12 +485,15 @@ impl ProteomeIndex {
             inverted_index.len(),
         );
 
-        self.log_kmer_frequency_stats(
-            &kmer_frequencies,
-            &inverted_index,
-            &target_list,
-            kmer_stats_out,
-        )?;
+        // Passed as a closure rather than the raw inverted_index/target_list so
+        // save_kmer_stats_only (below) can plug in a different, lower-memory resolution
+        // strategy instead -- see log_kmer_frequency_stats's doc comment.
+        self.log_kmer_frequency_stats(&kmer_frequencies, kmer_stats_out, |hashes| {
+            hashes
+                .iter()
+                .map(|&hash| (hash, self.resolve_kmer_string(hash, &inverted_index, &target_list)))
+                .collect()
+        })?;
 
         // Serialize and store the search cache
         eprintln!(
@@ -501,21 +521,28 @@ impl ProteomeIndex {
 
     /// Log a k-mer frequency histogram and the most/least common k-mers to stderr.
     ///
-    /// The lists show the actual encoded k-mer string (not the hash), resolved by looking up
-    /// one signature that contains each hash via the inverted index.
+    /// The lists show the actual encoded k-mer string (not the hash). `resolve` turns a
+    /// batch of hashes into their text (or a placeholder for any it can't find) -- callers
+    /// that already have a full inverted index can resolve directly from it;
+    /// `save_kmer_stats_only` (no inverted index kept in memory, to save memory at proteome
+    /// scale) scans signatures for just this handful of hashes instead. Either way this
+    /// function only ever asks for `2 * KMER_EXAMPLES` hashes, never a bulk resolution.
     fn log_kmer_frequency_stats(
         &self,
         kmer_frequencies: &HashMap<u64, usize>,
-        inverted_index: &HashMap<u64, Vec<u32>>,
-        target_list: &[String],
         kmer_stats_out: Option<&Path>,
+        resolve: impl Fn(&[u64]) -> HashMap<u64, String>,
     ) -> IndexResult<()> {
         if kmer_frequencies.is_empty() {
             return Ok(());
         }
-        Self::print_frequency_histogram(kmer_frequencies);
+        // Build the spectrum once. Every summary below (bins, total, unique, median, tie
+        // counts) is derived from it rather than rescanning the map, which holds over
+        // 125 million entries for protein k=15.
+        let spectrum = Self::frequency_spectrum(kmer_frequencies);
+        Self::print_frequency_histogram(&spectrum);
         if let Some(path) = kmer_stats_out {
-            self.write_kmer_frequency_spectrum(path, kmer_frequencies)?;
+            self.write_kmer_frequency_spectrum(path, &spectrum)?;
         }
 
         // Resolving a hash back to text needs the sequence it came from, which is only in
@@ -531,25 +558,20 @@ impl ProteomeIndex {
         });
         let least = Self::n_smallest_by_key(kmer_frequencies, n, |hash, count| (count, hash));
 
-        self.print_kmer_examples(
-            "most common",
-            &most,
-            kmer_frequencies,
-            inverted_index,
-            target_list,
-        );
-        self.print_kmer_examples(
-            "least common",
-            &least,
-            kmer_frequencies,
-            inverted_index,
-            target_list,
-        );
+        // Hashes actually printed below, deduplicated so a hash that lands in both `most`
+        // and `least` (a proteome with very few unique k-mers) is only resolved once.
+        let mut example_hashes: Vec<u64> =
+            most.iter().chain(least.iter()).map(|&(hash, _)| hash).collect();
+        example_hashes.sort_unstable();
+        example_hashes.dedup();
+        let resolved = resolve(&example_hashes);
+
+        self.print_kmer_examples("most common", &most, &spectrum, &resolved);
+        self.print_kmer_examples("least common", &least, &spectrum, &resolved);
         Ok(())
     }
 
-    /// Write the k-mer frequency spectrum (occurrences -> how many k-mers had that many)
-    /// as CSV, gzip-compressed when the path ends in `.gz`.
+    /// Write the k-mer frequency spectrum as CSV, gzip-compressed when the path ends in `.gz`.
     ///
     /// WHY the spectrum rather than one row per k-mer: this is the distribution you plot, and
     /// it is a few thousand rows instead of tens of millions, so a sweep over alphabets and
@@ -558,44 +580,23 @@ impl ProteomeIndex {
     fn write_kmer_frequency_spectrum(
         &self,
         path: &Path,
-        kmer_frequencies: &HashMap<u64, usize>,
+        spectrum: &BTreeMap<usize, usize>,
     ) -> IndexResult<()> {
-        let spectrum = Self::frequency_spectrum(kmer_frequencies);
-
         let file = File::create(path)?;
-        let mut sink: Box<dyn Write> = if path.extension().is_some_and(|e| e == "gz") {
-            Box::new(GzEncoder::new(file, Compression::default()))
+
+        // The gzip trailer is written when the encoder is finished. Finishing it explicitly
+        // rather than leaving it to Drop is what surfaces a failed final write: flate2's Drop
+        // discards that error, which would leave a truncated file behind while this function
+        // reported success.
+        if path.extension().is_some_and(|e| e == "gz") {
+            let mut encoder = GzEncoder::new(file, Compression::default());
+            self.write_spectrum_csv(&mut encoder, spectrum)?;
+            encoder.finish()?;
         } else {
-            Box::new(file)
-        };
-
-        // Totals go in a leading `#` comment rather than a column, because they are constant
-        // for the whole file and would otherwise be repeated on every row. Readers skip it
-        // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
-        let total: usize = kmer_frequencies.values().sum();
-        let unique = kmer_frequencies.len();
-        writeln!(
-            sink,
-            "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
-             median_seqs_per_kmer={:.1} moltype={} ksize={}",
-            total as f64 / unique as f64,
-            Self::median_occurrences(&spectrum, unique),
-            self.moltype,
-            self.ksize,
-        )?;
-
-        let mut writer = csv::Writer::from_writer(sink);
-        writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
-        let ksize = self.ksize.to_string();
-        for (occurrences, n_kmers) in &spectrum {
-            writer.write_record([
-                &self.moltype,
-                &ksize,
-                &occurrences.to_string(),
-                &n_kmers.to_string(),
-            ])?;
+            let mut file = file;
+            self.write_spectrum_csv(&mut file, spectrum)?;
         }
-        writer.flush()?;
+
         eprintln!(
             "[save] Wrote k-mer frequency spectrum ({} rows) to {}",
             spectrum.len(),
@@ -604,36 +605,85 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
-    ///
-    /// WHY power-of-two: k-mer frequency distributions are heavily right-skewed (most k-mers
-    /// occur once, a few occur thousands of times), so linear bins would be nearly unreadable.
-    fn frequency_bins(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<u32, usize> {
-        let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
-        for &freq in kmer_frequencies.values() {
-            let bin = usize::BITS - freq.leading_zeros() - 1;
-            *bins.entry(bin).or_insert(0) += 1;
+    /// Write the totals comment and one row per distinct occurrence count.
+    fn write_spectrum_csv<W: Write>(
+        &self,
+        sink: &mut W,
+        spectrum: &BTreeMap<usize, usize>,
+    ) -> IndexResult<()> {
+        // Totals go in a leading `#` comment rather than a column, because they are constant
+        // for the whole file and would otherwise be repeated on every row. Readers skip it
+        // with a comment prefix, e.g. polars' `read_csv(..., comment_prefix="#")`.
+        let total = Self::total_kmers(spectrum);
+        let unique = Self::unique_kmers(spectrum);
+        writeln!(
+            sink,
+            "# total_kmers={total} unique_kmers={unique} mean_seqs_per_kmer={:.4} \
+             median_seqs_per_kmer={:.1} mode_seqs_per_kmer={} moltype={} ksize={}",
+            total as f64 / unique as f64,
+            Self::median_occurrences(spectrum),
+            Self::mode_occurrences(spectrum),
+            self.moltype,
+            self.ksize,
+        )?;
+
+        let mut writer = csv::Writer::from_writer(sink);
+        writer.write_record(["moltype", "ksize", "occurrences", "n_kmers"])?;
+        let ksize = self.ksize.to_string();
+        for (occurrences, n_kmers) in spectrum {
+            writer.write_record([
+                &self.moltype,
+                &ksize,
+                &occurrences.to_string(),
+                &n_kmers.to_string(),
+            ])?;
         }
-        bins
+        writer.flush()?;
+        Ok(())
     }
 
     /// Exact frequency spectrum: occurrence count -> how many k-mers were seen that many times.
     ///
-    /// Distinct from [`frequency_bins`], which buckets into powers of two for display. This
-    /// keeps every count so order statistics stay exact.
+    /// Counts are always at least 1 because the caller builds them by incrementing from zero,
+    /// which [`frequency_bins`] relies on to avoid underflowing on `leading_zeros`.
     fn frequency_spectrum(kmer_frequencies: &HashMap<u64, usize>) -> BTreeMap<usize, usize> {
         let mut spectrum: BTreeMap<usize, usize> = BTreeMap::new();
         for &count in kmer_frequencies.values() {
+            debug_assert!(count > 0, "k-mer frequencies are counts, so never zero");
             *spectrum.entry(count).or_insert(0) += 1;
         }
         spectrum
+    }
+
+    /// Total (sequence, k-mer) pairs: each k-mer counted once per sequence containing it.
+    fn total_kmers(spectrum: &BTreeMap<usize, usize>) -> usize {
+        spectrum.iter().map(|(occurrences, n_kmers)| occurrences * n_kmers).sum()
+    }
+
+    /// How many distinct k-mers the index holds.
+    fn unique_kmers(spectrum: &BTreeMap<usize, usize>) -> usize {
+        spectrum.values().sum()
+    }
+
+    /// Bin k-mer counts into power-of-two ranges: bin `b` holds counts in `[2^b, 2^(b+1))`.
+    ///
+    /// WHY power-of-two: k-mer frequency distributions are heavily right-skewed (most k-mers
+    /// occur once, a few occur thousands of times), so linear bins would be nearly unreadable.
+    fn frequency_bins(spectrum: &BTreeMap<usize, usize>) -> BTreeMap<u32, usize> {
+        let mut bins: BTreeMap<u32, usize> = BTreeMap::new();
+        for (&count, &n_kmers) in spectrum {
+            let bin = usize::BITS - count.leading_zeros() - 1;
+            *bins.entry(bin).or_insert(0) += n_kmers;
+        }
+        bins
     }
 
     /// Median occurrences per k-mer, averaging the two middle values when the count is even.
     ///
     /// WHY alongside the mean: these distributions are heavily right-skewed, so a handful of
     /// very common k-mers drag the mean well above what a typical k-mer looks like.
-    fn median_occurrences(spectrum: &BTreeMap<usize, usize>, unique: usize) -> f64 {
+    fn median_occurrences(spectrum: &BTreeMap<usize, usize>) -> f64 {
+        let unique = Self::unique_kmers(spectrum);
         if unique == 0 {
             return 0.0;
         }
@@ -652,26 +702,41 @@ impl ProteomeIndex {
         lower.unwrap_or(0) as f64
     }
 
+    /// The most common per-k-mer occurrence count, ties broken toward the smaller count.
+    ///
+    /// WHY alongside mean and median: this answers "what does a typical k-mer look like" most
+    /// directly. In a k-mer frequency spectrum it is almost always 1, since most k-mers occur
+    /// in only one sequence -- seeing that plainly is more useful than inferring it from mean
+    /// and median alone.
+    fn mode_occurrences(spectrum: &BTreeMap<usize, usize>) -> usize {
+        spectrum
+            .iter()
+            .max_by_key(|&(&occurrences, &n_kmers)| (n_kmers, std::cmp::Reverse(occurrences)))
+            .map(|(&occurrences, _)| occurrences)
+            .unwrap_or(0)
+    }
+
     /// Print the binned frequency distribution as an ASCII bar chart.
     ///
     /// Empty bins between the smallest and largest populated bin are printed with a zero count
     /// so that gaps in the distribution are explicit rather than silently skipped.
-    fn print_frequency_histogram(kmer_frequencies: &HashMap<u64, usize>) {
+    fn print_frequency_histogram(spectrum: &BTreeMap<usize, usize>) {
         const BAR_WIDTH: usize = 40;
-        let bins = Self::frequency_bins(kmer_frequencies);
-        let (&first, &last) = (bins.keys().next().unwrap(), bins.keys().next_back().unwrap());
-        let max_count = *bins.values().max().unwrap();
+        let bins = Self::frequency_bins(spectrum);
+        let (Some((&first, _)), Some((&last, _))) = (bins.iter().next(), bins.iter().next_back())
+        else {
+            return;
+        };
+        let max_count = bins.values().max().copied().unwrap_or(1);
 
-        // Each k-mer is counted once per sequence containing it, so this is the total number
-        // of (sequence, k-mer) pairs the index holds rather than a count of k-mer positions.
-        let total: usize = kmer_frequencies.values().sum();
-        let unique = kmer_frequencies.len();
-        let median = Self::median_occurrences(&Self::frequency_spectrum(kmer_frequencies), unique);
+        let total = Self::total_kmers(spectrum);
+        let unique = Self::unique_kmers(spectrum);
         eprintln!(
             "[save] K-mer frequency histogram: {total} total k-mers found, {unique} unique \
-             (mean {:.2}, median {:.1} sequences per k-mer)",
+             (mean {:.2}, median {:.1}, mode {} sequences per k-mer)",
             total as f64 / unique as f64,
-            median,
+            Self::median_occurrences(spectrum),
+            Self::mode_occurrences(spectrum),
         );
         for bin in first..=last {
             let count = bins.get(&bin).copied().unwrap_or(0);
@@ -692,11 +757,15 @@ impl ProteomeIndex {
         n: usize,
         key: impl Fn(u64, usize) -> K,
     ) -> Vec<(u64, usize)> {
-        let mut heap: BinaryHeap<(K, u64, usize)> = BinaryHeap::with_capacity(n + 1);
+        let mut heap: BinaryHeap<(K, u64, usize)> = BinaryHeap::with_capacity(n);
         for (&hash, &count) in kmer_frequencies {
-            heap.push((key(hash, count), hash, count));
-            if heap.len() > n {
-                heap.pop();
+            let candidate = (key(hash, count), hash, count);
+            if heap.len() < n {
+                heap.push(candidate);
+            } else if heap.peek().is_some_and(|worst| candidate < *worst) {
+                // Replacing the worst entry avoids a push/pop pair for every element that
+                // cannot make the list, which is nearly all of them.
+                *heap.peek_mut().expect("heap is non-empty because n > 0") = candidate;
             }
         }
         let mut selected = heap.into_vec();
@@ -713,15 +782,17 @@ impl ProteomeIndex {
         &self,
         label: &str,
         examples: &[(u64, usize)],
-        kmer_frequencies: &HashMap<u64, usize>,
-        inverted_index: &HashMap<u64, Vec<u32>>,
-        target_list: &[String],
+        spectrum: &BTreeMap<usize, usize>,
+        resolved: &HashMap<u64, String>,
     ) {
         let Some(&(_, boundary)) = examples.last() else { return };
-        let tied = kmer_frequencies.values().filter(|&&c| c == boundary).count();
+        let tied = spectrum.get(&boundary).copied().unwrap_or(0);
         eprintln!("[save] {} {} k-mers (encoded k-mer: occurrences):", examples.len(), label);
         for &(hash, count) in examples {
-            let kmer = self.resolve_kmer_string(hash, inverted_index, target_list);
+            let kmer = resolved
+                .get(&hash)
+                .cloned()
+                .unwrap_or_else(|| format!("<sequence unavailable, hash {hash}>"));
             eprintln!("[save]   {kmer}: {count}");
         }
         if tied > examples.len() {
@@ -761,6 +832,46 @@ impl ProteomeIndex {
         .unwrap_or_else(|| format!("<sequence unavailable, hash {hash}>"))
     }
 
+    /// Resolve a small set of k-mer hashes back to their sequence text by scanning
+    /// `self.signatures` directly, with no inverted index at all.
+    ///
+    /// WHY a scan instead of a lookup: `resolve_kmer_string` needs an inverted index (hash
+    /// -> protein) to do this in O(1), but building that index for the whole proteome is
+    /// exactly the memory cost `save_kmer_stats_only` exists to avoid (see its doc comment).
+    /// For a handful of hashes (`KMER_EXAMPLES` most + least common, ~20 total) a linear scan
+    /// that early-exits once every hash is found is the better trade -- O(hashes) memory
+    /// instead of O(total (protein, k-mer) pairs), and in practice touches only the first
+    /// handful of signatures before `remaining` empties out. Not a general-purpose reverse
+    /// lookup: don't reach for this for more than a small, fixed number of hashes.
+    fn resolve_kmer_strings_by_scan(&self, hashes: &[u64]) -> HashMap<u64, String> {
+        let ksize = self.ksize as usize;
+        let mut remaining: std::collections::HashSet<u64> = hashes.iter().copied().collect();
+        let mut resolved: HashMap<u64, String> = HashMap::with_capacity(hashes.len());
+        if remaining.is_empty() {
+            return resolved;
+        }
+        for entry in self.signatures.iter() {
+            if remaining.is_empty() {
+                break;
+            }
+            let Some(seq) = entry.get_moltype_sequence().or_else(|| entry.get_raw_sequence())
+            else {
+                continue;
+            };
+            let positions = entry.kmer_positions();
+            remaining.retain(|&hash| {
+                let Some(&position) = positions.get(&hash).and_then(|p| p.first()) else {
+                    return true; // not in this signature -- keep looking
+                };
+                if let Some(kmer_str) = seq.get(position..position + ksize) {
+                    resolved.insert(hash, kmer_str.to_string());
+                }
+                false // found (or an unresolvable slice) -- stop looking for this one either way
+            });
+        }
+        resolved
+    }
+
     /// Save the current index state to RocksDB using chunked storage format
     ///
     /// This method stores signatures in chunks to avoid RocksDB value size limits.
@@ -788,6 +899,79 @@ impl ProteomeIndex {
 
     pub fn save_state(&self) -> IndexResult<()> {
         self.save_state_with_kmer_stats(None)
+    }
+
+    /// Compute and write the k-mer frequency spectrum WITHOUT persisting a searchable
+    /// index -- no RocksDB writes at all (no per-signature storage, no SearchCache, no
+    /// metadata). Signatures must already be in memory (i.e. call after `process_fasta`).
+    ///
+    /// WHY this exists as a separate path rather than a flag on `save_state_with_kmer_stats`:
+    /// that function always persists a full searchable index (chunked signature storage +
+    /// one serialized SearchCache value) even when the caller only wants `--kmer-stats-out`.
+    /// That persistence is expensive in two independent ways that both broke real runs at
+    /// proteome scale: the SearchCache is one RocksDB value containing the whole inverted
+    /// index, which can exceed RocksDB's ~4 GiB single-value limit at high ksize + a small
+    /// alphabet + a large proteome ("Invalid argument: value is too large"); and chunked
+    /// signature storage writes thousands of small files (500K+ signatures / CHUNK_SIZE=100
+    /// per run), which hit transient filesystem I/O errors under concurrent load on a shared
+    /// parallel filesystem ("IO error: ... Input/output error"). Both are sidestepped
+    /// entirely by never writing to `self.db` -- everything below reads only `self.signatures`,
+    /// which is already in memory from `process_fasta`.
+    pub fn save_kmer_stats_only(&self, kmer_stats_out: &Path) -> IndexResult<()> {
+        let t0 = Instant::now();
+        let total_sigs = self.signatures.len();
+        eprintln!(
+            "[save] Computing k-mer frequency stats for {} signatures (no index persisted)...",
+            total_sigs
+        );
+
+        // Only kmer_frequencies (one entry per UNIQUE k-mer) is needed for the CSV. An
+        // earlier version of this function also built `inverted_index: HashMap<u64,
+        // Vec<u32>>` and `target_list: Vec<String>` up front, purely so the console's
+        // "most/least common k-mer" printout could resolve a hash back to real sequence
+        // text. Those two structures scale with total (protein, k-mer) PAIRS and total
+        // signature count respectively -- not unique_kmers -- and at UniRef50 scale (tens
+        // of billions of residues) that dwarfs kmer_frequencies itself, becoming the
+        // dominant memory cost this function was supposed to have eliminated. The example
+        // text is still produced (see log_kmer_frequency_stats's `resolve` closure below),
+        // just via `resolve_kmer_strings_by_scan` instead -- a scan bounded to the ~20
+        // hashes actually printed, not a structure sized to the whole proteome.
+        let mut kmer_frequencies: HashMap<u64, usize> = HashMap::new();
+        let mut n_processed = 0usize;
+
+        for entry in self.signatures.iter() {
+            let mins = entry.value().signature().minhash.mins();
+            for min in mins {
+                *kmer_frequencies.entry(min).or_insert(0) += 1;
+            }
+
+            n_processed += 1;
+            if n_processed % 1000 == 0 {
+                eprintln!(
+                    "[save] {}/{} signatures processed ({:.1}s elapsed)",
+                    n_processed,
+                    total_sigs,
+                    t0.elapsed().as_secs_f32(),
+                );
+            }
+        }
+
+        eprintln!(
+            "[save] Processed all {} signatures in {:.1}s. {} unique k-mers.",
+            total_sigs,
+            t0.elapsed().as_secs_f32(),
+            kmer_frequencies.len(),
+        );
+
+        self.log_kmer_frequency_stats(&kmer_frequencies, Some(kmer_stats_out), |hashes| {
+            self.resolve_kmer_strings_by_scan(hashes)
+        })?;
+
+        eprintln!(
+            "[save] Done in {:.1}s (nothing written to the index database).",
+            t0.elapsed().as_secs_f32()
+        );
+        Ok(())
     }
 
     /// Like [`save_state`], but also writes the k-mer frequency spectrum to `kmer_stats_out`
@@ -1472,7 +1656,7 @@ impl ProteomeIndex {
     ///         dir.path().join("test.db"),
     ///         5,        // k-mer size
     ///         1,        // scaled (1 = capture all k-mers)
-    ///         "protein", // molecular type
+    ///         "protein20", // molecular type
     ///         false,    // store raw sequences
     ///     )?;
     ///     
@@ -1674,7 +1858,7 @@ impl ProteomeIndex {
     /// # use kmerseek::ProteomeIndex;
     /// # use tempfile::tempdir;
     /// # let dir = tempdir().unwrap();
-    /// # let index = ProteomeIndex::new(dir.path().join("test.db"), 10, 1, "protein", false).unwrap();
+    /// # let index = ProteomeIndex::new(dir.path().join("test.db"), 10, 1, "protein20", false).unwrap();
     /// # let fasta_path = dir.path().join("test.fasta");
     /// # std::fs::write(&fasta_path, ">test\nACDEFGHIKLMNPQRSTVWY").unwrap();
     ///
@@ -1877,10 +2061,56 @@ mod tests {
     use crate::tests::test_fixtures::{
         TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };
-    use crate::tests::test_utils::{self, print_kmer_positions};
+    use crate::tests::test_utils;
     use std::collections::{BTreeMap, HashMap};
     use std::fs::File;
     use std::path::PathBuf;
+
+    /// A zero k-mer size reached `add_protein` and panicked on integer underflow.
+    /// It is rejected at construction now, before RocksDB is even opened.
+    #[test]
+    fn test_new_rejects_zero_ksize_without_creating_database() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("rejected.db");
+
+        // `.err()` rather than `unwrap_err()`: ProteomeIndex holds a RocksDB
+        // handle and does not implement Debug, which unwrap_err() would require.
+        let err = ProteomeIndex::new(&db_path, 0, 1, "protein", false)
+            .err()
+            .expect("a zero k-mer size should be rejected");
+        assert!(
+            err.to_string().contains("K-mer size must be greater than 0"),
+            "unexpected error: {err}"
+        );
+        assert!(!db_path.exists(), "a rejected k-mer size should leave no database behind");
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_new_rejects_oversized_ksize() -> Result<()> {
+        let dir = tempdir()?;
+        let err = ProteomeIndex::new(dir.path().join("big.db"), 101, 1, "protein", false)
+            .err()
+            .expect("an oversized k-mer size should be rejected");
+        assert!(err.to_string().contains("K-mer size too large"), "unexpected error: {err}");
+
+        Ok(())
+    }
+
+    /// k=1 and k=100 are the boundaries next to the rejected 0 and 101, so they
+    /// should construct normally rather than being rejected.
+    #[test]
+    fn test_new_accepts_boundary_ksizes() -> Result<()> {
+        let dir = tempdir()?;
+        let small = ProteomeIndex::new(dir.path().join("small.db"), 1, 1, "protein", false)?;
+        assert_eq!(small.ksize(), 1);
+
+        let large = ProteomeIndex::new(dir.path().join("large.db"), 100, 1, "protein", false)?;
+        assert_eq!(large.ksize(), 100);
+
+        Ok(())
+    }
 
     /// Keeping the tests for ProteomeIndex in a separate file because they're more like integration tests
     /// than unit tests with all the moltype testing. Also, it's a lot of tests!
@@ -1890,7 +2120,7 @@ mod tests {
         let _dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         let sequence = TEST_PROTEIN;
 
@@ -1967,7 +2197,7 @@ mod tests {
             "test_protein",
             protein_ksize,
             1, // scaled
-            "dayhoff",
+            "dayhoff6",
         )?;
 
         // Add the sequence (now handles all processing: minhash, kmer_infos, sequence storage)
@@ -2028,7 +2258,7 @@ mod tests {
         let _dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let sequence = TEST_PROTEIN;
 
@@ -2095,7 +2325,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2147,7 +2377,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "dayhoff";
+        let moltype = "dayhoff6";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2199,7 +2429,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2251,7 +2481,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
         let sequence = TEST_PROTEIN;
         let name = "test_protein";
 
@@ -2297,7 +2527,8 @@ mod tests {
         // single md5 key and prove nothing about aggregation.
         // TEST_PROTEIN: 17 windows, 1 removed ("IMALG", all-hydrophobic).
         // FKBP8_POLY_E: 26 windows, 9 removed (7 raw "EEEEE" + 2 encoded "ppppp").
-        let mut index = ProteomeIndex::new(dir.path().join("counts.db"), 5, 1, "hp", false)?;
+        let mut index =
+            ProteomeIndex::new(dir.path().join("counts.db"), 5, 1, "hp_lehninger2", false)?;
         index.set_remove_low_complexity(true);
         for (name, seq) in [("p1", TEST_PROTEIN), ("p2", FKBP8_POLY_E)] {
             let sig = index.create_protein_signature(seq, name)?;
@@ -2307,7 +2538,8 @@ mod tests {
         assert_eq!(index.low_complexity_counts(), (43, 10));
 
         // With removal off nothing walks windows itself, so both stay zero.
-        let index_off = ProteomeIndex::new(dir.path().join("counts_off.db"), 5, 1, "hp", false)?;
+        let index_off =
+            ProteomeIndex::new(dir.path().join("counts_off.db"), 5, 1, "hp_lehninger2", false)?;
         let sig = index_off.create_protein_signature(TEST_PROTEIN, "p1")?;
         index_off.store_signatures(vec![sig])?;
         assert_eq!(index_off.low_complexity_counts(), (0, 0));
@@ -2324,7 +2556,7 @@ mod tests {
             .path(dir.path().join("builder_on.db"))
             .ksize(5)
             .scaled(1)
-            .moltype("hp")
+            .moltype("hp_lehninger2")
             .remove_low_complexity(true)
             .store_raw_sequences(true)
             .build()?;
@@ -2336,7 +2568,7 @@ mod tests {
             .path(dir.path().join("builder_off.db"))
             .ksize(5)
             .scaled(1)
-            .moltype("hp")
+            .moltype("hp_lehninger2")
             .build()?;
         assert!(!off.remove_low_complexity());
 
@@ -2352,7 +2584,7 @@ mod tests {
         for flag in [true, false] {
             let db_path = dir.path().join(format!("persist_{}.db", flag));
             {
-                let mut index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+                let mut index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
                 index.set_remove_low_complexity(flag);
                 let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
                 index.store_signatures(vec![sig])?;
@@ -2381,7 +2613,7 @@ mod tests {
             let dir = tempdir()?;
             let db_path = dir.path().join("legacy.db");
             {
-                let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+                let index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
                 let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
                 index.store_signatures(vec![sig])?;
                 index.save_state()?;
@@ -2420,7 +2652,7 @@ mod tests {
             let reopened = ProteomeIndex::open_for_search(&db_path)?;
             assert!(!reopened.remove_low_complexity());
             assert_eq!(reopened.ksize(), 5);
-            assert_eq!(reopened.moltype(), "hp");
+            assert_eq!(reopened.moltype(), "hp_lehninger2");
             // No version was ever stamped on these.
             assert_eq!(reopened.kmerseek_version(), None);
         }
@@ -2435,7 +2667,7 @@ mod tests {
         let dir = tempdir()?;
         let db_path = dir.path().join("load_state.db");
         {
-            let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            let index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
             for (name, seq) in [("p1", TEST_PROTEIN), ("p2", FKBP8_POLY_E)] {
                 let sig = index.create_protein_signature(seq, name)?;
                 index.store_signatures(vec![sig])?;
@@ -2443,7 +2675,7 @@ mod tests {
             index.save_state()?;
         }
 
-        let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+        let index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
         assert_eq!(index.signature_count(), 0, "a fresh handle starts empty");
         index.load_state()?;
         assert_eq!(index.signature_count(), 2, "load_state should pull both signatures back");
@@ -2458,7 +2690,7 @@ mod tests {
         let dir = tempdir()?;
         let db_path = dir.path().join("full_load.db");
         {
-            let mut index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            let mut index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
             index.set_remove_low_complexity(true);
             for (name, seq) in [("p1", TEST_PROTEIN), ("p2", FKBP8_POLY_E)] {
                 let sig = index.create_protein_signature(seq, name)?;
@@ -2474,7 +2706,7 @@ mod tests {
         assert_eq!(loaded.signature_count(), 2);
         assert_eq!(loaded.ksize(), 5);
         assert_eq!(loaded.scaled(), 1);
-        assert_eq!(loaded.moltype(), "hp");
+        assert_eq!(loaded.moltype(), "hp_lehninger2");
 
         // Counts are per-process build state, not persisted, so a fresh load
         // starts at zero rather than inheriting the writer's totals.
@@ -2490,7 +2722,7 @@ mod tests {
         let dir = tempdir()?;
         let db_path = dir.path().join("params.db");
         {
-            let index = ProteomeIndex::new(&db_path, 7, 1, "dayhoff", true)?;
+            let index = ProteomeIndex::new(&db_path, 7, 1, "dayhoff6", true)?;
             let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
             index.store_signatures(vec![sig])?;
             index.save_state()?;
@@ -2499,7 +2731,8 @@ mod tests {
         let (ksize, scaled, moltype) = ProteomeIndex::get_index_parameters(&db_path)?;
         assert_eq!(ksize, 7);
         assert_eq!(scaled, 1);
-        assert_eq!(moltype, "dayhoff");
+        // Stored under its current name, not the "dayhoff" spelling it was created with.
+        assert_eq!(moltype, "dayhoff6");
 
         Ok(())
     }
@@ -2510,7 +2743,7 @@ mod tests {
         let dir = tempdir()?;
         let db_path = dir.path().join("versioned.db");
         {
-            let index = ProteomeIndex::new(&db_path, 5, 1, "hp", true)?;
+            let index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
             let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
             index.store_signatures(vec![sig])?;
             index.save_state()?;
@@ -2527,7 +2760,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2589,7 +2822,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "dayhoff";
+        let moltype = "dayhoff6";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2651,7 +2884,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2713,7 +2946,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2770,7 +3003,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2829,7 +3062,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "dayhoff";
+        let moltype = "dayhoff6";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2895,7 +3128,7 @@ mod tests {
         // - Unique -> "25 signatures" passes
         // - "Combined minhash" has an upper bound of 4096 hashes, which is a lot more interesting
         let protein_ksize = 12;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2954,7 +3187,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -2965,43 +3198,17 @@ mod tests {
             false,
         )?;
 
-        // Test valid sequences (including those with ambiguous amino acids that should be resolved)
-        let valid_sequences = [
-            "PLANTANDANIMALGENQMES", // Standard amino acids
-            "ACDEFGHIKLMNPQRSTVWY",  // All standard amino acids
-            "ACDEFXBZJ",             // With ambiguous amino acids (should be resolved)
-        ];
+        // The k-mer count is the number of *readings*, not the number of windows: each
+        // ambiguity code doubles the windows covering it, up to a tenth of the window
+        // rounded up, which is one code at k=5. For "ACDEFXBZJ" the five windows ACDEF,
+        // CDEFX, DEFXB, EFXBZ and FXBZJ carry 0, 0, 1, 2 and 3 codes, so the first three
+        // give 1 + 1 + 2 = 4 readings and the last two are over the cap and dropped.
+        let valid_sequences =
+            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 4)];
 
-        for sequence in valid_sequences.iter() {
+        for (sequence, expected_kmers) in valid_sequences {
             let protein_signature = index.create_protein_signature(sequence, "test_protein")?;
-            test_utils::print_kmer_positions(&protein_signature);
-            if protein_signature.signature().md5sum == "7641839ad508ab8" {
-                assert!(
-                    protein_signature.kmer_positions().len() == 17,
-                    "Valid sequence 'PLANTANDANIMALGENQMES' should be accepted and have 17 protein 5-mers",
-                );
-            } else if protein_signature.signature().md5sum == "b95f0777d5439d56" {
-                assert!(
-                    protein_signature.kmer_positions().len() == 16,
-                    "Valid sequence 'ACDEFGHIKLMNPQRSTVWY' should be accepted and have 16 protein 5-mers",
-                );
-            } else if protein_signature.signature().md5sum == "fa11c30a562fd82" {
-                assert!(
-                    protein_signature.kmer_positions().len() == 5,
-                    "Valid sequence 'ACDEFXBZJ' should be accepted and have 5 protein 5-mers",
-                );
-            } else {
-                // For the third sequence, just check the length is correct
-                if protein_signature.kmer_positions().len() == 5 {
-                    // This is the expected case for ACDEFXBZJ
-                } else {
-                    panic!(
-                        "Unexpected kmer count: {} for md5sum: {}",
-                        protein_signature.kmer_positions().len(),
-                        protein_signature.signature().md5sum
-                    );
-                }
-            }
+            assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
         }
 
         // Test sequences with truly invalid characters (not in the replacements map)
@@ -3024,14 +3231,14 @@ mod tests {
             );
         }
 
-        // Test that ambiguous characters are resolved (not rejected)
+        // Ambiguity codes are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
-            "PLANTANDANIMALGENBMES", // B should be resolved to D or N
-            "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
-            "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+            ("PLANTANDANIMALGENBMES", 21), // B is indexed as both Asp and Asn
+            ("PLANTANDANIMALGENZMES", 21), // Z is indexed as both Glu and Gln
+            ("PLANTANDANIMALGENJMES", 21), // J is indexed as both Ile and Leu
         ];
 
-        for sequence in ambiguous_sequences.iter() {
+        for (sequence, expected_kmers) in ambiguous_sequences {
             let result = index.create_protein_signature(sequence, "test_protein");
             assert!(
                 result.is_ok(),
@@ -3040,12 +3247,13 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            print_kmer_positions(&protein_signature);
-            // Should have the same number of k-mers as the original sequence
+            // 21 residues at k=5 gives 17 windows, and the B at position 18 falls in four
+            // of them. Under this alphabet the two readings encode differently, so those
+            // four windows contribute two k-mers each: 17 + 4 = 21.
             assert_eq!(
                 protein_signature.kmer_positions().len(),
-                17,
-                "Resolved sequence should have 17 protein 5-mers"
+                expected_kmers,
+                "{sequence}: expected the windows covering the ambiguity code to be doubled"
             );
         }
 
@@ -3057,7 +3265,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "dayhoff";
+        let moltype = "dayhoff6";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -3068,14 +3276,14 @@ mod tests {
             false,
         )?;
 
-        // Test that ambiguous characters are resolved (not rejected)
+        // Ambiguity codes are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
-            "PLANTANDANIMALGENBMES", // B should be resolved to D or N
-            "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
-            "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+            ("PLANTANDANIMALGENBMES", 17), // Asp and Asn are both dayhoff `c`
+            ("PLANTANDANIMALGENZMES", 17), // Glu and Gln are both dayhoff `c`
+            ("PLANTANDANIMALGENJMES", 17), // Ile and Leu are both dayhoff `e`
         ];
 
-        for sequence in ambiguous_sequences.iter() {
+        for (sequence, expected_kmers) in ambiguous_sequences {
             let result = index.create_protein_signature(sequence, "test_protein");
             assert!(
                 result.is_ok(),
@@ -3084,30 +3292,26 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            print_kmer_positions(&protein_signature);
-            // Should have the same number of k-mers as the original sequence
-            println!("sequence: {}", sequence);
-            assert_eq!(
-                protein_signature.kmer_positions().len(),
-                17,
-                "Resolved sequence should have 17 protein 5-mers"
-            );
+            // Disambiguating a code adds k-mers only where the alphabet keeps the two readings
+            // apart. Dayhoff puts both members of every ambiguous pair in one class, so the
+            // disambiguated windows hash identically and the count is unchanged.
+            assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
             // Check that the ambiguous k-mer is resolved correctly
-            if sequence == &"PLANTANDANIMALGENBMES" {
+            if sequence == "PLANTANDANIMALGENBMES" {
                 // B resolves to D or N → dayhoff hash for NDMES/NNMES (both map to same dayhoff 6-letter encoding)
                 assert!(
                     protein_signature.kmer_positions().contains_key(&6161374941338912337),
                     "Expected k-mer with hash 6161374941338912337 (NDMES/NNMES dayhoff) to be present in {}",
                     sequence
                 );
-            } else if sequence == &"PLANTANDANIMALGENZMES" {
+            } else if sequence == "PLANTANDANIMALGENZMES" {
                 // Z resolves to E or Q → dayhoff hash for NEMES/NQMES
                 assert!(
                     protein_signature.kmer_positions().contains_key(&6161374941338912337),
                     "Expected k-mer with hash 6161374941338912337 (NEMES/NQMES dayhoff) to be present in {}",
                     sequence
                 );
-            } else if sequence == &"PLANTANDANIMALGENJMES" {
+            } else if sequence == "PLANTANDANIMALGENJMES" {
                 // J resolves to I or L → dayhoff hash for NLMES/NIMES
                 assert!(
                     protein_signature.kmer_positions().contains_key(&9182605311834199497),
@@ -3125,7 +3329,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -3136,14 +3340,14 @@ mod tests {
             false,
         )?;
 
-        // Test that ambiguous characters are resolved (not rejected)
+        // Ambiguity codes are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
-            "PLANTANDANIMALGENBMES", // B should be resolved to D or N
-            "PLANTANDANIMALGENZMES", // Z should be resolved to E or Q
-            "PLANTANDANIMALGENJMES", // J should be resolved to I or L
+            ("PLANTANDANIMALGENBMES", 14), // Asp and Asn are both polar
+            ("PLANTANDANIMALGENZMES", 14), // Glu and Gln are both polar
+            ("PLANTANDANIMALGENJMES", 14), // Ile and Leu are both hydrophobic
         ];
 
-        for sequence in ambiguous_sequences.iter() {
+        for (sequence, expected_kmers) in ambiguous_sequences {
             let result = index.create_protein_signature(sequence, "test_protein");
             assert!(
                 result.is_ok(),
@@ -3152,30 +3356,25 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            print_kmer_positions(&protein_signature);
-            // Should have the same number of k-mers as the original sequence
-            println!("sequence: {}", sequence);
-            assert_eq!(
-                protein_signature.kmer_positions().len(),
-                14,
-                "Resolved sequence should have 14 protein 5-mers"
-            );
+            // Both readings of every ambiguous pair land on the same side of the HP split,
+            // so the disambiguated windows hash identically and the count is unchanged.
+            assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
             // Check that the ambiguous k-mer is resolved correctly
-            if sequence == &"PLANTANDANIMALGENBMES" {
+            if sequence == "PLANTANDANIMALGENBMES" {
                 // B resolves to D or N → HP hash for NDMES/NNMES (both map to "pphpp" HP encoding)
                 assert!(
                     protein_signature.kmer_positions().contains_key(&13058023948041027181),
                     "Expected k-mer with hash 13058023948041027181 (NDMES/NNMES HP) to be present in {}",
                     sequence
                 );
-            } else if sequence == &"PLANTANDANIMALGENZMES" {
+            } else if sequence == "PLANTANDANIMALGENZMES" {
                 // Z resolves to E or Q → HP hash for NEMES/NQMES (both map to "pphpp" HP encoding)
                 assert!(
                     protein_signature.kmer_positions().contains_key(&13058023948041027181),
                     "Expected k-mer with hash 13058023948041027181 (NEMES/NQMES HP) to be present in {}",
                     sequence
                 );
-            } else if sequence == &"PLANTANDANIMALGENJMES" {
+            } else if sequence == "PLANTANDANIMALGENJMES" {
                 // J resolves to I or L → HP hash for NLMES/NIMES (both map to "phhpp" HP encoding)
                 assert!(
                     protein_signature.kmer_positions().contains_key(&10495165127682499337),
@@ -3193,7 +3392,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -3245,7 +3444,7 @@ mod tests {
         let dir = tempdir()?;
 
         let protein_ksize = 5;
-        let moltype = "protein";
+        let moltype = "protein20";
 
         // Create index with minimal parameters
         let index = ProteomeIndex::new(
@@ -3281,8 +3480,8 @@ mod tests {
         let db_path2 = temp_dir.path().join("test2.db");
 
         // Create two indices with the same parameters
-        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", false).unwrap();
-        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", false).unwrap();
+        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein20", false).unwrap();
+        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein20", false).unwrap();
 
         // Add the same signatures to both indices
         let sig1_1 = index1.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test1").unwrap();
@@ -3305,8 +3504,111 @@ mod tests {
 
         // Test that different indices are not equivalent
         let index3 =
-            ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("test3.db"), 10, 1, "protein20", false)
+                .unwrap();
         assert!(!index1.is_equivalent_to(&index3).unwrap());
+    }
+
+    /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958), from
+    /// tests/testdata/fasta/ced9.fasta.
+    const CED9_PREFIX: &str = "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRM";
+
+    #[test]
+    fn test_kmer_spectrum_csv_has_totals_comment_and_rows() {
+        use std::io::Read;
+
+        let temp_dir = tempdir().unwrap();
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("spec.db"), 10, 1, "protein20", true).unwrap();
+        // 3 k-mers seen once, 1 seen twice, 1 seen three times: 5 unique, 8 total.
+        let spectrum: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
+
+        let csv_path = temp_dir.path().join("spectrum.csv");
+        index.write_kmer_frequency_spectrum(&csv_path, &spectrum).unwrap();
+
+        let mut contents = String::new();
+        File::open(&csv_path).unwrap().read_to_string(&mut contents).unwrap();
+
+        assert_eq!(
+            contents,
+            "# total_kmers=8 unique_kmers=5 mean_seqs_per_kmer=1.6000 median_seqs_per_kmer=1.0 mode_seqs_per_kmer=1 moltype=protein20 ksize=10\n\
+             moltype,ksize,occurrences,n_kmers\n\
+             protein20,10,1,3\n\
+             protein20,10,2,1\n\
+             protein20,10,3,1\n"
+        );
+    }
+
+    #[test]
+    fn test_median_occurrences_exact() {
+        // Counts 1,1,1,2,3 -> odd length, middle element is 1.
+        let odd: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&odd), 1.0);
+
+        // Counts 1,1,2,3 -> even length, middle two are 1 and 2.
+        let even: BTreeMap<usize, usize> = [(1, 2), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&even), 1.5);
+
+        // Counts 4,4,9,9 -> both middles inside one bucket.
+        let flat: BTreeMap<usize, usize> = [(4, 2), (9, 2)].into_iter().collect();
+        assert_eq!(ProteomeIndex::median_occurrences(&flat), 6.5);
+
+        // Single value and empty.
+        assert_eq!(ProteomeIndex::median_occurrences(&[(7, 1)].into_iter().collect()), 7.0);
+        assert_eq!(ProteomeIndex::median_occurrences(&BTreeMap::new()), 0.0);
+    }
+
+    #[test]
+    fn test_mode_occurrences() {
+        // Occurrence count 1 has the most k-mers (3), so it's the mode.
+        let clear: BTreeMap<usize, usize> = [(1, 3), (2, 1), (3, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::mode_occurrences(&clear), 1);
+
+        // Tie between occurrence counts 2 and 5 (both have 4 k-mers): break toward smaller.
+        let tied: BTreeMap<usize, usize> = [(2, 4), (5, 4), (9, 1)].into_iter().collect();
+        assert_eq!(ProteomeIndex::mode_occurrences(&tied), 2);
+
+        assert_eq!(ProteomeIndex::mode_occurrences(&[(7, 1)].into_iter().collect()), 7);
+        assert_eq!(ProteomeIndex::mode_occurrences(&BTreeMap::new()), 0);
+    }
+
+    #[test]
+    fn test_frequency_bins_groups_counts_into_powers_of_two() {
+        // Bin b holds counts in [2^b, 2^(b+1)): 1 | 2-3 | 4-7 | 8-15 | ... | 256-511
+        // Three k-mers seen once, one each at 2, 3, 4, 7, 8 and 300 occurrences.
+        let spectrum: BTreeMap<usize, usize> =
+            [(1, 3), (2, 1), (3, 1), (4, 1), (7, 1), (8, 1), (300, 1)].into_iter().collect();
+
+        let bins = ProteomeIndex::frequency_bins(&spectrum);
+
+        let expected: BTreeMap<u32, usize> =
+            [(0, 3), (1, 2), (2, 2), (3, 1), (8, 1)].into_iter().collect();
+        assert_eq!(bins, expected);
+    }
+
+    #[test]
+    fn test_n_smallest_by_key_selects_most_and_least_common() {
+        let frequencies: HashMap<u64, usize> =
+            [(100, 5), (200, 9), (300, 1), (400, 9), (500, 3)].into_iter().collect();
+
+        // Most common: highest count first, ties broken by ascending hash (200 before 400).
+        let most = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| {
+            (std::cmp::Reverse(count), hash)
+        });
+        assert_eq!(most, vec![(200, 9), (400, 9), (100, 5)]);
+
+        // Least common: lowest count first.
+        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 3, |hash, count| (count, hash));
+        assert_eq!(least, vec![(300, 1), (500, 3), (100, 5)]);
+    }
+
+    #[test]
+    fn test_n_smallest_by_key_returns_all_when_n_exceeds_len() {
+        let frequencies: HashMap<u64, usize> = [(100, 2), (200, 1)].into_iter().collect();
+
+        let least = ProteomeIndex::n_smallest_by_key(&frequencies, 10, |hash, count| (count, hash));
+
+        assert_eq!(least, vec![(200, 1), (100, 2)]);
     }
 
     /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958) with three residues
@@ -3324,7 +3626,9 @@ mod tests {
     fn test_ambiguity_codes_index_deterministically() {
         let temp_dir = tempdir().unwrap();
 
-        for (i, moltype) in ["protein", "dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+        for (i, moltype) in
+            ["protein20", "dayhoff6", "hp_lehninger2", "hp_pbotc_1st_ed2"].iter().enumerate()
+        {
             let index =
                 ProteomeIndex::new(temp_dir.path().join(format!("d{i}.db")), 5, 1, moltype, true)
                     .unwrap();
@@ -3345,24 +3649,65 @@ mod tests {
         }
     }
 
-    /// Under a reduced alphabet, an ambiguity code must sketch identically to *both* residues
-    /// it stands for — that is what makes substituting a representative lossless.
+    /// A sequence carrying B must sketch to exactly the union of the two sequences it stands
+    /// for: every k-mer of the Asp reading and every k-mer of the Asn reading, and nothing
+    /// else. That is what makes the index match a query holding either residue, without
+    /// committing to a reading the source never made.
+    ///
+    /// Checked across the whole range of alphabets, including protein20 (where D and N are
+    /// distinct) and sdm12 and hsdm17 (where they land in separate classes), since those are
+    /// exactly the cases a single representative would have got wrong.
     #[test]
-    fn test_ambiguity_code_sketches_match_both_alternatives() {
+    fn test_ambiguity_code_sketches_as_union_of_both_alternatives() {
         let temp_dir = tempdir().unwrap();
         // Same fragment written three ways: with B, and with each residue B stands for.
         let with_b = "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGIK";
         let with_d = "MTRCTADNSLTNPAYRRRTMDTGEMKEFLGIK";
         let with_n = "MTRCTADNSLTNPAYRRRTMNTGEMKEFLGIK";
 
-        for (i, moltype) in ["dayhoff", "hp", "hp_pbotc_1st_ed"].iter().enumerate() {
+        let moltypes = [
+            "protein20",
+            "dayhoff6",
+            "hp_lehninger2",
+            "hp_pbotc_1st_ed2",
+            "gbmr4",
+            "sdm12",
+            "hsdm17",
+            "uniprot18",
+        ];
+        for (i, moltype) in moltypes.iter().enumerate() {
             let index =
                 ProteomeIndex::new(temp_dir.path().join(format!("a{i}.db")), 5, 1, moltype, true)
                     .unwrap();
             let sketch = |seq| index.create_protein_signature(seq, "x").unwrap().mins_as_set();
 
-            assert_eq!(sketch(with_b), sketch(with_d), "{moltype}: B should sketch like D");
-            assert_eq!(sketch(with_b), sketch(with_n), "{moltype}: B should sketch like N");
+            let (from_b, from_d, from_n) = (sketch(with_b), sketch(with_d), sketch(with_n));
+            let union: std::collections::HashSet<u64> = from_d.union(&from_n).copied().collect();
+            assert_eq!(from_b, union, "{moltype}: B should sketch as D union N");
+            assert!(from_b.is_superset(&from_d), "{moltype}: B is missing the Asp reading");
+            assert!(from_b.is_superset(&from_n), "{moltype}: B is missing the Asn reading");
+        }
+    }
+
+    /// Where the alphabet puts Asp and Asn in different classes, the two readings really are
+    /// different k-mers, so B contributes strictly more than either alone. This is the case
+    /// a fixed representative got wrong.
+    #[test]
+    fn test_ambiguity_code_adds_both_readings_when_classes_differ() {
+        let temp_dir = tempdir().unwrap();
+        let with_b = "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGIK";
+        let with_d = "MTRCTADNSLTNPAYRRRTMDTGEMKEFLGIK";
+
+        for (i, moltype) in ["protein20", "sdm12", "hsdm17"].iter().enumerate() {
+            let index =
+                ProteomeIndex::new(temp_dir.path().join(format!("d{i}.db")), 5, 1, moltype, true)
+                    .unwrap();
+            let sketch = |seq| index.create_protein_signature(seq, "x").unwrap().mins_as_set();
+
+            assert!(
+                sketch(with_b).len() > sketch(with_d).len(),
+                "{moltype}: B should contribute k-mers the Asp reading alone does not"
+            );
         }
     }
 
@@ -3372,7 +3717,7 @@ mod tests {
         let db_path = temp_dir.path().join("test.db");
 
         // Create a new index
-        let index = ProteomeIndex::new(&db_path, 8, 10, "hp", false).unwrap();
+        let index = ProteomeIndex::new(&db_path, 8, 10, "hp_lehninger2", false).unwrap();
 
         // Add a test signature
         let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test").unwrap();
@@ -3401,7 +3746,7 @@ mod tests {
 
         // Create index with manual path in temp directory
         let manual_index =
-            ProteomeIndex::new(manual_index_dir.clone(), 16, 5, "hp", false).unwrap();
+            ProteomeIndex::new(manual_index_dir.clone(), 16, 5, "hp_lehninger2", false).unwrap();
 
         // Process the FASTA file
         println!("Processing FASTA file: {:?}", fasta_path);
@@ -3424,7 +3769,8 @@ mod tests {
         // Create a new auto-generated index in the temp directory
         println!("Creating auto-generated index in temp directory...");
         let auto_index =
-            ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp", false).unwrap();
+            ProteomeIndex::new_with_auto_filename(&fasta_path, 16, 5, "hp_lehninger2", false)
+                .unwrap();
 
         // Process the same FASTA file
         auto_index.process_fasta(&fasta_path, 0, 1000).unwrap();
@@ -3457,10 +3803,12 @@ mod tests {
         let base_path = temp_dir.path().join("test.fasta");
 
         // Test different parameter combinations
+        // The moltype in the filename is the normalized name, so passing a pre-rename
+        // spelling still produces a file named after the current alphabet.
         let test_cases = vec![
-            (16, 5, "hp", "test.fasta.hp.k16.scaled5.kmerseek.rocksdb"),
-            (10, 1, "protein", "test.fasta.protein.k10.scaled1.kmerseek.rocksdb"),
-            (8, 100, "dayhoff", "test.fasta.dayhoff.k8.scaled100.kmerseek.rocksdb"),
+            (16, 5, "hp_lehninger2", "test.fasta.hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
+            (10, 1, "protein20", "test.fasta.protein20.k10.scaled1.kmerseek.rocksdb"),
+            (8, 100, "dayhoff6", "test.fasta.dayhoff6.k8.scaled100.kmerseek.rocksdb"),
         ];
 
         for (ksize, scaled, moltype, expected) in test_cases {
@@ -3485,13 +3833,15 @@ mod tests {
         assert!(fasta_path.exists(), "BCL2 FASTA file not found at {:?}", fasta_path);
 
         // Test different parameter combinations
+        // The fourth field is the normalized moltype that ends up in the filename: pre-rename
+        // spellings are rewritten to the current alphabet name when the index is created.
         let test_cases = vec![
-            (16, 5, "hp", "BCL2 with hp encoding, k=16, scaled=5"),
-            (10, 1, "protein", "BCL2 with protein encoding, k=10, scaled=1"),
-            (8, 100, "dayhoff", "BCL2 with dayhoff encoding, k=8, scaled=100"),
+            (16, 5, "hp_lehninger2", "hp_lehninger2", "BCL2 with hp encoding, k=16, scaled=5"),
+            (10, 1, "protein20", "protein20", "BCL2 with the full alphabet, k=10, scaled=1"),
+            (8, 100, "dayhoff6", "dayhoff6", "BCL2 with dayhoff encoding, k=8, scaled=100"),
         ];
 
-        for (ksize, scaled, moltype, description) in test_cases {
+        for (ksize, scaled, moltype, stored_moltype, description) in test_cases {
             println!("Testing: {}", description);
 
             // Create index with automatic filename generation
@@ -3500,7 +3850,7 @@ mod tests {
                     .unwrap();
 
             // Verify the generated filename
-            let expected_filename = format!("bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.{}.k{}.scaled{}.kmerseek.rocksdb", moltype, ksize, scaled);
+            let expected_filename = format!("bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz.{}.k{}.scaled{}.kmerseek.rocksdb", stored_moltype, ksize, scaled);
             let generated_filename = auto_index.generate_filename(
                 "bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz",
             );
@@ -3547,8 +3897,8 @@ mod tests {
         let db_path2 = temp_dir.path().join("index2.db");
 
         // Create two indices with the same parameters
-        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein", false).unwrap();
-        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein", false).unwrap();
+        let index1 = ProteomeIndex::new(&db_path1, 5, 1, "protein20", false).unwrap();
+        let index2 = ProteomeIndex::new(&db_path2, 5, 1, "protein20", false).unwrap();
 
         // Add the same protein sequences to both indices
         let sequences = vec![
@@ -3576,7 +3926,8 @@ mod tests {
 
         // Create a third index with different parameters
         let index3 =
-            ProteomeIndex::new(temp_dir.path().join("index3.db"), 10, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("index3.db"), 10, 1, "protein20", false)
+                .unwrap();
 
         // Test that different indices are not equivalent
         let are_equivalent_3 = index1.is_equivalent_to(&index3).unwrap();
@@ -3584,7 +3935,8 @@ mod tests {
 
         // Test with different sequences
         let index4 =
-            ProteomeIndex::new(temp_dir.path().join("index4.db"), 5, 1, "protein", false).unwrap();
+            ProteomeIndex::new(temp_dir.path().join("index4.db"), 5, 1, "protein20", false)
+                .unwrap();
         let sig4 = index4.create_protein_signature("DIFFERENTSEQUENCE", "different").unwrap();
         index4.store_signatures(vec![sig4]).unwrap();
 
@@ -3598,32 +3950,34 @@ mod tests {
 
         // Test with various filename patterns
         let test_cases = vec![
-            ("simple.fasta", "simple.fasta.hp.k16.scaled5.kmerseek.rocksdb"),
+            ("simple.fasta", "simple.fasta.hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (
                 "complex-name_with.underscores.fasta.gz",
-                "complex-name_with.underscores.fasta.gz.hp.k16.scaled5.kmerseek.rocksdb",
+                "complex-name_with.underscores.fasta.gz.hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
             ),
-            ("no_extension", "no_extension.hp.k16.scaled5.kmerseek.rocksdb"),
+            ("no_extension", "no_extension.hp_lehninger2.k16.scaled5.kmerseek.rocksdb"),
             (
                 "multiple.dots.in.name.fasta",
-                "multiple.dots.in.name.fasta.hp.k16.scaled5.kmerseek.rocksdb",
+                "multiple.dots.in.name.fasta.hp_lehninger2.k16.scaled5.kmerseek.rocksdb",
             ),
         ];
 
         for (base_name, expected) in test_cases {
             let base_path = temp_dir.path().join(base_name);
             let index =
-                ProteomeIndex::new_with_auto_filename(&base_path, 16, 5, "hp", false).unwrap();
+                ProteomeIndex::new_with_auto_filename(&base_path, 16, 5, "hp_lehninger2", false)
+                    .unwrap();
             let generated = index.generate_filename(base_name);
             assert_eq!(generated, expected, "Failed for base_name: {}", base_name);
         }
 
         // Test with different molecular types
+        // Pre-rename spellings normalize, so the filename names the current alphabet.
         let moltype_cases = vec![
-            ("hp", "test.fasta.hp.k8.scaled10.kmerseek.rocksdb"),
-            ("protein", "test.fasta.protein.k8.scaled10.kmerseek.rocksdb"),
-            ("dayhoff", "test.fasta.dayhoff.k8.scaled10.kmerseek.rocksdb"),
-            ("raw", "test.fasta.raw.k8.scaled10.kmerseek.rocksdb"),
+            ("hp_lehninger2", "test.fasta.hp_lehninger2.k8.scaled10.kmerseek.rocksdb"),
+            ("protein20", "test.fasta.protein20.k8.scaled10.kmerseek.rocksdb"),
+            ("dayhoff6", "test.fasta.dayhoff6.k8.scaled10.kmerseek.rocksdb"),
+            ("protein20", "test.fasta.protein20.k8.scaled10.kmerseek.rocksdb"),
         ];
 
         for (moltype, expected) in moltype_cases {
@@ -3646,7 +4000,7 @@ mod tests {
         let db_path = temp_dir.path().join("serialization_test.hp.k8.scaled10.kmerseek.rocksdb");
 
         // Create a simple index
-        let index = ProteomeIndex::new(&db_path, 8, 10, "hp", false).unwrap();
+        let index = ProteomeIndex::new(&db_path, 8, 10, "hp_lehninger2", false).unwrap();
 
         // Add a simple signature
         let sig = index.create_protein_signature("ACDEFGHIKLMNPQRSTVWY", "test_protein").unwrap();
@@ -3716,10 +4070,10 @@ mod tests {
         // Create index with raw sequence storage enabled
         let index = ProteomeIndex::new(
             dir.path().join("test_efficient_basic.db"),
-            5,         // k-mer size
-            1,         // scaled
-            "protein", // molecular type
-            true,      // store raw sequences
+            5,           // k-mer size
+            1,           // scaled
+            "protein20", // molecular type
+            true,        // store raw sequences
         )?;
 
         // Add a protein sequence
@@ -3766,7 +4120,7 @@ mod tests {
             dir.path().join("mixed_case_test.db"),
             3, // ksize
             1, // scaled=1 to capture all kmers for testing
-            "protein",
+            "protein20",
             true, // store_raw_sequences
         )?;
 
@@ -3860,7 +4214,7 @@ mod tests {
 ///         .path("/path/to/database.db")
 ///         .ksize(5)
 ///         .scaled(1)
-///         .moltype("protein")
+///         .moltype("protein20")
 ///         .build()?;
 ///
 ///     // With auto filename generation
@@ -3868,7 +4222,7 @@ mod tests {
 ///         .path("/path/to/base")
 ///         .ksize(5)
 ///         .scaled(1)
-///         .moltype("protein")
+///         .moltype("protein20")
 ///         .build_with_auto_filename()?;
 ///
 ///     // With raw sequence storage
@@ -3876,7 +4230,7 @@ mod tests {
 ///         .path("/path/to/database.db")
 ///         .ksize(5)
 ///         .scaled(1)
-///         .moltype("protein")
+///         .moltype("protein20")
 ///         .store_raw_sequences(true)
 ///         .build()?;
 ///     

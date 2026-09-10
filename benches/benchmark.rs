@@ -1,5 +1,5 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use kmerseek::encoding::{encode_by_moltype, encode_with_fn, get_encoding_fn_from_moltype};
+use kmerseek::hash_functions::{encode_by_alphabet, encode_with_fn, get_encoding_fn_from_moltype};
 use kmerseek::index::ProteomeIndex;
 use std::fs;
 use std::fs::File;
@@ -18,7 +18,7 @@ const TEST_PROTEIN_WITH_SPECIAL: &str = "PLANTYANDANIMALGENQMESCOFFEEXUO";
 const TEST_PROTEIN_WITH_STOP: &str = "PLANTYANDANIMALGENQMESCOFFEE*EXTRA";
 
 const KSIZES: [u32; 3] = [5, 10, 20];
-const MOLTYPES: [&str; 3] = ["protein", "hp", "dayhoff"];
+const MOLTYPES: [&str; 3] = ["protein20", "hp_lehninger2", "dayhoff6"];
 
 fn setup_test_index(ksize: u32, moltype: &str) -> (ProteomeIndex, PathBuf) {
     let temp_dir = tempdir().unwrap();
@@ -142,14 +142,15 @@ fn benchmark_proteome_index_encode_kmer(c: &mut Criterion) {
     for moltype in MOLTYPES {
         for ksize in KSIZES {
             let (_index, _) = setup_test_index(ksize, moltype);
-            let encoding_fn = kmerseek::encoding::get_encoding_fn_from_moltype(moltype).unwrap();
+            let encoding_fn =
+                kmerseek::hash_functions::get_encoding_fn_from_moltype(moltype).unwrap();
             c.bench_function(&format!("proteome_index_encode_kmer_{}_{}", moltype, ksize), |b| {
                 b.iter(|| {
                     // Record start time for CPU measurement
                     let start_time = Instant::now();
 
                     // Encode kmer
-                    let encoded = kmerseek::encoding::encode_with_fn(
+                    let encoded = kmerseek::hash_functions::encode_with_fn(
                         &TEST_PROTEIN[..ksize as usize],
                         encoding_fn,
                     )
@@ -177,7 +178,7 @@ fn benchmark_encodings_encode_kmer(c: &mut Criterion) {
 
                     // Encode kmer
                     let encoded =
-                        encode_by_moltype(&TEST_PROTEIN[..ksize as usize], moltype).unwrap();
+                        encode_by_alphabet(&TEST_PROTEIN[..ksize as usize], moltype).unwrap();
 
                     // Record end time
                     let end_time = Instant::now();
@@ -418,7 +419,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
         )
     };
 
-    for moltype in ["hp", "protein", "dayhoff"] {
+    for moltype in ["hp_lehninger2", "protein20", "dayhoff6"] {
         for ksize in [10u32, 12] {
             let temp_dir = tempdir().unwrap();
             let db_path = temp_dir.path().join(format!("bench_search_{}_{}", moltype, ksize));
@@ -446,7 +447,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
             {
                 let bench_name = format!("search_one_{moltype}_k{ksize}");
                 c.bench_function(&bench_name, |b| {
-                    b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default()))
+                    b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default(), 1))
                 });
             }
 
@@ -458,7 +459,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
                     b.iter(|| {
                         queries
                             .iter()
-                            .map(|q| searcher.search_one(q, &SearchFilters::default()))
+                            .map(|q| searcher.search_one(q, &SearchFilters::default(), n_queries))
                             .collect::<Vec<_>>()
                     })
                 });
@@ -497,7 +498,9 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
                 b.iter(|| {
                     let temp_dir = tempdir().unwrap();
                     let db_path = temp_dir.path().join(format!("bench_idx_hp_{}", ksize));
-                    let index = ProteomeIndex::new(db_path.clone(), ksize, 1, "hp", true).unwrap();
+                    let index =
+                        ProteomeIndex::new(db_path.clone(), ksize, 1, "hp_lehninger2", true)
+                            .unwrap();
                     index.process_fasta(target_fasta, 0, 1000).unwrap();
                     index.save_state().unwrap();
                 });
@@ -508,7 +511,8 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
         let temp_dir = tempdir().unwrap();
         let db_path = temp_dir.path().join(format!("bench_search_hp_{}", ksize));
         {
-            let index = ProteomeIndex::new(db_path.clone(), ksize, 1, "hp", true).unwrap();
+            let index =
+                ProteomeIndex::new(db_path.clone(), ksize, 1, "hp_lehninger2", true).unwrap();
             index.process_fasta(target_fasta, 0, 1000).unwrap();
             index.save_state().unwrap();
         }
@@ -523,11 +527,12 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
         // Benchmark search_one (shows selectivity improvement from larger k)
         {
             let searcher = ProteinSearcher::load(&db_path).unwrap();
-            let mut query_sig = ProteinSketch::new(&query_seq.0, ksize, 1, "hp").unwrap();
+            let mut query_sig =
+                ProteinSketch::new(&query_seq.0, ksize, 1, "hp_lehninger2").unwrap();
             query_sig.add_protein(&query_seq.1, true).unwrap();
             let search_name = format!("search_one_hp_k{ksize}");
             group.bench_function(&search_name, |b| {
-                b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default()))
+                b.iter(|| searcher.search_one(&query_sig, &SearchFilters::default(), 1))
             });
         }
     }
@@ -550,7 +555,7 @@ fn benchmark_index_hp_large_k(c: &mut Criterion) {
 ///
 /// Serialized sizes are printed to stderr once per moltype/ksize combination.
 fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
-    use kmerseek::encoding::get_hash_function_from_moltype;
+    use kmerseek::hash_functions::get_hash_function_from_moltype;
     use kmerseek::search::find_matched_regions;
     use kmerseek::sketch::{ProteinSketch, PROTEIN_TO_MINHASH_RATIO};
     use kmerseek::SEED;
@@ -576,7 +581,7 @@ fn benchmark_kmer_storage_approaches(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("kmer_storage");
 
-    for moltype in ["hp", "protein"] {
+    for moltype in ["hp_lehninger2", "protein20"] {
         for ksize in [10u32, 12] {
             let encoding_fn = get_encoding_fn_from_moltype(moltype).unwrap();
             let hash_fn = get_hash_function_from_moltype(moltype).unwrap();
@@ -775,7 +780,7 @@ fn benchmark_rebuild_combined_minhash(c: &mut Criterion) {
         let db_path = temp_dir.path().join(format!("bench_rebuild_k{ksize}"));
 
         // Build index once so signatures are in memory (not timed)
-        let index = ProteomeIndex::new(db_path, ksize, 1, "hp", false).unwrap();
+        let index = ProteomeIndex::new(db_path, ksize, 1, "hp_lehninger2", false).unwrap();
         index.process_fasta(target_fasta, 0, 1000).unwrap();
 
         let n_unique = index.combined_minhash_size();

@@ -4,7 +4,7 @@
 ///        the uppercase H/P hashes stored by sourmash's ReadingFrame::new_protein.
 ///
 /// Bug 2: encoded_sequence was storing raw amino acids instead of HP-encoded h/p codes,
-///        because encode_by_moltype returned the identity function for custom HP alphabets.
+///        because encode_by_alphabet returned the identity function for custom HP alphabets.
 
 #[cfg(test)]
 mod tests {
@@ -12,13 +12,34 @@ mod tests {
     use crate::SEED;
     use sourmash::_hash_murmur;
 
+    // Test sequences are real fragments taken verbatim from the repo's test FASTA files,
+    // so every HP encoding below is a genuine encoding of a Bcl-2-family protein.
+
+    /// CED-9 (P41958) residues 121-181, spanning the BH1 region, from
+    /// `tests/testdata/fasta/ced9.fasta`.
+    const CED9_FRAGMENT_121_181: &str =
+        "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
+
+    /// CED-9 (P41958) residues 121-164, the first 44 residues of [`CED9_FRAGMENT_121_181`].
+    const CED9_FRAGMENT_121_164: &str = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQC";
+
+    /// CED-9 (P41958) residues 121-149, the first 29 residues of [`CED9_FRAGMENT_121_181`].
+    const CED9_FRAGMENT_121_149: &str = "TIFEKKHAENFETFCEQLLAVPRISFSLY";
+
+    /// CED-9 (P41958) residues 121-134, the first 14 residues of [`CED9_FRAGMENT_121_181`].
+    const CED9_FRAGMENT_121_134: &str = "TIFEKKHAENFETF";
+
+    /// BCL-2 (P10415) residues 1-30, from `tests/testdata/fasta/bcl2.fasta`. Under the
+    /// Kyte-Doolittle partition this shares no 8-mer with any CED-9 fragment above.
+    const BCL2_FRAGMENT_1_30: &str = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEW";
+
     /// For a custom HP alphabet, every hash in kmer_positions must also be in the minhash.
     #[test]
     fn test_custom_hp_kmer_positions_match_minhash() {
-        let seq = "NSQLAGKRILVTQADTFMGPTLCEVFAEMGNTLSGFLNYCSFNLNLQTLRHYVLAKILNKH";
+        let seq = CED9_FRAGMENT_121_181;
         let ksize = 10;
         let sketch =
-            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("test_seq", seq, ksize, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let minhash_set = sketch.mins_as_set();
@@ -52,9 +73,9 @@ mod tests {
     /// built-in hp/dayhoff encodings, which sourmash emits lowercase.
     #[test]
     fn test_custom_hp_encoded_sequence_contains_hp_chars() {
-        let seq = "MKTAYIAKQRFLVS";
+        let seq = CED9_FRAGMENT_121_134;
         let sketch =
-            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("test_hp_enc", seq, 8, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let enc = sketch
@@ -74,9 +95,9 @@ mod tests {
     /// The encoded_sequence must differ from raw_sequence for custom HP alphabets.
     #[test]
     fn test_custom_hp_encoded_sequence_differs_from_raw() {
-        let seq = "MKTAYIAKQRFLVS";
+        let seq = CED9_FRAGMENT_121_134;
         let sketch =
-            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("test_hp_diff", seq, 8, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let raw = sketch.get_raw_sequence().expect("raw_sequence should be Some");
@@ -94,8 +115,9 @@ mod tests {
     fn test_uppercase_hp_hash_matches_sourmash() {
         // sourmash uppercases h/p to H/P before hashing — confirm hash of uppercase differs
         // from lowercase so that the fix (uppercasing) is actually necessary.
-        let lower: Vec<u8> = b"ppphpphpphpppppppphppp".to_vec();
-        let upper: Vec<u8> = b"PPPHPPHPPHPPPPPPPPHPPP".to_vec();
+        // CED-9 residues 121-130 (TIFEKKHAEN) under the Kyte-Doolittle partition.
+        let lower: Vec<u8> = b"phhpppphpp".to_vec();
+        let upper: Vec<u8> = b"PHHPPPPHPP".to_vec();
         let hash_lower = _hash_murmur(&lower, SEED);
         let hash_upper = _hash_murmur(&upper, SEED);
         assert_ne!(
@@ -110,10 +132,10 @@ mod tests {
     fn test_custom_hp_find_matched_regions_self_hit() {
         use crate::search::find_matched_regions;
 
-        let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
+        let seq = CED9_FRAGMENT_121_149;
 
         let sketch =
-            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle")
+            ProteinSketch::from_protein_sequence("self_test", seq, 8, 1, "hp_kyte_doolittle2")
                 .unwrap();
 
         let shared_hashes = sketch.mins_as_set();
@@ -131,17 +153,17 @@ mod tests {
     /// Catches per-alphabet regressions of Bug 1.
     #[test]
     fn test_all_custom_hp_alphabets_kmer_positions_match_minhash() {
-        let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQADTFMGPTLCEVFAEMG";
+        let seq = CED9_FRAGMENT_121_164;
         let ksize = 8;
 
         let alphabets = [
-            "hp_kyte_doolittle",
-            "hp_thomas_dill",
-            "hp_lehninger",
-            "hp_thomas_dill_no_c",
-            "hp_lehninger_c_nonpolar",
-            "hp_lehninger_hpc",
-            "hp_pbotc_1st_ed",
+            "hp_kyte_doolittle2",
+            "hp_thomas_dill2",
+            "hp_lehninger2",
+            "hp_thomas_dill_no_c2",
+            "hp_lehninger_c_nonpolar2",
+            "hp_lehninger_hpc3",
+            "hp_pbotc_1st_ed2",
         ];
 
         for moltype in alphabets {
@@ -184,10 +206,10 @@ mod tests {
     /// would produce hash mismatches since sourmash hashes those as lowercase).
     #[test]
     fn test_standard_encodings_kmer_positions_match_minhash() {
-        let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
+        let seq = CED9_FRAGMENT_121_149;
         let ksize = 8;
 
-        for moltype in ["hp", "dayhoff"] {
+        for moltype in ["hp_lehninger2", "dayhoff6"] {
             let sketch = ProteinSketch::from_protein_sequence("test", seq, ksize, 1, moltype)
                 .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
 
@@ -219,9 +241,9 @@ mod tests {
         use crate::search::find_matched_regions;
         use std::collections::HashSet;
 
-        let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
+        let seq = CED9_FRAGMENT_121_149;
         let sketch =
-            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("test", seq, 8, 1, "hp_kyte_doolittle2").unwrap();
 
         let empty: HashSet<u64> = HashSet::new();
         let regions = find_matched_regions(&sketch, &sketch, &empty);
@@ -230,19 +252,19 @@ mod tests {
 
     /// find_matched_regions with a disjoint query/target (no shared sequence) must not panic.
     /// The soft-skip (`if query_moltype_seq != target_moltype_seq`) guards hash collisions
-    /// where two different HP sequences share the same hash. Simulate by using two completely
-    /// different proteins that share zero HP k-mers.
+    /// where two different HP sequences share the same hash. CED-9's BH1 region and BCL-2's
+    /// N-terminus share zero Kyte-Doolittle 8-mers, so the intersection here is empty.
     #[test]
     fn test_find_matched_regions_disjoint_sequences_returns_empty() {
         use crate::search::find_matched_regions;
 
-        let seq_a = "MKTAYIAKQRFLVSNSQLAGKRILVTQAD";
-        let seq_b = "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"; // all-cys: likely different HP pattern
+        let seq_a = CED9_FRAGMENT_121_149;
+        let seq_b = BCL2_FRAGMENT_1_30;
 
         let sketch_a =
-            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("a", seq_a, 8, 1, "hp_kyte_doolittle2").unwrap();
         let sketch_b =
-            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle").unwrap();
+            ProteinSketch::from_protein_sequence("b", seq_b, 8, 1, "hp_kyte_doolittle2").unwrap();
 
         let shared = sketch_a
             .mins_as_set()

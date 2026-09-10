@@ -1,5 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::IndexResult;
+use kmerseek::types::MolType;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
 
@@ -28,13 +29,9 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         ksize: u32,
 
-        /// Protein encoding method
-        #[arg(short, long, default_value = "protein")]
-        encoding: ProteinEncoding,
-
-        /// Seed for hp_shuffled_control (1-10). Produces moltype hp_shuffled_control_N.
-        #[arg(long)]
-        shuffled_seed: Option<u64>,
+        /// Reduced amino acid alphabet to index with
+        #[arg(short = 'a', long, default_value = "protein20")]
+        alphabet: ProteinAlphabet,
 
         /// Progress notification interval (number of sequences between progress reports)
         #[arg(short, long, default_value = "10000")]
@@ -45,6 +42,14 @@ enum Commands {
         /// moltype, ksize, occurrences, n_kmers.
         #[arg(long, value_name = "PATH")]
         kmer_stats_out: Option<PathBuf>,
+
+        /// Skip persisting a searchable index -- compute and write --kmer-stats-out only,
+        /// with no RocksDB writes at all. Requires --kmer-stats-out. Use this when you only
+        /// want the frequency spectrum, not a database to search later: it avoids both the
+        /// SearchCache's RocksDB single-value size limit (~4 GiB) and the filesystem I/O load
+        /// of chunked signature storage, neither of which stats-only output needs.
+        #[arg(long, requires = "kmer_stats_out")]
+        stats_only: bool,
 
         /// Remove low-complexity (homopolymer) k-mers from the index: raw
         /// amino-acid runs (e.g. "AAAAA") for any encoding, plus all-h or all-p
@@ -72,13 +77,9 @@ enum Commands {
         #[arg(short, long)]
         ksize: Option<u32>,
 
-        /// Protein encoding method (must match the database)
-        #[arg(short, long, default_value = "protein")]
-        encoding: ProteinEncoding,
-
-        /// Seed for hp_shuffled_control (1-10). Must match the seed used during indexing.
-        #[arg(long)]
-        shuffled_seed: Option<u64>,
+        /// Reduced amino acid alphabet (must match the database)
+        #[arg(short = 'a', long, default_value = "protein20")]
+        alphabet: ProteinAlphabet,
 
         /// Minimum containment threshold (0.0 = show all matches)
         #[arg(long, default_value = "0.0")]
@@ -88,9 +89,26 @@ enum Commands {
         #[arg(long, default_value = "2")]
         min_shared_kmers: usize,
 
-        /// Maximum uncorrected Poisson p-value required to report a match
+        /// Maximum uncorrected whole-query Poisson p-value required to report a match.
+        /// A match is reported if either this or --min-region-score passes.
         #[arg(long, default_value = "0.05")]
-        max_pvalue: f64,
+        max_query_pvalue: f64,
+
+        /// Minimum region-scoped score required to report a match, applied to the
+        /// best-scoring region. Bigger means more surprising: the score is -log10 of the
+        /// region's Poisson tail probability, so a p-value of 0.05 is a score of about 1.3,
+        /// and a p-value of 0.0007 is a score of about 3.16. This is a heuristic ranking
+        /// cutoff, not a statistically calibrated significance threshold (see the region
+        /// scoring notes in the docs). A match is reported if either this or
+        /// --max-query-pvalue passes, so a strong sub-protein domain hit survives even when
+        /// the whole-query p-value is unimpressive. Defaults to about 1.3 (p=0.05).
+        #[arg(long)]
+        min_region_score: Option<f64>,
+
+        /// Deprecated: use --max-query-pvalue (whole protein) or --min-region-score (per
+        /// matched region). Kept as an alias that applies whole-query filtering only.
+        #[arg(long)]
+        max_pvalue: Option<f64>,
 
         /// Remove low-complexity (homopolymer) k-mers from query sketches.
         /// Omit this to follow whatever the target index was built with, which is
@@ -118,53 +136,90 @@ enum Commands {
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug, PartialEq)]
-enum ProteinEncoding {
-    /// Raw protein encoding (20 amino acids)
+enum ProteinAlphabet {
+    /// The full 20-letter amino acid alphabet: no reduction. Also accepts sourmash's
+    /// name for it, `protein`
+    #[value(name = "protein20", alias = "protein")]
     Protein,
-    /// Dayhoff encoding (6 groups)
+    /// Dayhoff, 6 classes. Also accepts sourmash's name for it, `dayhoff`
+    #[value(name = "dayhoff6", alias = "dayhoff")]
     Dayhoff,
-    /// HP encoding — sourmash built-in Lehninger classification (backward-compatible)
-    Hp,
-    /// HP Lehninger (explicit; identical hashes to hp)
-    #[value(alias = "hp_lehninger")]
+    /// HP Lehninger, 2 classes. Also accepts sourmash's name for it, `hp`, which is the
+    /// same partition hashed the same way
+    #[value(name = "hp_lehninger2", aliases = ["hp-lehninger2", "hp"])]
     HpLehninger,
     /// HP Thomas-Dill 1996 (C=h, G=p, P=p)
-    #[value(alias = "hp_thomas_dill")]
+    #[value(name = "hp_thomas_dill2", alias = "hp-thomas-dill2")]
     HpThomasDill,
     /// HP Kyte-Doolittle 1982 binarized at hydropathy > 0 (W=p, Y=p)
-    #[value(alias = "hp_kyte_doolittle")]
+    #[value(name = "hp_kyte_doolittle2", alias = "hp-kyte-doolittle2")]
     HpKyteDoolittle,
     /// HP Thomas-Dill with C reassigned to polar (isolation variant)
-    #[value(alias = "hp_thomas_dill_no_c")]
+    #[value(name = "hp_thomas_dill_no_c2", alias = "hp-thomas-dill-no-c2")]
     HpThomasDillNoC,
     /// HP Lehninger with C reassigned to hydrophobic (isolation variant)
-    #[value(alias = "hp_lehninger_c_nonpolar")]
+    #[value(name = "hp_lehninger_c_nonpolar2", alias = "hp-lehninger-c-nonpolar2")]
     HpLehningerCNonpolar,
     /// HPC Lehninger 3-letter: hydrophobic/polar/cystine, C split into its own class
-    #[value(alias = "hp_lehninger_hpc")]
+    #[value(name = "hp_lehninger_hpc3", alias = "hp-lehninger-hpc3")]
     HpLehningerHpc,
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
-    #[value(name = "hp-pbotc-1st-ed", alias = "hp_pbotc_1st_ed")]
+    #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
-    /// HP shuffled negative control (scrambled hydrophobicity signal)
-    #[value(alias = "hp_shuffled_control")]
-    HpShuffledControl,
+    /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
+    #[value(name = "gbmr4")]
+    ReducedGbmr4,
+    /// POLARITY4, 4 classes on polarity and charge (Ball, Hill & Scott 2014)
+    #[value(name = "polarity4")]
+    ReducedPolarity4,
+    /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
+    #[value(name = "wwmj5")]
+    ReducedWwmj5,
+    /// GBMR7, 7 classes (Solis & Rackovsky 2000)
+    #[value(name = "gbmr7")]
+    ReducedGbmr7,
+    /// FUNCGROUPS8, 8 classes, one per side-chain functional group (Jain et al. 2014)
+    #[value(name = "funcgroups8")]
+    ReducedFuncGroups8,
+    /// SDM12, 12 classes (Prlic et al. 2000; best AUC in Peterson et al. 2009)
+    #[value(name = "sdm12")]
+    ReducedSdm12,
+    /// MMSEQS12, 12 classes (Steinegger & Soding 2018)
+    #[value(name = "mmseqs12")]
+    ReducedMmseqs12,
+    /// WASS14, 14 classes, hydrophobicity-clustered (Ieremie et al. 2024)
+    #[value(name = "wass14")]
+    ReducedWass14,
+    /// HSDM17, 17 classes (Prlic et al. 2000; best precision in Peterson et al. 2009)
+    #[value(name = "hsdm17")]
+    ReducedHsdm17,
+    /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
+    #[value(name = "uniprot18")]
+    ReducedUniprot18,
 }
 
-impl From<ProteinEncoding> for &'static str {
-    fn from(encoding: ProteinEncoding) -> Self {
+impl From<ProteinAlphabet> for &'static str {
+    fn from(encoding: ProteinAlphabet) -> Self {
         match encoding {
-            ProteinEncoding::Protein => "protein",
-            ProteinEncoding::Dayhoff => "dayhoff",
-            ProteinEncoding::Hp => "hp",
-            ProteinEncoding::HpLehninger => "hp_lehninger",
-            ProteinEncoding::HpThomasDill => "hp_thomas_dill",
-            ProteinEncoding::HpKyteDoolittle => "hp_kyte_doolittle",
-            ProteinEncoding::HpThomasDillNoC => "hp_thomas_dill_no_c",
-            ProteinEncoding::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar",
-            ProteinEncoding::HpLehningerHpc => "hp_lehninger_hpc",
-            ProteinEncoding::HpPBotC1stEd => "hp_pbotc_1st_ed",
-            ProteinEncoding::HpShuffledControl => "hp_shuffled_control",
+            ProteinAlphabet::Protein => "protein20",
+            ProteinAlphabet::Dayhoff => "dayhoff6",
+            ProteinAlphabet::HpLehninger => "hp_lehninger2",
+            ProteinAlphabet::HpThomasDill => "hp_thomas_dill2",
+            ProteinAlphabet::HpKyteDoolittle => "hp_kyte_doolittle2",
+            ProteinAlphabet::HpThomasDillNoC => "hp_thomas_dill_no_c2",
+            ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
+            ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
+            ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
+            ProteinAlphabet::ReducedGbmr4 => "gbmr4",
+            ProteinAlphabet::ReducedPolarity4 => "polarity4",
+            ProteinAlphabet::ReducedWwmj5 => "wwmj5",
+            ProteinAlphabet::ReducedGbmr7 => "gbmr7",
+            ProteinAlphabet::ReducedFuncGroups8 => "funcgroups8",
+            ProteinAlphabet::ReducedSdm12 => "sdm12",
+            ProteinAlphabet::ReducedMmseqs12 => "mmseqs12",
+            ProteinAlphabet::ReducedWass14 => "wass14",
+            ProteinAlphabet::ReducedHsdm17 => "hsdm17",
+            ProteinAlphabet::ReducedUniprot18 => "uniprot18",
         }
     }
 }
@@ -179,10 +234,10 @@ fn main() -> IndexResult<()> {
             input,
             output,
             ksize,
-            encoding,
-            shuffled_seed,
+            alphabet,
             progress_interval,
             kmer_stats_out,
+            stats_only,
             remove_low_complexity,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
@@ -190,17 +245,7 @@ fn main() -> IndexResult<()> {
             // Scaled factor is always 1 (captures all k-mers)
             let scaled: u32 = 1;
 
-            // Resolve effective moltype: seeded shuffled control -> "hp_shuffled_control_N".
-            let effective_moltype: String = match (encoding, shuffled_seed) {
-                (ProteinEncoding::HpShuffledControl, Some(seed)) => {
-                    assert!((1..=10).contains(&seed), "--shuffled-seed must be 1-10, got {seed}");
-                    format!("hp_shuffled_control_{seed}")
-                }
-                _ => {
-                    let s: &'static str = encoding.into();
-                    s.to_string()
-                }
-            };
+            let effective_moltype: &'static str = alphabet.into();
 
             // Determine output path
             let output_path = if let Some(output) = output {
@@ -216,7 +261,7 @@ fn main() -> IndexResult<()> {
                     &input,
                     ksize,
                     scaled,
-                    &effective_moltype,
+                    effective_moltype,
                     true, // Always store raw sequences
                 )?;
                 // Must match the real index, so the generated name carries the
@@ -235,7 +280,7 @@ fn main() -> IndexResult<()> {
 
             eprintln!("\n-------\nK-mer size: {}", ksize);
             eprintln!("Scaled: {}", scaled);
-            eprintln!("Encoding: {}", effective_moltype);
+            eprintln!("Alphabet: {}", effective_moltype);
             eprintln!("Progress interval: {}", progress_interval);
             eprintln!("Remove low-complexity k-mers: {}", remove_low_complexity);
             eprintln!("-------\n");
@@ -245,7 +290,7 @@ fn main() -> IndexResult<()> {
                 &output_path,
                 ksize,
                 scaled,
-                &effective_moltype,
+                effective_moltype,
                 true, // Always store raw sequences
             )?;
             index.set_remove_low_complexity(remove_low_complexity);
@@ -255,7 +300,8 @@ fn main() -> IndexResult<()> {
             index.process_fasta(&input, progress_interval, 1000)?;
 
             // Report what removal actually did, so its effect is visible without
-            // having to rebuild and diff two indexes.
+            // having to rebuild and diff two indexes. Applies regardless of
+            // --stats-only -- removal happens during process_fasta either way.
             if remove_low_complexity {
                 let (examined, skipped) = index.low_complexity_counts();
                 let percent =
@@ -266,25 +312,36 @@ fn main() -> IndexResult<()> {
                 );
             }
 
-            // Enable compactions for better read performance
-            eprintln!("Optimizing database for read operations...");
-            index.enable_compactions()?;
+            if stats_only {
+                // --stats-only: skip persisting a searchable index entirely (see
+                // save_kmer_stats_only's doc comment for why). kmer_stats_out is
+                // guaranteed Some here -- clap's `requires = "kmer_stats_out"` enforces it.
+                let kmer_stats_out =
+                    kmer_stats_out.expect("clap requires kmer_stats_out with stats_only");
+                index.save_kmer_stats_only(&kmer_stats_out)?;
+                eprintln!("Stats-only run completed successfully (no index persisted).");
+            } else {
+                // Enable compactions for better read performance
+                eprintln!("Optimizing database for read operations...");
+                index.enable_compactions()?;
 
-            // Save the index state for loading
-            index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
+                // Save the index state for loading
+                index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
-            eprintln!("Indexing completed successfully!");
-            eprintln!("Database saved to: {}", output_path.display());
+                eprintln!("Indexing completed successfully!");
+                eprintln!("Database saved to: {}", output_path.display());
+            }
         }
         Commands::Search {
             query,
             target,
             output,
             ksize,
-            encoding,
-            shuffled_seed: _,
+            alphabet,
             threshold,
             min_shared_kmers,
+            max_query_pvalue,
+            min_region_score,
             max_pvalue,
             remove_low_complexity: remove_low_complexity_arg,
             verbose,
@@ -305,9 +362,9 @@ fn main() -> IndexResult<()> {
             // command handler much easier to read. It validates that user-provided parameters
             // match the database, or uses detected values if not provided. This is idiomatic
             // Rust - we extract complex logic into well-named methods for clarity.
-            let (final_ksize, final_scaled, final_encoding) = validate_and_assign_parameters(
+            let (final_ksize, final_scaled, final_alphabet) = validate_and_assign_parameters(
                 ksize,
-                encoding,
+                alphabet,
                 detected_ksize,
                 detected_scaled,
                 &detected_moltype,
@@ -316,15 +373,44 @@ fn main() -> IndexResult<()> {
             eprintln!("\n---\nUsing parameters:");
             eprintln!("  K-mer size: {} (detected: {})", final_ksize, detected_ksize);
             eprintln!("  Scaled: {} (detected: {})", final_scaled, detected_scaled);
-            eprintln!("  Encoding: {:?} (detected: {})", final_encoding, detected_moltype);
+            eprintln!("  Alphabet: {:?} (detected: {})", final_alphabet, detected_moltype);
+            // --max-pvalue predates region scoring, so honour it as whole-query filtering only:
+            // a region floor of infinity can never be cleared (the check is a strict >),
+            // leaving the query scope as the only decider, the same as before region scoring
+            // existed.
+            let (max_query_pvalue, min_region_score) = match max_pvalue {
+                Some(deprecated) => {
+                    if let Some(ignored) = min_region_score {
+                        eprintln!(
+                            "WARNING: --min-region-score {ignored} is ignored because \
+                             --max-pvalue was also passed; the region scope is forced to \
+                             infinity (never passes) to reproduce pre-region-scoring \
+                             behaviour."
+                        );
+                    }
+                    eprintln!(
+                        "WARNING: --max-pvalue is deprecated; it now applies whole-query \
+                         filtering only.\n         Use --max-query-pvalue {deprecated} for the \
+                         same behaviour, or --min-region-score to\n         keep sub-protein \
+                         domain hits whose whole-query p-value is unimpressive."
+                    );
+                    (deprecated, f64::INFINITY)
+                }
+                // -log10(0.05): the score-scale equivalent of the same 0.05 default this flag
+                // used before the -log10 transform.
+                None => (max_query_pvalue, min_region_score.unwrap_or(-0.05_f64.log10())),
+            };
+
             eprintln!("  Threshold: {}", threshold);
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
-            eprintln!("  Maximum p-value: {}", max_pvalue);
+            eprintln!("  Maximum query p-value: {}", max_query_pvalue);
+            eprintln!("  Minimum region score: {}", min_region_score);
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters = SearchFilters { threshold, min_shared_kmers, max_pvalue };
+            let filters =
+                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -412,12 +498,15 @@ fn main() -> IndexResult<()> {
                 use kmerseek::sketch::ProteinSketch;
                 use needletail::parse_fastx_file;
 
-                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq.
+                // First pass: build query-proteome k-mer frequencies for joint_kmer_freq. Also
+                // counts the total number of queries up front. That count is attached to each
+                // result as run_n_queries (see SearchResult::run_n_queries) and is not used in
+                // any correction.
                 eprintln!("First pass: scanning query proteome for k-mer frequencies...");
+                let mut total_queries: usize = 0;
                 {
                     use std::collections::HashMap;
                     let mut qfreqs: HashMap<u64, usize> = HashMap::new();
-                    let mut total_queries: usize = 0;
                     let mut freq_reader = parse_fastx_file(&query)
                         .map_err(|e| anyhow::anyhow!("Failed to parse query FASTA: {}", e))?;
                     while let Some(record) = freq_reader.next() {
@@ -432,7 +521,7 @@ fn main() -> IndexResult<()> {
                             name,
                             final_ksize,
                             final_scaled,
-                            final_encoding.into(),
+                            final_alphabet.into(),
                         )?;
                         sig.set_remove_low_complexity(remove_low_complexity);
                         sig.add_protein(&sequence, true)?;
@@ -490,8 +579,10 @@ fn main() -> IndexResult<()> {
                  -> anyhow::Result<()> {
                     // Search all queries in this batch in parallel. Results failing `filters`
                     // are never included (see SearchFilters), so no post-hoc filtering needed here.
-                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> =
-                        batch.par_iter().map(|q| searcher.search_one(q, &filters)).collect();
+                    let batch_results: Vec<Vec<kmerseek::search::SearchResult>> = batch
+                        .par_iter()
+                        .map(|q| searcher.search_one(q, &filters, total_queries))
+                        .collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
                     for results in &batch_results {
@@ -521,7 +612,7 @@ fn main() -> IndexResult<()> {
                         .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
 
                     let mut query_sig =
-                        ProteinSketch::new(name, final_ksize, final_scaled, final_encoding.into())?;
+                        ProteinSketch::new(name, final_ksize, final_scaled, final_alphabet.into())?;
                     query_sig.set_remove_low_complexity(remove_low_complexity);
                     query_sig.add_protein(&sequence, true)?;
                     batch.push(query_sig);
@@ -566,15 +657,18 @@ fn main() -> IndexResult<()> {
             };
 
             // search() / search_all_vs_all() already applied `filters` internally, so
-            // search_results only contains matches that passed threshold/min_shared_kmers/max_pvalue.
+            // search_results only contains matches that passed threshold/min_shared_kmers and
+            // cleared the query p-value or the region score.
             let filtered_results = search_results;
 
             eprintln!(
-                "Found {} matches above threshold {} with at least {} shared k-mers and p-value < {}",
+                "Found {} matches above threshold {} with at least {} shared k-mers and \
+                 query p-value < {} or region score > {}",
                 filtered_results.len(),
                 threshold,
                 min_shared_kmers,
-                max_pvalue
+                max_query_pvalue,
+                min_region_score
             );
 
             use kmerseek::search::SearchResultCsv;
@@ -634,36 +728,48 @@ fn main() -> IndexResult<()> {
 }
 
 fn assign_encoding(
-    encoding: ProteinEncoding,
+    alphabet: ProteinAlphabet,
     detected_moltype: &str,
-) -> kmerseek::errors::IndexResult<ProteinEncoding> {
+) -> kmerseek::errors::IndexResult<ProteinAlphabet> {
     // Convert detected moltype string to enum
     // WHY: We need to compare the user-provided encoding with the detected encoding.
     // The detected encoding comes from the database as a string, so we convert it to
     // the enum type for comparison.
-    let detected_encoding = match detected_moltype {
-        "protein" => ProteinEncoding::Protein,
-        "dayhoff" => ProteinEncoding::Dayhoff,
-        "hp" => ProteinEncoding::Hp,
-        "hp_lehninger" => ProteinEncoding::HpLehninger,
-        "hp_thomas_dill" => ProteinEncoding::HpThomasDill,
-        "hp_kyte_doolittle" => ProteinEncoding::HpKyteDoolittle,
-        "hp_thomas_dill_no_c" => ProteinEncoding::HpThomasDillNoC,
-        "hp_lehninger_c_nonpolar" => ProteinEncoding::HpLehningerCNonpolar,
-        "hp_lehninger_hpc" => ProteinEncoding::HpLehningerHpc,
-        "hp_pbotc_1st_ed" => ProteinEncoding::HpPBotC1stEd,
-        "hp_shuffled_control" => ProteinEncoding::HpShuffledControl,
-        // Seeded shuffled controls (hp_shuffled_control_N) are stored with the seed
-        // in the moltype; map them back to HpShuffledControl so the encoding path
-        // picks them up via HpAlphabet::from_moltype() which parses the numeric suffix.
-        s if s.starts_with("hp_shuffled_control_") => ProteinEncoding::HpShuffledControl,
+    // Indexes built before class counts were added to the HP names store the old
+    // "hp_<name>" moltype. Alphabet::from_moltype() still parses those, so normalizing
+    // here lets the match below deal only in current names.
+    let canonical = MolType::new(detected_moltype)
+        .map(|moltype| moltype.get().to_string())
+        .unwrap_or_else(|_| detected_moltype.to_string());
+
+    let detected_alphabet = match canonical.as_str() {
+        "protein20" => ProteinAlphabet::Protein,
+        "dayhoff6" => ProteinAlphabet::Dayhoff,
+        "hp_lehninger2" => ProteinAlphabet::HpLehninger,
+        "hp_thomas_dill2" => ProteinAlphabet::HpThomasDill,
+        "hp_kyte_doolittle2" => ProteinAlphabet::HpKyteDoolittle,
+        "hp_thomas_dill_no_c2" => ProteinAlphabet::HpThomasDillNoC,
+        "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
+        "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
+        "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
+        "gbmr4" => ProteinAlphabet::ReducedGbmr4,
+        "polarity4" => ProteinAlphabet::ReducedPolarity4,
+        "wwmj5" => ProteinAlphabet::ReducedWwmj5,
+        "gbmr7" => ProteinAlphabet::ReducedGbmr7,
+        "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
+        "sdm12" => ProteinAlphabet::ReducedSdm12,
+        "mmseqs12" => ProteinAlphabet::ReducedMmseqs12,
+        "wass14" => ProteinAlphabet::ReducedWass14,
+        "hsdm17" => ProteinAlphabet::ReducedHsdm17,
+        "uniprot18" => ProteinAlphabet::ReducedUniprot18,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown encoding in database: {}. Expected one of: protein, dayhoff, hp, \
-                     hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
-                     hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
-                     hp_shuffled_control (or hp_shuffled_control_N for seeded variants)",
+                    "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
+                     hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
+                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
+                     gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
+                     wass14, hsdm17, uniprot18",
                     detected_moltype
                 ),
             });
@@ -676,19 +782,21 @@ fn assign_encoding(
     // where searches would produce incorrect results. However, since encoding has
     // a default value, we can't distinguish "user specified" from "using default",
     // so we only error if it's clearly wrong (not the default and doesn't match).
-    // In practice, users should not specify --encoding and let it autodetect.
-    if encoding != detected_encoding && encoding != ProteinEncoding::Protein {
+    // In practice, users should not specify --alphabet and let it autodetect.
+    if alphabet != detected_alphabet && alphabet != ProteinAlphabet::Protein {
         // User explicitly provided a non-default encoding that doesn't match
         return Err(kmerseek::errors::IndexError::ValidationError {
             message: format!(
-                "Encoding mismatch: database has encoding={}, but you specified --encoding={:?}.\n\
-                The encoding must match the database. Remove --encoding to use the database value ({:?}).",
-                detected_moltype, encoding, detected_encoding
+                "Alphabet mismatch: database was built with {}, but you specified \
+                 --alphabet={:?}.\n\
+                 The alphabet must match the database. Remove --alphabet to use the database \
+                 value ({:?}).",
+                detected_moltype, alphabet, detected_alphabet
             ),
         });
     }
 
-    Ok(detected_encoding)
+    Ok(detected_alphabet)
 }
 
 /// Validate and assign search parameters from user input and database detection
@@ -707,14 +815,14 @@ fn assign_encoding(
 /// * `detected_moltype` - Moltype detected from database (as string)
 ///
 /// # Returns
-/// Tuple of (final_ksize, final_scaled, final_encoding) or ValidationError if mismatch
+/// Tuple of (final_ksize, final_scaled, final_alphabet) or ValidationError if mismatch
 fn validate_and_assign_parameters(
     user_ksize: Option<u32>,
-    user_encoding: ProteinEncoding,
+    user_encoding: ProteinAlphabet,
     detected_ksize: u32,
     detected_scaled: u32,
     detected_moltype: &str,
-) -> IndexResult<(u32, u32, ProteinEncoding)> {
+) -> IndexResult<(u32, u32, ProteinAlphabet)> {
     // Validate and assign ksize: use detected if not provided, error if mismatch
     // WHY: The database parameters are authoritative. If the user explicitly provides
     // a ksize that doesn't match, that's an error (they're trying to search with wrong
@@ -757,7 +865,7 @@ fn validate_and_assign_parameters(
     let final_scaled = 1;
 
     // Validate and assign encoding
-    let final_encoding = assign_encoding(user_encoding, detected_moltype)?;
+    let final_alphabet = assign_encoding(user_encoding, detected_moltype)?;
 
-    Ok((final_ksize, final_scaled, final_encoding))
+    Ok((final_ksize, final_scaled, final_alphabet))
 }
