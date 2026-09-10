@@ -557,12 +557,34 @@ impl ProteomeIndex {
             chunk_size,
             chunks.len()
         );
+
+        // Order matters, and it is chosen so that an interrupted write leaves a database
+        // that REFUSES to open rather than one that opens wrong.
+        //
+        // The count goes first, as a delete. Rewriting a database that already had a valid
+        // count would otherwise leave that count standing over chunks being overwritten
+        // underneath it, and a crash midway would produce a count matched by a mixture of
+        // old and new chunks -- which deserializes into a plausible, wrong index.
+        self.db.delete(b"search_cache_chunks")?;
+        // Any stale single-key cache from an earlier build would otherwise win on read,
+        // because the reader prefers it.
+        self.db.delete(b"search_cache")?;
+
         for (i, chunk) in chunks.iter().enumerate() {
             self.db.put(Self::search_cache_chunk_key(i), chunk)?;
         }
-        // Any stale single-key cache from an earlier build of the same database would
-        // otherwise win on read, because the reader prefers it.
-        self.db.delete(b"search_cache")?;
+        // A previous write may have made more chunks than this one. Those are not read --
+        // the count bounds the loop -- but they are left behind claiming to be part of an
+        // index they no longer belong to, and the torn-write check below reads their
+        // presence as evidence. Clear them until the first key that is absent.
+        for i in chunks.len().. {
+            if self.db.get(Self::search_cache_chunk_key(i))?.is_none() {
+                break;
+            }
+            self.db.delete(Self::search_cache_chunk_key(i))?;
+        }
+
+        // Written LAST: its presence is what certifies every chunk above is on disk.
         self.db.put(b"search_cache_chunks", chunks.len().to_string().as_bytes())?;
         Ok(())
     }
@@ -1479,6 +1501,22 @@ impl ProteomeIndex {
         }
 
         let Some(count) = self.db.get(b"search_cache_chunks")? else {
+            // No count key. That is either a database written before the cache existed --
+            // legitimately Ok(None), and the caller falls back to loading every signature
+            // -- or one whose chunk write was interrupted before the count was committed.
+            //
+            // Those two must not be confused. A torn index returning Ok(None) is the
+            // quietest possible failure: the search still runs, on the slow path, against
+            // an index nobody is told is broken. Chunk 0 is written before any other, so
+            // its presence without a count means the write did not finish.
+            if self.db.get(Self::search_cache_chunk_key(0))?.is_some() {
+                return Err(IndexError::CorruptIndex(
+                    "search cache chunks are present but the chunk count is missing: the \
+                     index was interrupted while being written and is incomplete. Rebuild \
+                     it with `kmerseek index`."
+                        .to_string(),
+                ));
+            }
             return Ok(None);
         };
         let count: usize = String::from_utf8_lossy(&count).parse().map_err(|_| {
@@ -4335,6 +4373,90 @@ mod tests {
         assert!(index.db.get(b"search_cache")?.is_some(), "must use the original key");
         assert!(index.db.get(b"search_cache_chunks")?.is_none(), "must not write a count");
         assert!(index.load_search_cache()?.is_some());
+        Ok(())
+    }
+
+    /// An interrupted write must refuse to open, not read as a database with no cache.
+    ///
+    /// This is the quietest failure the chunked layout can produce: chunks on disk, no
+    /// count key, `Ok(None)` returned, and the caller falls back to loading every
+    /// signature. The search then runs -- slowly, and against an index nobody is told is
+    /// broken. A genuinely cache-free database must still return `Ok(None)`, so the two
+    /// cases are asserted together; a check that cannot tell them apart is no check.
+    #[test]
+    fn test_torn_write_is_loud_but_no_cache_is_quiet() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+
+        let torn = ProteomeIndex::new(dir.path().join("torn.db"), 10, 1, "protein20", false)?;
+        let cache = crate::index::SearchCache {
+            target_list: (0..500).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..500u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..500u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        torn.write_search_cache_chunked(&serialized, 1024)?;
+
+        // Exactly what a crash between the last chunk and the count leaves behind.
+        torn.db.delete(b"search_cache_chunks")?;
+        match torn.load_search_cache() {
+            Ok(None) => panic!("a torn write must not read as an absent cache"),
+            Ok(Some(_)) => panic!("a torn write must not load"),
+            Err(err) => assert!(
+                err.to_string().contains("interrupted"),
+                "error should say the write was interrupted, got: {err}"
+            ),
+        }
+
+        // A database that never had a cache is still legitimately empty.
+        let fresh = ProteomeIndex::new(dir.path().join("fresh.db"), 10, 1, "protein20", false)?;
+        assert!(
+            fresh.load_search_cache()?.is_none(),
+            "a database with no cache must return Ok(None), not an error"
+        );
+        Ok(())
+    }
+
+    /// Rewriting a database with a SMALLER cache must not leave the old cache's extra
+    /// chunks behind.
+    ///
+    /// They are never read, since the count bounds the loop, so the index is correct
+    /// either way -- but they are indistinguishable from the debris of an interrupted
+    /// write, which is what the torn-write check keys on. Left in place they would make a
+    /// healthy database fail that check the next time it was rewritten.
+    #[test]
+    fn test_rewriting_smaller_clears_stale_chunks() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("shrink.db"), 10, 1, "protein20", false)?;
+
+        let big = crate::index::SearchCache {
+            target_list: (0..2000).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..2000u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..2000u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let big_bytes = bincode::serialize(&big)?;
+        index.write_search_cache_chunked(&big_bytes, 1024)?;
+        let big_chunks = big_bytes.len().div_ceil(1024);
+
+        let small = crate::index::SearchCache {
+            target_list: (0..100).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..100u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..100u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let small_bytes = bincode::serialize(&small)?;
+        index.write_search_cache_chunked(&small_bytes, 1024)?;
+        let small_chunks = small_bytes.len().div_ceil(1024);
+        assert!(small_chunks < big_chunks, "second write must need fewer chunks");
+
+        for i in small_chunks..big_chunks {
+            assert!(
+                index.db.get(ProteomeIndex::search_cache_chunk_key(i))?.is_none(),
+                "stale chunk {i} from the larger cache was left behind"
+            );
+        }
+        let loaded = index.load_search_cache()?.expect("the smaller cache must load");
+        assert_eq!(loaded.target_list, small.target_list);
         Ok(())
     }
 
