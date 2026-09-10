@@ -1630,7 +1630,7 @@ impl ProteomeIndex {
     /// to extract detailed position information, and returns the signature for later storage.
     ///
     /// The method resolves amino acid ambiguity before processing. Valid amino acids include the 20 standard amino acids (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y)
-    /// and the ambiguous codes (B for D/N, Z for E/Q, J for I/L, X for unknown) which are resolved to one of their possible values.
+    /// and the ambiguous residues (B for D/N, Z for E/Q, J for I/L, X for unknown) which are resolved to one of their possible values.
     ///
     /// # Arguments
     ///
@@ -3198,13 +3198,13 @@ mod tests {
             false,
         )?;
 
-        // The k-mer count is the number of *readings*, not the number of windows: an
-        // ambiguity code doubles the windows covering it, and a window carrying a second
-        // code is dropped. For "ACDEFXBZJ" the five windows ACDEF, CDEFX, DEFXB, EFXBZ and
-        // FXBZJ carry 0, 0, 1, 2 and 3 codes, so the first three give 1 + 1 + 2 = 4
-        // readings and the last two are dropped.
+        // The k-mer count is the number of *readings*, not the number of windows: every
+        // ambiguous residue in a window doubles it, so a window carrying n of them gives 2^n
+        // readings. For "ACDEFXBZJ" the five windows ACDEF, CDEFX, DEFXB, EFXBZ and FXBZJ
+        // carry 0, 0, 1, 2 and 3 of them, so they give 1 + 1 + 2 + 4 + 8 = 16 readings. X is
+        // not an ambiguous residue and never expands.
         let valid_sequences =
-            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 4)];
+            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 16)];
 
         for (sequence, expected_kmers) in valid_sequences {
             let protein_signature = index.create_protein_signature(sequence, "test_protein")?;
@@ -3231,7 +3231,7 @@ mod tests {
             );
         }
 
-        // Ambiguity codes are accepted, and indexed under both readings rather than one.
+        // Ambiguous residues are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
             ("PLANTANDANIMALGENBMES", 21), // B is indexed as both Asp and Asn
             ("PLANTANDANIMALGENZMES", 21), // Z is indexed as both Glu and Gln
@@ -3253,7 +3253,7 @@ mod tests {
             assert_eq!(
                 protein_signature.kmer_positions().len(),
                 expected_kmers,
-                "{sequence}: expected the windows covering the ambiguity code to be doubled"
+                "{sequence}: expected the windows covering the ambiguous residue to be doubled"
             );
         }
 
@@ -3276,7 +3276,7 @@ mod tests {
             false,
         )?;
 
-        // Ambiguity codes are accepted, and indexed under both readings rather than one.
+        // Ambiguous residues are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
             ("PLANTANDANIMALGENBMES", 17), // Asp and Asn are both dayhoff `c`
             ("PLANTANDANIMALGENZMES", 17), // Glu and Gln are both dayhoff `c`
@@ -3292,7 +3292,7 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            // Disambiguating a code adds k-mers only where the alphabet keeps the two readings
+            // Disambiguating adds k-mers only where the alphabet keeps the two readings
             // apart. Dayhoff puts both members of every ambiguous pair in one class, so the
             // disambiguated windows hash identically and the count is unchanged.
             assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
@@ -3340,7 +3340,7 @@ mod tests {
             false,
         )?;
 
-        // Ambiguity codes are accepted, and indexed under both readings rather than one.
+        // Ambiguous residues are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
             ("PLANTANDANIMALGENBMES", 14), // Asp and Asn are both polar
             ("PLANTANDANIMALGENZMES", 14), // Glu and Gln are both polar
@@ -3608,18 +3608,18 @@ mod tests {
     }
 
     /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958) with three residues
-    /// rewritten to the ambiguity codes that stand for them: Asn->B (Asx), Glu->Z (Glx),
+    /// rewritten to the ambiguous residues that stand for them: Asn->B (Asx), Glu->Z (Glx),
     /// Ile->J (Xle). Also carries U (Sec) and O (Pyl).
-    const CED9_WITH_AMBIGUITY_CODES: &str =
+    const CED9_WITH_AMBIGUOUS_RESIDUES: &str =
         "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGJKGTEPTDFGZNSDAQDLPSPSRQASTRRUO";
 
     /// Indexing the same sequence twice must produce byte-identical sketches.
     ///
-    /// WHY: ambiguity codes were previously resolved by drawing at random from the
+    /// WHY: ambiguous residues were previously resolved by drawing at random from the
     /// alternatives, so B became Asp on one run and Asn on the next. That changed the k-mers,
     /// the hashes and the stored index every time the same FASTA was indexed.
     #[test]
-    fn test_ambiguity_codes_index_deterministically() {
+    fn test_ambiguous_residues_index_deterministically() {
         let temp_dir = tempdir().unwrap();
 
         for (i, moltype) in
@@ -3630,14 +3630,14 @@ mod tests {
                     .unwrap();
 
             let first = index
-                .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                .create_protein_signature(CED9_WITH_AMBIGUOUS_RESIDUES, "ced9")
                 .unwrap()
                 .mins_as_set();
             assert!(!first.is_empty(), "{moltype}: no k-mers produced");
 
             for attempt in 0..5 {
                 let again = index
-                    .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                    .create_protein_signature(CED9_WITH_AMBIGUOUS_RESIDUES, "ced9")
                     .unwrap()
                     .mins_as_set();
                 assert_eq!(again, first, "{moltype}: sketch differed on attempt {attempt}");
