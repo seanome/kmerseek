@@ -35,10 +35,10 @@ indicatif = { version = "0.17", features = ["rayon"] }
 sourmash_plugin_branchwater = { git = "https://github.com/sourmash-bio/sourmash_plugin_branchwater", rev = "585dabf4f50239dbcf56dddf94a7ed181fc03046" }
 zip = { version = "4.0", default-features = false }
 statrs = "0.17"
+tempfile = "3.20"
 
 
 [dev-dependencies]
-tempfile = "3.20"
 memuse = "0.2.0"
 criterion = "0.5.1"
 human_bytes = "0.4.3"

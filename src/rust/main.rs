@@ -43,11 +43,9 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         kmer_stats_out: Option<PathBuf>,
 
-        /// Skip persisting a searchable index -- compute and write --kmer-stats-out only,
-        /// with no RocksDB writes at all. Requires --kmer-stats-out. Use this when you only
-        /// want the frequency spectrum, not a database to search later: it avoids both the
-        /// SearchCache's RocksDB single-value size limit (~4 GiB) and the filesystem I/O load
-        /// of chunked signature storage, neither of which stats-only output needs.
+        /// Do not keep a searchable index: build it in a scratch directory that is removed
+        /// on exit, and write only --kmer-stats-out. Requires --kmer-stats-out. Use this
+        /// when you only want the frequency spectrum, not a database to search later.
         #[arg(long, requires = "kmer_stats_out")]
         stats_only: bool,
 
@@ -247,8 +245,15 @@ fn main() -> IndexResult<()> {
 
             let effective_moltype: &'static str = alphabet.into();
 
+            // --stats-only builds in a scratch directory that is removed on exit. The
+            // index is still written there: the streaming indexer sorts k-mers on disk,
+            // so there is no in-memory path that could produce the spectrum without it.
+            let scratch = if stats_only { Some(tempfile::tempdir()?) } else { None };
+
             // Determine output path
-            let output_path = if let Some(output) = output {
+            let output_path = if let Some(scratch) = &scratch {
+                scratch.path().join("stats-only.kmerseek.rocksdb")
+            } else if let Some(output) = output {
                 eprintln!("Output database: {}", output.display());
                 output
             } else {
@@ -313,12 +318,13 @@ fn main() -> IndexResult<()> {
             }
 
             if stats_only {
-                // --stats-only: skip persisting a searchable index entirely (see
-                // save_kmer_stats_only's doc comment for why). kmer_stats_out is
-                // guaranteed Some here -- clap's `requires = "kmer_stats_out"` enforces it.
+                // kmer_stats_out is guaranteed Some here -- clap's
+                // `requires = "kmer_stats_out"` enforces it.
                 let kmer_stats_out =
                     kmer_stats_out.expect("clap requires kmer_stats_out with stats_only");
-                index.save_kmer_stats_only(&kmer_stats_out)?;
+                index.save_state_with_kmer_stats(Some(&kmer_stats_out))?;
+                drop(index);
+                drop(scratch);
                 eprintln!("Stats-only run completed successfully (no index persisted).");
             } else {
                 // Enable compactions for better read performance
