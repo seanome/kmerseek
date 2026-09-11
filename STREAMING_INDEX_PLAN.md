@@ -1,5 +1,9 @@
 # Streaming index: removing the whole-corpus memory ceiling
 
+Status: implemented in this branch. The sections below keep the measurements
+and reasoning that motivated it; "What was done" at the end says how each
+structure was removed and what the result measures.
+
 ## Why
 
 Indexing currently holds the entire corpus in RAM. That caps the largest
@@ -107,3 +111,71 @@ Ordered by expected benefit per unit of risk.
 - Peak RSS at `--scaled 1` must stay at or below the measured 683 B/residue
   at every step, so a partial implementation does not regress the constant
   while attacking the slope.
+
+## What was done
+
+Schema version 3. `src/rust/index.rs` no longer holds anything O(corpus):
+
+1. **Signatures stream to disk.** `ingest` writes each sketch to its `sig_{md5}`
+   key in one `WriteBatch` per batch and drops it. The in-memory map is now
+   only for `store_signatures` and `load`, whose callers want every sketch in
+   hand. The dedup the map used to do by key is kept with a `HashSet<u64>`
+   (8 bytes per sequence); the first occurrence wins, so which name a repeated
+   sequence carries is now fixed by FASTA order rather than by which parallel
+   insert landed last.
+
+2. **The inverted index is built by an external sort.** `(hash, target)` pairs
+   go into a buffer of 16 M entries (256 MB). When it fills it is bucketed by
+   `hash & 1023` and written as one run per shard (`ii_run_{r}_{s}`).
+   `finalize` reads each shard's runs, sorts by `(hash, target)`, groups into
+   posting lists, writes `ii_shard_{s}`, and deletes the runs. Peak memory is
+   one shard, about 1/1024 of the postings. Shards use the low bits because
+   FracMinHash keeps only hashes below `max_hash / scaled`, which would leave
+   the high bits nearly constant.
+
+3. **The combined minhash is gone.** `unique_kmer_count()` is the number of
+   inverted index keys, counted while the shards are written.
+
+4. **`signature_data` and the `signatures_chunk_{n}` keys are gone.** `load`
+   reads the `sig_{md5}` keys with a prefix iterator.
+
+5. **`combined_mins` and `combined_abunds` are gone from the metadata**, so the
+   next 4 GiB single-value limit is gone with them. `kmer_frequencies` is no
+   longer stored either: it is the length of each posting list, derived when
+   the search cache is loaded.
+
+The k-mer frequency spectrum and the most/least common examples are gathered in
+the same pass that writes the shards, with two bounded heaps (`SmallestN`), so
+`--kmer-stats-out` needs no frequency map. The examples' text is recovered by
+reading the first target of each from disk. `--stats-only` builds in a scratch
+directory that is removed on exit, since the sort needs the disk.
+
+The writer no longer opens RocksDB with mmap. Every SST page touched during
+compaction was otherwise mapped into the process and counted in RSS, which left
+a slope of ~70 bytes per residue, the on-disk size, after the in-memory
+structures were removed.
+
+Indexes written by schema 2 still open: `load_search_cache` reads their single
+`search_cache` value and `load` their signature chunks. PR #48's chunked cache
+write is superseded.
+
+### Measured
+
+Swiss-Prot 2026_03 prefixes and the full release, k=10 protein20, release
+builds, `/usr/bin/time -l`, same machine as the table above.
+
+| Sequences | Residues | Old peak RSS | New peak RSS | Old time | New time | Old disk | New disk |
+|-----------|----------|-------------:|-------------:|---------:|---------:|---------:|---------:|
+| 20,000    | 8.3 M    | 4.88 GB      | 1.01 GB      | 7.4 s    | 2.1 s    | 532 MB   | 255 MB   |
+| 50,000    | 19.6 M   | 10.35 GB     | 1.82 GB      | 17.7 s   | 4.7 s    | 1.22 GB  | 587 MB   |
+| 100,000   | 38.7 M   | 19.35 GB     | 2.21 GB      | 29.3 s   | 10.1 s   | 2.42 GB  | 1.17 GB  |
+| 575,748   | ~200 M   | not run (~100 GB by the old slope) | 2.88 GB | | 108 s | | 6.14 GB |
+
+The old code is 500 B/residue. The new code's growth from 100 K sequences to
+the full release is 0.67 GB over ~160 M residues, about 4 B/residue, and most
+of that is the posting buffer and RocksDB memtables filling up to their fixed
+sizes. Disk halves because signatures are stored once instead of twice.
+
+Searching the 25 BCL2 query sequences against the 50 K index gives the same
+110 hits and 458 rows from the old index, the new index, and the old index read
+by the new binary; the only numeric differences are at 1e-15 (summation order).
