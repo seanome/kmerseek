@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use kmerseek::errors::IndexResult;
-use kmerseek::types::MolType;
+use kmerseek::errors::{IndexError, IndexResult};
+use kmerseek::types::{MolType, Scaled};
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
 
@@ -28,6 +28,15 @@ enum Commands {
         /// K-mer size for indexing
         #[arg(short, long, default_value = "10")]
         ksize: u32,
+
+        /// Keep only k-mers whose hash falls in the lowest 1/scaled of the hash space
+        /// (FracMinHash). 1 keeps every k-mer. Indexing memory and index size fall
+        /// almost linearly with this value. A match is found from any one kept k-mer
+        /// and reported at its full length; a match none of whose k-mers were kept is
+        /// missed, which is likelier the shorter it is. Stored in the index; search
+        /// reads it back. Maximum 10.
+        #[arg(short, long, default_value = "1")]
+        scaled: u32,
 
         /// Reduced amino acid alphabet to index with
         #[arg(short = 'a', long, default_value = "protein20")]
@@ -234,6 +243,7 @@ fn main() -> IndexResult<()> {
             input,
             output,
             ksize,
+            scaled,
             alphabet,
             progress_interval,
             kmer_stats_out,
@@ -242,8 +252,13 @@ fn main() -> IndexResult<()> {
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
-            // Scaled factor is always 1 (captures all k-mers)
-            let scaled: u32 = 1;
+            // Fail on a bad value here, before any database is created.
+            let scaled = Scaled::new(scaled)
+                .map_err(|message| IndexError::ConfigurationError {
+                    field: "scaled".to_string(),
+                    message,
+                })?
+                .get();
 
             let effective_moltype: &'static str = alphabet.into();
 
@@ -852,17 +867,10 @@ fn validate_and_assign_parameters(
         }
     };
 
-    // Scaled is always 1 (captures all k-mers). The database is authoritative, so
-    // error out if it was built with a different scaled factor.
-    if detected_scaled != 1 {
-        return Err(kmerseek::errors::IndexError::ValidationError {
-            message: format!(
-                "Scaled factor mismatch: database has scaled={}, but kmerseek only supports scaled=1.",
-                detected_scaled
-            ),
-        });
-    }
-    let final_scaled = 1;
+    // Query sketches must use the database's scaled factor, or the FracMinHash cutoffs
+    // disagree and shared k-mers go unseen. There is no --scaled on search, so the
+    // detected value is the only one.
+    let final_scaled = detected_scaled;
 
     // Validate and assign encoding
     let final_alphabet = assign_encoding(user_encoding, detected_moltype)?;

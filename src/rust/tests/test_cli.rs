@@ -539,3 +539,106 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+/// `--scaled 5` keeps about a fifth of the k-mers. The same CED9 vs BCL2 search then reports
+/// exactly the four regions the unit tests fix for this pair at scaled=5 (see
+/// `test_sampled_regions_scaled_5_exact`), each spanning the whole exact match, with
+/// `region_n_shared_kmers` counting only the kept k-mers. `scaled` is read back from the
+/// database, so search needs no flag of its own.
+#[test]
+fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target_scaled5.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            target_index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--scaled",
+            "5",
+            "--alphabet",
+            "hp_lehninger2",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Scaled: 5"));
+
+    let output_csv = temp_dir.path().join("scaled5.csv");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            target_index_path.to_str().unwrap(),
+            "--output",
+            output_csv.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp_lehninger2",
+            "--min-shared-kmers",
+            "0",
+            "--max-query-pvalue",
+            "1.0",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Scaled: 5 (detected: 5)"));
+
+    let mut bcl2_regions = Vec::new();
+    for record in csv::Reader::from_path(&output_csv)?.deserialize::<SearchResultCsv>() {
+        let record = record?;
+        assert_eq!(record.scaled, 5);
+        if record.target_name.contains("BCL2_HUMAN") {
+            assert_eq!(record.n_intersecting_hashes, 5);
+            bcl2_regions.push((
+                record.region_start,
+                record.region_end,
+                record.target_start,
+                record.target_end,
+                record.region_n_shared_kmers,
+                record.region_subseq,
+            ));
+        }
+    }
+    bcl2_regions.sort();
+    assert_eq!(
+        bcl2_regions,
+        [
+            (145, 159, 130, 144, 1, "FSLYQDVVRTVGNA".to_string()),
+            (162, 181, 138, 157, 1, "QCPMSYGRLIGLISFGGFV".to_string()),
+            (253, 266, 80, 93, 1, "MIGAGVTAGAIGI".to_string()),
+            (267, 280, 200, 213, 2, "GVVVCGRMMFSLK".to_string()),
+        ]
+    );
+    Ok(())
+}
+
+/// A bad `--scaled` is rejected before any database is created.
+#[test]
+fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    for (value, message) in [("0", "must be greater than 0"), ("11", "Scaled value too large")] {
+        let db = temp_dir.path().join(format!("scaled_{value}.db"));
+        Command::cargo_bin("kmerseek")?
+            .args([
+                "index",
+                "--input",
+                TEST_FASTA_GZ,
+                "--output",
+                db.to_str().unwrap(),
+                "--scaled",
+                value,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert!(!db.exists(), "--scaled {value} must not leave a database behind");
+    }
+    Ok(())
+}

@@ -43,14 +43,14 @@ pub struct Scaled(pub u32);
 impl Scaled {
     /// Create a new scaled value with validation
     ///
-    /// Scaled represents the sampling rate (1/scaled), so:
-    /// - scaled=1: take every k-mer (100% sampling)
-    /// - scaled=2: take every 2nd k-mer (50% sampling)  
-    /// - scaled=5: take every 5th k-mer (20% sampling)
-    /// - scaled=10: take every 10th k-mer (10% sampling)
+    /// A k-mer is kept when its hash falls in the lowest `1/scaled` of the hash space
+    /// (FracMinHash), so the same k-mer is kept or dropped in every sequence and the
+    /// expected fraction kept is `1/scaled`. Which positions survive is decided by
+    /// hash value, not by stride: scaled=2 keeps about half the k-mers, not every
+    /// second one.
     ///
-    /// For protein analysis, we typically want scaled ≤ 10 to ensure
-    /// meaningful k-mer coverage. Higher values result in too sparse sampling.
+    /// Capped at 10. Beyond that a typical protein keeps too few k-mers for a matched
+    /// region to be sampled at all.
     pub fn new(scaled: u32) -> Result<Self, String> {
         if scaled == 0 {
             Err("Scaled value must be greater than 0".to_string())
