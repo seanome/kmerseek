@@ -23,6 +23,9 @@ pub enum IndexError {
     #[error("No saved state found in database")]
     NoSavedState,
 
+    #[error("Corrupt index: {0}")]
+    CorruptIndex(String),
+
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
 

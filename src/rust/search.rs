@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use statrs::distribution::{DiscreteCDF, Poisson};
 
-use crate::errors::IndexResult;
-use crate::index::ProteomeIndex;
+use crate::errors::{IndexError, IndexResult};
+use crate::index::{ProteomeIndex, SearchCache};
 use crate::significance;
 use crate::sketch::ProteinSketch;
 use crate::types::MolType;
@@ -529,30 +529,12 @@ pub struct PreparedQuery<'a> {
 }
 
 impl SearchStats {
-    /// Calculate search statistics from a proteome index
-    pub fn from_index(index: &ProteomeIndex) -> Self {
-        let signatures = index.get_signatures();
-        let total_signatures = signatures.len();
-
-        // Count k-mer frequencies across all signatures
-        let mut kmer_frequencies: HashMap<u64, usize> = HashMap::new();
-
-        for signature in signatures.iter() {
-            let mins = signature.value().signature().minhash.mins();
-            for min in mins {
-                *kmer_frequencies.entry(min).or_insert(0) += 1;
-            }
-        }
-
-        // Calculate IDF values
+    /// Search statistics from the structures `ProteomeIndex::load_search_cache` returns.
+    fn from_cache(total_signatures: usize, kmer_frequencies: HashMap<u64, usize>) -> Self {
         let idf: HashMap<u64, f64> = kmer_frequencies
             .iter()
-            .map(|(&kmer, &freq)| {
-                let idf_value = (total_signatures as f64 / freq as f64).ln();
-                (kmer, idf_value)
-            })
+            .map(|(&kmer, &freq)| (kmer, (total_signatures as f64 / freq as f64).ln()))
             .collect();
-
         Self { total_signatures, idf, kmer_frequencies }
     }
 }
@@ -588,106 +570,46 @@ pub struct ProteinSearcher {
 }
 
 impl ProteinSearcher {
-    /// Create a new protein searcher from an index
-    pub fn new(index: ProteomeIndex) -> Self {
-        let stats = SearchStats::from_index(&index);
-        let (target_list, inverted_index) = Self::build_search_structures(&index);
-        let db_n_kmers = stats.kmer_frequencies.values().sum();
-        Self {
-            index,
-            stats,
-            target_list,
-            inverted_index,
-            sig_cache: DashMap::new(),
-            query_kmer_frequencies: None,
-            total_queries: 0,
-            db_n_kmers,
-        }
+    /// Create a searcher over an index built in this process.
+    ///
+    /// Finalizes the index so its inverted index is on disk, then reads the search
+    /// structures back exactly as `load` would for a saved index. Sketches the index
+    /// holds in memory (from `store_signatures` or `load`) are used directly; the rest
+    /// are read on demand.
+    pub fn new(index: ProteomeIndex) -> IndexResult<Self> {
+        index.finalize()?;
+        let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
+        Ok(Self::from_cache(index, cache))
     }
 
     /// Load a searcher from a saved index.
     ///
-    /// Fast path: if the index was built with a recent version of kmerseek (which saves a
-    /// pre-built search cache), this method opens the DB without loading all signatures into
-    /// memory. Signatures are then loaded on demand during search via `get_signature_by_md5()`.
-    ///
-    /// Slow path (backward compat): for older databases without a search cache, falls back to
-    /// loading all signatures into memory and building the inverted index at startup.
+    /// Opens the database without loading any signatures into memory. Signatures are
+    /// loaded on demand during search via `get_signature_by_md5()`.
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
-        // Open DB minimally: read metadata only, leave signatures DashMap empty
         let index = ProteomeIndex::open_for_search(&path)?;
-
-        // Fast path: pre-built search cache exists - no need to load all signatures
-        if let Some(cache) = index.load_search_cache()? {
-            let total_signatures = cache.target_list.len();
-            let idf: HashMap<u64, f64> = cache
-                .kmer_frequencies
-                .iter()
-                .map(|(&kmer, &freq)| {
-                    let idf_value = (total_signatures as f64 / freq as f64).ln();
-                    (kmer, idf_value)
-                })
-                .collect();
-            let stats =
-                SearchStats { total_signatures, idf, kmer_frequencies: cache.kmer_frequencies };
-            let db_n_kmers = stats.kmer_frequencies.values().sum();
-            eprintln!(
-                "Loaded search cache: {} targets, {} k-mers indexed",
-                total_signatures,
-                cache.inverted_index.len()
-            );
-            return Ok(Self {
-                index,
-                stats,
-                target_list: cache.target_list,
-                inverted_index: cache.inverted_index,
-                sig_cache: DashMap::new(),
-                query_kmer_frequencies: None,
-                total_queries: 0,
-                db_n_kmers,
-            });
-        }
-
-        // Slow path: old DB without search cache - load all signatures and build structures
+        let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
         eprintln!(
-            "No search cache found; loading all signatures (run `kmerseek index` to rebuild)"
+            "Loaded search cache: {} targets, {} k-mers indexed",
+            cache.target_list.len(),
+            cache.inverted_index.len()
         );
-        index.load_state()?;
-        let stats = SearchStats::from_index(&index);
-        let (target_list, inverted_index) = Self::build_search_structures(&index);
+        Ok(Self::from_cache(index, cache))
+    }
+
+    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
+        let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
         let db_n_kmers = stats.kmer_frequencies.values().sum();
-        Ok(Self {
+        Self {
             index,
             stats,
-            target_list,
-            inverted_index,
+            target_list: cache.target_list,
+            inverted_index: cache.inverted_index,
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
-        })
-    }
-
-    /// Build an ordered target list and inverted k-mer index from the index.
-    ///
-    /// WHY: The inverted index maps each k-mer hash to the set of target signatures that
-    /// contain it. This allows search_one to skip the vast majority of targets that share
-    /// no k-mers with the query, reducing search from O(Q×T) to O(Q×candidates) where
-    /// candidates << T for most real queries. Building this once at load time amortizes
-    /// the cost across all subsequent searches.
-    fn build_search_structures(index: &ProteomeIndex) -> (Vec<String>, HashMap<u64, Vec<u32>>) {
-        let mut target_list: Vec<String> = Vec::new();
-        let mut inverted_index: HashMap<u64, Vec<u32>> = HashMap::new();
-
-        for entry in index.get_signatures().iter() {
-            let idx = target_list.len() as u32;
-            target_list.push(entry.key().clone());
-            for min in entry.value().signature().minhash.mins() {
-                inverted_index.entry(min).or_default().push(idx);
-            }
         }
-
-        (target_list, inverted_index)
     }
 
     /// Prepare a query for efficient batch searching
@@ -1859,7 +1781,7 @@ mod tests {
         target_index.process_fasta(target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         // Create query index (BCL2)
         let query_index_path = temp_path.join("query_index");
@@ -1874,6 +1796,7 @@ mod tests {
         query_index.process_fasta(query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Get query signatures
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -1924,7 +1847,7 @@ mod tests {
             DEFAULT_PROGRESS_INTERVAL,
             DEFAULT_BATCH_SIZE,
         )?;
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         let query_index_path = temp_path.join("query_index");
         let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp_lehninger2", false)?;
@@ -1933,6 +1856,7 @@ mod tests {
             DEFAULT_PROGRESS_INTERVAL,
             DEFAULT_BATCH_SIZE,
         )?;
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -1984,11 +1908,12 @@ mod tests {
         let target_index_path = temp_dir.path().join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp_lehninger2", true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         let query_index_path = temp_dir.path().join("query_index");
         let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp_lehninger2", true)?;
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -2038,7 +1963,7 @@ mod tests {
         Ok(())
     }
 
-    /// `ProteinSearcher::new()` (used by most tests) keeps signatures in an in-memory DashMap,
+    /// `ProteinSearcher::new()` (used by most tests) reads the cache the index just finalized,
     /// so `search_one()` always takes its "Path 1" branch. Only `ProteinSearcher::load()` (the
     /// fast path used by the real CLI, backed by an on-demand `sig_cache`) exercises Path 3
     /// (first RocksDB load of a target) and Path 2 (sig_cache hit on a later query that shares
@@ -2262,7 +2187,7 @@ mod tests {
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         // Create searcher
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         // Create query FASTA
         let query_fasta = temp_path.join("query.fasta");
@@ -2273,6 +2198,7 @@ mod tests {
 
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -2301,12 +2227,13 @@ mod tests {
         let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         let query_index =
             ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -2358,7 +2285,7 @@ mod tests {
         let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         // Create query
         let query_fasta = temp_path.join("query.fasta");
@@ -2368,6 +2295,7 @@ mod tests {
             ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -2415,12 +2343,11 @@ mod tests {
             kmer_frequencies: HashMap::new(),
         };
 
-        let (target_list, inverted_index) = ProteinSearcher::build_search_structures(&index);
         let searcher = ProteinSearcher {
             index,
             stats,
-            target_list,
-            inverted_index,
+            target_list: Vec::new(),
+            inverted_index: HashMap::new(),
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
@@ -2630,7 +2557,7 @@ mod tests {
         );
 
         // Create searcher from the index
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         // Create query index from CED9 in a temporary directory
         // WHY: new_with_auto_filename creates the database next to the input file, which causes
@@ -2642,6 +2569,7 @@ mod tests {
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
 
         // Get query signatures
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -2759,7 +2687,7 @@ mod tests {
         let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
 
-        let mut searcher = ProteinSearcher::new(target_index);
+        let mut searcher = ProteinSearcher::new(target_index)?;
 
         // Build a query sketch for CED9
         let mut query_sig = ProteinSketch::new("ced9_query", ksize, scaled, moltype)?;
@@ -2869,11 +2797,12 @@ mod tests {
         let target_index_path = temp_dir.path().join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         let query_index_path = temp_dir.path().join("query_index");
         let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
@@ -2950,7 +2879,7 @@ mod tests {
         let target_index_path = temp_dir.path().join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
         let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
@@ -3100,7 +3029,7 @@ mod tests {
         let index_path = temp_dir.path().join("index");
         let index = ProteomeIndex::new(&index_path, ksize, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(index);
+        let searcher = ProteinSearcher::new(index)?;
 
         let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
         let sketch =
@@ -3145,7 +3074,7 @@ mod tests {
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         assert_eq!(index.signature_count(), 25);
 
-        let searcher = ProteinSearcher::new(index);
+        let searcher = ProteinSearcher::new(index)?;
         let results = searcher.search_all_vs_all(&SearchFilters::default())?;
         assert!(!results.is_empty(), "a family database should match itself across members");
 
@@ -3186,11 +3115,12 @@ mod tests {
         let target_index_path = temp_dir.path().join("target_index");
         let target_index = ProteomeIndex::new(&target_index_path, ksize, scaled, moltype, true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(target_index);
+        let searcher = ProteinSearcher::new(target_index)?;
 
         let query_index_path = temp_dir.path().join("query_index");
         let query_index = ProteomeIndex::new(&query_index_path, ksize, scaled, moltype, true)?;
         query_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
 
