@@ -48,9 +48,10 @@ pub fn has_ambiguous_residues(residues: &[u8]) -> bool {
 ///
 /// This bounds memory; it expresses no view about which readings are worth keeping. `2^n`
 /// readings would otherwise grow without bound on pathological input, such as a long run of
-/// `B`. The densest window in Swiss-Prot 2026_03 holds 9 of them, so no real sequence comes
-/// near this.
-pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 16;
+/// `B`. At the default `--ksize 10` the ceiling can never fire, since a 10-mer holds at most
+/// 10. For any k up to 30 the densest window in Swiss-Prot 2026_03 and among UniRef50
+/// 2026_03 representatives holds 9 (P00659 and P01658), so no real sequence is dropped.
+pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 10;
 
 /// Disambiguate one k-mer into every reading its ambiguous residues allow: `D` and `N` for
 /// `B`, `I` and `L` for `J`, and `E` and `Q` for `Z`. A k-mer with no ambiguous residue yields
@@ -62,11 +63,11 @@ pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 16;
 /// SDM12 and HSDM17 give Asp and Asn separate classes, so under them the readings are
 /// different k-mers.
 ///
-/// The expansion is affordable because ambiguous residues are rare and stay sparse within
+/// The expansion is affordable because ambiguous residues are rare and stay sparse within a
 /// window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
-/// across 146 of its 575_748 sequences. The densest window holds 9, so the worst single
-/// k-mer expands to 512 readings, and expansion grows the index by 0.0012% at k=4 and
-/// 0.034% at k=30.
+/// across 146 of its 575_748 sequences. The densest window at any k up to 30 holds 9, so the
+/// worst single k-mer expands to 512 readings, and expansion grows the index by 0.0012% at
+/// k=4 and 0.034% at k=30. A k-mer past `MAX_AMBIGUOUS_RESIDUES_PER_KMER` is dropped.
 ///
 /// WHY bytes rather than `&str`: callers hash the result, and hashing reads bytes. Going
 /// through `String` would add a UTF-8 validation per reading and a panic path for input
@@ -159,8 +160,10 @@ impl AminoAcidAmbiguity {
     /// discarded as unknown. Under `protein20` nothing is substituted, since there is no
     /// class to fall into and rewriting U as C would assert a residue the source never had.
     ///
-    /// The ambiguous residues B, J and Z are never resolved here. They stay in the sequence and
-    /// every k-mer covering one is indexed under both readings; see `disambiguate_kmer`.
+    /// B, J and Z are not substituted here. Each stands for two residues, so replacing it
+    /// with either one would assert a residue the source never claimed. They pass through
+    /// unchanged and `disambiguate_kmer` expands every k-mer covering one into both readings
+    /// at sketch time.
     pub fn validate_and_resolve<'a>(
         &self,
         sequence: &'a str,
@@ -390,20 +393,34 @@ mod tests {
     /// Every ambiguous residue in the window expands, so `n` of them give `2^n` readings and the real
     /// fragment is among them whichever residue the query holds.
     #[test]
-    fn test_every_code_in_the_kmer_expands() {
+    fn test_every_ambiguous_residue_in_the_kmer_expands() {
         // Residues 1-20 with Asp10 written as B: one ambiguous residue, two readings.
         assert_eq!(
             readings("MAHAGRTGYBNREIVMKYIH").unwrap(),
             vec![&BCL2_1_30[..20], "MAHAGRTGYNNREIVMKYIH"]
         );
-        // The same window with Glu13 also written as Z: two ambiguous residues, so four readings.
-        let two = readings("MAHAGRTGYBNRZIVMKYIH").unwrap();
-        assert_eq!(two.len(), 4);
-        assert!(two.contains(&BCL2_1_30[..20].to_string()), "{two:?}");
+        // The same window with Glu13 also written as Z: two ambiguous residues, so four
+        // readings. The first ambiguous residue varies slowest, and the real fragment is the
+        // first reading.
+        assert_eq!(
+            readings("MAHAGRTGYBNRZIVMKYIH").unwrap(),
+            vec![
+                &BCL2_1_30[..20],
+                "MAHAGRTGYDNRQIVMKYIH",
+                "MAHAGRTGYNNREIVMKYIH",
+                "MAHAGRTGYNNRQIVMKYIH",
+            ]
+        );
         // Length does not decide it either: the same two ambiguous residues across thirty residues.
-        let longer = readings("MAHAGRTGYBNRZIVMKYIHYKLSQRGYEW").unwrap();
-        assert_eq!(longer.len(), 4);
-        assert!(longer.contains(&BCL2_1_30.to_string()), "{longer:?}");
+        assert_eq!(
+            readings("MAHAGRTGYBNRZIVMKYIHYKLSQRGYEW").unwrap(),
+            vec![
+                BCL2_1_30,
+                "MAHAGRTGYDNRQIVMKYIHYKLSQRGYEW",
+                "MAHAGRTGYNNREIVMKYIHYKLSQRGYEW",
+                "MAHAGRTGYNNRQIVMKYIHYKLSQRGYEW",
+            ]
+        );
     }
 
     /// The ceiling bounds memory on pathological input. A k-mer past it is dropped whole,

@@ -517,9 +517,9 @@ impl ProteinSketch {
 
         let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
         let residues = sequence.as_bytes();
-        // Checked once for the whole sequence: almost none carry an ambiguous residue (roughly
-        // 900 non-canonical residues in SwissProt's 207.6 M), so the per-window check is
-        // skipped entirely for nearly every sequence.
+        // Checked once for the whole sequence: almost none carry an ambiguous residue (146 of
+        // Swiss-Prot 2026_03's 575_748 sequences), so the per-window check is skipped
+        // entirely for nearly every sequence.
         let sequence_has_ambiguous_residues = has_ambiguous_residues(residues);
         // Reused across windows. Without it this loop allocated once per window, and once
         // per reading, for every sequence indexed.

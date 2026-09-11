@@ -1629,8 +1629,10 @@ impl ProteomeIndex {
     /// This method creates a protein signature from the given sequence, processes its k-mers
     /// to extract detailed position information, and returns the signature for later storage.
     ///
-    /// The method resolves amino acid ambiguity before processing. Valid amino acids include the 20 standard amino acids (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y)
-    /// and the ambiguous residues (B for D/N, Z for E/Q, J for I/L, X for unknown) which are resolved to one of their possible values.
+    /// Valid amino acids are the 20 standard residues (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y),
+    /// X (unknown), U and O (substituted by their canonical analogue under a reduced alphabet), and the
+    /// ambiguous residues B (D or N), J (I or L) and Z (E or Q). An ambiguous residue is not resolved to one
+    /// reading; every k-mer covering it is indexed under both. See `aminoacid::disambiguate_kmer`.
     ///
     /// # Arguments
     ///

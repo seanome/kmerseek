@@ -255,7 +255,7 @@ Total matches: 21
 
 ### Amino acid disambiguation
 
-Three letters stand for a pair of residues rather than a single one, because the
+Three letters stand for a pair of amino acids rather than a single one, because the
 method that produced the sequence could not tell the pair apart. Asn and Gln deamidate to
 Asp and Glu during acid hydrolysis, and Ile and Leu have the same mass:
 
@@ -312,10 +312,12 @@ which reading was kept.
 
 The expansion is affordable because ambiguous residues are rare and stay sparse within any one
 window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
-across 146 of its 575_748 sequences. The densest window in the database holds 9, so the
-worst single k-mer expands to 512 readings, and expansion grows the index by 0.0012% at
-k=4 and 0.034% at k=30. A k-mer carrying more than 16 is dropped, which bounds memory on
-pathological input and which no real sequence approaches.
+across 146 of its 575_748 sequences. The densest window at any k up to 30, in Swiss-Prot and
+among UniRef50 representatives alike, holds 9, so the worst single k-mer expands to 512
+readings, and expansion grows the index by 0.0012% at k=4 and 0.034% at k=30. A k-mer
+carrying more than 10 is dropped, which bounds memory on a pathological input such as a long
+run of `B`. At the default `--ksize 10` that can never happen, and no window in either
+database reaches it at any k up to 30.
 
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,
