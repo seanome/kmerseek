@@ -131,6 +131,8 @@ A region with `n` k-mers survives with probability `1 - (1 - 1/N)^n`: at
 counts surviving k-mers, and the region Poisson score is computed against an
 expectation summed over the same survivors, so the two stay comparable.
 
+![CED9 vs BCL2 regions at scaled 1, 2, 5 and 10](docs/images/scaled_region_survival.png)
+
 Choose N from the shortest match you need to see reliably, not from k. The cap is 10.
 
 ## Visualizing hits
