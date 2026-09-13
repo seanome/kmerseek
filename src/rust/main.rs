@@ -140,6 +140,15 @@ enum Commands {
         #[arg(long, default_value = "8.0")]
         extend_xdrop: f64,
 
+        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
+        /// Depends on the alphabet, the penalty and the seed length. The default was fitted
+        /// on reversed-sequence decoys (200 SCOPe40 domains against the SCOPe40 index,
+        /// hp-thomas-dill, k=12, penalty 2): hits per query with E' <= x were 0.0305x at
+        /// x=10 and 0.0324x at x=100. Refit for another alphabet or penalty before
+        /// trusting the E-values. Used only with --extend-mismatch-penalty.
+        #[arg(long, default_value = "0.03")]
+        ka_k: f64,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -342,6 +351,7 @@ fn main() -> IndexResult<()> {
             remove_low_complexity: remove_low_complexity_arg,
             extend_mismatch_penalty,
             extend_xdrop,
+            ka_k,
             verbose,
             query_is_index,
             batch_size,
@@ -405,8 +415,8 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum region score: {}", min_region_score);
             if extend_mismatch_penalty > 0.0 {
                 eprintln!(
-                    "  Seed extension: mismatch penalty {}, X-drop {}",
-                    extend_mismatch_penalty, extend_xdrop
+                    "  Seed extension: mismatch penalty {}, X-drop {}, Karlin-Altschul K {}",
+                    extend_mismatch_penalty, extend_xdrop, ka_k
                 );
             } else {
                 eprintln!("  Seed extension: off (regions are exact runs)");
@@ -439,6 +449,7 @@ fn main() -> IndexResult<()> {
                 searcher.set_extension(Some(ExtensionParams {
                     mismatch_penalty: extend_mismatch_penalty,
                     xdrop: extend_xdrop,
+                    ka_k,
                 }));
             }
 

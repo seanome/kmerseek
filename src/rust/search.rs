@@ -78,6 +78,66 @@ pub struct ExtensionParams {
     pub mismatch_penalty: f64,
     /// Extension stops once the running score is this far below its best so far.
     pub xdrop: f64,
+    /// Karlin-Altschul K for the E-value. Depends on the alphabet, the penalty and the
+    /// composition, so it has to be fitted on a decoy search; see `ka_evalue`.
+    pub ka_k: f64,
+}
+
+/// Class frequencies of an encoded sequence, keyed by byte. Gaps and unknowns count too,
+/// since a match against them is also a match in the run.
+fn class_composition(encoded: &[u8]) -> HashMap<u8, f64> {
+    let mut counts: HashMap<u8, f64> = HashMap::new();
+    for &b in encoded {
+        *counts.entry(b).or_insert(0.0) += 1.0;
+    }
+    let n = encoded.len().max(1) as f64;
+    counts.values_mut().for_each(|v| *v /= n);
+    counts
+}
+
+/// Probability that two positions drawn from these compositions fall in the same class.
+fn match_probability(p: &HashMap<u8, f64>, q: &HashMap<u8, f64>) -> f64 {
+    p.iter().map(|(b, pb)| pb * q.get(b).copied().unwrap_or(0.0)).sum()
+}
+
+/// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
+/// matches with probability `a`: the positive root of a e^x + (1-a) e^(-penalty x) = 1.
+///
+/// A positive root exists only when the expected score a - penalty (1-a) is negative,
+/// i.e. a < penalty / (1 + penalty). Above that, agreement is what these two compositions
+/// do by default and no run of it is surprising: returns 0. The left side is convex with
+/// value 1 at x = 0 and slope a - penalty (1-a) there, so bisection on [0, hi] with hi
+/// pushed out until f(hi) > 1 is safe.
+pub fn karlin_altschul_lambda(a: f64, penalty: f64) -> f64 {
+    let b = 1.0 - a;
+    if a <= 0.0 || a.is_nan() || a - penalty * b >= 0.0 {
+        return 0.0;
+    }
+    let f = |x: f64| a * x.exp() + b * (-penalty * x).exp();
+    let mut hi = 1.0;
+    while f(hi) <= 1.0 {
+        hi *= 2.0;
+        if hi > 1e6 {
+            return 0.0;
+        }
+    }
+    let (mut lo, mut hi) = (0.0, hi);
+    for _ in 0..80 {
+        let mid = 0.5 * (lo + hi);
+        if f(mid) > 1.0 {
+            hi = mid;
+        } else {
+            lo = mid;
+        }
+    }
+    let root = 0.5 * (lo + hi);
+    // At the boundary a = penalty / (1 + penalty) the root is 0 up to rounding; a lambda of
+    // 1e-8 would make every E-value ~ K m n, which is the same "no evidence" answer.
+    if root < 1e-6 {
+        0.0
+    } else {
+        root
+    }
 }
 
 impl SearchFilters {
@@ -162,6 +222,11 @@ pub struct SearchResultCsv {
     /// Encoded positions inside the region where query and target disagree. Zero unless the
     /// search ran with `--extend-mismatch-penalty`.
     pub region_n_mismatches: u32,
+    /// Karlin-Altschul bit score of the region (see MatchedRegion::ka_bits). 0 without
+    /// `--extend-mismatch-penalty`.
+    pub region_ka_bits: f64,
+    /// E-value of the region against the searched database (see MatchedRegion::evalue).
+    pub region_evalue: f64,
 }
 
 impl SearchResultCsv {
@@ -226,6 +291,8 @@ impl SearchResultCsv {
             region_tail_probability: region.tail_probability,
             region_enrichment: region.enrichment,
             region_n_mismatches: region.n_mismatches,
+            region_ka_bits: region.ka_bits,
+            region_evalue: region.evalue,
         }
     }
 }
@@ -444,6 +511,25 @@ pub struct MatchedRegion {
     /// Fold-enrichment scoped to this region: n_shared / expected_shared_kmers. 0.0 without DB
     /// context or when expected_shared_kmers is 0.
     pub enrichment: f64,
+
+    /// Karlin-Altschul bit score of the region as an ungapped alignment in the encoded
+    /// alphabet: (lambda * S - ln K) / ln 2, where S = matches - penalty * mismatches over the
+    /// region and lambda is the root of sum_ij p_i q_j exp(lambda s_ij) = 1 for THIS pair's
+    /// class compositions (Karlin & Altschul 1990; per-pair composition after Schaffer et
+    /// al. 2001). Zero when the pair's expected score per position is not negative, which is
+    /// what two hydrophobic runs or two low-complexity stretches look like: no positive
+    /// lambda exists, so no length of agreement counts as evidence. That is the property
+    /// that makes this the ranking statistic for extended regions rather than the Poisson
+    /// count, which sees a transmembrane helix against any other as a long exact run.
+    /// Requires an extension penalty (`ExtensionParams`), since the score's mismatch term
+    /// is the penalty; 0.0 otherwise.
+    pub ka_bits: f64,
+
+    /// E-value for `ka_bits` against the searched database: K * m * n * exp(-lambda * S), with
+    /// m the query length and n the database's residue count (`db_n_kmers` stands in for it).
+    /// K is `ExtensionParams::ka_k`, which has to be calibrated on decoys for the alphabet
+    /// and penalty in use. Infinity without extension or DB context.
+    pub evalue: f64,
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -1103,6 +1189,32 @@ impl ProteinSearcher {
             region.enrichment = fold_enrichment(n_shared, lambda);
         }
 
+        // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
+        // Only meaningful with a mismatch penalty, which is the score's mismatch term.
+        if let Some(params) = self.extension {
+            if let (Some(q_enc), Some(t_enc)) =
+                (query.sketch.get_moltype_sequence(), target.get_moltype_sequence())
+            {
+                let a = match_probability(
+                    &class_composition(q_enc.as_bytes()),
+                    &class_composition(t_enc.as_bytes()),
+                );
+                let ka_lambda = karlin_altschul_lambda(a, params.mismatch_penalty);
+                let m = q_enc.len() as f64;
+                let n = self.db_n_kmers as f64;
+                for region in result.matched_regions.iter_mut() {
+                    let matches = region.length as f64 - region.n_mismatches as f64;
+                    let raw = matches - params.mismatch_penalty * region.n_mismatches as f64;
+                    if ka_lambda > 0.0 && params.ka_k > 0.0 {
+                        region.ka_bits = ((ka_lambda * raw - params.ka_k.ln())
+                            / std::f64::consts::LN_2)
+                            .max(0.0);
+                        region.evalue = params.ka_k * m * n * (-ka_lambda * raw).exp();
+                    }
+                }
+            }
+        }
+
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
         // one.
@@ -1565,6 +1677,8 @@ pub fn find_matched_regions(
                         poisson_score: 0.0,
                         tail_probability: 1.0,
                         enrichment: 0.0,
+                        ka_bits: 0.0,
+                        evalue: f64::INFINITY,
                     });
 
                     i = j;
@@ -1608,6 +1722,8 @@ pub fn find_matched_regions(
             poisson_score: 0.0,
             tail_probability: 1.0,
             enrichment: 0.0,
+            ka_bits: 0.0,
+            evalue: f64::INFINITY,
         });
 
         i = j;
@@ -1766,6 +1882,8 @@ mod tests {
             poisson_score: 0.05,
             tail_probability: 0.89,
             enrichment: 1.5,
+            ka_bits: 0.0,
+            evalue: f64::INFINITY,
         };
 
         let result = SearchResult {
@@ -2345,6 +2463,29 @@ mod tests {
     }
 
     #[test]
+    fn test_karlin_altschul_lambda() {
+        // a e^x + (1-a) e^(-2x) = 1 at a = 0.5: e^x = 1.618..., x = ln(golden ratio).
+        let lam = karlin_altschul_lambda(0.5, 2.0);
+        assert_relative_eq!(lam, ((1.0 + 5f64.sqrt()) / 2.0).ln(), epsilon = 1e-9);
+        // No positive root once agreement is expected: a >= penalty / (1 + penalty).
+        assert_eq!(karlin_altschul_lambda(2.0 / 3.0, 2.0), 0.0);
+        assert_eq!(karlin_altschul_lambda(0.9, 2.0), 0.0);
+        // Rarer agreement, larger lambda.
+        assert!(karlin_altschul_lambda(0.3, 2.0) > lam);
+        // The root satisfies the equation for a 20-letter-like composition too.
+        let a = 0.06;
+        let l = karlin_altschul_lambda(a, 1.0);
+        assert_relative_eq!(a * l.exp() + (1.0 - a) * (-l).exp(), 1.0, epsilon = 1e-9);
+    }
+
+    #[test]
+    fn test_class_composition_match_probability() {
+        let p = class_composition(b"hhpp");
+        let q = class_composition(b"hhhp");
+        assert_relative_eq!(match_probability(&p, &q), 0.5 * 0.75 + 0.5 * 0.25, epsilon = 1e-12);
+    }
+
+    #[test]
     fn test_extend_regions_bridges_one_flip() {
         let (q, t) = one_flip_pair();
         let intersection = q.intersect(&t);
@@ -2355,7 +2496,7 @@ mod tests {
         assert_eq!((exact[1].start, exact[1].end, exact[1].n_shared), (13, 25, 5));
         assert!(exact.iter().all(|r| r.n_mismatches == 0));
 
-        let params = ExtensionParams { mismatch_penalty: 2.0, xdrop: 8.0 };
+        let params = ExtensionParams { mismatch_penalty: 2.0, xdrop: 8.0, ka_k: 0.1 };
         let extended = extend_regions(exact.clone(), &q, &t, params);
         assert_eq!(extended.len(), 1, "{extended:?}");
         let r = &extended[0];
@@ -2369,7 +2510,7 @@ mod tests {
 
         // A penalty larger than the X-drop cannot cross the flip: the two seeds stay apart,
         // and nothing else changes about them.
-        let strict = ExtensionParams { mismatch_penalty: 9.0, xdrop: 8.0 };
+        let strict = ExtensionParams { mismatch_penalty: 9.0, xdrop: 8.0, ka_k: 0.1 };
         let kept = extend_regions(exact.clone(), &q, &t, strict);
         assert_eq!(kept.len(), 2);
         for (a, b) in kept.iter().zip(&exact) {
@@ -2380,7 +2521,7 @@ mod tests {
         }
 
         // Penalty 0 is "off" and returns the regions untouched.
-        let off = ExtensionParams { mismatch_penalty: 0.0, xdrop: 8.0 };
+        let off = ExtensionParams { mismatch_penalty: 0.0, xdrop: 8.0, ka_k: 0.1 };
         let same = extend_regions(exact.clone(), &q, &t, off);
         assert_eq!(same.len(), exact.len());
     }
@@ -2396,7 +2537,7 @@ mod tests {
         let intersection = q.intersect(&t);
         let exact = find_matched_regions(&q, &t, &intersection);
         assert!(!exact.is_empty());
-        let params = ExtensionParams { mismatch_penalty: 2.0, xdrop: 8.0 };
+        let params = ExtensionParams { mismatch_penalty: 2.0, xdrop: 8.0, ka_k: 0.1 };
         let extended = extend_regions(exact.clone(), &q, &t, params);
         assert!(!extended.is_empty());
         assert!(extended.len() <= exact.len());

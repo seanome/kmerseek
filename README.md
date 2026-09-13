@@ -123,6 +123,18 @@ disagree. The region Poisson score keeps counting exact k-mers against the expec
 summed over the extended span, so extension can only make a region's score more
 conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
+Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
+statistics: S = matches - C x mismatches, lambda solved per pair from the two sequences'
+class compositions (so two hydrophobic runs, whose expected score is positive, get no
+lambda and no significance), E = K m n e^(-lambda S) with n the database's residue count.
+`--ka-k` sets K; the default 0.03 was fitted on reversed-sequence decoys for
+`hp-thomas-dill` at k=12 with penalty 2, and needs refitting for other settings. On 200
+SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+`region_poisson_score` raised the share of same-superfamily relatives found before the
+first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
+different-fold hit at E <= 0.01.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
