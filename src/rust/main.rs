@@ -126,6 +126,20 @@ enum Commands {
         #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
         remove_low_complexity: Option<bool>,
 
+        /// Grow each matched region past its exact k-mer run, charging this much per
+        /// encoded position where query and target disagree (+1 per agreeing position).
+        /// 0 keeps regions exact, the default. A remote homolog conserves the HP pattern per
+        /// position far better than it conserves any 23-residue stretch of it exactly, so an
+        /// exact run is treated as a seed and extended with X-drop (see --extend-xdrop).
+        /// The region's shared k-mer count and Poisson score still count exact k-mers only;
+        /// `region_n_mismatches` reports how many positions inside the region disagree.
+        #[arg(long, default_value = "0.0")]
+        extend_mismatch_penalty: f64,
+
+        /// Stop extending once the running score has fallen this far below its best.
+        #[arg(long, default_value = "8.0")]
+        extend_xdrop: f64,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -326,6 +340,8 @@ fn main() -> IndexResult<()> {
             min_region_score,
             max_pvalue,
             remove_low_complexity: remove_low_complexity_arg,
+            extend_mismatch_penalty,
+            extend_xdrop,
             verbose,
             query_is_index,
             batch_size,
@@ -387,6 +403,14 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
             eprintln!("  Minimum region score: {}", min_region_score);
+            if extend_mismatch_penalty > 0.0 {
+                eprintln!(
+                    "  Seed extension: mismatch penalty {}, X-drop {}",
+                    extend_mismatch_penalty, extend_xdrop
+                );
+            } else {
+                eprintln!("  Seed extension: off (regions are exact runs)");
+            }
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
@@ -410,6 +434,13 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
+            if extend_mismatch_penalty > 0.0 {
+                use kmerseek::search::ExtensionParams;
+                searcher.set_extension(Some(ExtensionParams {
+                    mismatch_penalty: extend_mismatch_penalty,
+                    xdrop: extend_xdrop,
+                }));
+            }
 
             // Build query sketches the same way the target index was built.
             // WHY: if the index dropped low-complexity k-mers but queries keep them,

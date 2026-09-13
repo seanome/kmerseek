@@ -97,6 +97,32 @@ Removal is **off by default**; existing indexes and workflows are unaffected.
 Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 `hhhhhhhhhp` is kept.
 
+## Extending matched regions past the exact seed
+
+A matched region is a maximal run of shared k-mers: one position where the encoded
+query and target disagree ends it. Between remote homologs the HP pattern is conserved
+per position (chance-corrected agreement about 0.45 at 20-30% identity) far better than
+any 23-residue stretch of it is conserved exactly (most such pairs share no exact
+23-mer at all), so an exact run is better read as a seed than as the match.
+
+`--extend-mismatch-penalty C` grows each region outward along the encoded sequences,
+scoring +1 per agreeing position and -C per disagreeing one, and stops when the running
+score has fallen `--extend-xdrop X` (default 8) below its best, the same X-drop rule
+BLAST uses. Two seeds on one diagonal whose extensions meet become one region.
+
+```bash
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --encoding hp \
+    --extend-mismatch-penalty 2 --output hits.csv
+```
+
+What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
+the extended span, `region_length` with them; `region_n_shared_kmers` still counts
+exact shared k-mers (the seeds), so it no longer equals `region_length - ksize + 1`;
+and a new column `region_n_mismatches` says how many positions inside the region
+disagree. The region Poisson score keeps counting exact k-mers against the expectation
+summed over the extended span, so extension can only make a region's score more
+conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
