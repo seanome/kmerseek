@@ -111,19 +111,19 @@ jobs:
             --input tests/testdata/fasta/ced9.fasta \
             --output test_output.db \
             --ksize 5 \
-            --encoding protein
+            --alphabet protein20
 
           cargo run --bin kmerseek --no-default-features -- index \
             --input tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
             --output test_output_gz.db \
             --ksize 10 \
-            --encoding hp
+            --alphabet hp_lehninger2
 
           cargo run --bin kmerseek --no-default-features -- index \
             --input tests/testdata/fasta/ced9.fasta \
             --output test_output_dayhoff.db \
             --ksize 8 \
-            --encoding dayhoff
+            --alphabet dayhoff6
 
           ls -la test_output*.db
 

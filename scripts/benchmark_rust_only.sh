@@ -26,24 +26,24 @@ for test_file_info in "${TEST_FILES[@]}"; do
     
     # Test different k-mer sizes
     for ksize in 5 10 15; do
-        # Test different encodings
-        for encoding in protein hp dayhoff; do
-            echo "  k=$ksize, encoding=$encoding:"
+        # Test different alphabets
+        for alphabet in protein20 hp_lehninger2 dayhoff6; do
+            echo "  k=$ksize, alphabet=$alphabet:"
             
             # Time the execution
             START_TIME=$(date +%s.%N)
             
             kmerseek index \
                 --input "$test_file" \
-                --output "$TEMP_DIR/output_${ksize}_${encoding}.db" \
+                --output "$TEMP_DIR/output_${ksize}_${alphabet}.db" \
                 --ksize "$ksize" \
-                --encoding "$encoding"
+                --alphabet "$alphabet"
             
             END_TIME=$(date +%s.%N)
             EXECUTION_TIME=$(echo "$END_TIME - $START_TIME" | bc)
             
             # Get output size
-            OUTPUT_SIZE=$(du -h "$TEMP_DIR/output_${ksize}_${encoding}.db" | cut -f1)
+            OUTPUT_SIZE=$(du -h "$TEMP_DIR/output_${ksize}_${alphabet}.db" | cut -f1)
             
             echo "    Time: ${EXECUTION_TIME}s, Size: ${OUTPUT_SIZE}"
         done
@@ -57,13 +57,13 @@ echo
 # Test memory usage for the larger file
 LARGE_FILE="tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz"
 
-echo "Memory usage for large file (k=10, encoding=hp):"
+echo "Memory usage for large file (k=10, alphabet=hp_lehninger2):"
 echo "Rust CLI:"
 /usr/bin/time -l kmerseek index \
     --input "$LARGE_FILE" \
     --output "$TEMP_DIR/memory_test.db" \
     --ksize 10 \
-    --encoding hp 2>&1 | grep "maximum resident set size"
+    --alphabet hp_lehninger2 2>&1 | grep "maximum resident set size"
 
 echo
 echo "=== Benchmark Complete ===" 

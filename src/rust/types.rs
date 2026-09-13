@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
+use crate::alphabets::{canonical_moltype, Alphabet};
+
 /// A type-safe wrapper for k-mer sizes
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct KmerSize(pub u32);
@@ -80,19 +82,25 @@ impl fmt::Display for Scaled {
 pub struct MolType(pub String);
 
 impl MolType {
-    /// Create a new molecular type with validation
+    /// Create a molecular type, rejecting anything that is not a known alphabet.
+    ///
+    /// sourmash's `protein`, `dayhoff` and `hp` are accepted and stored under kmerseek's
+    /// names for the same alphabets. Normalizing here rather than at each call site keeps a
+    /// single spelling in indexes and results: `find_matched_regions` asserts query and
+    /// target moltypes are equal, and two names for one alphabet would abort the search.
     pub fn new(moltype: &str) -> Result<Self, String> {
-        match moltype {
-            "protein" | "dayhoff" | "hp" => Ok(MolType(moltype.to_string())),
-            s if s.starts_with("hp_") => Ok(MolType(moltype.to_string())),
-            _ => Err(format!(
-                "Invalid molecular type: {}. Must be one of: protein, dayhoff, hp, \
-                 hp_lehninger, hp_thomas_dill, hp_kyte_doolittle, \
-                 hp_thomas_dill_no_c, hp_lehninger_c_nonpolar, hp_lehninger_hpc, hp_pbotc_1st_ed, \
-                 hp_shuffled_control",
-                moltype
-            )),
+        if let Some(alphabet) = Alphabet::from_moltype(canonical_moltype(moltype)) {
+            return Ok(MolType(alphabet.to_moltype().to_string()));
         }
+        Err(format!(
+            "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \
+             hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
+             hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
+             gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, \
+             mmseqs12, wass14, hsdm17, uniprot18 (sourmash's protein, dayhoff and hp are \
+             also read)",
+            moltype
+        ))
     }
 
     /// Get the raw value
@@ -184,9 +192,39 @@ mod tests {
 
     #[test]
     fn test_moltype_validation() {
-        assert!(MolType::new("protein").is_ok());
-        assert!(MolType::new("dayhoff").is_ok());
-        assert!(MolType::new("hp").is_ok());
+        assert!(MolType::new("protein20").is_ok());
+        assert!(MolType::new("dayhoff6").is_ok());
+        assert!(MolType::new("hp_lehninger2").is_ok());
         assert!(MolType::new("invalid").is_err());
+    }
+
+    /// `protein` and its synonym `raw` are the full 20-letter alphabet and keep their names,
+    /// as do the alphabets that already carry a class count.
+    #[test]
+    fn test_moltype_leaves_current_names_alone() {
+        for moltype in ["protein20", "dayhoff6", "hp_lehninger2", "sdm12", "gbmr4", "uniprot18"] {
+            assert_eq!(MolType::new(moltype).unwrap().get(), moltype);
+        }
+    }
+
+    /// kmerseek reads sourmash's three moltypes and stores them under its own names, so
+    /// sourmash-labelled data stays usable and only one spelling reaches the rest of the
+    /// code.
+    #[test]
+    fn test_moltype_reads_sourmash_names() {
+        for (sourmash, kmerseek) in
+            [("protein", "protein20"), ("dayhoff", "dayhoff6"), ("hp", "hp_lehninger2")]
+        {
+            assert_eq!(MolType::new(sourmash).unwrap().get(), kmerseek, "{sourmash}");
+            assert_eq!(MolType::new(sourmash).unwrap(), MolType::new(kmerseek).unwrap());
+        }
+    }
+
+    /// kmerseek's own earlier spellings were never sourmash's, so they stay rejected.
+    #[test]
+    fn test_moltype_rejects_earlier_kmerseek_spellings() {
+        for moltype in ["raw", "hp_lehninger", "hp_thomas_dill", "reduced_sdm12"] {
+            assert!(MolType::new(moltype).is_err(), "{moltype}");
+        }
     }
 }
