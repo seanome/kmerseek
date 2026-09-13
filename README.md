@@ -135,6 +135,14 @@ SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
 different-fold hit at E <= 0.01.
 
+`--chain-max-gap G --chain-max-shift D` chains colinear extended regions that are at most
+G residues apart on the query and at most D diagonals apart (a net indel of up to D)
+into one region, scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993);
+`region_n_chained` says how many regions a row is made of. A domain that no single
+gapless run covers becomes one call. On SCOPe40 domains it changes ranking little
+(chains form in 2% of regions at 30/10); its purpose is region-level transfer, where a
+call has to cover a domain to carry its label.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit

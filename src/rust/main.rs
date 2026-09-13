@@ -149,6 +149,18 @@ enum Commands {
         #[arg(long, default_value = "0.03")]
         ka_k: f64,
 
+        /// Chain extended regions on one diagonal at most this many residues apart into one
+        /// region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
+        /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
+        /// every region separate. Used only with --extend-mismatch-penalty.
+        #[arg(long, default_value = "0")]
+        chain_max_gap: u32,
+
+        /// Largest diagonal shift (net indel) between chained regions. 0 chains only along
+        /// one diagonal. Used with --chain-max-gap.
+        #[arg(long, default_value = "0")]
+        chain_max_shift: u32,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -352,6 +364,8 @@ fn main() -> IndexResult<()> {
             extend_mismatch_penalty,
             extend_xdrop,
             ka_k,
+            chain_max_gap,
+            chain_max_shift,
             verbose,
             query_is_index,
             batch_size,
@@ -415,8 +429,8 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum region score: {}", min_region_score);
             if extend_mismatch_penalty > 0.0 {
                 eprintln!(
-                    "  Seed extension: mismatch penalty {}, X-drop {}, Karlin-Altschul K {}",
-                    extend_mismatch_penalty, extend_xdrop, ka_k
+                    "  Seed extension: mismatch penalty {}, X-drop {}, Karlin-Altschul K {}, chain gap {} shift {}",
+                    extend_mismatch_penalty, extend_xdrop, ka_k, chain_max_gap, chain_max_shift
                 );
             } else {
                 eprintln!("  Seed extension: off (regions are exact runs)");
@@ -450,6 +464,8 @@ fn main() -> IndexResult<()> {
                     mismatch_penalty: extend_mismatch_penalty,
                     xdrop: extend_xdrop,
                     ka_k,
+                    chain_max_gap,
+                    chain_max_shift,
                 }));
             }
 
