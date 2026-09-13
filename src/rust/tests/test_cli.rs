@@ -555,7 +555,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
             target_index_path.to_str().unwrap(),
             "--ksize",
             "12",
-            "--encoding",
+            "--alphabet",
             "hp",
         ])
         .assert()
@@ -575,7 +575,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
             out.to_str().unwrap(),
             "--ksize",
             "12",
-            "--encoding",
+            "--alphabet",
             "hp",
             "--min-shared-kmers",
             "0",
