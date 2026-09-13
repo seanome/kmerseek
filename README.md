@@ -97,6 +97,52 @@ Removal is **off by default**; existing indexes and workflows are unaffected.
 Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 `hhhhhhhhhp` is kept.
 
+## Extending matched regions past the exact seed
+
+A matched region is a maximal run of shared k-mers: one position where the encoded
+query and target disagree ends it. Between remote homologs the HP pattern is conserved
+per position (chance-corrected agreement about 0.45 at 20-30% identity) far better than
+any 23-residue stretch of it is conserved exactly (most such pairs share no exact
+23-mer at all), so an exact run is better read as a seed than as the match.
+
+`--extend-mismatch-penalty C` grows each region outward along the encoded sequences,
+scoring +1 per agreeing position and -C per disagreeing one, and stops when the running
+score has fallen `--extend-xdrop X` (default 8) below its best, the same X-drop rule
+BLAST uses. Two seeds on one diagonal whose extensions meet become one region.
+
+```bash
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --encoding hp \
+    --extend-mismatch-penalty 2 --output hits.csv
+```
+
+What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
+the extended span, `region_length` with them; `region_n_shared_kmers` still counts
+exact shared k-mers (the seeds), so it no longer equals `region_length - ksize + 1`;
+and a new column `region_n_mismatches` says how many positions inside the region
+disagree. The region Poisson score keeps counting exact k-mers against the expectation
+summed over the extended span, so extension can only make a region's score more
+conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
+
+Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
+statistics: S = matches - C x mismatches, lambda solved per pair from the two sequences'
+class compositions (so two hydrophobic runs, whose expected score is positive, get no
+lambda and no significance), E = K m n e^(-lambda S) with n the database's residue count.
+`--ka-k` sets K; the default 0.03 was fitted on reversed-sequence decoys for
+`hp-thomas-dill` at k=12 with penalty 2, and needs refitting for other settings. On 200
+SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+`region_poisson_score` raised the share of same-superfamily relatives found before the
+first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
+different-fold hit at E <= 0.01.
+
+`--chain-max-gap G --chain-max-shift D` chains colinear extended regions that are at most
+G residues apart on the query and at most D diagonals apart (a net indel of up to D)
+into one region, scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993);
+`region_n_chained` says how many regions a row is made of. A domain that no single
+gapless run covers becomes one call. On SCOPe40 domains it changes ranking little
+(chains form in 2% of regions at 30/10); its purpose is region-level transfer, where a
+call has to cover a domain to carry its label.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit

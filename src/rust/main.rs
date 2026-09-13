@@ -119,6 +119,41 @@ enum Commands {
         #[arg(long, value_name = "BOOL", num_args = 0..=1, default_missing_value = "true")]
         remove_low_complexity: Option<bool>,
 
+        /// Grow each matched region past its exact k-mer run, charging this much per
+        /// encoded position where query and target disagree (+1 per agreeing position).
+        /// 0 keeps regions exact, the default. A remote homolog conserves the HP pattern per
+        /// position far better than it conserves any 23-residue stretch of it exactly, so an
+        /// exact run is treated as a seed and extended with X-drop (see --extend-xdrop).
+        /// The region's shared k-mer count and Poisson score still count exact k-mers only;
+        /// `region_n_mismatches` reports how many positions inside the region disagree.
+        #[arg(long, default_value = "0.0")]
+        extend_mismatch_penalty: f64,
+
+        /// Stop extending once the running score has fallen this far below its best.
+        #[arg(long, default_value = "8.0")]
+        extend_xdrop: f64,
+
+        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
+        /// Depends on the alphabet, the penalty and the seed length. The default was fitted
+        /// on reversed-sequence decoys (200 SCOPe40 domains against the SCOPe40 index,
+        /// hp-thomas-dill, k=12, penalty 2): hits per query with E' <= x were 0.0305x at
+        /// x=10 and 0.0324x at x=100. Refit for another alphabet or penalty before
+        /// trusting the E-values. Used only with --extend-mismatch-penalty.
+        #[arg(long, default_value = "0.03")]
+        ka_k: f64,
+
+        /// Chain extended regions on one diagonal at most this many residues apart into one
+        /// region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
+        /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
+        /// every region separate. Used only with --extend-mismatch-penalty.
+        #[arg(long, default_value = "0")]
+        chain_max_gap: u32,
+
+        /// Largest diagonal shift (net indel) between chained regions. 0 chains only along
+        /// one diagonal. Used with --chain-max-gap.
+        #[arg(long, default_value = "0")]
+        chain_max_shift: u32,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -344,6 +379,11 @@ fn main() -> IndexResult<()> {
             min_region_score,
             max_pvalue,
             remove_low_complexity: remove_low_complexity_arg,
+            extend_mismatch_penalty,
+            extend_xdrop,
+            ka_k,
+            chain_max_gap,
+            chain_max_shift,
             verbose,
             query_is_index,
             batch_size,
@@ -405,6 +445,14 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
             eprintln!("  Minimum region score: {}", min_region_score);
+            if extend_mismatch_penalty > 0.0 {
+                eprintln!(
+                    "  Seed extension: mismatch penalty {}, X-drop {}, Karlin-Altschul K {}, chain gap {} shift {}",
+                    extend_mismatch_penalty, extend_xdrop, ka_k, chain_max_gap, chain_max_shift
+                );
+            } else {
+                eprintln!("  Seed extension: off (regions are exact runs)");
+            }
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
@@ -428,6 +476,16 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
+            if extend_mismatch_penalty > 0.0 {
+                use kmerseek::search::ExtensionParams;
+                searcher.set_extension(Some(ExtensionParams {
+                    mismatch_penalty: extend_mismatch_penalty,
+                    xdrop: extend_xdrop,
+                    ka_k,
+                    chain_max_gap,
+                    chain_max_shift,
+                }));
+            }
 
             // Build query sketches the same way the target index was built.
             // WHY: if the index dropped low-complexity k-mers but queries keep them,

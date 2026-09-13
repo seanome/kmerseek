@@ -539,3 +539,87 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
     Ok(())
 }
+
+/// `--extend-mismatch-penalty` grows regions past their exact seeds and reports the
+/// mismatches inside; without it every region is exact and the new column reads 0.
+#[test]
+fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            target_index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+        ])
+        .assert()
+        .success();
+
+    let run = |extra: &[&str],
+               out: &std::path::Path|
+     -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            target_index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "0.7",
+        ]);
+        cmd.args(extra);
+        cmd.assert().success();
+        let mut reader = csv::Reader::from_path(out)?;
+        Ok(reader.deserialize::<SearchResultCsv>().collect::<Result<Vec<_>, _>>()?)
+    };
+
+    let exact = run(&[], &temp_dir.path().join("exact.csv"))?;
+    let extended = run(
+        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8"],
+        &temp_dir.path().join("extended.csv"),
+    )?;
+
+    // Off: the same 242 records (243 lines with the header) as test_cli_search_bcl2_ced9,
+    // all exact.
+    assert_eq!(exact.len(), 242);
+    assert!(exact.iter().all(|r| r.region_n_mismatches == 0));
+    assert!(exact.iter().all(|r| r.region_n_shared_kmers == r.region_length - 12 + 1));
+
+    // On: regions only grow or merge, so there are no more rows than before, at least one
+    // region now spans a mismatch, and n_shared never exceeds what the span could hold.
+    assert!(!extended.is_empty());
+    assert!(extended.len() <= exact.len(), "{} vs {}", extended.len(), exact.len());
+    assert!(extended.iter().any(|r| r.region_n_mismatches > 0));
+    for r in &extended {
+        assert!(r.region_length >= 12);
+        assert!(r.region_n_shared_kmers <= r.region_length - 12 + 1);
+        assert_eq!(r.region_subseq.len() as u32, r.region_length);
+        assert_eq!(r.target_subseq.len() as u32, r.region_length);
+    }
+    let bcl2_exact: Vec<_> =
+        exact.iter().filter(|r| r.target_name.contains("BCL2_HUMAN")).collect();
+    let bcl2_ext: Vec<_> =
+        extended.iter().filter(|r| r.target_name.contains("BCL2_HUMAN")).collect();
+    assert!(bcl2_ext.len() <= bcl2_exact.len());
+    assert!(
+        bcl2_ext.iter().map(|r| r.region_length).max()
+            >= bcl2_exact.iter().map(|r| r.region_length).max(),
+        "the longest BCL2/CED9 region can only get longer"
+    );
+    Ok(())
+}
