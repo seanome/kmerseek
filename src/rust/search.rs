@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
 
@@ -485,16 +485,18 @@ pub struct MatchedRegion {
     /// Encoded sequence (hp/dayhoff/protein encoding)
     pub moltype_seq: String,
 
-    // One of "protein", "dayhoff", or "hp"
+    // One of "protein20", "dayhoff6", or "hp"
     pub moltype: MolType,
 
     /// Length of the match
     pub length: u32,
 
     /// Exact shared k-mers inside the region. For a region as `find_matched_regions` emits it
-    /// this is `length - ksize + 1`. Extension (see `extend_regions`) adds residues that were
-    /// not shared k-mers, so on an extended region it is smaller than that formula and is the
-    /// count the Poisson test has to use.
+    /// at scaled=1 this is `length - ksize + 1`. Two things make it smaller: at scaled>1 only
+    /// sampled k-mers are in the sketch, so only those count as observations (the region still
+    /// spans the whole exact match), and extension (see `extend_regions`) adds residues that
+    /// were not shared k-mers. Either way it is the count the Poisson test has to use, against
+    /// `expected_shared_kmers` summed over the same k-mers.
     pub n_shared: u32,
 
     /// Encoded positions inside the region where query and target disagree. Zero unless the
@@ -1227,13 +1229,14 @@ impl ProteinSearcher {
             // signatures, summed. See region_expectation for the exact formula.
             let lambda =
                 region_expectation(&query.position_prefix, region.start, region.end, ksize);
-            // find_matched_regions never emits a region shorter than ksize (its length is
-            // consecutive_count + ksize - 1, and consecutive_count >= 1), and extension only
-            // grows a region. debug_assert catches it loudly if that invariant is ever broken.
+            // find_matched_regions never emits a region shorter than ksize or with no shared
+            // k-mer in it, and extension only grows a region. debug_assert catches either
+            // loudly if that invariant is ever broken.
             debug_assert!(
-                region.length >= ksize as u32,
-                "region shorter than ksize: length={}, ksize={ksize}",
-                region.length
+                region.length >= ksize as u32 && region.n_shared >= 1,
+                "bad region: length={}, n_shared={}, ksize={ksize}",
+                region.length,
+                region.n_shared
             );
             let n_shared = region.n_shared;
             let tail_probability = poisson_survival(n_shared, lambda);
@@ -1582,8 +1585,8 @@ fn calculate_similarity_from_precomputed(
 /// use kmerseek::sketch::ProteinSketch;
 /// use kmerseek::search::calculate_similarity;
 ///
-/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp").unwrap();
-/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp").unwrap();
+/// let query = ProteinSketch::from_protein_sequence("query", "ATCGATCG", 10, 1, "hp_lehninger2").unwrap();
+/// let target = ProteinSketch::from_protein_sequence("target", "ATCGATCG", 10, 1, "hp_lehninger2").unwrap();
 /// let result = calculate_similarity(&query, &target);
 /// ```
 #[must_use]
@@ -1594,27 +1597,13 @@ pub fn calculate_similarity(query: &ProteinSketch, target: &ProteinSketch) -> Op
     calculate_similarity_from_precomputed(query, &query_mins, target, &target_mins, &intersection)
 }
 
-/// Find all consecutive matched regions of k-mer overlap between a query and target sequences
-///
-/// WHY: This is a standalone function because it doesn't require any state from ProteinSearcher.
-/// It only operates on the sketches and intersection provided. This makes it easier to test and
-/// more reusable. This is idiomatic Rust - functions that don't need state should be standalone.
-#[must_use = "matched regions should be used to analyze query-target alignments"]
-pub fn find_matched_regions(
+/// Every (query position, target position, hash) triple where a shared k-mer starts, one per
+/// pairing of a hash's query starts with its target starts. Unsorted.
+fn shared_position_pairs(
     query_sketch: &ProteinSketch,
     target_sketch: &ProteinSketch,
     intersection: &HashSet<u64>,
-) -> Vec<MatchedRegion> {
-    // Ensure that query and target protein sketches are the same ksize
-    assert_eq!(query_sketch.protein_ksize(), target_sketch.protein_ksize());
-    let ksize = query_sketch.protein_ksize() as usize;
-    let query_name = query_sketch.signature().name.clone();
-    let target_name = target_sketch.signature().name.clone();
-
-    // Ensure that both query and target have the same moltypes
-    assert_eq!(query_sketch.moltype(), target_sketch.moltype());
-    let moltype = query_sketch.moltype().clone();
-
+) -> Vec<(usize, usize, u64)> {
     // Build mapping from hashval to positions for both query and target
     // WHY: We need to maintain correspondence between query and target positions for each
     // k-mer hash. This allows us to find the correct target region for each query region.
@@ -1649,6 +1638,167 @@ pub fn find_matched_regions(
             }
         }
     }
+    query_target_pairs
+}
+
+/// The maximal stretch of agreeing encoded residues on one diagonal through the seed k-mer
+/// at (`qpos`, `tpos`), as `[start, end)` in query coordinates. `None` when the seed window
+/// itself disagrees, which happens when two k-mers share a hash only through an ambiguous
+/// residue's expansion; the dense path drops those regions the same way.
+fn exact_run_around(
+    query: &[u8],
+    target: &[u8],
+    qpos: usize,
+    tpos: usize,
+    ksize: usize,
+) -> Option<(usize, usize)> {
+    let offset = tpos as isize - qpos as isize;
+    let agree = |i: usize| {
+        let j = i as isize + offset;
+        i < query.len() && j >= 0 && (j as usize) < target.len() && query[i] == target[j as usize]
+    };
+    if !(qpos..qpos + ksize).all(agree) {
+        return None;
+    }
+    let mut start = qpos;
+    while start > 0 && agree(start - 1) {
+        start -= 1;
+    }
+    let mut end = qpos + ksize;
+    while agree(end) {
+        end += 1;
+    }
+    Some((start, end))
+}
+
+/// Region detection when the sketches keep only a `1/scaled` sample of their k-mers.
+///
+/// With every k-mer present, `find_matched_regions` reads a region straight off the shared
+/// k-mers: consecutive shared starts on one diagonal are an exact match, and its length is
+/// the count plus `ksize - 1`. A sampled sketch keeps k-mers by hash value, so the shared
+/// starts on a diagonal sit about `scaled` apart and are rarely adjacent. That rule would
+/// turn every match into a scatter of single k-mers.
+///
+/// Here each shared k-mer is a seed instead. The encoded sequences are stored, so the seed's
+/// diagonal is walked outward while the residues agree, which recovers the full exact match
+/// the seed sits in, including the k-mers the sample dropped. A seed inside a run already
+/// emitted is skipped. Every region returned is therefore a maximal exact match of at least
+/// `ksize` residues holding at least one sampled shared k-mer: the same set the dense path
+/// finds, minus any match the sample missed entirely.
+///
+/// `n_shared` counts only the sampled k-mers inside the run, since those are the observations
+/// the Poisson test's expectation is summed over.
+///
+/// Returns nothing when either sketch lacks its stored sequences, since the walk needs them.
+fn find_sampled_regions(
+    query_sketch: &ProteinSketch,
+    target_sketch: &ProteinSketch,
+    intersection: &HashSet<u64>,
+) -> Vec<MatchedRegion> {
+    let ksize = query_sketch.protein_ksize() as usize;
+    let (Some(query_raw), Some(target_raw)) =
+        (query_sketch.get_raw_sequence(), target_sketch.get_raw_sequence())
+    else {
+        return Vec::new();
+    };
+    let (Some(query_encoded), Some(target_encoded)) =
+        (query_sketch.get_moltype_sequence(), target_sketch.get_moltype_sequence())
+    else {
+        return Vec::new();
+    };
+    let query_name = query_sketch.signature().name.clone();
+    let target_name = target_sketch.signature().name.clone();
+    let moltype = query_sketch.moltype().clone();
+
+    // Seeds grouped by diagonal (target start minus query start), sorted within each.
+    let mut seeds_by_diagonal: BTreeMap<isize, Vec<usize>> = BTreeMap::new();
+    for (qpos, tpos, _) in shared_position_pairs(query_sketch, target_sketch, intersection) {
+        seeds_by_diagonal.entry(tpos as isize - qpos as isize).or_default().push(qpos);
+    }
+
+    let mut regions = Vec::new();
+    for (diagonal, mut seeds) in seeds_by_diagonal {
+        seeds.sort_unstable();
+        seeds.dedup();
+        // Query positions below this start inside a run already emitted on this diagonal.
+        let mut covered_until = 0;
+        for (i, &qpos) in seeds.iter().enumerate() {
+            if qpos < covered_until {
+                continue;
+            }
+            let tpos = (qpos as isize + diagonal) as usize;
+            let Some((start, end)) = exact_run_around(
+                query_encoded.as_bytes(),
+                target_encoded.as_bytes(),
+                qpos,
+                tpos,
+                ksize,
+            ) else {
+                continue;
+            };
+            let last_start = end - ksize;
+            let n_shared = seeds[i..].iter().take_while(|&&p| p <= last_start).count();
+            covered_until = last_start + 1;
+
+            let target_start = (start as isize + diagonal) as usize;
+            let target_end = target_start + (end - start);
+            regions.push(MatchedRegion {
+                query_name: query_name.clone(),
+                start: start as u32,
+                end: end as u32,
+                subseq: query_raw[start..end].to_string(),
+                target_name: target_name.clone(),
+                target_start: target_start as u32,
+                target_end: target_end as u32,
+                target_subseq: target_raw[target_start..target_end].to_string(),
+                moltype: moltype.clone(),
+                moltype_seq: target_encoded[target_start..target_end].to_string(),
+                length: (end - start) as u32,
+                n_shared: n_shared as u32,
+                n_mismatches: 0,
+                expected_shared_kmers: 0.0,
+                poisson_score: 0.0,
+                tail_probability: 1.0,
+                enrichment: 0.0,
+                ka_bits: 0.0,
+                n_chained: 1,
+                evalue: f64::INFINITY,
+            });
+        }
+    }
+    regions.sort_by_key(|r| r.start);
+    regions
+}
+
+/// Find all consecutive matched regions of k-mer overlap between a query and target sequences
+///
+/// WHY: This is a standalone function because it doesn't require any state from ProteinSearcher.
+/// It only operates on the sketches and intersection provided. This makes it easier to test and
+/// more reusable. This is idiomatic Rust - functions that don't need state should be standalone.
+#[must_use = "matched regions should be used to analyze query-target alignments"]
+pub fn find_matched_regions(
+    query_sketch: &ProteinSketch,
+    target_sketch: &ProteinSketch,
+    intersection: &HashSet<u64>,
+) -> Vec<MatchedRegion> {
+    // Ensure that query and target protein sketches are the same ksize
+    assert_eq!(query_sketch.protein_ksize(), target_sketch.protein_ksize());
+    let ksize = query_sketch.protein_ksize() as usize;
+    let query_name = query_sketch.signature().name.clone();
+    let target_name = target_sketch.signature().name.clone();
+
+    // Ensure that both query and target have the same moltypes
+    assert_eq!(query_sketch.moltype(), target_sketch.moltype());
+    let moltype = query_sketch.moltype().clone();
+
+    // A sampled sketch has too few adjacent shared k-mers for the consecutive-position rule
+    // below; see find_sampled_regions.
+    assert_eq!(query_sketch.scaled(), target_sketch.scaled());
+    if query_sketch.scaled() > 1 {
+        return find_sampled_regions(query_sketch, target_sketch, intersection);
+    }
+
+    let mut query_target_pairs = shared_position_pairs(query_sketch, target_sketch, intersection);
 
     if query_target_pairs.is_empty() {
         return Vec::new();
@@ -2060,7 +2210,7 @@ mod tests {
             target_end: 17,
             target_subseq: "TSUBSEQ".to_string(),
             moltype_seq: "hphph".to_string(),
-            moltype: MolType::new("hp").unwrap(),
+            moltype: MolType::new("hp_lehninger2").unwrap(),
             length: 6,
             n_shared: 2,
             n_mismatches: 0,
@@ -2082,7 +2232,7 @@ mod tests {
             n_intersecting_hashes: 7,
             ksize: 5,
             scaled: 1,
-            moltype: "hp".to_string(),
+            moltype: "hp_lehninger2".to_string(),
             jaccard: 0.25,
             max_containment: 0.6,
             average_abund: 2.0,
@@ -2121,7 +2271,7 @@ mod tests {
         assert_eq!(row.target_subseq, "TSUBSEQ");
         assert_eq!(row.moltype_seq, "hphph");
         assert_eq!(row.region_length, 6);
-        // Region-scoped stat columns: length 6, ksize 5 -> 6 - 5 + 1 = 2 shared k-mers.
+        // Region-scoped stat columns are copied straight from the region.
         assert_eq!(row.region_n_shared_kmers, 2);
         assert_eq!(row.region_expected_shared_kmers, 2.0);
         assert_eq!(row.region_poisson_score, 0.05);
@@ -2250,25 +2400,25 @@ mod tests {
         // still caches this fixture, so if multiple test cases use it, the FASTA is only read once.
         // This gives us the caching benefit while maintaining compatibility with #[case] attributes.
         let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp_lehninger2").unwrap()
     }
 
     #[fixture]
     fn ced9_sketch_k15() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
     }
 
     #[fixture]
     fn bcl2_sketch_k12() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 12, 1, "hp_lehninger2").unwrap()
     }
 
     #[fixture]
     fn bcl2_sketch_k15() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
-        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp").unwrap()
+        ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
     }
 
     /// Read the first record from a FASTA file and return name and sequence.
@@ -2311,10 +2461,10 @@ mod tests {
         let target_index_path = temp_path.join("target_index");
         let target_index = ProteomeIndex::new(
             &target_index_path,
-            15,    // ksize - k=15 is where BCL2/CED9 have good HP overlap
-            1,     // scaled
-            "hp",  // moltype
-            false, // store_raw_sequences
+            15,              // ksize - k=15 is where BCL2/CED9 have good HP overlap
+            1,               // scaled
+            "hp_lehninger2", // moltype
+            false,           // store_raw_sequences
         )?;
 
         target_index.process_fasta(target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
@@ -2326,10 +2476,10 @@ mod tests {
         let query_index_path = temp_path.join("query_index");
         let query_index = ProteomeIndex::new(
             &query_index_path,
-            15,    // ksize
-            1,     // scaled
-            "hp",  // moltype
-            false, // store_raw_sequences
+            15,              // ksize
+            1,               // scaled
+            "hp_lehninger2", // moltype
+            false,           // store_raw_sequences
         )?;
 
         query_index.process_fasta(query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
@@ -2379,7 +2529,7 @@ mod tests {
         let temp_path = temp_dir.path();
 
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(
             TEST_CED9_FASTA,
             DEFAULT_PROGRESS_INTERVAL,
@@ -2388,7 +2538,7 @@ mod tests {
         let searcher = ProteinSearcher::new(target_index);
 
         let query_index_path = temp_path.join("query_index");
-        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", false)?;
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(
             TEST_BLC2_FASTA,
             DEFAULT_PROGRESS_INTERVAL,
@@ -2443,12 +2593,12 @@ mod tests {
     fn test_pvalue_scopes_combine_with_or() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp", true)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 15, 1, "hp_lehninger2", true)?;
         target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(target_index);
 
         let query_index_path = temp_dir.path().join("query_index");
-        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp", true)?;
+        let query_index = ProteomeIndex::new(&query_index_path, 15, 1, "hp_lehninger2", true)?;
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
         let query_signatures: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
@@ -2512,7 +2662,7 @@ mod tests {
     ) -> Result<()> {
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 12, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 12, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(TEST_FASTA_GZ, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
         target_index.save_state()?;
         drop(target_index);
@@ -2865,7 +3015,7 @@ mod tests {
         // 14 is the minimum k-mersize that finds multiple match regions from Delilah's analyses
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Read CED9 sequence from FASTA file
         let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
@@ -2960,7 +3110,7 @@ mod tests {
 
         // Create target index
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
 
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
@@ -2971,7 +3121,8 @@ mod tests {
         let query_fasta = temp_path.join("query.fasta");
         std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
 
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
 
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
@@ -3000,12 +3151,13 @@ mod tests {
 
         // Create indices
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let searcher = ProteinSearcher::new(target_index);
 
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
@@ -3056,7 +3208,7 @@ mod tests {
         std::fs::write(&target_fasta, ">exact_match\nATCGATCGATCGATCG\n>partial_match\nATCGATCGATCGATCA\n>no_match\nGGGGGGGGGGGGGGGG")?;
 
         let target_index_path = temp_path.join("target_index");
-        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp", false)?;
+        let target_index = ProteomeIndex::new(&target_index_path, 10, 1, "hp_lehninger2", false)?;
         target_index.process_fasta(&target_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let searcher = ProteinSearcher::new(target_index);
@@ -3065,7 +3217,8 @@ mod tests {
         let query_fasta = temp_path.join("query.fasta");
         std::fs::write(&query_fasta, ">query\nATCGATCGATCGATCG")?;
 
-        let query_index = ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp", false)?;
+        let query_index =
+            ProteomeIndex::new_with_auto_filename(&query_fasta, 10, 1, "hp_lehninger2", false)?;
         query_index.process_fasta(&query_fasta, DEFAULT_PROGRESS_INTERVAL, DEFAULT_BATCH_SIZE)?;
 
         let query_signatures: Vec<_> =
@@ -3106,9 +3259,9 @@ mod tests {
         let temp_path = temp_dir.path().join("test.db");
 
         // Create a proper index with a database path
-        let index = ProteomeIndex::new(&temp_path, 10, 5, "hp", false)?;
+        let index = ProteomeIndex::new(&temp_path, 10, 5, "hp_lehninger2", false)?;
 
-        let query = ProteinSketch::new("test", 10, 5, "hp")?;
+        let query = ProteinSketch::new("test", 10, 5, "hp_lehninger2")?;
         let stats = SearchStats {
             total_signatures: 100,
             idf: HashMap::new(),
@@ -3305,7 +3458,7 @@ mod tests {
     fn test_search_database_bcl2_ced9() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         // Create temporary directory for the index
         let temp_dir = TempDir::new()?;
@@ -3375,7 +3528,8 @@ mod tests {
         );
         assert_eq!(bcl2_result.ksize, ksize);
         assert_eq!(bcl2_result.scaled, scaled);
-        assert_eq!(bcl2_result.moltype, moltype);
+        // Results carry the normalized moltype, not the spelling the index was created with.
+        assert_eq!(bcl2_result.moltype, "hp_lehninger2");
 
         // Verify we have intersecting k-mers
         assert!(
@@ -3399,11 +3553,10 @@ mod tests {
         // WHY: With multiple signatures in the database, some k-mers will be rare and have
         // higher IDF values, making TF-IDF > 0. In a real database search, TF-IDF helps
         // identify matches based on rare, significant k-mers.
-        assert!(
-            bcl2_result.query_tfidf == 565.119680433367,
-            "query_tfidf should be 565.119680433367, got {}",
-            bcl2_result.query_tfidf
-        );
+        // Compared approximately, not with ==: this is a sum over a HashMap keyed by k-mer
+        // hash, so the summation order (and therefore the last bits) depends on the hash
+        // values themselves.
+        approx::assert_relative_eq!(bcl2_result.query_tfidf, 565.119680433367, epsilon = 1e-9);
 
         assert!(
             bcl2_result.mean_matched_kmer_freq > 0.0,
@@ -3453,7 +3606,7 @@ mod tests {
     fn test_joint_kmer_freq_two_pass() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
@@ -3505,30 +3658,177 @@ mod tests {
         Ok(())
     }
 
-    /// Checks the CSV's `region_n_shared_kmers` shortcut (`region.length - ksize + 1`, see
-    /// `SearchResultCsv::from_result_and_region`) against an independent count of real k-mer
-    /// positions, for every named HP alphabet.
+    fn sketch_pair(ksize: u32, scaled: u32) -> (ProteinSketch, ProteinSketch) {
+        let (qn, qs) = read_first_fasta_record(TEST_CED9_FASTA).unwrap();
+        let (tn, ts) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
+        (
+            ProteinSketch::from_protein_sequence(&qn, &qs, ksize, scaled, "hp_lehninger2").unwrap(),
+            ProteinSketch::from_protein_sequence(&tn, &ts, ksize, scaled, "hp_lehninger2").unwrap(),
+        )
+    }
+
+    fn span(r: &MatchedRegion) -> (u32, u32, u32, u32) {
+        (r.start, r.end, r.target_start, r.target_end)
+    }
+
+    /// Recounts `n_shared` without the region code: shared k-mer starts on the region's own
+    /// diagonal whose whole window lies inside the span.
+    fn recount_shared_on_diagonal(
+        query: &ProteinSketch,
+        target: &ProteinSketch,
+        region: &MatchedRegion,
+    ) -> u32 {
+        let ksize = query.protein_ksize();
+        let diagonal = region.target_start as i64 - region.start as i64;
+        let mut n = 0;
+        for hash in query.intersect(target) {
+            for &qpos in &query.kmer_positions()[&hash] {
+                let qpos = qpos as u32;
+                let inside = region.start <= qpos && qpos + ksize <= region.end;
+                let on_diagonal = target.kmer_positions()[&hash]
+                    .iter()
+                    .any(|&tpos| tpos as i64 - qpos as i64 == diagonal);
+                if inside && on_diagonal {
+                    n += 1;
+                }
+            }
+        }
+        n
+    }
+
+    /// A sampled sketch keeps a k-mer by hash value, so at scaled=s roughly 1/s of the shared
+    /// k-mers survive and they are rarely adjacent. The sampled path grows each survivor
+    /// back out to the full exact match it sits in, so every region it reports must be one of
+    /// the dense path's regions, span for span, and never a fragment of one. What it cannot
+    /// do is report a match none of whose k-mers survived, so the count only falls.
     ///
-    /// That formula is only correct because scaled=1 means FracMinHash keeps every k-mer (no
-    /// downsampling), so "how many k-mers are in this span" reduces to arithmetic on the span's
-    /// length. Rather than trusting that reasoning, this test recomputes the count a different
-    /// way: for each region, it walks `kmer_positions` (the sketch's own record of where each
-    /// retained k-mer starts) and counts how many positions fall inside the region's span,
-    /// then asserts that matches the formula's answer. Repeated for every named HP
+    /// CED9 vs BCL2 at hp k=12 has 13 dense regions. The survivors at each scaled are fixed
+    /// by the hash cutoff, so they are asserted exactly.
+    #[rstest]
+    #[case::scaled_2(2, 7)]
+    #[case::scaled_5(5, 4)]
+    #[case::scaled_10(10, 1)]
+    fn test_sampled_regions_are_whole_dense_regions(
+        #[case] scaled: u32,
+        #[case] expected_regions: usize,
+    ) {
+        let (dq, dt) = sketch_pair(12, 1);
+        let dense = find_matched_regions(&dq, &dt, &dq.intersect(&dt));
+        assert_eq!(dense.len(), 13);
+
+        let (sq, st) = sketch_pair(12, scaled);
+        let sampled = find_matched_regions(&sq, &st, &sq.intersect(&st));
+        assert_eq!(sampled.len(), expected_regions);
+
+        let dense_spans: Vec<_> = dense.iter().map(span).collect();
+        for r in &sampled {
+            let i = dense_spans
+                .iter()
+                .position(|&d| d == span(r))
+                .unwrap_or_else(|| panic!("sampled region {:?} is not a dense region", span(r)));
+            assert_eq!(r.subseq, dense[i].subseq);
+            assert_eq!(r.target_subseq, dense[i].target_subseq);
+            assert_eq!(r.moltype_seq, dense[i].moltype_seq);
+            assert_eq!(r.length, dense[i].length);
+            assert_eq!(r.n_shared, recount_shared_on_diagonal(&sq, &st, r), "{:?}", span(r));
+            assert!(r.n_shared <= dense[i].n_shared);
+        }
+    }
+
+    /// The four survivors at scaled=5, with the sampled k-mer count each one rests on.
+    /// GVVVCGRMMFSLK kept 2 of its 2 k-mers; the other three kept 1 each, and the 19-residue
+    /// QCPMSYGRLIGLISFGGFV match was recovered in full from that single k-mer.
+    #[test]
+    fn test_sampled_regions_scaled_5_exact() {
+        let (q, t) = sketch_pair(12, 5);
+        let regions = find_matched_regions(&q, &t, &q.intersect(&t));
+        let got: Vec<_> = regions
+            .iter()
+            .map(|r| (r.start, r.end, r.target_start, r.target_end, r.n_shared, r.subseq.as_str()))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                (145, 159, 130, 144, 1, "FSLYQDVVRTVGNA"),
+                (162, 181, 138, 157, 1, "QCPMSYGRLIGLISFGGFV"),
+                (253, 266, 80, 93, 1, "MIGAGVTAGAIGI"),
+                (267, 280, 200, 213, 2, "GVVVCGRMMFSLK"),
+            ]
+        );
+    }
+
+    /// At k=15 the only dense region is the 19-residue landmark, held up by 5 shared k-mers.
+    /// The sampled path reports it at every scaled here, with the span intact and `n_shared`
+    /// falling to however many of the 5 the cutoff kept: all 5 at scaled=2 (the hash values
+    /// happen to land low), 3 at scaled=5, 1 at scaled=10.
+    #[rstest]
+    #[case::scaled_1(1, 5)]
+    #[case::scaled_2(2, 5)]
+    #[case::scaled_5(5, 3)]
+    #[case::scaled_10(10, 1)]
+    fn test_sampled_landmark_k15(#[case] scaled: u32, #[case] n_shared: u32) {
+        let (q, t) = sketch_pair(15, scaled);
+        let regions = find_matched_regions(&q, &t, &q.intersect(&t));
+        assert_eq!(regions.len(), 1);
+        let r = &regions[0];
+        assert_eq!(span(r), (162, 181, 138, 157));
+        assert_eq!(r.subseq, "QCPMSYGRLIGLISFGGFV");
+        assert_eq!(r.length, 19);
+        assert_eq!(r.n_shared, n_shared);
+        assert_eq!(r.n_shared, recount_shared_on_diagonal(&q, &t, r));
+    }
+
+    /// The seed window's own residues must agree; a run is never grown from a k-mer pair that
+    /// only shares a hash. Two identical 20-mers on a diagonal with a substitution between
+    /// them are two runs, not one bridged run: exact_run_around stops at the mismatch.
+    #[test]
+    fn test_exact_run_stops_at_mismatch() {
+        // BCL2 positions 138..157 and the same stretch with one residue changed in the middle.
+        let q = b"RDGVNWGRIVAFFEFGGVM";
+        let t = b"RDGVNWGRIVKFFEFGGVM"; // A -> K at index 10
+        assert_eq!(exact_run_around(q, t, 0, 0, 5), Some((0, 10)));
+        assert_eq!(exact_run_around(q, t, 12, 12, 5), Some((11, 19)));
+        assert_eq!(exact_run_around(q, t, 8, 8, 5), None, "window 8..13 crosses the mismatch");
+        // A seed near the end grows left to the mismatch and right to the sequence end.
+        assert_eq!(exact_run_around(q, t, 14, 14, 5), Some((11, 19)));
+    }
+
+    /// The sampled path needs the stored sequences to grow a seed; without them it reports
+    /// nothing rather than a scatter of single k-mers.
+    #[test]
+    fn test_sampled_regions_need_stored_sequences() {
+        let (q, t) = sketch_pair(12, 5);
+        let mut bare = ProteinSketch::new("bare", 12, 5, "hp_lehninger2").unwrap();
+        for (h, positions) in q.kmer_positions() {
+            bare.kmer_positions_mut().insert(*h, positions.clone());
+        }
+        assert!(bare.get_moltype_sequence().is_none());
+        assert_eq!(find_matched_regions(&bare, &t, &q.intersect(&t)).len(), 0);
+    }
+
+    /// Checks `MatchedRegion::n_shared` (surfaced as the CSV's `region_n_shared_kmers`)
+    /// against an independent count of real k-mer positions, for every named HP alphabet.
+    ///
+    /// At scaled=1 FracMinHash keeps every k-mer, so the dense region path sets `n_shared` to
+    /// its consecutive-k-mer count, which must equal `length - ksize + 1`. Rather than
+    /// trusting that reasoning, this test recomputes the count a different way: for each
+    /// region, it walks `kmer_positions` (the sketch's own record of where each retained k-mer
+    /// starts) and counts how many positions fall inside the region's span, then asserts
+    /// that matches both the field and the formula. Repeated for every named HP
     /// alphabet (including hp_thomas_dill_no_c) since each partitions residues into H/P
     /// differently, and the position bookkeeping has to hold for all of them, not just one.
     #[test]
     fn test_region_shared_kmer_count_exact_at_scaled_one_all_alphabets() {
-        use crate::hp_alphabets::HpAlphabet;
+        use crate::alphabets::Alphabet;
 
         // Real sequence (already used elsewhere in this codebase for HP-alphabet regression
         // tests, see test_hp_encoding.rs) - self-hit so every alphabet reliably finds a region.
         let seq = "MKTAYIAKQRFLVSNSQLAGKRILVTQADTFMGPTLCEVFAEMG";
         let ksize = 8;
 
-        for alpha in HpAlphabet::all_named() {
+        for alpha in Alphabet::hp_family() {
             let moltype = alpha.to_moltype();
-            let sketch = ProteinSketch::from_protein_sequence("self", seq, ksize, 1, &moltype)
+            let sketch = ProteinSketch::from_protein_sequence("self", seq, ksize, 1, moltype)
                 .unwrap_or_else(|e| panic!("{moltype}: from_protein_sequence failed: {e}"));
 
             let shared = sketch.mins_as_set();
@@ -3544,11 +3844,11 @@ mod tests {
                     .filter(|&&p| p >= region.start as usize && p < window_end)
                     .count();
                 assert_eq!(
-                    n_in_region as u32,
-                    region.length - ksize + 1,
-                    "{moltype}: region {:?} shared k-mer count mismatch",
+                    n_in_region as u32, region.n_shared,
+                    "{moltype}: region {:?} n_shared mismatch",
                     region.subseq
                 );
+                assert_eq!(region.n_shared, region.length - ksize + 1);
             }
         }
     }
@@ -3564,7 +3864,7 @@ mod tests {
     fn test_region_poisson_score_independently_recomputed() -> Result<()> {
         let ksize = 15;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
@@ -3645,7 +3945,7 @@ mod tests {
     fn test_multiplicity_components_are_reported_separately() -> Result<()> {
         let ksize = 12;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");
@@ -3799,12 +4099,13 @@ mod tests {
         let ksize = 12;
         let temp_dir = TempDir::new()?;
         let index_path = temp_dir.path().join("index");
-        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp", true)?;
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(index);
 
         let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
-        let sketch = ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp")?;
+        let sketch =
+            ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp_lehninger2")?;
         let prefix = searcher.build_position_prefix(&sketch);
 
         // A window holding one k-mer: [0, 0 + 1) after the ksize adjustment.
@@ -3841,7 +4142,7 @@ mod tests {
         let ksize = 12;
         let temp_dir = TempDir::new()?;
         let index_path = temp_dir.path().join("index");
-        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp", true)?;
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         assert_eq!(index.signature_count(), 25);
 
@@ -3880,7 +4181,7 @@ mod tests {
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
         let ksize = 9;
         let scaled = 1;
-        let moltype = "hp";
+        let moltype = "hp_lehninger2";
 
         let temp_dir = TempDir::new()?;
         let target_index_path = temp_dir.path().join("target_index");

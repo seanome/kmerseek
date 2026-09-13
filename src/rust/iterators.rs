@@ -158,7 +158,7 @@ mod tests {
     const REP_HASH_AT_0: u64 = 8299134706416968033;
 
     fn sketch() -> ProteinSketch {
-        ProteinSketch::from_protein_sequence("p", REPEAT_SEQ, 5, 1, "protein").unwrap()
+        ProteinSketch::from_protein_sequence("p", REPEAT_SEQ, 5, 1, "protein20").unwrap()
     }
 
     #[test]

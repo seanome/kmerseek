@@ -6,7 +6,7 @@ use sourmash::sketch::minhash::KmerMinHash;
 use sourmash::storage::SigStore;
 use sourmash_plugin_branchwater::utils::multicollection::SmallSignature;
 
-use crate::encoding::{
+use crate::hash_functions::{
     get_hash_function_from_moltype, get_moltype_from_hash_function,
     get_moltype_from_hash_function_string,
 };
@@ -274,7 +274,7 @@ mod tests {
         "MKTAYIAKQRQISFVKSHFSRQLEERLGLIEVQAPILSRVGDGTQDNLSGAEKAVQVKVKALPDAQFEVVHSLAKWKR";
 
     fn make_stable() -> StableSignature {
-        let mut sig = ProteinSketch::from_protein_sequence("test_seq", SEQ, 5, 1, "protein")
+        let mut sig = ProteinSketch::from_protein_sequence("test_seq", SEQ, 5, 1, "protein20")
             .unwrap()
             .into_signature();
         sig.location = "loc.fasta".to_string();
@@ -283,7 +283,7 @@ mod tests {
     }
 
     fn small_signature() -> SmallSignature {
-        let minhash = ProteinSketch::from_protein_sequence("small_seq", SEQ, 5, 1, "protein")
+        let minhash = ProteinSketch::from_protein_sequence("small_seq", SEQ, 5, 1, "protein20")
             .unwrap()
             .signature()
             .get_minhash()
@@ -346,7 +346,8 @@ mod tests {
         let stable: StableSignature = small.into();
         assert_eq!(stable.get_name(), "small_seq");
         assert_eq!(stable.get_location(), "small.fasta");
-        assert_eq!(stable.moltype, "protein");
+        // `protein` normalizes to the name that states its class count.
+        assert_eq!(stable.moltype, "protein20");
         // From uses the minhash ksize (protein k=5 * PROTEIN_TO_MINHASH_RATIO=3).
         assert_eq!(stable.ksize, 15);
         assert_eq!(stable.minhash.mins().len(), SEQ_MINS);
