@@ -1341,8 +1341,11 @@ impl ProteomeIndex {
         // Create RocksDB options optimized for read operations
         let opts = Self::create_rocksdb_options(false);
 
-        // Open the database
-        let db = DB::open(&opts, path)?;
+        // WHY: read-only. Every caller of load() only reads (the --query-is-index search
+        // path and the round-trip tests), and DB::open would take the exclusive LOCK file,
+        // so two searches loading the same pre-indexed query would race on it exactly as
+        // get_index_parameters did. Writers go through new(), which keeps DB::open.
+        let db = DB::open_for_read_only(&opts, path, false)?;
 
         // Try to load state to get configuration
         let serialized = db.get(b"index_metadata")?;
