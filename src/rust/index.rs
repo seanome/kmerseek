@@ -1460,8 +1460,12 @@ impl ProteomeIndex {
         // Create RocksDB options optimized for read operations
         let opts = Self::create_rocksdb_options(false);
 
-        // Open the database
-        let db = DB::open(&opts, path)?;
+        // WHY: read-only, like `open_for_search`. This only reads metadata, but `DB::open`
+        // takes the exclusive LOCK file, so two searches autodetecting against the same
+        // index at the same moment raced on it: 32 of 92 tasks on a shared Lustre index
+        // died here with "While lock file: .../LOCK: Resource temporarily unavailable"
+        // before the read-only search open was ever reached (2026-09-12).
+        let db = DB::open_for_read_only(&opts, path, false)?;
 
         // Validate schema version before loading anything else.
         // Indices built before versioning was added have no schema_version key and are
