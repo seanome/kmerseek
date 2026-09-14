@@ -1369,12 +1369,9 @@ impl ProteomeIndex {
         Ok((index.ksize, index.scaled, index.moltype.clone()))
     }
 
-    /// Refuse an index written by a newer binary than this one.
-    ///
-    /// Only a newer stored version is rejected. Older versions are accepted: indices
-    /// built before versioning was added have no schema_version key and read as
-    /// version 0, and version 0 indices built after commit 9d083c8 (Feb 24 2026) use
-    /// the kmer_positions format, which schema version 1 reads unchanged.
+    /// Refuse an index written by a newer binary than this one. Without this, a
+    /// newer on-disk layout fails inside bincode with a length mismatch instead
+    /// of a message saying to upgrade.
     fn reject_newer_schema(db: &DB) -> IndexResult<()> {
         let stored_version = Self::read_schema_version(db)?;
         if stored_version > SCHEMA_VERSION {
