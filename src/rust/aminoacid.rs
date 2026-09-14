@@ -9,7 +9,7 @@ pub const STANDARD_AA: [char; 20] = [
     'Y',
 ];
 
-/// Amino acids that carry no residue identity and so can never be reduced: X (any residue) and
+/// Ambiguous amino acids that carry no residue identity and so can never be reduced: X (any residue) and
 /// the stop codon.
 pub const SPECIAL_AA: [char; 2] = ['X', '*'];
 
