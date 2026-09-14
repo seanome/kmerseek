@@ -1257,112 +1257,15 @@ impl ProteomeIndex {
         }
     }
 
-    /// Load an existing ProteomeIndex from a RocksDB path
-    /// Note: This method has known issues with serialization and may not work reliably.
-    /// For now, it's recommended to use save_state() and load_state() on existing indices.
+    /// Open an index read-only with every signature deserialized into memory.
+    ///
+    /// `open_for_search()` plus `load_state()`. Use this when the caller needs all
+    /// sketches with their k-mer positions up front (the `--query-is-index` search path);
+    /// use `open_for_search()` when signatures can be fetched on demand.
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
-        // Create RocksDB options optimized for read operations
-        let opts = Self::create_rocksdb_options(false);
-
-        // WHY: read-only. Every caller of load() only reads (the --query-is-index search
-        // path and the round-trip tests), and DB::open would take the exclusive LOCK file,
-        // so two searches loading the same pre-indexed query would race on it exactly as
-        // get_index_parameters did. Writers go through new(), which keeps DB::open.
-        let db = DB::open_for_read_only(&opts, path, false)?;
-
-        // Try to load state to get configuration
-        let serialized = db.get(b"index_metadata")?;
-        if let Some(data) = serialized {
-            let metadata = Self::read_metadata(&db, &data)?;
-
-            let _hash_function = get_hash_function_from_moltype(&metadata.moltype)
-                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-
-            // Reconstruct the combined minhash from raw data
-            let hash_function = get_hash_function_from_moltype(&metadata.moltype)
-                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            let minhash_ksize = metadata.ksize * 3;
-            let mut combined_minhash = KmerMinHash::new(
-                metadata.scaled,
-                minhash_ksize,
-                hash_function,
-                SEED,
-                true, // track_abundance
-                0,    // num (use scaled instead)
-            );
-
-            if let Some(abunds) = &metadata.combined_abunds {
-                combined_minhash
-                    .add_many_with_abund(
-                        &metadata
-                            .combined_mins
-                            .clone()
-                            .into_iter()
-                            .zip(abunds.iter().cloned())
-                            .collect::<Vec<_>>(),
-                    )
-                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            } else {
-                combined_minhash
-                    .add_many(&metadata.combined_mins)
-                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            }
-
-            // Load all chunk data from RocksDB (sequential - RocksDB reads are single-threaded)
-            let mut raw_chunks: Vec<Vec<u8>> = Vec::with_capacity(metadata.chunk_count);
-            for chunk_idx in 0..metadata.chunk_count {
-                let chunk_key = format!("signatures_chunk_{}", chunk_idx);
-                if let Some(data) = db.get(chunk_key.as_bytes())? {
-                    raw_chunks.push(data);
-                }
-            }
-
-            // Deserialize and reconstruct signatures in parallel
-            use rayon::prelude::*;
-            let moltype = &metadata.moltype;
-            let ksize = metadata.ksize;
-            let scaled = metadata.scaled;
-            let remove_low_complexity = metadata.remove_low_complexity;
-            // Read before `db` is moved into the struct below.
-            let kmerseek_version = Self::read_kmerseek_version(&db)?;
-
-            let signatures: DashMap<String, ProteinSketch> = DashMap::new();
-            raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
-                let chunk: Vec<ProteinSketchStore> = bincode::deserialize(raw_data)?;
-                for signature_data in chunk {
-                    let protein_sig = ProteinSketch::from_efficient_data(
-                        signature_data,
-                        moltype.clone(),
-                        ksize,
-                        scaled,
-                    )?;
-                    let md5sum = protein_sig.signature().md5sum.clone();
-                    signatures.insert(md5sum.to_string(), protein_sig);
-                }
-                Ok(())
-            })?;
-
-            let index = Self {
-                db,
-                signatures,
-                combined_minhash: Arc::new(Mutex::new(combined_minhash)),
-                aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-                moltype: metadata.moltype,
-                ksize: metadata.ksize,
-                minhash_ksize: metadata.ksize * 3,
-                scaled: metadata.scaled,
-                stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
-                store_raw_sequences: metadata.store_raw_sequences,
-                remove_low_complexity,
-                kmer_windows_examined: AtomicUsize::new(0),
-                low_complexity_kmers_removed: AtomicUsize::new(0),
-                kmerseek_version,
-            };
-
-            Ok(index)
-        } else {
-            Err(IndexError::NoSavedState)
-        }
+        let index = Self::open_for_search(path)?;
+        index.load_state()?;
+        Ok(index)
     }
 
     /// Open a database for searching without loading all signatures into memory.
@@ -1376,8 +1279,10 @@ impl ProteomeIndex {
     pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let opts = Self::create_rocksdb_options(false);
         // WHY: open_for_read_only avoids acquiring the exclusive LOCK file, allowing
-        // multiple search processes to query the same index concurrently.
+        // multiple search processes to query the same index concurrently. This is the
+        // only read-only open; `load()` and `get_index_parameters()` build on it.
         let db = DB::open_for_read_only(&opts, path, false)?;
+        Self::reject_newer_schema(&db)?;
 
         let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
         let metadata = Self::read_metadata(&db, &metadata_data)?;
@@ -1457,27 +1362,21 @@ impl ProteomeIndex {
 
     /// Get the index parameters (ksize, scaled, moltype) from the database metadata
     ///
-    /// This method reads the stored metadata to extract the parameters used when
-    /// the index was created, enabling autodetection of correct search parameters.
+    /// Reads the stored metadata to extract the parameters used when the index was
+    /// created, enabling autodetection of correct search parameters.
     pub fn get_index_parameters<P: AsRef<Path>>(path: P) -> IndexResult<(u32, u32, String)> {
-        // Create RocksDB options optimized for read operations
-        let opts = Self::create_rocksdb_options(false);
+        let index = Self::open_for_search(path)?;
+        Ok((index.ksize, index.scaled, index.moltype.clone()))
+    }
 
-        // WHY: read-only, like `open_for_search`. This only reads metadata, but `DB::open`
-        // takes the exclusive LOCK file, so two searches autodetecting against the same
-        // index at the same moment raced on it: 32 of 92 tasks on a shared Lustre index
-        // died here with "While lock file: .../LOCK: Resource temporarily unavailable"
-        // before the read-only search open was ever reached (2026-09-12).
-        let db = DB::open_for_read_only(&opts, path, false)?;
-
-        // Validate schema version before loading anything else.
-        // Indices built before versioning was added have no schema_version key and are
-        // treated as version 0.
-        // Version 0 indexes built after commit 9d083c8 (Feb 24 2026) use kmer_positions
-        // format and are fully compatible with schema version 1. We accept them here.
-        // Only truly incompatible formats (e.g., pre-Feb-24 kmer_infos format) need rebuilding,
-        // but those can't be detected by this key alone.
-        let stored_version = Self::read_schema_version(&db)?;
+    /// Refuse an index written by a newer binary than this one.
+    ///
+    /// Only a newer stored version is rejected. Older versions are accepted: indices
+    /// built before versioning was added have no schema_version key and read as
+    /// version 0, and version 0 indices built after commit 9d083c8 (Feb 24 2026) use
+    /// the kmer_positions format, which schema version 1 reads unchanged.
+    fn reject_newer_schema(db: &DB) -> IndexResult<()> {
+        let stored_version = Self::read_schema_version(db)?;
         if stored_version > SCHEMA_VERSION {
             return Err(IndexError::ValidationError {
                 message: format!(
@@ -1488,22 +1387,7 @@ impl ProteomeIndex {
                 ),
             });
         }
-
-        // Try to load metadata from new chunked format first
-        let metadata_serialized = db.get(b"index_metadata")?;
-        if let Some(metadata_data) = metadata_serialized {
-            let metadata = Self::read_metadata(&db, &metadata_data)?;
-            return Ok((metadata.ksize, metadata.scaled, metadata.moltype));
-        }
-
-        // Fallback to old format for backward compatibility
-        let serialized = db.get(b"index_state")?;
-        if let Some(data) = serialized {
-            let state: ProteomeIndexState = bincode::deserialize(&data)?;
-            return Ok((state.ksize, state.scaled, state.moltype));
-        }
-
-        Err(IndexError::ValidationError { message: "No metadata found in database".to_string() })
+        Ok(())
     }
 
     /// Get the combined minhash size
