@@ -619,6 +619,57 @@ fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Er
     Ok(())
 }
 
+/// Two indexes are compared sketch for sketch, so `--query-is-index` refuses a query index
+/// whose scaled differs from the target's instead of reaching the assertion in
+/// `find_matched_regions`.
+#[test]
+fn test_cli_query_is_index_rejects_scaled_mismatch() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let mut dbs = Vec::new();
+    for scaled in ["1", "5"] {
+        let db = temp_dir.path().join(format!("scaled_{scaled}.db"));
+        Command::cargo_bin("kmerseek")?
+            .args([
+                "index",
+                "--input",
+                TEST_FASTA_GZ,
+                "--output",
+                db.to_str().unwrap(),
+                "--ksize",
+                "12",
+                "--scaled",
+                scaled,
+                "--alphabet",
+                "hp_lehninger2",
+            ])
+            .assert()
+            .success();
+        dbs.push(db);
+    }
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "search",
+            "--query",
+            dbs[1].to_str().unwrap(),
+            "--query-is-index",
+            "--target",
+            dbs[0].to_str().unwrap(),
+            "--output",
+            temp_dir.path().join("hits.csv").to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp_lehninger2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Query index (ksize=12, scaled=5, alphabet=hp_lehninger2) was not built with the \
+             target's parameters (ksize=12, scaled=1, alphabet=hp_lehninger2)",
+        ));
+    Ok(())
+}
+
 /// A bad `--scaled` is rejected before any database is created.
 #[test]
 fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>> {

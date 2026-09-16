@@ -492,6 +492,26 @@ fn main() -> IndexResult<()> {
                 // Load pre-indexed query database
                 eprintln!("Loading pre-indexed query database...");
                 let query_index = ProteomeIndex::load(&query)?;
+                // Sketches from two indexes are compared as they are, so the two must agree
+                // on every sketch parameter. A scaled mismatch would otherwise reach
+                // find_matched_regions, which asserts it.
+                let query_params =
+                    (query_index.ksize(), query_index.scaled(), query_index.moltype());
+                let target_params = (final_ksize, final_scaled, detected_moltype.as_str());
+                if query_params != target_params {
+                    return Err(IndexError::ValidationError {
+                        message: format!(
+                            "Query index (ksize={}, scaled={}, alphabet={}) was not built with \
+                             the target's parameters (ksize={}, scaled={}, alphabet={})",
+                            query_params.0,
+                            query_params.1,
+                            query_params.2,
+                            target_params.0,
+                            target_params.1,
+                            target_params.2,
+                        ),
+                    });
+                }
                 let query_signatures: Vec<_> = query_index
                     .get_signatures()
                     .iter()
