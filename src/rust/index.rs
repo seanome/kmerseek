@@ -4371,6 +4371,34 @@ mod tests {
         }
         Ok(())
     }
+
+    /// A chunk count that does not parse is an error naming the key, not a panic and not
+    /// `Ok(None)`. Nothing in this code writes such a value, so it only arises from a
+    /// damaged database, and the message should say which key to look at.
+    #[test]
+    fn test_unparseable_chunk_count_is_an_error() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("count.db"), 10, 1, "protein20", false)?;
+
+        let cache = crate::index::SearchCache {
+            target_list: (0..500).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..500u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..500u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        index.write_search_cache_chunked(&serialized, 1024)?;
+
+        index.db.put(b"search_cache_chunks", b"seven")?;
+        match index.load_search_cache() {
+            Ok(_) => panic!("an unparseable chunk count must not load"),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Corrupt index: search_cache_chunks is not a number: \"seven\""
+            ),
+        }
+        Ok(())
+    }
 }
 
 /// Builder for creating ProteomeIndex instances with sensible defaults
