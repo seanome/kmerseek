@@ -99,11 +99,11 @@ Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 
 ### Indexing a large proteome: `--scaled`
 
-Indexing holds every k-mer of every sequence in memory, about 680 bytes per residue
-at k=10. Swiss-Prot (208 M residues) needs ~140 GB; UniRef50 (12 G residues) would
-need ~8 TB. `--scaled N` keeps only the k-mers whose hash falls in the lowest `1/N`
-of the hash space (FracMinHash), so the same k-mer is kept or dropped in every
-sequence. Memory, index size and search-time memory all fall almost linearly with N:
+Nearly all of an index's cost is per k-mer: at k=10 each residue adds about 660
+bytes of k-mer bookkeeping during indexing on top of ~20 bytes that do not depend on
+the k-mer count, and about 79 bytes on disk. `--scaled N` keeps only the k-mers whose
+hash falls in the lowest `1/N` of the hash space (FracMinHash), so the same k-mer is
+kept or dropped in every sequence and the per-k-mer cost falls almost linearly with N:
 
 ```bash
 kmerseek index -i uniref50.fasta.gz --ksize 10 --scaled 5
@@ -116,7 +116,10 @@ kmerseek index -i uniref50.fasta.gz --ksize 10 --scaled 5
 | 5 | 162 B | 17 B |
 | 10 | 87 B | 9.7 B |
 
-(Measured on a 55,486-sequence UniRef50 sample at k=10, protein20.)
+(Measured on a 55,486-sequence UniRef50 sample at k=10, protein20. The memory column
+is for the indexer in this release, which holds every k-mer in memory until the index
+is written; with it, Swiss-Prot's 208 M residues need ~140 GB at scaled=1 and ~18 GB
+at scaled=10.)
 
 The value is stored in the index and search reads it back, so `search` takes no
 `--scaled` flag and cannot disagree with the database.

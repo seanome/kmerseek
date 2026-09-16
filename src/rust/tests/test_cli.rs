@@ -4,6 +4,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 use approx::assert_relative_eq;
+use rstest::rstest;
 
 use crate::alphabets::Alphabet;
 use crate::search::SearchResultCsv;
@@ -540,15 +541,15 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// `--scaled 5` keeps about a fifth of the k-mers. The same CED9 vs BCL2 search then reports
-/// exactly the four regions the unit tests fix for this pair at scaled=5 (see
-/// `test_sampled_regions_scaled_5_exact`), each spanning the whole exact match, with
-/// `region_n_shared_kmers` counting only the kept k-mers. `scaled` is read back from the
-/// database, so search needs no flag of its own.
-#[test]
-fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Error>> {
+/// Index the 25-sequence test FASTA at `ksize`/`scaled` in `hp_lehninger2`, search CED9
+/// against it with every result filter open, and return the rows hitting BCL2_HUMAN sorted
+/// by query start. `scaled` is read back from the database, so `search` takes no flag.
+fn index_and_search_bcl2(
+    ksize: u32,
+    scaled: u32,
+) -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
-    let target_index_path = temp_dir.path().join("target_scaled5.db");
+    let target_index_path = temp_dir.path().join("target.db");
     Command::cargo_bin("kmerseek")?
         .args([
             "index",
@@ -557,17 +558,17 @@ fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Er
             "--output",
             target_index_path.to_str().unwrap(),
             "--ksize",
-            "12",
+            &ksize.to_string(),
             "--scaled",
-            "5",
+            &scaled.to_string(),
             "--alphabet",
             "hp_lehninger2",
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Scaled: 5"));
+        .stderr(predicate::str::contains(format!("Scaled: {scaled}")));
 
-    let output_csv = temp_dir.path().join("scaled5.csv");
+    let output_csv = temp_dir.path().join("hits.csv");
     Command::cargo_bin("kmerseek")?
         .args([
             "search",
@@ -578,7 +579,7 @@ fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Er
             "--output",
             output_csv.to_str().unwrap(),
             "--ksize",
-            "12",
+            &ksize.to_string(),
             "--alphabet",
             "hp_lehninger2",
             "--min-shared-kmers",
@@ -588,34 +589,100 @@ fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Er
         ])
         .assert()
         .success()
-        .stderr(predicate::str::contains("Scaled: 5 (detected: 5)"));
+        .stderr(predicate::str::contains(format!("Scaled: {scaled} (detected: {scaled})")));
 
-    let mut bcl2_regions = Vec::new();
+    let mut rows = Vec::new();
     for record in csv::Reader::from_path(&output_csv)?.deserialize::<SearchResultCsv>() {
         let record = record?;
-        assert_eq!(record.scaled, 5);
+        assert_eq!(record.scaled, scaled);
         if record.target_name.contains("BCL2_HUMAN") {
-            assert_eq!(record.n_intersecting_hashes, 5);
-            bcl2_regions.push((
-                record.region_start,
-                record.region_end,
-                record.target_start,
-                record.target_end,
-                record.region_n_shared_kmers,
-                record.region_subseq,
-            ));
+            rows.push(record);
         }
     }
-    bcl2_regions.sort();
+    rows.sort_by_key(|r| (r.region_start, r.target_start));
+    Ok(rows)
+}
+
+/// `--scaled 5` keeps about a fifth of the k-mers. The same CED9 vs BCL2 search then reports
+/// exactly the four regions the unit tests fix for this pair at scaled=5 (see
+/// `test_sampled_regions_scaled_5_exact`), each spanning the whole exact match, with
+/// `region_n_shared_kmers` counting only the kept k-mers.
+#[test]
+fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = index_and_search_bcl2(12, 5)?;
+    let regions: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.region_start,
+                r.region_end,
+                r.target_start,
+                r.target_end,
+                r.region_n_shared_kmers,
+                r.region_subseq.as_str(),
+            )
+        })
+        .collect();
     assert_eq!(
-        bcl2_regions,
+        regions,
         [
-            (145, 159, 130, 144, 1, "FSLYQDVVRTVGNA".to_string()),
-            (162, 181, 138, 157, 1, "QCPMSYGRLIGLISFGGFV".to_string()),
-            (253, 266, 80, 93, 1, "MIGAGVTAGAIGI".to_string()),
-            (267, 280, 200, 213, 2, "GVVVCGRMMFSLK".to_string()),
+            (145, 159, 130, 144, 1, "FSLYQDVVRTVGNA"),
+            (162, 181, 138, 157, 1, "QCPMSYGRLIGLISFGGFV"),
+            (253, 266, 80, 93, 1, "MIGAGVTAGAIGI"),
+            (267, 280, 200, 213, 2, "GVVVCGRMMFSLK"),
         ]
     );
+    for r in &rows {
+        assert_eq!(r.n_intersecting_hashes, 5);
+    }
+    Ok(())
+}
+
+/// The BH1 match between CED9 and BCL2, CED9 162..181 against BCL2 138..157:
+///
+/// ```text
+/// Ced9 pr: …RTVGNAQTD QCPMSYGRLIGLISFGGFV AAKMMESVE…
+/// Ced9 hp: …pphhphppp pphhphhphhhhhphhhhh hhphhpphp…
+///                     |||||||||||||||||||
+/// BCL2 hp: …hhphhpphh pphhphhphhhhhphhhhh phpphppph…
+/// BCL2 pr: …FATVVEELF RDGVNWGRIVAFFEFGGVM CVESVNREM…
+/// ```
+///
+/// Whenever any of its k-mers survives the cutoff the CLI reports the whole 19-residue
+/// stretch, both residue strings and the encoding intact, and `region_n_shared_kmers` counts
+/// the survivors: 8, 4 and 1 of its 8 k-mers at k=12, and 5, 5, 3 and 1 of its 5 at k=15.
+/// At k=12 and scaled=10 all 8 hash above the cutoff and the match is missed, which is what
+/// the README's survival formula predicts for a match this short at that sampling rate.
+#[rstest]
+#[case::k12_scaled_1(12, 1, Some(8))]
+#[case::k12_scaled_2(12, 2, Some(4))]
+#[case::k12_scaled_5(12, 5, Some(1))]
+#[case::k12_scaled_10(12, 10, None)]
+#[case::k15_scaled_1(15, 1, Some(5))]
+#[case::k15_scaled_2(15, 2, Some(5))]
+#[case::k15_scaled_5(15, 5, Some(3))]
+#[case::k15_scaled_10(15, 10, Some(1))]
+fn test_cli_landmark_region_across_scaled(
+    #[case] ksize: u32,
+    #[case] scaled: u32,
+    #[case] n_shared: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rows = index_and_search_bcl2(ksize, scaled)?;
+    let landmark: Vec<_> =
+        rows.iter().filter(|r| r.region_start == 162 && r.target_start == 138).collect();
+    let Some(n_shared) = n_shared else {
+        assert!(landmark.is_empty(), "k={ksize} scaled={scaled}: {landmark:?}");
+        return Ok(());
+    };
+    assert_eq!(landmark.len(), 1, "k={ksize} scaled={scaled}");
+    let r = landmark[0];
+    assert_eq!(r.region_end, 181);
+    assert_eq!(r.target_end, 157);
+    assert_eq!(r.region_subseq, "QCPMSYGRLIGLISFGGFV");
+    assert_eq!(r.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+    assert_eq!(r.moltype_seq, "pphhphhphhhhhphhhhh");
+    assert_eq!(r.region_length, 19);
+    assert_eq!(r.region_n_shared_kmers, n_shared);
     Ok(())
 }
 
