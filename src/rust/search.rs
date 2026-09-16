@@ -1454,17 +1454,25 @@ fn exact_run_around(
 /// starts on a diagonal sit about `scaled` apart and are rarely adjacent. That rule would
 /// turn every match into a scatter of single k-mers.
 ///
-/// Here each shared k-mer is a seed instead. The encoded sequences are stored, so the seed's
-/// diagonal is walked outward while the residues agree, which recovers the full exact match
-/// the seed sits in, including the k-mers the sample dropped. A seed inside a run already
-/// emitted is skipped. Every region returned is therefore a maximal exact match of at least
-/// `ksize` residues holding at least one sampled shared k-mer: the same set the dense path
-/// finds, minus any match the sample missed entirely.
+/// Here each shared k-mer is a seed instead. The sequences are stored, so the seed's diagonal
+/// is walked outward while the residues agree, which recovers the full exact match the seed
+/// sits in, including the k-mers the sample dropped. A seed inside a run already emitted is
+/// skipped. Every region returned is therefore a maximal exact match of at least `ksize`
+/// residues holding at least one sampled shared k-mer.
+///
+/// That is the dense path's set minus any match the sample missed entirely, with one
+/// difference: the walk compares residues, while the dense path chains sketched k-mers. A
+/// window the sketch never held (one rejected by `disambiguate_kmer`, or dropped as low
+/// complexity) breaks a dense run but not a walk, so a run through such a window is reported
+/// here as one region where the dense path reports two.
 ///
 /// `n_shared` counts only the sampled k-mers inside the run, since those are the observations
 /// the Poisson test's expectation is summed over.
 ///
-/// Returns nothing when either sketch lacks its stored sequences, since the walk needs them.
+/// The walk uses the encoded sequence, falling back to the raw one when no encoded copy is
+/// stored (the full alphabet encodes to itself, so `protein20` sketches keep only the raw
+/// sequence). `moltype_seq` is empty in that case, as on the dense path. Returns nothing
+/// when either sketch stores no sequence at all, since the walk needs one.
 fn find_sampled_regions(
     query_sketch: &ProteinSketch,
     target_sketch: &ProteinSketch,
@@ -1476,11 +1484,9 @@ fn find_sampled_regions(
     else {
         return Vec::new();
     };
-    let (Some(query_encoded), Some(target_encoded)) =
-        (query_sketch.get_moltype_sequence(), target_sketch.get_moltype_sequence())
-    else {
-        return Vec::new();
-    };
+    let has_encoded = query_sketch.get_moltype_sequence().is_some();
+    let query_encoded = query_sketch.get_moltype_sequence().unwrap_or(query_raw);
+    let target_encoded = target_sketch.get_moltype_sequence().unwrap_or(target_raw);
     let query_name = query_sketch.signature().name.clone();
     let target_name = target_sketch.signature().name.clone();
     let moltype = query_sketch.moltype().clone();
@@ -1527,7 +1533,11 @@ fn find_sampled_regions(
                 target_end: target_end as u32,
                 target_subseq: target_raw[target_start..target_end].to_string(),
                 moltype: moltype.clone(),
-                moltype_seq: target_encoded[target_start..target_end].to_string(),
+                moltype_seq: if has_encoded {
+                    target_encoded[target_start..target_end].to_string()
+                } else {
+                    String::new()
+                },
                 length: (end - start) as u32,
                 n_shared: n_shared as u32,
                 expected_shared_kmers: 0.0,
@@ -1546,6 +1556,11 @@ fn find_sampled_regions(
 /// WHY: This is a standalone function because it doesn't require any state from ProteinSearcher.
 /// It only operates on the sketches and intersection provided. This makes it easier to test and
 /// more reusable. This is idiomatic Rust - functions that don't need state should be standalone.
+///
+/// # Panics
+///
+/// If the two sketches differ in k-mer size, alphabet, or scaled factor. Sketches built by
+/// `search` share all three with the index; `--query-is-index` checks them before searching.
 #[must_use = "matched regions should be used to analyze query-target alignments"]
 pub fn find_matched_regions(
     query_sketch: &ProteinSketch,
@@ -1985,6 +2000,19 @@ mod tests {
             .map_err(|e| anyhow::anyhow!("Invalid UTF-8 in name: {}", e))?;
 
         Ok((name, sequence))
+    }
+
+    /// The first record whose id contains `id`, as (name, sequence).
+    fn read_fasta_record<P: AsRef<Path>>(path: P, id: &str) -> Result<(String, String)> {
+        let mut reader = parse_fastx_file(path)?;
+        while let Some(record) = reader.next() {
+            let record = record?;
+            let name = String::from_utf8(record.id().to_vec())?;
+            if name.contains(id) {
+                return Ok((name, String::from_utf8(record.seq().to_vec())?));
+            }
+        }
+        anyhow::bail!("no record with id containing {id}")
     }
 
     /// Test search functionality similar to the Python tests
@@ -3091,6 +3119,44 @@ mod tests {
         assert_eq!(exact_run_around(q, t, 8, 8, 5), None, "window 8..13 crosses the mismatch");
         // A seed near the end grows left to the mismatch and right to the sequence end.
         assert_eq!(exact_run_around(q, t, 14, 14, 5), Some((11, 19)));
+    }
+
+    /// `protein20` sketches store no encoded copy of the sequence (the full alphabet encodes to
+    /// itself), so the walk has to fall back to the raw sequence. BCL2 and BCL-xL share the
+    /// 16-residue BH1 stretch ELFRDGVNWGRIVAFF, 7 k-mers at k=10. Every sampled sketch that
+    /// keeps any of the 7 reports the whole stretch, with `moltype_seq` empty as on the dense
+    /// path; at scaled=10 none of the 7 survive and the match is missed outright.
+    #[rstest]
+    #[case::scaled_1(1, 7)]
+    #[case::scaled_2(2, 4)]
+    #[case::scaled_5(5, 3)]
+    #[case::scaled_10(10, 0)]
+    fn test_sampled_regions_protein20_fall_back_to_raw_sequence(
+        #[case] scaled: u32,
+        #[case] n_shared: u32,
+    ) {
+        let (qn, qs) = read_fasta_record(TEST_BLC2_FASTA, "BCL2_HUMAN").unwrap();
+        let (tn, ts) = read_fasta_record(TEST_FASTA_GZ, "B2CL1_HUMAN").unwrap();
+        let q = ProteinSketch::from_protein_sequence(&qn, &qs, 10, scaled, "protein20").unwrap();
+        let t = ProteinSketch::from_protein_sequence(&tn, &ts, 10, scaled, "protein20").unwrap();
+        assert!(q.get_moltype_sequence().is_none());
+        let intersection = q.intersect(&t);
+        assert_eq!(intersection.len() as u32, n_shared);
+
+        let regions = find_matched_regions(&q, &t, &intersection);
+        if n_shared == 0 {
+            assert!(regions.is_empty());
+            return;
+        }
+        assert_eq!(regions.len(), 1);
+        let r = &regions[0];
+        assert_eq!(span(r), (135, 151, 128, 144));
+        assert_eq!(r.subseq, "ELFRDGVNWGRIVAFF");
+        assert_eq!(r.target_subseq, "ELFRDGVNWGRIVAFF");
+        assert_eq!(r.moltype_seq, "");
+        assert_eq!(r.length, 16);
+        assert_eq!(r.n_shared, n_shared);
+        assert_eq!(r.n_shared, recount_shared_on_diagonal(&q, &t, r));
     }
 
     /// The sampled path needs the stored sequences to grow a seed; without them it reports
