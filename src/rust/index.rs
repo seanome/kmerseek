@@ -52,9 +52,9 @@ const SCHEMA_VERSION_STREAMING: u32 = 3;
 const INVERTED_INDEX_SHARDS: usize = 1024;
 
 /// Target md5s per `targets_{n}` key. Chunk `n` always holds targets
-/// `n * TARGET_CHUNK .. (n + 1) * TARGET_CHUNK`, so an index into the target list maps to
-/// a key without reading anything else.
-const TARGET_CHUNK: usize = 4096;
+/// `n * chunk .. (n + 1) * chunk`, so an index into the target list maps to a key
+/// without reading anything else. Stored in the metadata, since readers need it.
+const DEFAULT_TARGET_CHUNK: usize = 4096;
 
 /// `(hash, target)` pairs buffered in memory before they are written out as a sorted run.
 /// Each pair is 16 bytes, so the default buffer is 256 MB. This is the only structure
@@ -86,6 +86,8 @@ struct ProteomeIndexMetadata {
     /// `signatures_chunk_{n}` keys of a pre-streaming index. 0 means signatures are read
     /// from their `sig_{md5}` keys.
     chunk_count: usize,
+    /// Target md5s per `targets_{n}` key.
+    target_chunk: usize,
 }
 
 /// Metadata layout of schema 2: carries the combined minhash, which schema 3 dropped
@@ -149,6 +151,7 @@ impl From<ProteomeIndexMetadataV2> for ProteomeIndexMetadata {
             unique_kmers: v2.combined_mins.len(),
             shards: 0,
             chunk_count: v2.chunk_count,
+            target_chunk: DEFAULT_TARGET_CHUNK,
         }
     }
 }
@@ -203,11 +206,6 @@ impl IngestState {
             duplicates_skipped: 0,
             stats: None,
         }
-    }
-
-    /// Index of the `targets_{n}` chunk the next signature lands in.
-    fn tail_chunk(&self) -> usize {
-        self.next_idx / TARGET_CHUNK
     }
 }
 
@@ -269,6 +267,10 @@ pub struct ProteomeIndex {
     // Posting pairs buffered before a run is written. A field rather than the constant
     // so a test can force many runs on a tiny corpus.
     posting_buffer_capacity: usize,
+
+    // Target md5s per `targets_{n}` key. Read from the metadata of a saved index; for a
+    // new one the default, unless a test lowers it to exercise chunk rollover.
+    target_chunk: usize,
 
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
@@ -417,7 +419,16 @@ impl ProteomeIndex {
         let opts = Self::create_rocksdb_options(true);
         let db = DB::open(&opts, path)?;
 
-        Ok(Self::assemble(db, moltype, ksize, scaled, store_raw_sequences, false, None))
+        Ok(Self::assemble(
+            db,
+            moltype,
+            ksize,
+            scaled,
+            store_raw_sequences,
+            false,
+            None,
+            DEFAULT_TARGET_CHUNK,
+        ))
     }
 
     /// Build the struct around an open database. Every constructor ends here so the
@@ -431,12 +442,14 @@ impl ProteomeIndex {
         store_raw_sequences: bool,
         remove_low_complexity: bool,
         kmerseek_version: Option<String>,
+        target_chunk: usize,
     ) -> Self {
         Self {
             db,
             signatures: DashMap::new(),
             ingest: Mutex::new(IngestState::empty()),
             posting_buffer_capacity: DEFAULT_POSTING_BUFFER,
+            target_chunk,
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             minhash_ksize: ksize * 3,
             moltype,
@@ -456,6 +469,19 @@ impl ProteomeIndex {
     /// than one run, so the multi-run merge in `finalize` would go unexercised.
     pub fn set_posting_buffer_capacity(&mut self, capacity: usize) {
         self.posting_buffer_capacity = capacity.max(1);
+    }
+
+    /// Target md5s per `targets_{n}` key. Only a test has a reason to lower it: no
+    /// fixture holds more than the default, so chunk rollover would otherwise go
+    /// unexercised. Must be set before anything is ingested.
+    pub fn set_target_chunk(&mut self, target_chunk: usize) {
+        assert_eq!(self.signature_count(), 0, "target chunk size is fixed once targets exist");
+        self.target_chunk = target_chunk.max(1);
+    }
+
+    /// Index of the `targets_{n}` chunk the next signature lands in.
+    fn tail_chunk(&self, state: &IngestState) -> usize {
+        state.next_idx / self.target_chunk
     }
 
     /// Enable or disable dropping low-complexity (homopolymer) k-mers when
@@ -833,11 +859,11 @@ impl ProteomeIndex {
     /// The md5 of target `idx` from its `targets_{n}` chunk on disk.
     fn target_md5(&self, idx: u32) -> IndexResult<Option<String>> {
         let idx = idx as usize;
-        let Some(raw) = self.db.get(Self::targets_key(idx / TARGET_CHUNK))? else {
+        let Some(raw) = self.db.get(Self::targets_key(idx / self.target_chunk))? else {
             return Ok(None);
         };
         let mut chunk: Vec<String> = bincode::deserialize(&raw)?;
-        let within = idx % TARGET_CHUNK;
+        let within = idx % self.target_chunk;
         Ok((within < chunk.len()).then(|| chunk.swap_remove(within)))
     }
 
@@ -886,10 +912,10 @@ impl ProteomeIndex {
                 self.signatures.insert(md5.clone(), sketch);
             }
 
-            let tail_chunk = state.tail_chunk();
+            let tail_chunk = self.tail_chunk(&state);
             state.target_tail.push(md5);
             state.next_idx += 1;
-            if state.target_tail.len() == TARGET_CHUNK {
+            if state.target_tail.len() == self.target_chunk {
                 batch.put(Self::targets_key(tail_chunk), bincode::serialize(&state.target_tail)?);
                 state.target_tail.clear();
             }
@@ -920,13 +946,15 @@ impl ProteomeIndex {
     }
 
     /// Write the partial last `targets_{n}` chunk. It is rewritten whole each time,
-    /// which is at most `TARGET_CHUNK` strings.
+    /// which is at most one chunk of strings.
     fn write_target_tail(&self, state: &IngestState) -> IndexResult<()> {
         if state.target_tail.is_empty() {
             return Ok(());
         }
-        self.db
-            .put(Self::targets_key(state.tail_chunk()), bincode::serialize(&state.target_tail)?)?;
+        self.db.put(
+            Self::targets_key(self.tail_chunk(state)),
+            bincode::serialize(&state.target_tail)?,
+        )?;
         Ok(())
     }
 
@@ -1055,6 +1083,7 @@ impl ProteomeIndex {
             unique_kmers: state.unique_kmers,
             shards: INVERTED_INDEX_SHARDS,
             chunk_count: 0,
+            target_chunk: self.target_chunk,
         };
         let mut batch = WriteBatch::default();
         batch.put(b"schema_version", bincode::serialize(&SCHEMA_VERSION)?);
@@ -1128,22 +1157,28 @@ impl ProteomeIndex {
             // need a full rebuild anyway, which `finalize` performs from scratch.
             return Ok(state);
         }
-        let chunks = metadata.total_signatures.div_ceil(TARGET_CHUNK);
+        let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
         for chunk in 0..chunks {
-            let raw = self.db.get(Self::targets_key(chunk))?.ok_or_else(|| {
-                IndexError::CorruptIndex(format!("target chunk {chunk} of {chunks} is missing"))
-            })?;
-            let md5s: Vec<String> = bincode::deserialize(&raw)?;
+            let md5s = self.read_target_chunk(chunk, chunks)?;
             for md5 in &md5s {
                 if let Ok(key) = u64::from_str_radix(md5, 16) {
                     state.seen.insert(key);
                 }
             }
-            if md5s.len() < TARGET_CHUNK {
+            if md5s.len() < metadata.target_chunk {
                 state.target_tail = md5s;
             }
         }
         Ok(state)
+    }
+
+    /// One `targets_{n}` chunk. Missing means the index was interrupted while being
+    /// written.
+    fn read_target_chunk(&self, chunk: usize, chunks: usize) -> IndexResult<Vec<String>> {
+        let raw = self.db.get(Self::targets_key(chunk))?.ok_or_else(|| {
+            IndexError::CorruptIndex(format!("target chunk {chunk} of {chunks} is missing"))
+        })?;
+        Ok(bincode::deserialize(&raw)?)
     }
 
     /// Every signature of a saved index, from `sig_{md5}` keys (schema 3) or from the
@@ -1231,6 +1266,7 @@ impl ProteomeIndex {
             metadata.store_raw_sequences,
             metadata.remove_low_complexity,
             kmerseek_version,
+            metadata.target_chunk,
         );
         let mut state = IngestState::empty();
         state.next_idx = metadata.total_signatures;
@@ -1253,13 +1289,9 @@ impl ProteomeIndex {
         }
 
         let mut target_list: Vec<String> = Vec::with_capacity(metadata.total_signatures);
-        let chunks = metadata.total_signatures.div_ceil(TARGET_CHUNK);
+        let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
         for chunk in 0..chunks {
-            let raw = self.db.get(Self::targets_key(chunk))?.ok_or_else(|| {
-                IndexError::CorruptIndex(format!("target chunk {chunk} of {chunks} is missing"))
-            })?;
-            let md5s: Vec<String> = bincode::deserialize(&raw)?;
-            target_list.extend(md5s);
+            target_list.extend(self.read_target_chunk(chunk, chunks)?);
         }
         if target_list.len() != metadata.total_signatures {
             return Err(IndexError::CorruptIndex(format!(
@@ -1566,14 +1598,6 @@ impl ProteomeIndex {
         self.ingest(protein_signatures, true)
     }
 
-    /// Add sketches to the index without keeping them in memory.
-    pub fn store_signatures_batch(
-        &self,
-        protein_signatures: Vec<ProteinSketch>,
-    ) -> IndexResult<()> {
-        self.ingest(protein_signatures, false)
-    }
-
     /// Validate that a FASTA file exists and is readable
     ///
     /// WHY: This function centralizes file validation logic, making `process_fasta` easier to read.
@@ -1857,7 +1881,7 @@ mod tests {
 
     use crate::index::{
         ProteomeIndex, ProteomeIndexMetadataV2, SearchCache, SmallestN, INVERTED_INDEX_SHARDS,
-        TARGET_CHUNK,
+        SCHEMA_VERSION,
     };
     use crate::sketch::ProteinSketchStore;
     use rocksdb::{Direction, IteratorMode};
@@ -1871,7 +1895,7 @@ mod tests {
         TEST_KMER, TEST_PROTEIN,
     };
     use crate::tests::test_utils;
-    use std::collections::{BTreeMap, HashMap};
+    use std::collections::{BTreeMap, HashMap, HashSet};
     use std::fs::File;
     use std::path::PathBuf;
 
@@ -4010,7 +4034,9 @@ mod tests {
         let mut many_runs =
             ProteomeIndex::new(dir.path().join("many.db"), 16, 5, "hp_lehninger2", false)?;
         many_runs.set_posting_buffer_capacity(7);
-        // A batch of 3 also exercises the target chunk and dedup paths across batches.
+        // Target chunks of 4 roll over six times and leave a partial seventh; batches of
+        // 3 put the rollovers mid-batch as well as between batches.
+        many_runs.set_target_chunk(4);
         many_runs.process_fasta(TEST_FASTA_GZ, 0, 3)?;
 
         let expected = cache_of(&one_run)?;
@@ -4044,7 +4070,10 @@ mod tests {
         let at_once = ProteomeIndex::new(dir.path().join("once.db"), 12, 1, "hp_lehninger2", true)?;
         at_once.process_fasta(&both, 0, 1000)?;
 
-        let in_two = ProteomeIndex::new(dir.path().join("two.db"), 12, 1, "hp_lehninger2", true)?;
+        let mut in_two =
+            ProteomeIndex::new(dir.path().join("two.db"), 12, 1, "hp_lehninger2", true)?;
+        // One target per chunk: the first call fills chunk 0, the second starts chunk 1.
+        in_two.set_target_chunk(1);
         in_two.process_fasta(TEST_CED9_FASTA, 0, 1000)?;
         in_two.process_fasta(TEST_BLC2_FASTA, 0, 1000)?;
 
@@ -4147,9 +4176,7 @@ mod tests {
             for shard in 0..INVERTED_INDEX_SHARDS {
                 index.db.delete(ProteomeIndex::shard_key(shard))?;
             }
-            for chunk in 0..25usize.div_ceil(TARGET_CHUNK) {
-                index.db.delete(ProteomeIndex::targets_key(chunk))?;
-            }
+            index.db.delete(ProteomeIndex::targets_key(0))?;
             expected
         };
 
@@ -4163,6 +4190,144 @@ mod tests {
         let full = ProteomeIndex::load(&db_path)?;
         assert_eq!(full.signature_count(), 25);
         assert_eq!(full.get_signatures().len(), 25);
+
+        drop(full);
+
+        // A schema 2 index whose cache was never written reads as having none, so the
+        // caller can say so rather than fail on a missing key.
+        {
+            use rocksdb::{Options, DB};
+            DB::open(&Options::default(), &db_path)?.delete(b"search_cache")?;
+        }
+        let without_cache = ProteomeIndex::open_for_search(&db_path)?;
+        assert!(without_cache.load_search_cache()?.is_none());
+        Ok(())
+    }
+
+    /// The target list is as load-bearing as the shards: a missing or short chunk is an
+    /// error, never a shorter target list that would silently misnumber every posting.
+    #[test]
+    fn test_missing_or_short_target_chunk_is_reported_as_corrupt() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("targets.db");
+        let mut index = ProteomeIndex::new(&db_path, 16, 5, "hp_lehninger2", false)?;
+        index.set_target_chunk(10);
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        let chunk_1 = index.db.get(ProteomeIndex::targets_key(1))?.expect("chunk 1 written");
+
+        index.db.delete(ProteomeIndex::targets_key(1))?;
+        match index.load_search_cache() {
+            Err(crate::errors::IndexError::CorruptIndex(message)) => {
+                assert_eq!(message, "target chunk 1 of 3 is missing");
+            }
+            other => panic!("expected CorruptIndex, got {:?}", other.map(|c| c.is_some())),
+        }
+
+        let mut short: Vec<String> = bincode::deserialize(&chunk_1)?;
+        short.pop();
+        index.db.put(ProteomeIndex::targets_key(1), bincode::serialize(&short)?)?;
+        match index.load_search_cache() {
+            Err(crate::errors::IndexError::CorruptIndex(message)) => {
+                assert_eq!(message, "target list holds 24 entries but the metadata says 25");
+            }
+            other => panic!("expected CorruptIndex, got {:?}", other.map(|c| c.is_some())),
+        }
+        Ok(())
+    }
+
+    /// `get_index_parameters` refuses a layout newer than this binary and a database
+    /// that was never finalized, with messages that say which.
+    #[test]
+    fn test_get_index_parameters_rejects_newer_schema_and_missing_metadata() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("params.db");
+        // Created but never finalized, and dropped so the write lock is released.
+        drop(ProteomeIndex::new(&db_path, 5, 1, "protein20", false)?);
+        let err = ProteomeIndex::get_index_parameters(&db_path).unwrap_err();
+        assert_eq!(err.to_string(), "No saved state found in database");
+
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", false)?;
+            index.save_state()?;
+            index.db.put(b"schema_version", bincode::serialize(&(SCHEMA_VERSION + 1))?)?;
+        }
+        let err = ProteomeIndex::get_index_parameters(&db_path).unwrap_err();
+        assert!(
+            err.to_string().contains(&format!(
+                "built with schema version {}, but this binary uses schema version {}",
+                SCHEMA_VERSION + 1,
+                SCHEMA_VERSION
+            )),
+            "unexpected message: {err}"
+        );
+        Ok(())
+    }
+
+    /// Same parameters but different contents: a missing signature and a differing one
+    /// are each enough to make two indexes non-equivalent.
+    #[test]
+    fn test_is_equivalent_to_sees_missing_and_differing_signatures() -> Result<()> {
+        let dir = tempdir()?;
+        let build = |name: &str, seqs: &[(&str, &str)]| -> Result<ProteomeIndex> {
+            let index = ProteomeIndex::new(dir.path().join(name), 5, 1, "protein20", false)?;
+            for (sequence, label) in seqs {
+                let sig = index.create_protein_signature(sequence, label)?;
+                index.store_signatures(vec![sig])?;
+            }
+            Ok(index)
+        };
+        let both = build("both.db", &[(TEST_PROTEIN, "a"), (TEST_KMER, "b")])?;
+        let one = build("one.db", &[(TEST_PROTEIN, "a")])?;
+        let other = build("other.db", &[(TEST_PROTEIN, "a"), (FKBP8_POLY_E, "c")])?;
+
+        assert!(!both.is_equivalent_to(&one)?, "a missing signature differs");
+        assert!(!both.is_equivalent_to(&other)?, "a different signature differs");
+        assert!(
+            both.is_equivalent_to(&build("again.db", &[(TEST_PROTEIN, "a"), (TEST_KMER, "b")])?)?
+        );
+        Ok(())
+    }
+
+    /// `--kmer-stats-out` through `save_state`: the spectrum is gathered while the shards
+    /// are written and lands in the CSV, gzipped when asked, with the example k-mers
+    /// resolved from the stored sequences.
+    #[test]
+    fn test_save_state_writes_gzipped_kmer_spectrum() -> Result<()> {
+        use std::io::Read;
+
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("spec.db"), 16, 5, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        let csv_path = dir.path().join("spectrum.csv.gz");
+        index.save_state_with_kmer_stats(Some(&csv_path))?;
+
+        let mut contents = String::new();
+        flate2::read::GzDecoder::new(File::open(&csv_path)?).read_to_string(&mut contents)?;
+        let (_, _, frequencies) = cache_of(&index)?;
+        let total: usize = frequencies.values().sum();
+        assert_eq!(total, 1752);
+        assert!(
+            contents.starts_with("# total_kmers=1752 unique_kmers=1603 "),
+            "unexpected header: {}",
+            contents.lines().next().unwrap_or("")
+        );
+        // Comment, header, then one row per distinct occurrence count.
+        let distinct_counts: HashSet<usize> = frequencies.values().copied().collect();
+        assert_eq!(contents.lines().count(), 2 + distinct_counts.len());
+        Ok(())
+    }
+
+    /// An index with no sequences still saves and reports an empty spectrum.
+    #[test]
+    fn test_empty_index_saves_with_empty_spectrum() -> Result<()> {
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("empty.db"), 5, 1, "protein20", true)?;
+        let csv_path = dir.path().join("spectrum.csv");
+        index.save_state_with_kmer_stats(Some(&csv_path))?;
+        assert!(!csv_path.exists(), "nothing to plot, so no file");
+        assert_eq!(index.signature_count(), 0);
+        assert_eq!(index.unique_kmer_count(), 0);
+        assert!(index.load_search_cache()?.expect("finalized").target_list.is_empty());
         Ok(())
     }
 }

@@ -597,11 +597,8 @@ impl ProteinSearcher {
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let index = ProteomeIndex::open_for_search(&path)?;
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
-        eprintln!(
-            "Loaded search cache: {} targets, {} k-mers indexed",
-            cache.target_list.len(),
-            cache.inverted_index.len()
-        );
+        let (targets, kmers) = (cache.target_list.len(), cache.inverted_index.len());
+        eprintln!("Loaded search cache: {targets} targets, {kmers} k-mers indexed");
         Ok(Self::from_cache(index, cache))
     }
 
