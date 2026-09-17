@@ -510,10 +510,87 @@ impl ProteomeIndex {
             t1.elapsed().as_secs_f32()
         );
         let t2 = Instant::now();
-        self.db.put(b"search_cache", serialized)?;
+        self.write_search_cache_bytes(&serialized)?;
         eprintln!("[save] search_cache written in {:.1}s", t2.elapsed().as_secs_f32());
 
         Ok(())
+    }
+
+    /// Largest slice written under one RocksDB key.
+    ///
+    /// RocksDB refuses any single value at or above 4 GiB -- its length is a u32 -- and
+    /// returns `Invalid argument: value is too large`. That is a format limit, so no amount
+    /// of memory or tuning avoids it. A reviewed Swiss-Prot index (483_966 targets,
+    /// 115_749_594 unique k-mers) serializes to 4.43 GB and hit it.
+    ///
+    /// 1 GiB leaves a wide margin and keeps the chunk count small: even a 100 GB cache is
+    /// 100 keys.
+    const SEARCH_CACHE_CHUNK: usize = 1 << 30;
+
+    /// Store the serialized [`SearchCache`], splitting it across keys when it is too large
+    /// for one.
+    ///
+    /// A cache that fits keeps the original single `search_cache` key and byte-for-byte
+    /// layout, so databases written by this version are still readable by older builds
+    /// whenever they would have been readable at all.
+    ///
+    /// The chunk count is written LAST. A crash midway therefore leaves a database with no
+    /// count key, which reads as "no cache" rather than as a cache that silently ends
+    /// early -- the failure that would otherwise surface much later as a truncated
+    /// inverted index and quietly missing search hits.
+    fn write_search_cache_bytes(&self, serialized: &[u8]) -> IndexResult<()> {
+        self.write_search_cache_chunked(serialized, Self::SEARCH_CACHE_CHUNK)
+    }
+
+    /// The chunk size is a parameter so the split path can be tested against a few KB
+    /// instead of the 4 GiB it takes to reach it in production.
+    fn write_search_cache_chunked(&self, serialized: &[u8], chunk_size: usize) -> IndexResult<()> {
+        if serialized.len() < chunk_size {
+            self.db.put(b"search_cache", serialized)?;
+            return Ok(());
+        }
+
+        let chunks: Vec<&[u8]> = serialized.chunks(chunk_size).collect();
+        eprintln!(
+            "[save] cache is {} bytes, above the {} byte RocksDB value limit -- writing {} chunks",
+            serialized.len(),
+            chunk_size,
+            chunks.len()
+        );
+
+        // Order matters, and it is chosen so that an interrupted write leaves a database
+        // that REFUSES to open rather than one that opens wrong.
+        //
+        // The count goes first, as a delete. Rewriting a database that already had a valid
+        // count would otherwise leave that count standing over chunks being overwritten
+        // underneath it, and a crash midway would produce a count matched by a mixture of
+        // old and new chunks -- which deserializes into a plausible, wrong index.
+        self.db.delete(b"search_cache_chunks")?;
+        // Any stale single-key cache from an earlier build would otherwise win on read,
+        // because the reader prefers it.
+        self.db.delete(b"search_cache")?;
+
+        for (i, chunk) in chunks.iter().enumerate() {
+            self.db.put(Self::search_cache_chunk_key(i), chunk)?;
+        }
+        // A previous write may have made more chunks than this one. Those are not read --
+        // the count bounds the loop -- but they are left behind claiming to be part of an
+        // index they no longer belong to, and the torn-write check below reads their
+        // presence as evidence. Clear them until the first key that is absent.
+        for i in chunks.len().. {
+            if self.db.get(Self::search_cache_chunk_key(i))?.is_none() {
+                break;
+            }
+            self.db.delete(Self::search_cache_chunk_key(i))?;
+        }
+
+        // Written LAST: its presence is what certifies every chunk above is on disk.
+        self.db.put(b"search_cache_chunks", chunks.len().to_string().as_bytes())?;
+        Ok(())
+    }
+
+    fn search_cache_chunk_key(i: usize) -> Vec<u8> {
+        format!("search_cache_chunk_{i}").into_bytes()
     }
 
     /// Number of k-mers listed in the "most common" / "least common" summaries.
@@ -1257,109 +1334,15 @@ impl ProteomeIndex {
         }
     }
 
-    /// Load an existing ProteomeIndex from a RocksDB path
-    /// Note: This method has known issues with serialization and may not work reliably.
-    /// For now, it's recommended to use save_state() and load_state() on existing indices.
+    /// Open an index read-only with every signature deserialized into memory.
+    ///
+    /// `open_for_search()` plus `load_state()`. Use this when the caller needs all
+    /// sketches with their k-mer positions up front (the `--query-is-index` search path);
+    /// use `open_for_search()` when signatures can be fetched on demand.
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
-        // Create RocksDB options optimized for read operations
-        let opts = Self::create_rocksdb_options(false);
-
-        // Open the database
-        let db = DB::open(&opts, path)?;
-
-        // Try to load state to get configuration
-        let serialized = db.get(b"index_metadata")?;
-        if let Some(data) = serialized {
-            let metadata = Self::read_metadata(&db, &data)?;
-
-            let _hash_function = get_hash_function_from_moltype(&metadata.moltype)
-                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-
-            // Reconstruct the combined minhash from raw data
-            let hash_function = get_hash_function_from_moltype(&metadata.moltype)
-                .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            let minhash_ksize = metadata.ksize * 3;
-            let mut combined_minhash = KmerMinHash::new(
-                metadata.scaled,
-                minhash_ksize,
-                hash_function,
-                SEED,
-                true, // track_abundance
-                0,    // num (use scaled instead)
-            );
-
-            if let Some(abunds) = &metadata.combined_abunds {
-                combined_minhash
-                    .add_many_with_abund(
-                        &metadata
-                            .combined_mins
-                            .clone()
-                            .into_iter()
-                            .zip(abunds.iter().cloned())
-                            .collect::<Vec<_>>(),
-                    )
-                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            } else {
-                combined_minhash
-                    .add_many(&metadata.combined_mins)
-                    .map_err(|e| IndexError::SourmashError(e.to_string()))?;
-            }
-
-            // Load all chunk data from RocksDB (sequential - RocksDB reads are single-threaded)
-            let mut raw_chunks: Vec<Vec<u8>> = Vec::with_capacity(metadata.chunk_count);
-            for chunk_idx in 0..metadata.chunk_count {
-                let chunk_key = format!("signatures_chunk_{}", chunk_idx);
-                if let Some(data) = db.get(chunk_key.as_bytes())? {
-                    raw_chunks.push(data);
-                }
-            }
-
-            // Deserialize and reconstruct signatures in parallel
-            use rayon::prelude::*;
-            let moltype = &metadata.moltype;
-            let ksize = metadata.ksize;
-            let scaled = metadata.scaled;
-            let remove_low_complexity = metadata.remove_low_complexity;
-            // Read before `db` is moved into the struct below.
-            let kmerseek_version = Self::read_kmerseek_version(&db)?;
-
-            let signatures: DashMap<String, ProteinSketch> = DashMap::new();
-            raw_chunks.par_iter().try_for_each(|raw_data| -> IndexResult<()> {
-                let chunk: Vec<ProteinSketchStore> = bincode::deserialize(raw_data)?;
-                for signature_data in chunk {
-                    let protein_sig = ProteinSketch::from_efficient_data(
-                        signature_data,
-                        moltype.clone(),
-                        ksize,
-                        scaled,
-                    )?;
-                    let md5sum = protein_sig.signature().md5sum.clone();
-                    signatures.insert(md5sum.to_string(), protein_sig);
-                }
-                Ok(())
-            })?;
-
-            let index = Self {
-                db,
-                signatures,
-                combined_minhash: Arc::new(Mutex::new(combined_minhash)),
-                aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-                moltype: metadata.moltype,
-                ksize: metadata.ksize,
-                minhash_ksize: metadata.ksize * 3,
-                scaled: metadata.scaled,
-                stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
-                store_raw_sequences: metadata.store_raw_sequences,
-                remove_low_complexity,
-                kmer_windows_examined: AtomicUsize::new(0),
-                low_complexity_kmers_removed: AtomicUsize::new(0),
-                kmerseek_version,
-            };
-
-            Ok(index)
-        } else {
-            Err(IndexError::NoSavedState)
-        }
+        let index = Self::open_for_search(path)?;
+        index.load_state()?;
+        Ok(index)
     }
 
     /// Open a database for searching without loading all signatures into memory.
@@ -1373,8 +1356,10 @@ impl ProteomeIndex {
     pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let opts = Self::create_rocksdb_options(false);
         // WHY: open_for_read_only avoids acquiring the exclusive LOCK file, allowing
-        // multiple search processes to query the same index concurrently.
+        // multiple search processes to query the same index concurrently. This is the
+        // only read-only open; `load()` and `get_index_parameters()` build on it.
         let db = DB::open_for_read_only(&opts, path, false)?;
+        Self::reject_newer_schema(&db)?;
 
         let metadata_data = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
         let metadata = Self::read_metadata(&db, &metadata_data)?;
@@ -1415,13 +1400,55 @@ impl ProteomeIndex {
     ///
     /// The caller (ProteinSearcher::load) uses this to skip loading all signatures and instead
     /// find candidates via the inverted index, loading individual signatures on demand.
+    /// Reads a cache written either as one value or as chunks; see
+    /// [`Self::write_search_cache_bytes`].
     pub fn load_search_cache(&self) -> IndexResult<Option<SearchCache>> {
         if let Some(data) = self.db.get(b"search_cache")? {
             let cache: SearchCache = bincode::deserialize(&data)?;
-            Ok(Some(cache))
-        } else {
-            Ok(None)
+            return Ok(Some(cache));
         }
+
+        let Some(count) = self.db.get(b"search_cache_chunks")? else {
+            // No count key. That is either a database written before the cache existed --
+            // legitimately Ok(None), and the caller falls back to loading every signature
+            // -- or one whose chunk write was interrupted before the count was committed.
+            //
+            // Those two must not be confused. A torn index returning Ok(None) is the
+            // quietest possible failure: the search still runs, on the slow path, against
+            // an index nobody is told is broken. Chunk 0 is written before any other, so
+            // its presence without a count means the write did not finish.
+            if self.db.get(Self::search_cache_chunk_key(0))?.is_some() {
+                return Err(IndexError::CorruptIndex(
+                    "search cache chunks are present but the chunk count is missing: the \
+                     index was interrupted while being written and is incomplete. Rebuild \
+                     it with `kmerseek index`."
+                        .to_string(),
+                ));
+            }
+            return Ok(None);
+        };
+        let count: usize = String::from_utf8_lossy(&count).parse().map_err(|_| {
+            IndexError::CorruptIndex(format!(
+                "search_cache_chunks is not a number: {:?}",
+                String::from_utf8_lossy(&count)
+            ))
+        })?;
+
+        // A missing chunk is an error, never a short cache. Deserializing a truncated
+        // stream would either fail somewhere confusing or, worse, succeed against a
+        // partial inverted index and drop search hits with nothing to show for it.
+        let mut serialized = Vec::new();
+        for i in 0..count {
+            let chunk = self.db.get(Self::search_cache_chunk_key(i))?.ok_or_else(|| {
+                IndexError::CorruptIndex(format!(
+                    "search cache chunk {i} of {count} is missing; the index is \
+                         incomplete and must be rebuilt"
+                ))
+            })?;
+            serialized.extend_from_slice(&chunk);
+        }
+        let cache: SearchCache = bincode::deserialize(&serialized)?;
+        Ok(Some(cache))
     }
 
     /// Load a single signature from RocksDB by its MD5 sum.
@@ -1454,23 +1481,18 @@ impl ProteomeIndex {
 
     /// Get the index parameters (ksize, scaled, moltype) from the database metadata
     ///
-    /// This method reads the stored metadata to extract the parameters used when
-    /// the index was created, enabling autodetection of correct search parameters.
+    /// Reads the stored metadata to extract the parameters used when the index was
+    /// created, enabling autodetection of correct search parameters.
     pub fn get_index_parameters<P: AsRef<Path>>(path: P) -> IndexResult<(u32, u32, String)> {
-        // Create RocksDB options optimized for read operations
-        let opts = Self::create_rocksdb_options(false);
+        let index = Self::open_for_search(path)?;
+        Ok((index.ksize, index.scaled, index.moltype.clone()))
+    }
 
-        // Open the database
-        let db = DB::open(&opts, path)?;
-
-        // Validate schema version before loading anything else.
-        // Indices built before versioning was added have no schema_version key and are
-        // treated as version 0.
-        // Version 0 indexes built after commit 9d083c8 (Feb 24 2026) use kmer_positions
-        // format and are fully compatible with schema version 1. We accept them here.
-        // Only truly incompatible formats (e.g., pre-Feb-24 kmer_infos format) need rebuilding,
-        // but those can't be detected by this key alone.
-        let stored_version = Self::read_schema_version(&db)?;
+    /// Refuse an index written by a newer binary than this one. Without this, a
+    /// newer on-disk layout fails inside bincode with a length mismatch instead
+    /// of a message saying to upgrade.
+    fn reject_newer_schema(db: &DB) -> IndexResult<()> {
+        let stored_version = Self::read_schema_version(db)?;
         if stored_version > SCHEMA_VERSION {
             return Err(IndexError::ValidationError {
                 message: format!(
@@ -1481,22 +1503,7 @@ impl ProteomeIndex {
                 ),
             });
         }
-
-        // Try to load metadata from new chunked format first
-        let metadata_serialized = db.get(b"index_metadata")?;
-        if let Some(metadata_data) = metadata_serialized {
-            let metadata = Self::read_metadata(&db, &metadata_data)?;
-            return Ok((metadata.ksize, metadata.scaled, metadata.moltype));
-        }
-
-        // Fallback to old format for backward compatibility
-        let serialized = db.get(b"index_state")?;
-        if let Some(data) = serialized {
-            let state: ProteomeIndexState = bincode::deserialize(&data)?;
-            return Ok((state.ksize, state.scaled, state.moltype));
-        }
-
-        Err(IndexError::ValidationError { message: "No metadata found in database".to_string() })
+        Ok(())
     }
 
     /// Get the combined minhash size
@@ -1629,8 +1636,10 @@ impl ProteomeIndex {
     /// This method creates a protein signature from the given sequence, processes its k-mers
     /// to extract detailed position information, and returns the signature for later storage.
     ///
-    /// The method resolves amino acid ambiguity before processing. Valid amino acids include the 20 standard amino acids (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y)
-    /// and the ambiguous codes (B for D/N, Z for E/Q, J for I/L, X for unknown) which are resolved to one of their possible values.
+    /// Valid amino acids are the 20 standard residues (A, C, D, E, F, G, H, I, K, L, M, N, P, Q, R, S, T, V, W, Y),
+    /// X (unknown), U and O (substituted by their canonical analogue under a reduced alphabet), and the
+    /// ambiguous residues B (D or N), J (I or L) and Z (E or Q). An ambiguous residue is not resolved to one
+    /// reading; every k-mer covering it is indexed under both. See `aminoacid::disambiguate_kmer`.
     ///
     /// # Arguments
     ///
@@ -3198,13 +3207,13 @@ mod tests {
             false,
         )?;
 
-        // The k-mer count is the number of *readings*, not the number of windows: an
-        // ambiguity code doubles the windows covering it, and a window carrying a second
-        // code is dropped. For "ACDEFXBZJ" the five windows ACDEF, CDEFX, DEFXB, EFXBZ and
-        // FXBZJ carry 0, 0, 1, 2 and 3 codes, so the first three give 1 + 1 + 2 = 4
-        // readings and the last two are dropped.
+        // The k-mer count is the number of *readings*, not the number of windows: every
+        // ambiguous residue in a window doubles it, so a window carrying n of them gives 2^n
+        // readings. For "ACDEFXBZJ" the five windows ACDEF, CDEFX, DEFXB, EFXBZ and FXBZJ
+        // carry 0, 0, 1, 2 and 3 of them, so they give 1 + 1 + 2 + 4 + 8 = 16 readings. X is
+        // not an ambiguous residue and never expands.
         let valid_sequences =
-            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 4)];
+            [("PLANTANDANIMALGENQMES", 17), ("ACDEFGHIKLMNPQRSTVWY", 16), ("ACDEFXBZJ", 16)];
 
         for (sequence, expected_kmers) in valid_sequences {
             let protein_signature = index.create_protein_signature(sequence, "test_protein")?;
@@ -3231,7 +3240,7 @@ mod tests {
             );
         }
 
-        // Ambiguity codes are accepted, and indexed under both readings rather than one.
+        // Ambiguous residues are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
             ("PLANTANDANIMALGENBMES", 21), // B is indexed as both Asp and Asn
             ("PLANTANDANIMALGENZMES", 21), // Z is indexed as both Glu and Gln
@@ -3253,7 +3262,7 @@ mod tests {
             assert_eq!(
                 protein_signature.kmer_positions().len(),
                 expected_kmers,
-                "{sequence}: expected the windows covering the ambiguity code to be doubled"
+                "{sequence}: expected the windows covering the ambiguous residue to be doubled"
             );
         }
 
@@ -3276,7 +3285,7 @@ mod tests {
             false,
         )?;
 
-        // Ambiguity codes are accepted, and indexed under both readings rather than one.
+        // Ambiguous residues are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
             ("PLANTANDANIMALGENBMES", 17), // Asp and Asn are both dayhoff `c`
             ("PLANTANDANIMALGENZMES", 17), // Glu and Gln are both dayhoff `c`
@@ -3292,7 +3301,7 @@ mod tests {
             );
 
             let protein_signature = result.unwrap();
-            // Disambiguating a code adds k-mers only where the alphabet keeps the two readings
+            // Disambiguating adds k-mers only where the alphabet keeps the two readings
             // apart. Dayhoff puts both members of every ambiguous pair in one class, so the
             // disambiguated windows hash identically and the count is unchanged.
             assert_eq!(protein_signature.kmer_positions().len(), expected_kmers, "{sequence}");
@@ -3340,7 +3349,7 @@ mod tests {
             false,
         )?;
 
-        // Ambiguity codes are accepted, and indexed under both readings rather than one.
+        // Ambiguous residues are accepted, and indexed under both readings rather than one.
         let ambiguous_sequences = [
             ("PLANTANDANIMALGENBMES", 14), // Asp and Asn are both polar
             ("PLANTANDANIMALGENZMES", 14), // Glu and Gln are both polar
@@ -3608,18 +3617,18 @@ mod tests {
     }
 
     /// Real N-terminal fragment of C. elegans CED-9 (UniProt P41958) with three residues
-    /// rewritten to the ambiguity codes that stand for them: Asn->B (Asx), Glu->Z (Glx),
+    /// rewritten to the ambiguous residues that stand for them: Asn->B (Asx), Glu->Z (Glx),
     /// Ile->J (Xle). Also carries U (Sec) and O (Pyl).
-    const CED9_WITH_AMBIGUITY_CODES: &str =
+    const CED9_WITH_AMBIGUOUS_RESIDUES: &str =
         "MTRCTADNSLTNPAYRRRTMBTGEMKEFLGJKGTEPTDFGZNSDAQDLPSPSRQASTRRUO";
 
     /// Indexing the same sequence twice must produce byte-identical sketches.
     ///
-    /// WHY: ambiguity codes were previously resolved by drawing at random from the
+    /// WHY: ambiguous residues were previously resolved by drawing at random from the
     /// alternatives, so B became Asp on one run and Asn on the next. That changed the k-mers,
     /// the hashes and the stored index every time the same FASTA was indexed.
     #[test]
-    fn test_ambiguity_codes_index_deterministically() {
+    fn test_ambiguous_residues_index_deterministically() {
         let temp_dir = tempdir().unwrap();
 
         for (i, moltype) in
@@ -3630,14 +3639,14 @@ mod tests {
                     .unwrap();
 
             let first = index
-                .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                .create_protein_signature(CED9_WITH_AMBIGUOUS_RESIDUES, "ced9")
                 .unwrap()
                 .mins_as_set();
             assert!(!first.is_empty(), "{moltype}: no k-mers produced");
 
             for attempt in 0..5 {
                 let again = index
-                    .create_protein_signature(CED9_WITH_AMBIGUITY_CODES, "ced9")
+                    .create_protein_signature(CED9_WITH_AMBIGUOUS_RESIDUES, "ced9")
                     .unwrap()
                     .mins_as_set();
                 assert_eq!(again, first, "{moltype}: sketch differed on attempt {attempt}");
@@ -4191,6 +4200,205 @@ mod tests {
         // Test that we can save state without errors
         index.save_state()?;
 
+        Ok(())
+    }
+
+    /// A cache too big for one RocksDB value survives a write/read round trip.
+    ///
+    /// The real trigger is 4 GiB; this drives the same code path with a 1 KB chunk size so
+    /// the test costs milliseconds. What it is actually checking is that reassembly
+    /// preserves byte order across chunk boundaries -- a reversed or skipped chunk still
+    /// deserializes into *something* for many payloads, so a round trip that only asserts
+    /// "no error" would pass while returning a wrong index.
+    #[test]
+    fn test_search_cache_survives_chunking() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("chunked.db"), 10, 1, "protein20", false)?;
+
+        // Big enough to need several chunks, and varied enough that a misordered
+        // reassembly cannot coincidentally match.
+        let target_list: Vec<String> = (0..500).map(|i| format!("md5-{i:08x}")).collect();
+        let inverted_index: HashMap<u64, Vec<u32>> =
+            (0..500u64).map(|i| (i * 7919, vec![i as u32, (i as u32) + 1])).collect();
+        let kmer_frequencies: HashMap<u64, usize> =
+            (0..500u64).map(|i| (i * 7919, (i as usize) % 13 + 1)).collect();
+        let cache = crate::index::SearchCache {
+            target_list: target_list.clone(),
+            inverted_index: inverted_index.clone(),
+            kmer_frequencies: kmer_frequencies.clone(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        assert!(serialized.len() > 4096, "payload must span several 1 KB chunks");
+
+        index.write_search_cache_chunked(&serialized, 1024)?;
+        let loaded = index.load_search_cache()?.expect("a chunked cache must load");
+
+        assert_eq!(loaded.target_list, target_list);
+        assert_eq!(loaded.inverted_index, inverted_index);
+        assert_eq!(loaded.kmer_frequencies, kmer_frequencies);
+        Ok(())
+    }
+
+    /// A cache that fits keeps the single-key layout, so a database written by this build
+    /// is still readable by one without the chunking support.
+    #[test]
+    fn test_small_search_cache_stays_single_key() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("small.db"), 10, 1, "protein20", false)?;
+
+        let cache = crate::index::SearchCache {
+            target_list: vec!["md5-0".to_string()],
+            inverted_index: HashMap::from([(42u64, vec![0u32])]),
+            kmer_frequencies: HashMap::from([(42u64, 1usize)]),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        index.write_search_cache_chunked(&serialized, 1 << 30)?;
+
+        assert!(index.db.get(b"search_cache")?.is_some(), "must use the original key");
+        assert!(index.db.get(b"search_cache_chunks")?.is_none(), "must not write a count");
+        assert!(index.load_search_cache()?.is_some());
+        Ok(())
+    }
+
+    /// An interrupted write must refuse to open, not read as a database with no cache.
+    ///
+    /// This is the quietest failure the chunked layout can produce: chunks on disk, no
+    /// count key, `Ok(None)` returned, and the caller falls back to loading every
+    /// signature. The search then runs -- slowly, and against an index nobody is told is
+    /// broken. A genuinely cache-free database must still return `Ok(None)`, so the two
+    /// cases are asserted together; a check that cannot tell them apart is no check.
+    #[test]
+    fn test_torn_write_is_loud_but_no_cache_is_quiet() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+
+        let torn = ProteomeIndex::new(dir.path().join("torn.db"), 10, 1, "protein20", false)?;
+        let cache = crate::index::SearchCache {
+            target_list: (0..500).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..500u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..500u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        torn.write_search_cache_chunked(&serialized, 1024)?;
+
+        // Exactly what a crash between the last chunk and the count leaves behind.
+        torn.db.delete(b"search_cache_chunks")?;
+        match torn.load_search_cache() {
+            Ok(None) => panic!("a torn write must not read as an absent cache"),
+            Ok(Some(_)) => panic!("a torn write must not load"),
+            Err(err) => assert!(
+                err.to_string().contains("interrupted"),
+                "error should say the write was interrupted, got: {err}"
+            ),
+        }
+
+        // A database that never had a cache is still legitimately empty.
+        let fresh = ProteomeIndex::new(dir.path().join("fresh.db"), 10, 1, "protein20", false)?;
+        assert!(
+            fresh.load_search_cache()?.is_none(),
+            "a database with no cache must return Ok(None), not an error"
+        );
+        Ok(())
+    }
+
+    /// Rewriting a database with a SMALLER cache must not leave the old cache's extra
+    /// chunks behind.
+    ///
+    /// They are never read, since the count bounds the loop, so the index is correct
+    /// either way -- but they are indistinguishable from the debris of an interrupted
+    /// write, which is what the torn-write check keys on. Left in place they would make a
+    /// healthy database fail that check the next time it was rewritten.
+    #[test]
+    fn test_rewriting_smaller_clears_stale_chunks() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("shrink.db"), 10, 1, "protein20", false)?;
+
+        let big = crate::index::SearchCache {
+            target_list: (0..2000).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..2000u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..2000u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let big_bytes = bincode::serialize(&big)?;
+        index.write_search_cache_chunked(&big_bytes, 1024)?;
+        let big_chunks = big_bytes.len().div_ceil(1024);
+
+        let small = crate::index::SearchCache {
+            target_list: (0..100).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..100u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..100u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let small_bytes = bincode::serialize(&small)?;
+        index.write_search_cache_chunked(&small_bytes, 1024)?;
+        let small_chunks = small_bytes.len().div_ceil(1024);
+        assert!(small_chunks < big_chunks, "second write must need fewer chunks");
+
+        for i in small_chunks..big_chunks {
+            assert!(
+                index.db.get(ProteomeIndex::search_cache_chunk_key(i))?.is_none(),
+                "stale chunk {i} from the larger cache was left behind"
+            );
+        }
+        let loaded = index.load_search_cache()?.expect("the smaller cache must load");
+        assert_eq!(loaded.target_list, small.target_list);
+        Ok(())
+    }
+
+    /// A cache whose chunks are incomplete is an error, not a short index. Deserializing a
+    /// truncated stream can succeed against a partial inverted index and silently drop
+    /// search hits, which is far worse than refusing to open.
+    #[test]
+    fn test_missing_chunk_is_an_error_not_a_short_cache() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("torn.db"), 10, 1, "protein20", false)?;
+
+        let cache = crate::index::SearchCache {
+            target_list: (0..500).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..500u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..500u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        index.write_search_cache_chunked(&serialized, 1024)?;
+
+        index.db.delete(b"search_cache_chunk_1")?;
+        match index.load_search_cache() {
+            Ok(_) => panic!("a torn cache must not load"),
+            Err(err) => assert!(
+                err.to_string().contains("missing"),
+                "error should name the missing chunk, got: {err}"
+            ),
+        }
+        Ok(())
+    }
+
+    /// A chunk count that does not parse is an error naming the key, not a panic and not
+    /// `Ok(None)`. Nothing in this code writes such a value, so it only arises from a
+    /// damaged database, and the message should say which key to look at.
+    #[test]
+    fn test_unparseable_chunk_count_is_an_error() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("count.db"), 10, 1, "protein20", false)?;
+
+        let cache = crate::index::SearchCache {
+            target_list: (0..500).map(|i| format!("md5-{i:08x}")).collect(),
+            inverted_index: (0..500u64).map(|i| (i * 7919, vec![i as u32])).collect(),
+            kmer_frequencies: (0..500u64).map(|i| (i * 7919, 1usize)).collect(),
+        };
+        let serialized = bincode::serialize(&cache)?;
+        index.write_search_cache_chunked(&serialized, 1024)?;
+
+        index.db.put(b"search_cache_chunks", b"seven")?;
+        match index.load_search_cache() {
+            Ok(_) => panic!("an unparseable chunk count must not load"),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Corrupt index: search_cache_chunks is not a number: \"seven\""
+            ),
+        }
         Ok(())
     }
 }
