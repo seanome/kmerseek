@@ -170,6 +170,9 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_poisson_score": region_poisson_score,
         "region_tail_probability": region_tail_probability,
         "region_enrichment": region_enrichment,
+        # One shared k-mer (region_n_shared_kmers above), so the IDF sum equals its mean.
+        "region_tfidf": 3.2,
+        "region_mean_idf": 3.2,
     }
 
 
