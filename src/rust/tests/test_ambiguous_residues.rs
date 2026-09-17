@@ -41,13 +41,14 @@ mod tests {
     struct Expected {
         moltype: &'static str,
         ksize: u32,
-        /// Readings sketched, summed over windows: a window holding n ambiguous residues
-        /// contributes 2^n, and a window holding more than
-        /// `MAX_AMBIGUOUS_RESIDUES_PER_KMER` (10) is dropped.
+        /// Readings sketched, summed over windows. A window holding n residues that are
+        /// still ambiguous after encoding contributes 2^n. Under an alphabet that merges
+        /// Asp with Asn and Glu with Gln, no residue of this protein is ambiguous once
+        /// encoded, so every window contributes one reading and none reaches
+        /// `MAX_AMBIGUOUS_RESIDUES_PER_KMER`.
         readings: usize,
-        /// Distinct hashes those readings produce. Equal to `readings` when the alphabet
-        /// keeps D/N and E/Q apart, and equal to the number of windows kept when it merges
-        /// both pairs, since then every reading of a window hashes the same.
+        /// Distinct hashes those readings produce, equal to `readings` for every alphabet
+        /// since no two windows of the query encode the same.
         query_hashes: usize,
         /// Query hashes also found in bovine RNase A.
         shared_with_bovine: usize,
@@ -55,11 +56,14 @@ mod tests {
 
     /// One row per alphabet, in `Alphabet::all()` order.
     ///
-    /// Windows and readings per k: k=10 has 115 windows and at most 4 ambiguous residues
-    /// per window, giving 541 readings; k=11 has 114 windows and 617 readings; k=12, 113
-    /// and 709; k=14, 111 and 933; k=15, 110 and 1083; k=17, 108 and 1452; k=19, 106 and
-    /// 1984; k=22, 103 and 3250; k=27, 98 and 6916. At k=43 the 11 windows holding 11 or 12
-    /// ambiguous residues are dropped, leaving 71 of 82, with 28032 readings.
+    /// Windows per k: 115 at k=10, 114 at k=11, 113 at k=12, 111 at k=14, 110 at k=15,
+    /// 108 at k=17, 106 at k=19, 103 at k=22, 98 at k=27 and 82 at k=43. Where the alphabet
+    /// keeps D/N and E/Q apart, the readings are the sum of 2^n over windows holding n
+    /// ambiguous residues: at most 4 per window at k=10, giving 541; 617 at k=11; 709 at
+    /// k=12; 933 at k=14; 1984 at k=19; 3250 at k=22. Where it merges both pairs (dayhoff6,
+    /// gbmr4, gbmr7, mmseqs12 and the HP family), the readings are the windows. The densest
+    /// window, 12 ambiguous residues at k=43, is under the two-class alphabets, where it is
+    /// not ambiguous at all.
     ///
     /// The bovine count is the number of query hashes also found in bovine RNase A, which is
     /// the windows that cover none of the four real mismatches, less any the alphabet merges
@@ -78,63 +82,63 @@ mod tests {
         Expected {
             moltype: "dayhoff6",
             ksize: 17,
-            readings: 1452,
+            readings: 108,
             query_hashes: 108,
             shared_with_bovine: 74,
         },
         Expected {
             moltype: "hp_lehninger2",
             ksize: 43,
-            readings: 28032,
-            query_hashes: 71,
-            shared_with_bovine: 52,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 63,
         },
         Expected {
             moltype: "hp_thomas_dill2",
             ksize: 43,
-            readings: 28032,
-            query_hashes: 71,
-            shared_with_bovine: 52,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 63,
         },
         Expected {
             moltype: "hp_kyte_doolittle2",
             ksize: 43,
-            readings: 28032,
-            query_hashes: 71,
-            shared_with_bovine: 52,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 63,
         },
         Expected {
             moltype: "hp_thomas_dill_no_c2",
             ksize: 43,
-            readings: 28032,
-            query_hashes: 71,
-            shared_with_bovine: 52,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 63,
         },
         Expected {
             moltype: "hp_lehninger_c_nonpolar2",
             ksize: 43,
-            readings: 28032,
-            query_hashes: 71,
-            shared_with_bovine: 52,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 63,
         },
         Expected {
             moltype: "hp_lehninger_hpc3",
             ksize: 27,
-            readings: 6916,
+            readings: 98,
             query_hashes: 98,
             shared_with_bovine: 79,
         },
         Expected {
             moltype: "hp_pbotc_1st_ed2",
             ksize: 43,
-            readings: 28032,
-            query_hashes: 71,
-            shared_with_bovine: 52,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 63,
         },
         Expected {
             moltype: "gbmr4",
             ksize: 22,
-            readings: 3250,
+            readings: 103,
             query_hashes: 103,
             shared_with_bovine: 103,
         },
@@ -155,7 +159,7 @@ mod tests {
         Expected {
             moltype: "gbmr7",
             ksize: 15,
-            readings: 1083,
+            readings: 110,
             query_hashes: 110,
             shared_with_bovine: 77,
         },
@@ -176,7 +180,7 @@ mod tests {
         Expected {
             moltype: "mmseqs12",
             ksize: 12,
-            readings: 709,
+            readings: 113,
             query_hashes: 113,
             shared_with_bovine: 89,
         },
@@ -260,6 +264,38 @@ mod tests {
                 "{moltype}: k-mers shared with bovine RNase A"
             );
         }
+        Ok(())
+    }
+
+    /// The spans of a hit's matched regions, as `(start, end)` in query coordinates,
+    /// zero-based and end-exclusive, in order along the query.
+    fn region_spans(hit: &SearchResult) -> Vec<(u32, u32)> {
+        let mut spans: Vec<_> = hit.matched_regions.iter().map(|r| (r.start, r.end)).collect();
+        spans.sort_unstable();
+        spans
+    }
+
+    /// A matched region runs through an ambiguous residue instead of stopping at it. Every
+    /// region below covers several B and Z, and each break is a real mismatch the alphabet
+    /// can see. Bovine differs from topi at residues 3 (S/T), 19 (S/A), 37 (Q/K) and 103
+    /// (K/N): sdm12 merges S with T and so breaks at the other three, giving four regions;
+    /// every HP alphabet merges all but S/A, giving one region from residue 20 to the end.
+    /// Goat differs only at residue 103 (K/E), which sdm12 merges, so under sdm12 goat is
+    /// one region covering the whole protein.
+    #[test]
+    fn test_matched_regions_run_through_ambiguous_residues() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let (_, results) = search_topi(&temp_dir, "sdm12", 12)?;
+        let bovine = shared_with(&results, "RNAS1_BOVIN");
+        assert_eq!(region_spans(bovine), vec![(0, 18), (19, 36), (37, 102), (103, 124)]);
+        let goat = shared_with(&results, "RNAS1_CAPHI");
+        assert_eq!(region_spans(goat), vec![(0, 124)]);
+
+        let temp_dir = TempDir::new()?;
+        let (_, results) = search_topi(&temp_dir, "hp_lehninger2", 43)?;
+        let bovine = shared_with(&results, "RNAS1_BOVIN");
+        assert_eq!(region_spans(bovine), vec![(19, 124)]);
+        assert_eq!(bovine.matched_regions[0].n_shared, 63);
         Ok(())
     }
 

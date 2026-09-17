@@ -366,28 +366,33 @@ impl ProteinSketch {
         self.efficient_data.as_ref()?.get_encoded_sequence()
     }
 
-    /// Hash one k-mer the way sourmash would, given how this alphabet is encoded.
+    /// The per-residue encoder for an alphabet, as sourmash would hash it.
     ///
     /// WHY the two cases differ in capitalization: for a table-backed alphabet the sequence
     /// is pre-encoded and handed to sourmash as protein, and sourmash uppercases protein
     /// input before hashing, so the symbols must be uppercased here to match. For
     /// sourmash-encoded alphabets (protein20, dayhoff6, hp_lehninger2) sourmash applies the
     /// encoder itself and hashes its lowercase output, so these must NOT be uppercased.
-    fn hash_kmer(
-        kmer: &[u8],
-        residue_classes: Option<&HashMap<u8, u8>>,
+    fn residue_encoder(
+        residue_classes: Option<&'static HashMap<u8, u8>>,
         encoding_fn: fn(u8) -> u8,
-        scratch: &mut Vec<u8>,
-    ) -> u64 {
+    ) -> impl Fn(u8) -> u8 {
+        move |residue| match residue_classes {
+            Some(table) => table
+                .get(&residue.to_ascii_uppercase())
+                .copied()
+                .unwrap_or(residue)
+                .to_ascii_uppercase(),
+            None => encoding_fn(residue),
+        }
+    }
+
+    /// Hash one k-mer the way sourmash would, given how this alphabet is encoded.
+    fn hash_kmer(kmer: &[u8], encode: &impl Fn(u8) -> u8, scratch: &mut Vec<u8>) -> u64 {
         use sourmash::_hash_murmur;
 
         scratch.clear();
-        match residue_classes {
-            Some(table) => scratch.extend(kmer.iter().map(|b| {
-                table.get(&b.to_ascii_uppercase()).copied().unwrap_or(*b).to_ascii_uppercase()
-            })),
-            None => scratch.extend(kmer.iter().map(|b| encoding_fn(*b))),
-        }
+        scratch.extend(kmer.iter().map(|&residue| encode(residue)));
         _hash_murmur(scratch, SEED)
     }
 
@@ -399,15 +404,16 @@ impl ProteinSketch {
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
         use crate::alphabets::alphabet_table;
-        use crate::aminoacid::{disambiguate_kmer, has_ambiguous_residues};
+        use crate::aminoacid::{disambiguate_kmer, encode_sequence, has_ambiguous_residues};
         use crate::hash_functions::{
-            encode_by_alphabet, encode_with_fn, get_encoding_fn_from_moltype,
+            encode_with_fn, get_encoding_fn_from_moltype, residue_encoder,
         };
         use crate::kmer::is_homopolymer_kmer;
         use sourmash::_hash_murmur;
 
         let moltype_str = self.moltype.to_string();
         let residue_classes = alphabet_table(&moltype_str);
+        let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
         let ksize = self.protein_ksize as usize;
         // hp_lehninger2 is encoded by sourmash rather than through a table of ours, so it
         // has no entry in residue_classes but still produces h/p k-mers that can be
@@ -425,36 +431,33 @@ impl ProteinSketch {
         // and the branch below keeps every k-mer.
         if has_ambiguous_residues(sequence.as_bytes()) && !self.remove_low_complexity {
             // B, J and Z each stand for two residues (B is Asp or Asn, J is Ile or Leu, Z
-            // is Glu or Gln). Rather than committing to one, index every window under both
-            // readings, so a query carrying either residue matches.
+            // is Glu or Gln). Rather than committing to one, index every window under every
+            // reading the alphabet tells apart, so a query carrying either residue matches.
             // sourmash's add_protein windows and hashes internally and cannot do this, so
             // hash window by window here. This branch has to come first: a table-backed
             // alphabet would otherwise pre-encode the whole sequence in one go below and
             // never disambiguate.
-            let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
+            let encode = Self::residue_encoder(residue_classes, encoding_fn);
             let residues = sequence.as_bytes();
             let mut scratch = Vec::with_capacity(ksize);
             for i in 0..residues.len().saturating_sub(ksize - 1) {
                 let kmer = &residues[i..i + ksize];
                 if !has_ambiguous_residues(kmer) {
-                    let hashval = Self::hash_kmer(kmer, residue_classes, encoding_fn, &mut scratch);
+                    let hashval = Self::hash_kmer(kmer, &encode, &mut scratch);
                     self.signature.minhash.add_hash(hashval);
                     continue;
                 }
-                let Some(readings) = disambiguate_kmer(kmer) else {
+                let Some(readings) = disambiguate_kmer(kmer, &encode) else {
                     continue;
                 };
                 for reading in readings {
-                    let hashval =
-                        Self::hash_kmer(&reading, residue_classes, encoding_fn, &mut scratch);
-                    self.signature.minhash.add_hash(hashval);
+                    self.signature.minhash.add_hash(_hash_murmur(&reading, SEED));
                 }
             }
         } else if self.remove_low_complexity {
             // Hoisted: both are loop-invariant, so resolving them per window would
             // be pure overhead.
             let table = residue_classes;
-            let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
             // Reused across windows so the custom-HP path allocates once, not once
             // per k-mer.
             let mut encoded: Vec<u8> = Vec::with_capacity(ksize);
@@ -515,7 +518,7 @@ impl ProteinSketch {
 
         let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
-        let encoding_fn = get_encoding_fn_from_moltype(&moltype_str)?;
+        let encode = Self::residue_encoder(residue_classes, encoding_fn);
         let residues = sequence.as_bytes();
         // Checked once for the whole sequence: almost none carry an ambiguous residue (146 of
         // Swiss-Prot 2026_03's 575_748 sequences), so the per-window check is skipped
@@ -527,17 +530,17 @@ impl ProteinSketch {
         for i in 0..residues.len().saturating_sub(ksize - 1) {
             let kmer = &residues[i..i + ksize];
             if !sequence_has_ambiguous_residues || !has_ambiguous_residues(kmer) {
-                let hashval = Self::hash_kmer(kmer, residue_classes, encoding_fn, &mut scratch);
+                let hashval = Self::hash_kmer(kmer, &encode, &mut scratch);
                 if hashvals.contains(&hashval) {
                     self.kmer_positions_mut().entry(hashval).or_default().push(i);
                 }
                 continue;
             }
-            let Some(readings) = disambiguate_kmer(kmer) else {
+            let Some(readings) = disambiguate_kmer(kmer, &encode) else {
                 continue;
             };
             for reading in readings {
-                let hashval = Self::hash_kmer(&reading, residue_classes, encoding_fn, &mut scratch);
+                let hashval = _hash_murmur(&reading, SEED);
                 if hashvals.contains(&hashval) {
                     self.kmer_positions_mut().entry(hashval).or_default().push(i);
                 }
@@ -554,23 +557,16 @@ impl ProteinSketch {
             // duplicate the raw sequence. MolType normalizes `protein`/`raw` to `protein20`,
             // so this one name covers all three spellings.
             if moltype_str != "protein20" {
-                let encoded_sequence = if let Some(table) = residue_classes {
-                    // Custom alphabets: apply the table directly, keeping its lowercase
-                    // symbols so output matches built-in hp/dayhoff (which sourmash encodes
-                    // lowercase). Unmapped residues (X/U/O) stay uppercase, also matching
-                    // sourmash. This string is display-only (matched regions and k-mer
-                    // stats), so its case is independent of hashing, which must uppercase
-                    // because sourmash uppercases protein input before hashing.
-                    sequence
-                        .bytes()
-                        .map(|b| {
-                            let upper = b.to_ascii_uppercase();
-                            table.get(&upper).copied().unwrap_or(upper) as char
-                        })
-                        .collect::<String>()
-                } else {
-                    encode_by_alphabet(sequence, &moltype_str)?
-                };
+                // Display-only, so the table's lowercase symbols are kept as they are, matching
+                // built-in hp/dayhoff (which sourmash encodes lowercase); hashing uppercases
+                // separately because sourmash uppercases protein input before hashing. An
+                // ambiguous residue the alphabet merges is written as its class, one it keeps
+                // apart stays as its letter (see encode_sequence).
+                let encoded_sequence = String::from_utf8(encode_sequence(
+                    sequence.as_bytes(),
+                    residue_encoder(&moltype_str),
+                ))
+                .expect("class symbols and residues are ASCII");
                 efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
             }
 

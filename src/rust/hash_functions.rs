@@ -132,19 +132,27 @@ pub fn get_encoding_fn_from_moltype(moltype: &str) -> Result<fn(u8) -> u8, anyho
 /// // encoded will be the HP-encoded version
 /// ```
 pub fn encode_by_alphabet(sequence: &str, moltype: &str) -> Result<String> {
-    // Table-backed alphabets cannot be expressed as a fn(u8) -> u8, so they are applied
-    // here directly. Without this the HP family would encode to the identity.
-    if let Some(table) = alphabet_table(moltype) {
-        return Ok(sequence
-            .bytes()
-            .map(|b| {
-                let upper = b.to_ascii_uppercase();
-                table.get(&upper).copied().unwrap_or(upper) as char
-            })
-            .collect());
+    // Reject an unknown alphabet here; residue_encoder itself cannot fail.
+    get_encoding_fn_from_moltype(moltype)?;
+    let encode = residue_encoder(moltype);
+    Ok(sequence.bytes().map(|b| encode(b) as char).collect())
+}
+
+/// The per-residue encoder for an alphabet's stored, display-only sequence: the table's
+/// lowercase class symbol for a table-backed alphabet, with unmapped residues (X, U, O)
+/// uppercased as sourmash leaves them, or sourmash's own encoder for protein20, dayhoff6
+/// and hp_lehninger2. An unknown alphabet encodes to itself, since every caller has
+/// already validated the moltype.
+pub fn residue_encoder(moltype: &str) -> impl Fn(u8) -> u8 {
+    let table = alphabet_table(moltype);
+    let encoding_fn = get_encoding_fn_from_moltype(moltype).unwrap_or(|b| b);
+    move |b: u8| match table {
+        Some(table) => {
+            let upper = b.to_ascii_uppercase();
+            table.get(&upper).copied().unwrap_or(upper)
+        }
+        None => encoding_fn(b),
     }
-    let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
-    encode_with_fn(sequence, encoding_fn)
 }
 
 /// Encode a sequence into a molecular type using the provided encoding function.
