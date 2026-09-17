@@ -442,7 +442,7 @@ pub struct MatchedRegion {
 
     /// `tfidf / n_shared`: the average rarity of one k-mer in this region, so a short run of
     /// rare k-mers and a long run of common ones can be told apart without the length term.
-    /// Divides by the same `length - ksize + 1` the Poisson test uses. 0.0 without DB context.
+    /// Divides by the same `n_shared` the Poisson test uses. 0.0 without DB context.
     pub mean_idf: f64,
 }
 
@@ -500,9 +500,9 @@ fn fold_enrichment(observed: u32, expected: f64) -> f64 {
 /// `prefix` is `PreparedQuery::position_prefix`: `freq_target(h)/N` already summed by position,
 /// one entry per query, built once regardless of how many targets or regions it is looked up
 /// for. Handing it `PreparedQuery::idf_prefix` instead gives the region's TF-IDF over the
-/// same window. This turns the lookup into a difference of two prefix sums, O(1), instead of the O(query
-/// k-mer count) rescan that computing lambda from scratch for every region on every target would
-/// otherwise cost.
+/// same window. This turns the lookup into a difference of two prefix sums, O(1), instead of
+/// the O(query k-mer count) rescan that computing lambda from scratch for every region on
+/// every target would otherwise cost.
 fn region_expectation(prefix: &[f64], start: u32, end: u32, ksize: usize) -> f64 {
     let last_index = prefix.len() - 1;
     let window_start = (start as usize).min(last_index);
@@ -756,7 +756,7 @@ impl ProteinSearcher {
     /// would be rescanned target-count x region-count times instead of once.
     fn build_position_prefix(&self, query: &ProteinSketch) -> Vec<f64> {
         let total_signatures = self.stats.total_signatures as f64;
-        self.build_prefix(query, |hashval| {
+        Self::build_prefix(query, |hashval| {
             self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64
                 / total_signatures
         })
@@ -766,15 +766,20 @@ impl ProteinSearcher {
     /// hash the database has never seen contributes 0, matching `calculate_tfidf`, which
     /// skips such hashes. Same once-per-query reasoning as `build_position_prefix`.
     fn build_idf_prefix(&self, query: &ProteinSketch) -> Vec<f64> {
-        self.build_prefix(query, |hashval| self.stats.idf.get(&hashval).copied().unwrap_or(0.0))
+        Self::build_prefix(query, |hashval| self.stats.idf.get(&hashval).copied().unwrap_or(0.0))
     }
 
     /// Lays `per_hash(h)` out by k-mer start position and returns its prefix sums, so any
     /// window `[a, b)` of positions sums to `prefix[b] - prefix[a]`.
     ///
+    /// A position holding an ambiguous residue (B, J or Z) is recorded under every reading's
+    /// hash, so a position can carry several hashes. Their values are added, which keeps the
+    /// whole-query total equal to the sums `calculate_expected_shared_kmers` and
+    /// `calculate_tfidf` take over every query hash.
+    ///
     /// Sized to the highest k-mer start position actually present in `query.kmer_positions()`,
     /// not to the raw sequence length, since raw sequences are only optionally stored.
-    fn build_prefix(&self, query: &ProteinSketch, per_hash: impl Fn(u64) -> f64) -> Vec<f64> {
+    fn build_prefix(query: &ProteinSketch, per_hash: impl Fn(u64) -> f64) -> Vec<f64> {
         let n_positions = query
             .kmer_positions()
             .values()
@@ -786,7 +791,7 @@ impl ProteinSearcher {
         for (&hashval, positions) in query.kmer_positions() {
             let value = per_hash(hashval);
             for &p in positions {
-                position_value[p] = value;
+                position_value[p] += value;
             }
         }
 
@@ -1593,6 +1598,8 @@ fn find_sampled_regions(
                 poisson_score: 0.0,
                 tail_probability: 1.0,
                 enrichment: 0.0,
+                tfidf: 0.0,
+                mean_idf: 0.0,
             });
         }
     }
@@ -3369,8 +3376,6 @@ mod tests {
             .sum();
         assert_relative_eq!(region.tfidf, tfidf_by_hand, epsilon = 1e-12);
         assert_relative_eq!(region.mean_idf, tfidf_by_hand / 5.0, epsilon = 1e-12);
-        // All 5 k-mers are shared with BCL2 so each has freq >= 1, i.e. idf <= ln(N), and the
-        // region's per-k-mer mean can't exceed that ceiling.
         // Pinned values for this fixture (N = 25 signatures): 5 shared k-mers whose database
         // frequencies are a mix of 1 and more than 1, so the mean IDF sits below ln(25) = 3.22.
         assert_relative_eq!(region.tfidf, 10.326058128547245, epsilon = 1e-12);
@@ -3567,6 +3572,54 @@ mod tests {
         // A span shorter than k contains no whole k-mer, so there is nothing to expect.
         let too_short = region_expectation(&prefix, 0, ksize - 1, ksize as usize);
         assert_eq!(too_short, 0.0);
+
+        Ok(())
+    }
+
+    /// A k-mer window holding an ambiguous residue is sketched under every reading, so one
+    /// query position carries several hashes. The prefix arrays must add those up: then the
+    /// whole-query prefix total is the same sum `calculate_expected_shared_kmers` and
+    /// `calculate_tfidf` take over every query hash, and a region covering the ambiguous
+    /// residue counts both readings instead of whichever one HashMap iteration visited last.
+    ///
+    /// protein20 keeps Asp and Asn distinct, so the B really does yield two different hashes
+    /// per window covering it.
+    #[test]
+    fn test_prefix_sums_add_every_reading_of_an_ambiguous_residue() -> Result<()> {
+        let ksize = 5;
+        let temp_dir = TempDir::new()?;
+        let index_path = temp_dir.path().join("index");
+        let index = ProteomeIndex::new(&index_path, ksize, 1, "protein20", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index);
+
+        // BCL2_HUMAN (P10415) residues 1-32 with the Asp at index 9 written as B (Asp or Asn).
+        let with_b = "MAHAGRTGYBNREIVMKYIHYKLSQRGYEWDA";
+        let sketch = ProteinSketch::from_protein_sequence("bcl2_b", with_b, ksize, 1, "protein20")?;
+        let prepared = searcher.prepare_query(&sketch);
+
+        // 28 windows, plus one extra hash for each of the 5 windows covering the B.
+        assert_eq!(sketch.mins_as_set().len(), 33);
+        assert_eq!(prepared.position_prefix.len(), 29);
+
+        // Whole-query totals agree with the per-hash sums.
+        let expected_total = searcher.calculate_expected_shared_kmers(&sketch, &sketch);
+        let total_prefix = *prepared.position_prefix.last().unwrap();
+        let total_idf_prefix = *prepared.idf_prefix.last().unwrap();
+        assert_relative_eq!(total_prefix, expected_total, epsilon = 1e-12);
+        assert_relative_eq!(total_idf_prefix, prepared.tfidf, epsilon = 1e-12);
+
+        // The window [5, 14) holds k-mer starts 5..=9, all covering the B. The Asp readings
+        // are BCL2's own k-mers; the Asn readings are in no target, so they count as
+        // frequency 1 for lambda and contribute nothing to IDF.
+        let k = ksize as usize;
+        let lambda = region_expectation(&prepared.position_prefix, 5, 14, k);
+        let tfidf = region_expectation(&prepared.idf_prefix, 5, 14, k);
+        // 10 hashes at frequency 1 out of 25 targets; 5 Asp-reading hashes at ln(25 / 1).
+        assert_relative_eq!(lambda, 10.0 / 25.0, epsilon = 1e-12);
+        assert_relative_eq!(tfidf, 5.0 * 25f64.ln(), epsilon = 1e-12);
+        assert_relative_eq!(expected_total, 1.4, epsilon = 1e-12);
+        assert_relative_eq!(prepared.tfidf, 88.74222873518976, epsilon = 1e-12);
 
         Ok(())
     }
