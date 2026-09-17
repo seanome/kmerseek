@@ -623,3 +623,75 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     );
     Ok(())
 }
+
+/// `kmerseek index` fits lambda and K for its penalty and X-drop and stores them;
+/// `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty that
+/// was never fitted when `--ka-queries 0` forbids fitting one now, and fits one otherwise.
+#[test]
+fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting Karlin-Altschul lambda and K on 25 database sequences (penalty 2, X-drop 8)",
+        ))
+        .stderr(predicate::str::contains(
+            "Closed form at the database's own match probability 0.500: K 0.1631",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 25 database queries, 9838 regions; lambda 0.388 (closed form 0.481 \
+             at match probability 0.500), K 0.0141, fit on scores 16..=23, rms 0.112",
+        ))
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
+        ));
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            let mut cmd = Command::cargo_bin("kmerseek")?;
+            cmd.args([
+                "search",
+                "--query",
+                TEST_CED9_FASTA,
+                "--target",
+                index_path.to_str().unwrap(),
+                "--output",
+                temp_dir.path().join("out.csv").to_str().unwrap(),
+            ]);
+            cmd.args(extra);
+            Ok(cmd.assert())
+        };
+
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: K 0.0141, lambda scale 0.807 (stored in the index: 25 database queries, 9838 regions",
+    ));
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0300, lambda scale 1.000 (--ka-k, closed-form lambda)",
+        ),
+    );
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("no Karlin-Altschul fit for penalty 3, X-drop 8"));
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.1089, lambda scale 0.919 (fitted now: 25 database queries, 9854 regions; lambda 0.560",
+        ),
+    );
+    Ok(())
+}
