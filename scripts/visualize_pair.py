@@ -48,6 +48,8 @@ RESIDUE_EDGE = "#b8b7b0"
 # ribbon and the dot plot, and the dots that fall inside one.
 REGION_COLOR = INK
 SINGLE_COLOR = MUTED
+# Residues of padding around a run's k-mer starts in the dot plot.
+RUN_BOX_PAD = 4
 
 # Ribbon geometry, in residue units (one residue = one x unit).
 RESIDUE_INCHES = 0.2
@@ -400,11 +402,14 @@ class PairPlot:
         self._scatter(ax, self.single, SINGLE_COLOR, f"single shared {self.ksize}-mer ({len(self.single)})")
         self._scatter(ax, self.on_run, REGION_COLOR, f"shared {self.ksize}-mer in a run ({len(self.on_run)})")
         for region in self.runs:
+            # Dots sit at k-mer starts, so the box surrounds those, not every residue the
+            # run covers; RUN_BOX_PAD keeps a two-k-mer run's box visible around its dots.
+            n_kmers = region["length"] - self.ksize + 1
             ax.add_patch(
                 Rectangle(
-                    (region["query_start"], region["target_start"]),
-                    region["length"],
-                    region["length"],
+                    (region["query_start"] - RUN_BOX_PAD, region["target_start"] - RUN_BOX_PAD),
+                    n_kmers + 2 * RUN_BOX_PAD,
+                    n_kmers + 2 * RUN_BOX_PAD,
                     fill=False,
                     edgecolor=REGION_COLOR,
                     linestyle=(0, (4, 2)),
@@ -419,7 +424,7 @@ class PairPlot:
         # k-mer starting at 0-based position 0 is drawn inside the axes.
         xs = [k["query_pos"] + 0.5 for k in kmers]
         ys = [k["target_pos"] + 0.5 for k in kmers]
-        ax.scatter(xs, ys, s=14, color=color, label=label, linewidths=0, zorder=3)
+        ax.scatter(xs, ys, s=9, color=color, label=label, linewidths=0, zorder=3)
 
 
 def plot_pair(pair, output_paths, flank=10, dpi=200):

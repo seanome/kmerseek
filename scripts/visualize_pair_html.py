@@ -187,7 +187,6 @@ function drawRibbon() {
   const labelW = Math.max(...rows.map(x => x[2].length)) * 7 + 12;
   const x0 = RIBBON_LEFT + labelW;
   const height = rows.length * ROW + 30;
-  svg.setAttribute("width", x0 + n * CELL + 10);
   svg.setAttribute("height", height);
 
   rows.forEach(([text, encoded, label], ri) => {
@@ -215,9 +214,11 @@ function drawRibbon() {
     height: rows.length * ROW - (ROW - BOX) + 6, fill: "none", stroke: "var(--run)", "stroke-width": 1.4, "stroke-dasharray": "5 3" }));
   const ident = agree(Q.sequence.slice(r.query_start, r.query_end), T.sequence.slice(r.target_start, r.target_end));
   const same = agree(Q.encoded.slice(r.query_start, r.query_end), T.encoded.slice(r.target_start, r.target_end));
-  svg.appendChild(svgEl("text", { x: x0 + start * CELL - 2, y: rows.length * ROW + 20, class: "label", "font-size": FONT },
-    `${r.length - K + 1} consecutive shared ${K}-mers, ${r.length} residues: ${ident}/${r.length} identical, ` +
-    `${same}/${r.length} same class` + (reduced ? "" : "")));
+  const runLabel = `${r.length - K + 1} consecutive shared ${K}-mers, ${r.length} residues: ` +
+    `${ident}/${r.length} identical, ${same}/${r.length} same class`;
+  svg.appendChild(svgEl("text", { x: x0 + start * CELL - 2, y: rows.length * ROW + 20, class: "label", "font-size": FONT }, runLabel));
+  // Wide enough for the boxes and for the run label, which can extend past the last box.
+  svg.setAttribute("width", Math.max(x0 + n * CELL + 10, x0 + start * CELL + runLabel.length * 7));
   note.textContent = "";
 }
 
@@ -274,7 +275,11 @@ function drawDots() {
     svg.appendChild(c);
   }
   runs.forEach((r, i) => {
-    const box = svgEl("rect", { x: sx(r.query_start), y: sy(r.target_end), width: r.length * scale, height: r.length * scale,
+    // Dots sit at k-mer starts, so the box surrounds those, not every residue the run
+    // covers; the padding keeps a two-k-mer run's box visible around its dots.
+    const n = r.length - K + 1, pad = 4;
+    const box = svgEl("rect", { x: sx(r.query_start - pad), y: sy(r.target_start + n + pad),
+      width: (n + 2 * pad) * scale, height: (n + 2 * pad) * scale,
       fill: "none", stroke: "var(--run)", "stroke-width": i === state.run ? 2 : 1, "stroke-dasharray": "5 3", class: "run-box" });
     box.addEventListener("click", () => { state.run = i; document.getElementById("run-select").value = i; drawRibbon(); drawDots(); });
     svg.appendChild(box);
