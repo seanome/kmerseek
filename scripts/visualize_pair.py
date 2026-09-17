@@ -1,29 +1,36 @@
 #!/usr/bin/env python3
 """Render a PNG+SVG of the k-mers one query and one target share.
 
-Two panels, from the JSON that `kmerseek pair` writes:
+From the JSON that `kmerseek pair` writes:
 
-1. A residue ribbon around the longest matched region: both sequences boxed residue by
-   residue, each with its reduced-alphabet encoding, a tick wherever the two encodings
-   agree, and the matched region outlined.
-2. A dot plot of every shared k-mer, query position against target position, with every
-   matched region outlined. K-mers on a region's diagonal are drawn dark, the scattered
-   singles grey.
+1. A dot plot of every shared k-mer, query position against target position. Each
+   protein is drawn as a line with boxes for its domains along its axis (with --domains),
+   and each domain's span is shaded across the plot, so a run sits in a named cell such
+   as "Bcl-2 x Bcl-2" without reading coordinates. Runs of two or more consecutive shared
+   k-mers are numbered diagonal segments; lone shared k-mers are dots.
+2. One alignment block per run, longest first, numbered to match the dot plot: the query
+   row, the identical residues written between the rows, and the target row, with
+   1-based coordinates at both ends and residue boxes coloured by alphabet class. The
+   header gives the two regions, the length, the identical residues and, for a
+   hydrophobic/polar alphabet, how many residues are polar (a low-complexity flag).
 
-With --html, also writes a self-contained interactive page: hover a dot for the k-mer and
-its position in both sequences, click a run to move the ribbon onto it, change the flank.
+--domains takes Pfam-style tables (TSV, CSV or parquet) with one row per domain: a
+protein column (accession, protein or name), start and end columns (domain_start/
+domain_end or start/end, 1-based inclusive), and a name column (name, pfam_name or
+pfam_id). Proteins match by full FASTA header, first token, or UniProt accession.
+--html also writes a self-contained interactive page.
 
 Usage:
     kmerseek pair --query bcl2.fasta --target ced9.fasta --ksize 12 --alphabet hp \\
         --output bcl2_vs_ced9.json
-    python visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ --html
+    python visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ \\
+        --domains pfam_domains.tsv --html
 """
 
 import argparse
 import json
 import os
 import sys
-from collections import defaultdict
 
 import matplotlib
 
@@ -34,29 +41,26 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from visualize_hits import INK, MUTED, SECONDARY_INK, SURFACE, safe_filename, short_label
+from pair_model import CLASS_NAMES, build_model, load_domains, run_header, title_lines
+from visualize_hits import INK, SECONDARY_INK, SURFACE, safe_filename
 from visualize_pair_html import render_html
 
-# Reduced-alphabet classes get a fill colour only when there are few enough to tell apart
-# at a glance (hp and hpc alphabets). Larger alphabets keep the letters and drop the fill.
-CLASS_COLORS = ["#e08a1e", "#2b6cb0", "#3a9d5d", "#8e5bb5"]
-MAX_COLORED_CLASSES = len(CLASS_COLORS)
-RESIDUE_BOX = "#ffffff"
-RESIDUE_EDGE = "#b8b7b0"
+# Residue box fill and edge per alphabet class, in class-symbol order. Only alphabets with
+# this few classes get colour; larger alphabets keep the letters and plain boxes.
+CLASS_STYLES = [("#f3e3c3", "#c9a15a"), ("#dde9f8", "#7fa6d6"), ("#dff0e2", "#6fae7c"), ("#ece0f3", "#a98bc4")]
+PLAIN_BOX = ("#ffffff", "#b8b7b0")
 
-# One colour for "part of a matched region" in both panels: the dashed outline in the
-# ribbon and the dot plot, and the dots that fall inside one.
-REGION_COLOR = INK
-SINGLE_COLOR = MUTED
-# Residues of padding around a run's k-mer starts in the dot plot.
-RUN_BOX_PAD = 4
+DOMAIN_FILL, DOMAIN_EDGE = "#e8e7e2", "#8d8c86"
+SPAN_SHADE = "#e8e7e2"
+RUN_COLOR = INK
+SINGLE_COLOR = "#6e6d68"
 
-# Ribbon geometry, in residue units (one residue = one x unit).
-RESIDUE_INCHES = 0.2
-ROW_HEIGHT = 1.0
-BOX_W = 0.86
-BOX_H = 0.78
-FONT_PT = 8
+WRAP = 60  # residues per alignment line before wrapping
+RESIDUE_IN = 0.155
+ROW_IN = 0.2
+PLOT_IN = 3.6
+TRACK_IN = 0.42
+FONT = 8
 
 
 def load_pair(path):
@@ -64,380 +68,218 @@ def load_pair(path):
         return json.load(fh)
 
 
-def class_residues(pair):
-    """{class symbol: sorted residues that map to it}, read off the two sequences rather
-    than from an alphabet table, so it is right for whichever alphabet was used."""
-    seen = defaultdict(set)
-    for side in ("query", "target"):
-        for residue, cls in zip(pair[side]["sequence"], pair[side]["encoded"]):
-            seen[cls].add(residue)
-    return {cls: "".join(sorted(res)) for cls, res in sorted(seen.items())}
+class PairFigure:
+    """Draws the dot plot and the stacked alignment blocks from one figure model."""
 
+    def __init__(self, model):
+        self.m = model
+        self.styles = self._styles()
 
-def is_reduced(pair):
-    return pair["query"]["encoded"] != pair["query"]["sequence"]
+    def _styles(self):
+        classes = [c["symbol"] for c in self.m["classes"]]
+        if 0 < len(classes) <= len(CLASS_STYLES):
+            return dict(zip(classes, CLASS_STYLES))
+        return {}
 
+    def style(self, cls):
+        return self.styles.get(cls, PLAIN_BOX)
 
-def runs(pair):
-    """Matched regions made of at least two consecutive shared k-mers. `kmerseek pair` also
-    reports every lone shared k-mer as a region exactly k residues long; those are drawn as
-    scattered singles, not outlined."""
-    return [r for r in pair["regions"] if r["length"] > pair["ksize"]]
+    # -- layout in inches, top to bottom --
 
+    def has_domains(self):
+        return bool(self.m["query"]["domains"] or self.m["target"]["domains"])
 
-def longest_run(pair):
-    """Regions are written longest first, so the first run is the ribbon's subject."""
-    return next(iter(runs(pair)), None)
+    def legend_rows(self):
+        return len(self._legend_handles())
 
+    @staticmethod
+    def chunks(block):
+        return -(-len(block["query_row"]) // WRAP)
 
-def ribbon_window(region, query_len, target_len, flank):
-    """Start (inclusive) and end (exclusive) of the ribbon in each sequence: the region
-    plus `flank` residues either side, clipped so the window stays on the diagonal in both."""
-    left = min(flank, region["query_start"], region["target_start"])
-    right = min(flank, query_len - region["query_end"], target_len - region["target_end"])
-    return {
-        "query_start": region["query_start"] - left,
-        "query_end": region["query_end"] + right,
-        "target_start": region["target_start"] - left,
-        "target_end": region["target_end"] + right,
-    }
+    def height(self):
+        h = 0.6 + 0.2 * self.legend_rows() + 0.25
+        h += TRACK_IN + 0.15 + PLOT_IN + 0.55
+        for b in self.m["runs"]:
+            h += 0.32 + self.chunks(b) * (3 * ROW_IN + 0.12)
+        return h + 0.2
 
-
-def window_slices(pair, window):
-    q, t = pair["query"], pair["target"]
-    qs, qe = window["query_start"], window["query_end"]
-    ts, te = window["target_start"], window["target_end"]
-    return {
-        "query_seq": q["sequence"][qs:qe],
-        "query_enc": q["encoded"][qs:qe],
-        "target_seq": t["sequence"][ts:te],
-        "target_enc": t["encoded"][ts:te],
-    }
-
-
-def count_agreement(a, b):
-    return sum(x == y for x, y in zip(a, b))
-
-
-def region_counts(pair, region):
-    """Identical residues and agreeing classes inside one region."""
-    q, t = pair["query"], pair["target"]
-    qs, qe, ts, te = (
-        region["query_start"],
-        region["query_end"],
-        region["target_start"],
-        region["target_end"],
-    )
-    return {
-        "identical": count_agreement(q["sequence"][qs:qe], t["sequence"][ts:te]),
-        "same_class": count_agreement(q["encoded"][qs:qe], t["encoded"][ts:te]),
-        "length": region["length"],
-    }
-
-
-def in_region(kmer, region, ksize):
-    """A shared k-mer sits on a region's diagonal when its start is inside the region in
-    both sequences and its diagonal offset matches."""
-    q_in = region["query_start"] <= kmer["query_pos"] <= region["query_end"] - ksize
-    t_in = region["target_start"] <= kmer["target_pos"] <= region["target_end"] - ksize
-    same_diagonal = (kmer["target_pos"] - kmer["query_pos"]) == (
-        region["target_start"] - region["query_start"]
-    )
-    return q_in and t_in and same_diagonal
-
-
-def split_kmers_by_run(pair):
-    """Shared k-mers on the diagonal of a run of consecutive shared k-mers, and the singles."""
-    ksize = pair["ksize"]
-    on, off = [], []
-    for kmer in pair["shared_kmers"]:
-        (on if any(in_region(kmer, r, ksize) for r in runs(pair)) else off).append(kmer)
-    return on, off
-
-
-def _text_color(hex_fill):
-    r, g, b = (int(hex_fill[i : i + 2], 16) / 255 for i in (1, 3, 5))
-    return "#ffffff" if 0.299 * r + 0.587 * g + 0.114 * b < 0.6 else INK
-
-
-class PairPlot:
-    """Draws the two panels for one pair. Kept as a class so the layout numbers and the
-    colour mapping are shared between them instead of threaded through arguments."""
-
-    def __init__(self, pair, flank=10):
-        self.pair = pair
-        self.flank = flank
-        self.ksize = pair["ksize"]
-        self.query_label = short_label(pair["query"]["name"])
-        self.target_label = short_label(pair["target"]["name"])
-        self.reduced = is_reduced(pair)
-        self.classes = class_residues(pair) if self.reduced else {}
-        self.class_fill = self._class_fill()
-        self.runs = runs(pair)
-        self.region = longest_run(pair)
-        self.on_run, self.single = split_kmers_by_run(pair)
-
-    def _class_fill(self):
-        if len(self.classes) > MAX_COLORED_CLASSES:
-            return {}
-        return dict(zip(self.classes, CLASS_COLORS))
-
-    # -- layout -------------------------------------------------------------------
-
-    def window(self):
-        if self.region is None:
-            return None
-        return ribbon_window(
-            self.region,
-            len(self.pair["query"]["sequence"]),
-            len(self.pair["target"]["sequence"]),
-            self.flank,
-        )
-
-    def row_labels(self, window):
-        """Left-hand labels for the four ribbon rows, 1-based inclusive ranges in residues."""
-        t = f"{self.target_label} {window['target_start'] + 1}–{window['target_end']}"
-        q = f"{self.query_label} {window['query_start'] + 1}–{window['query_end']}"
-        if not self.reduced:
-            return [t, q]
-        return [t, self.pair["moltype"], self.pair["moltype"], q]
-
-    def label_margin_units(self, labels):
-        """Residue units needed left of the ribbon so the longest label fits."""
-        char_inches = 0.6 * FONT_PT / 72
-        return max(len(s) for s in labels) * char_inches / RESIDUE_INCHES + 1.5
-
-    # Vertical budget, top to bottom, in inches.
-    TITLE_IN = 0.55
-    RIBBON_LEGEND_IN = 0.3
-    ROW_IN = 0.28
-    REGION_LABEL_IN = 0.35
-    GAP_IN = 0.1
-    DOT_LEGEND_IN = 0.65
-    DOT_SIDE_IN = 3.4
-    XLABEL_IN = 0.65
-
-    def n_rows(self):
-        return 4 if self.reduced else 2
-
-    def ribbon_inches(self):
-        if self.region is None:
-            return 0.4
-        return self.RIBBON_LEGEND_IN + self.n_rows() * self.ROW_IN + self.REGION_LABEL_IN
-
-    def figure_size(self, window):
-        n = window["query_end"] - window["query_start"] if window else 40
-        width = max(8.0, n * RESIDUE_INCHES + 3.0)
-        height = (
-            self.TITLE_IN
-            + self.ribbon_inches()
-            + self.GAP_IN
-            + self.DOT_LEGEND_IN
-            + self.DOT_SIDE_IN
-            + self.XLABEL_IN
-        )
-        return width, height
-
-    # -- drawing ------------------------------------------------------------------
+    def width(self):
+        """Wide enough for the title (about 0.6 * 9.5 pt per character), the widest
+        alignment line, and the dot plot with its target track."""
+        longest = max((len(b["query_row"]) for b in self.m["runs"]), default=0)
+        title_in = len(title_lines(self.m)[0]) * 0.6 * 9.5 / 72 + 0.3
+        return max(7.5, title_in, 1.3 + min(longest, WRAP) * RESIDUE_IN + 1.0)
 
     def draw(self):
-        window = self.window()
-        width, height = self.figure_size(window)
-        fig = plt.figure(figsize=(width, height), facecolor=SURFACE)
-        ribbon_top = height - self.TITLE_IN
-        ribbon_bottom = ribbon_top - self.ribbon_inches()
-        ax_ribbon = fig.add_axes(
-            [0.02, ribbon_bottom / height, 0.96, self.ribbon_inches() / height]
-        )
-        ax_dots = fig.add_axes(
-            [0.9 / width, self.XLABEL_IN / height, self.DOT_SIDE_IN / width, self.DOT_SIDE_IN / height]
-        )
-        for i, line in enumerate(self.title_lines()):
-            fig.text(0.02, 1 - (0.12 + 0.2 * i) / height, line, ha="left", va="top", fontsize=9.5, color=INK)
-        if window is None:
-            self._draw_no_region(ax_ribbon)
-        else:
-            self._draw_ribbon(ax_ribbon, window)
-        self._draw_dots(ax_dots)
+        w, h = self.width(), self.height()
+        self.w, self.h = w, h
+        fig = plt.figure(figsize=(w, h), facecolor=SURFACE)
+        y = h - 0.1
+        y = self._draw_title(fig, y)
+        y = self._draw_legend(fig, y)
+        y = self._draw_dotplot(fig, y)
+        for block in self.m["runs"]:
+            y = self._draw_block(fig, y, block)
         return fig
 
-    def title_lines(self):
-        first = (
-            f"{self.query_label} (query) vs {self.target_label} (target), "
-            f"{self.pair['moltype']} {self.ksize}-mers"
-        )
-        n = len(self.pair["shared_kmers"])
-        if self.region is None:
-            return [first, f"{n} shared, none consecutive in both sequences"]
-        c = region_counts(self.pair, self.region)
-        second = (
-            f"{n} shared: {len(self.on_run)} in runs of consecutive k-mers, {len(self.single)} singles; "
-            f"longest run {c['length']} residues, {c['identical']}/{c['length']} identical, "
-            f"{c['same_class']}/{c['length']} same class"
-        )
-        return [first, second]
+    def _text(self, fig, x_in, y_in, text, **kw):
+        fig.text(x_in / self.w, y_in / self.h, text, **kw)
 
-    def _draw_no_region(self, ax):
+    def _axes(self, fig, x_in, y_in, w_in, h_in):
+        return fig.add_axes([x_in / self.w, y_in / self.h, w_in / self.w, h_in / self.h])
+
+    # -- title and legend --
+
+    def _draw_title(self, fig, y):
+        first, second = title_lines(self.m)
+        self._text(fig, 0.1, y, first, fontsize=9.5, color=INK, va="top")
+        self._text(fig, 0.1, y - 0.22, second, fontsize=8.5, color=SECONDARY_INK, va="top")
+        return y - 0.55
+
+    def _legend_handles(self):
+        k = self.m["ksize"]
+        handles = [Patch(facecolor=self.style(c["symbol"])[0], edgecolor=self.style(c["symbol"])[1], label=c["label"]) for c in self.m["classes"]]
+        handles = handles or [Patch(facecolor=PLAIN_BOX[0], edgecolor=PLAIN_BOX[1], label="residue")]
+        handles.append(Line2D([], [], color=RUN_COLOR, linewidth=2.2, label=f"run of 2 or more consecutive shared {k}-mers ({len(self.m['runs'])}), numbered"))
+        handles.append(Line2D([], [], color=SINGLE_COLOR, marker="o", linestyle="none", markersize=4, label=f"single shared {k}-mer ({len(self.m['singles'])})"))
+        if self.has_domains():
+            handles.append(Patch(facecolor=DOMAIN_FILL, edgecolor=DOMAIN_EDGE, label="protein, with its domains as boxes; each domain's span shaded across the plot"))
+        handles.append(Line2D([], [], color=INK, marker="$\\mathtt{G}$", linestyle="none", markersize=6, label="identical residue, written between the rows"))
+        return handles
+
+    def _draw_legend(self, fig, y):
+        rows = self.legend_rows()
+        ax = self._axes(fig, 0.1, y - 0.2 * rows, self.w - 0.2, 0.2 * rows)
         ax.set_axis_off()
-        ax.text(
-            0.0,
-            0.5,
-            f"No run to show: no two shared {self.ksize}-mers are consecutive in both sequences.",
-            transform=ax.transAxes,
-            fontsize=9,
-            color=SECONDARY_INK,
-            va="center",
-        )
+        ax.legend(handles=self._legend_handles(), loc="upper left", ncol=1, frameon=False, fontsize=FONT, handlelength=1.6, borderaxespad=0, labelspacing=0.35)
+        return y - 0.2 * rows - 0.25
 
-    def _draw_ribbon(self, ax, window):
-        s = window_slices(self.pair, window)
-        n = len(s["query_seq"])
-        rows = self._ribbon_rows(s)
-        labels = self.row_labels(window)
-        margin = self.label_margin_units(labels)
-        ax.set_xlim(-margin, n + 0.5)
-        # y in row units: rows sit at 0..n_rows-1, the legend above, the region label below.
-        ax.set_ylim(
-            -0.5 - self.REGION_LABEL_IN / self.ROW_IN,
-            len(rows) - 0.5 + self.RIBBON_LEGEND_IN / self.ROW_IN,
-        )
+    # -- dot plot with protein tracks --
+
+    def _draw_dotplot(self, fig, y):
+        left = 0.85
+        q, t = self.m["query"], self.m["target"]
+        self._draw_track(self._axes(fig, left, y - TRACK_IN, PLOT_IN, TRACK_IN), q, horizontal=True)
+        top = y - TRACK_IN - 0.05
+        ax = self._axes(fig, left, top - PLOT_IN, PLOT_IN, PLOT_IN)
+        self._draw_track(self._axes(fig, left + PLOT_IN + 0.05, top - PLOT_IN, TRACK_IN, PLOT_IN), t, horizontal=False)
+        self._draw_spans(ax)
+        self._draw_marks(ax)
+        self._style_axes(ax, q, t)
+        return top - PLOT_IN - 0.55
+
+    def _style_axes(self, ax, q, t):
+        ax.set_xlim(1, q["length"])
+        ax.set_ylim(1, t["length"])
+        ax.set_xticks(sorted({1, q["length"]} | set(range(100, q["length"], 100))))
+        ax.set_yticks(sorted({1, t["length"]} | set(range(100, t["length"], 100))))
+        ax.tick_params(labelsize=FONT, colors=SECONDARY_INK)
+        for s in ("top", "right"):
+            ax.spines[s].set_visible(False)
+        ax.set_xlabel(f"{q['label']} position (aa)", fontsize=FONT + 1)
+        ax.set_ylabel(f"{t['label']} position (aa)", fontsize=FONT + 1)
+
+    def _draw_track(self, ax, side, horizontal):
+        """The protein as a line with a box per domain, labelled."""
         ax.set_axis_off()
-        self._draw_ribbon_legend(ax)
-        for row_index, (text, encoded) in enumerate(rows):
-            y = (len(rows) - 1 - row_index) * ROW_HEIGHT
-            ax.text(-1.0, y, labels[row_index], ha="right", va="center", fontsize=FONT_PT, color=SECONDARY_INK)
-            self._draw_row(ax, y, text, encoded)
-        self._draw_agreement_ticks(ax, s, len(rows))
-        self._draw_region_outline(ax, window, len(rows))
+        L = side["length"]
+        if horizontal:
+            ax.set_xlim(1, L)
+            ax.set_ylim(0, 1)
+            ax.plot([1, L], [0.3, 0.3], color=DOMAIN_EDGE, linewidth=1)
+        else:
+            ax.set_ylim(1, L)
+            ax.set_xlim(0, 1)
+            ax.plot([0.3, 0.3], [1, L], color=DOMAIN_EDGE, linewidth=1)
+        stagger = self._labels_collide(side) if horizontal else False
+        for i, d in enumerate(side["domains"]):
+            self._draw_domain(ax, d, horizontal, lift=0.3 * (i % 2) if stagger else 0)
 
-    def _ribbon_rows(self, s):
-        """(text, is_encoded) per row, top to bottom: target residues, target classes,
-        query classes, query residues. Without a reduced alphabet only the residue rows."""
-        if not self.reduced:
-            return [(s["target_seq"], False), (s["query_seq"], False)]
-        return [
-            (s["target_seq"], False),
-            (s["target_enc"], True),
-            (s["query_enc"], True),
-            (s["query_seq"], False),
-        ]
+    def _draw_domain(self, ax, d, horizontal, lift):
+        span = d["end"] - d["start"] + 1
+        mid = (d["start"] + d["end"]) / 2
+        if horizontal:
+            ax.add_patch(Rectangle((d["start"], 0.1), span, 0.4, facecolor=DOMAIN_FILL, edgecolor=DOMAIN_EDGE, linewidth=0.8))
+            ax.text(mid, 0.6 + lift, d["name"], ha="center", va="bottom", fontsize=FONT, color=SECONDARY_INK)
+        else:
+            ax.add_patch(Rectangle((0.1, d["start"]), 0.4, span, facecolor=DOMAIN_FILL, edgecolor=DOMAIN_EDGE, linewidth=0.8))
+            ax.text(0.6, mid, d["name"], ha="left", va="center", fontsize=FONT, color=SECONDARY_INK)
+
+    def _labels_collide(self, side):
+        """Whether two neighbouring domain labels on the horizontal track would overlap,
+        at about 0.6 * FONT points per character."""
+        aa_per_pt = side["length"] / (PLOT_IN * 72)
+        centres = [((d["start"] + d["end"]) / 2, len(d["name"])) for d in side["domains"]]
+        for (c1, n1), (c2, n2) in zip(centres, centres[1:]):
+            if (c2 - c1) < ((n1 + n2) / 2 * 0.6 * FONT + 4) * aa_per_pt:
+                return True
+        return False
+
+    def _draw_spans(self, ax):
+        for d in self.m["query"]["domains"]:
+            ax.axvspan(d["start"], d["end"] + 1, facecolor=SPAN_SHADE, alpha=0.6, linewidth=0, zorder=0)
+        for d in self.m["target"]["domains"]:
+            ax.axhspan(d["start"], d["end"] + 1, facecolor=SPAN_SHADE, alpha=0.6, linewidth=0, zorder=0)
+
+    def _draw_marks(self, ax):
+        k = self.m["ksize"]
+        # A single k-mer is a dot at the centre of the k residues it covers.
+        xs = [s["query_pos"] + (k + 1) / 2 for s in self.m["singles"]]
+        ys = [s["target_pos"] + (k + 1) / 2 for s in self.m["singles"]]
+        ax.scatter(xs, ys, s=12, color=SINGLE_COLOR, linewidths=0, zorder=3)
+        for b in self.m["runs"]:
+            x = (b["query_start"] + 1, b["query_end"])
+            yy = (b["target_start"] + 1, b["target_end"])
+            ax.plot(x, yy, color=RUN_COLOR, linewidth=2.2, solid_capstyle="round", zorder=4)
+            ax.annotate(str(b["number"]), (x[1], yy[1]), xytext=(4, 2), textcoords="offset points", fontsize=FONT + 2, fontweight="bold", color=RUN_COLOR)
+
+    # -- alignment blocks --
+
+    def _draw_block(self, fig, y, block):
+        self._text(fig, 0.1, y - 0.05, run_header(block), fontsize=FONT + 2, color=INK, va="top")
+        y -= 0.32
+        for start in range(0, len(block["query_row"]), WRAP):
+            y = self._draw_chunk(fig, y, block, start)
+        return y
+
+    def _draw_chunk(self, fig, y, block, start):
+        n = len(block["query_row"][start : start + WRAP])
+        ax = self._axes(fig, 1.3, y - 3 * ROW_IN, n * RESIDUE_IN, 3 * ROW_IN)
+        ax.set_axis_off()
+        ax.set_xlim(-0.5, n - 0.5)
+        ax.set_ylim(-0.5, 2.5)
+        sl = slice(start, start + WRAP)
+        self._draw_row(ax, 2, block["query_row"][sl], block["query_enc"][sl])
+        self._draw_row(ax, 0, block["target_row"][sl], block["target_enc"][sl])
+        for i, ch in enumerate(block["middle"][sl]):
+            if ch != " ":
+                ax.text(i, 1, ch, ha="center", va="center", fontsize=FONT, color=INK, family="monospace")
+        self._draw_coordinates(ax, block, start, n)
+        return y - 3 * ROW_IN - 0.12
+
+    def _draw_coordinates(self, ax, block, start, n):
+        win = block["window"]
+        for y, label, first in ((2, self.m["query"]["label"], win["query_start"]), (0, self.m["target"]["label"], win["target_start"])):
+            ax.text(-0.9, y, f"{label} {first + start + 1}", ha="right", va="center", fontsize=FONT, color=SECONDARY_INK)
+            ax.text(n - 0.1, y, str(first + start + n), ha="left", va="center", fontsize=FONT, color=SECONDARY_INK)
 
     def _draw_row(self, ax, y, text, encoded):
-        for i, ch in enumerate(text):
-            fill = self.class_fill.get(ch, RESIDUE_BOX) if encoded else RESIDUE_BOX
-            edge = fill if fill != RESIDUE_BOX else RESIDUE_EDGE
-            ax.add_patch(
-                Rectangle((i - BOX_W / 2, y - BOX_H / 2), BOX_W, BOX_H, facecolor=fill, edgecolor=edge, linewidth=0.6)
-            )
-            ax.text(i, y, ch, ha="center", va="center", fontsize=FONT_PT, color=_text_color(fill) if fill != RESIDUE_BOX else INK, family="monospace")
-
-    def _draw_agreement_ticks(self, ax, s, n_rows):
-        """A tick between the two middle rows wherever the classes (or, without a reduced
-        alphabet, the residues) agree."""
-        top = s["target_enc"] if self.reduced else s["target_seq"]
-        bottom = s["query_enc"] if self.reduced else s["query_seq"]
-        upper_row = n_rows // 2  # index from the bottom of the row just above the gap
-        y_top = upper_row * ROW_HEIGHT - BOX_H / 2
-        y_bottom = (upper_row - 1) * ROW_HEIGHT + BOX_H / 2
-        for i, (a, b) in enumerate(zip(top, bottom)):
-            if a == b:
-                ax.plot([i, i], [y_bottom, y_top], color=SECONDARY_INK, linewidth=0.8, solid_capstyle="butt")
-
-    def _draw_region_outline(self, ax, window, n_rows):
-        start = self.region["query_start"] - window["query_start"]
-        width = self.region["length"]
-        ax.add_patch(
-            Rectangle(
-                (start - 0.5, -BOX_H / 2 - 0.12),
-                width,
-                (n_rows - 1) * ROW_HEIGHT + BOX_H + 0.24,
-                fill=False,
-                edgecolor=REGION_COLOR,
-                linestyle=(0, (4, 2)),
-                linewidth=1.0,
-            )
-        )
-        n_kmers = self.region["length"] - self.ksize + 1
-        label = (
-            f"{n_kmers} consecutive shared {self.ksize}-mers: {self.query_label} "
-            f"{self.region['query_start'] + 1}\u2013{self.region['query_end']}, {self.target_label} "
-            f"{self.region['target_start'] + 1}\u2013{self.region['target_end']}"
-        )
-        ax.text(start - 0.5, -BOX_H / 2 - 0.35, label, ha="left", va="top", fontsize=FONT_PT, color=REGION_COLOR)
-
-    def _draw_ribbon_legend(self, ax):
-        handles = [
-            Patch(facecolor=RESIDUE_BOX, edgecolor=RESIDUE_EDGE, label="residue"),
-        ]
-        for cls, residues in self.classes.items():
-            fill = self.class_fill.get(cls, RESIDUE_BOX)
-            handles.append(Patch(facecolor=fill, edgecolor=fill if fill != RESIDUE_BOX else RESIDUE_EDGE, label=f"class {cls}: {' '.join(residues)}"))
-        what = "same class" if self.reduced else "same residue"
-        handles.append(Line2D([], [], color=SECONDARY_INK, linewidth=0.8, label=f"{what} in both"))
-        handles.append(Line2D([], [], color=REGION_COLOR, linestyle=(0, (4, 2)), label="longest run of consecutive shared k-mers"))
-        ax.legend(
-            handles=handles,
-            loc="upper left",
-            bbox_to_anchor=(0.0, 1.0),
-            bbox_transform=ax.transAxes,
-            ncol=len(handles),
-            frameon=False,
-            fontsize=FONT_PT,
-            handlelength=1.4,
-            columnspacing=1.2,
-        )
-
-    def _draw_dots(self, ax):
-        ax.set_facecolor(SURFACE)
-        q_len = len(self.pair["query"]["sequence"])
-        t_len = len(self.pair["target"]["sequence"])
-        ax.set_xlim(0, q_len)
-        ax.set_ylim(0, t_len)
-        ax.set_aspect("equal")
-        ax.set_xlabel(f"{self.query_label} position (query, {q_len} aa)", fontsize=9)
-        ax.set_ylabel(f"{self.target_label} position (target, {t_len} aa)", fontsize=9)
-        for spine in ("top", "right"):
-            ax.spines[spine].set_visible(False)
-        ax.tick_params(labelsize=8, colors=SECONDARY_INK)
-        self._scatter(ax, self.single, SINGLE_COLOR, f"single shared {self.ksize}-mer ({len(self.single)})")
-        self._scatter(ax, self.on_run, REGION_COLOR, f"shared {self.ksize}-mer in a run ({len(self.on_run)})")
-        for region in self.runs:
-            # Dots sit at k-mer starts, so the box surrounds those, not every residue the
-            # run covers; RUN_BOX_PAD keeps a two-k-mer run's box visible around its dots.
-            n_kmers = region["length"] - self.ksize + 1
-            ax.add_patch(
-                Rectangle(
-                    (region["query_start"] - RUN_BOX_PAD, region["target_start"] - RUN_BOX_PAD),
-                    n_kmers + 2 * RUN_BOX_PAD,
-                    n_kmers + 2 * RUN_BOX_PAD,
-                    fill=False,
-                    edgecolor=REGION_COLOR,
-                    linestyle=(0, (4, 2)),
-                    linewidth=0.9,
-                )
-            )
-        ax.add_patch(Rectangle((0, 0), 0, 0, fill=False, edgecolor=REGION_COLOR, linestyle=(0, (4, 2)), label=f"run of consecutive shared k-mers ({len(self.runs)})"))
-        ax.legend(loc="lower left", bbox_to_anchor=(0, 1.01), frameon=False, fontsize=8, ncol=1, borderaxespad=0)
-
-    def _scatter(self, ax, kmers, color, label):
-        # A k-mer covers k residues; the dot sits on its start, plus half a residue so a
-        # k-mer starting at 0-based position 0 is drawn inside the axes.
-        xs = [k["query_pos"] + 0.5 for k in kmers]
-        ys = [k["target_pos"] + 0.5 for k in kmers]
-        ax.scatter(xs, ys, s=9, color=color, label=label, linewidths=0, zorder=3)
+        for i, (ch, cls) in enumerate(zip(text, encoded)):
+            fill, edge = self.style(cls)
+            ax.add_patch(Rectangle((i - 0.42, y - 0.4), 0.84, 0.8, facecolor=fill, edgecolor=edge, linewidth=0.6))
+            ax.text(i, y, ch, ha="center", va="center", fontsize=FONT, color=INK, family="monospace")
 
 
-def plot_pair(pair, output_paths, flank=10, dpi=200):
-    fig = PairPlot(pair, flank=flank).draw()
+def plot_pair(model, output_paths, dpi=200):
+    fig = PairFigure(model).draw()
     for path in output_paths:
         fig.savefig(path, dpi=dpi, facecolor=SURFACE)
     plt.close(fig)
 
 
-def write_html(pair, path, flank=10):
-    title = f"{short_label(pair['query']['name'])} vs {short_label(pair['target']['name'])} shared k-mers"
+def write_html(model, path):
     with open(path, "w") as fh:
-        fh.write(render_html(pair, title, flank=flank))
+        fh.write(render_html(model))
 
 
 def output_basename(pair):
@@ -448,26 +290,24 @@ def _build_arg_parser():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--pair", required=True, help="JSON written by `kmerseek pair`")
     p.add_argument("--output-dir", required=True)
-    p.add_argument("--flank", type=int, default=10, help="residues shown either side of the longest matched region (default 10)")
+    p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="domain tables (TSV, CSV or parquet) for either protein; see the module docstring for columns")
+    p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run (default 0); with a flank the middle line uses `:` for same class")
     p.add_argument("--dpi", type=int, default=200)
-    p.add_argument(
-        "--html",
-        action="store_true",
-        help="also write a self-contained interactive HTML page (hover a dot for the k-mer, click a run to show it)",
-    )
+    p.add_argument("--html", action="store_true", help="also write a self-contained interactive HTML page")
     return p
 
 
 def main():
     args = _build_arg_parser().parse_args()
     pair = load_pair(args.pair)
+    model = build_model(pair, load_domains(args.domains), flank=args.flank)
     os.makedirs(args.output_dir, exist_ok=True)
     base = os.path.join(args.output_dir, output_basename(pair))
-    plot_pair(pair, [base + ".png", base + ".svg"], flank=args.flank, dpi=args.dpi)
+    plot_pair(model, [base + ".png", base + ".svg"], dpi=args.dpi)
     print(base + ".png")
     print(base + ".svg")
     if args.html:
-        write_html(pair, base + ".html", flank=args.flank)
+        write_html(model, base + ".html")
         print(base + ".html")
 
 

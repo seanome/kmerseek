@@ -187,13 +187,22 @@ distinct hits. See
 `kmerseek pair` compares one query sequence with one target sequence at a chosen
 alphabet and k-mer size and writes JSON listing every shared k-mer with its position in
 both sequences, plus the matched regions those k-mers chain into (the same regions
-`search` reports). `scripts/visualize_pair.py` draws that JSON as two panels: a residue
-ribbon around the longest run of consecutive shared k-mers, with both sequences boxed
-residue by residue, their reduced-alphabet encodings between them, and a tick wherever
-the two encodings agree; and a dot plot of every shared k-mer, query position against
-target position, with every run outlined. Example, human BCL-2 against C. elegans CED-9
-at `hp_lehninger2`, k=12: the 19-residue run is the BH1 motif, 5/19 residues identical
-but 19/19 the same hydrophobic/polar class.
+`search` reports). `scripts/visualize_pair.py` draws that JSON as a dot plot and one
+alignment block per run of two or more consecutive shared k-mers:
+
+- In the dot plot each protein is a line with boxes for its domains along its axis, and
+  each domain's span is shaded across the plot, so a run sits in a named cell such as
+  "Bcl-2 x Bcl-2" without reading coordinates. Runs are numbered diagonal segments;
+  lone shared k-mers are dots.
+- Each alignment block, longest run first and numbered to match, is the BLAST layout:
+  query row, identical residues written between the rows, target row, 1-based
+  coordinates at both ends, residue boxes coloured hydrophobic or polar. The header
+  gives the two regions, the length, the identical residues and how many residues are
+  polar (a low-complexity flag; 1 of 14 is an all-hydrophobic run).
+
+Example, human BCL-2 against C. elegans CED-9 at `hp_lehninger2`, k=12, with both
+proteins' Pfam domains. Run 1 is the BH1 motif inside the Bcl-2 domain of both: 5/19
+residues identical, 19/19 the same hydrophobic/polar class.
 
 ![Shared k-mers between BCL2_HUMAN and CED9_CAEEL](docs/images/bcl2_vs_ced9_pair_example.png)
 
@@ -203,19 +212,43 @@ but 19/19 the same hydrophobic/polar class.
 kmerseek pair -q tests/testdata/fasta/bcl2.fasta -t tests/testdata/fasta/ced9.fasta \
     --alphabet hp --ksize 12 -o bcl2_vs_ced9.json
 
-python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ --html
+python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ \
+    --domains scripts/testdata/bcl2_ced9_pfam_domains.tsv --html
 ```
 
-`--html` also writes one self-contained HTML page with the same two panels: hover a dot
-for the k-mer and its residues in both sequences, click a run in the dot plot (or pick it
-from the list) to move the ribbon onto it, and change the flank live. No external
-libraries, so the file works offline.
-
 The first record of each FASTA is used unless `--query-name` / `--target-name` names
-another by its header or its first token (`sp|P10415|BCL2_HUMAN`). `--flank` sets how
-many residues the ribbon shows either side of the run (default 10). Every lone shared
-k-mer is also written to the JSON as a region exactly k residues long; the plot draws
-those as grey singles and outlines only runs of two or more consecutive k-mers.
+another by its header or its first token (`sp|P10415|BCL2_HUMAN`). `--domains` takes
+one or more Pfam-style tables (TSV, CSV or parquet) with a protein column (`accession`,
+`protein` or `name`), `domain_start`/`domain_end` or `start`/`end` (1-based inclusive)
+and a `name`, `pfam_name` or `pfam_id` column; proteins match by full header, first
+token or UniProt accession, so the `*_pfam_domains.parquet` tables built from
+Pfam-A.regions work as they are. `--flank N` shows N residues either side of each run
+and switches the middle line to BLAST's: the letter where identical, `:` where only the
+class agrees. `--html` also writes one self-contained page: hover a single for its
+k-mer, click a run's number to jump to its alignment.
+
+Every lone shared k-mer is also written to the JSON as a region exactly k residues
+long; the figure draws those as singles and gives alignments only to runs.
+
+## Visualizing a whole search
+
+`scripts/visualize_search.py` turns `kmerseek search` output into one HTML report per
+query, laid out like a Foldseek results page: one row per target hit with the numbers
+in the row (runs, shared k-mers, containment, whole-query p-value, best region score,
+Benjamini-Hochberg q-value) and a bar showing where the hit's runs land on the query.
+Click a row and the pair view above opens underneath it. Columns sort on click.
+
+```bash
+kmerseek search -q ced9.fasta -t bcl2_family.rocksdb -o results.csv --alphabet hp --ksize 12
+
+python scripts/visualize_search.py --csv results.csv --query-fasta ced9.fasta \
+    --target-fasta bcl2_family.fasta.gz --output-dir report/ --domains pfam_domains.tsv
+```
+
+The pair view needs every shared k-mer, which the CSV does not carry, so the script
+runs `kmerseek pair` once per hit (under a second for 24 hits) on sequences taken from
+the two FASTA files; `--target-fasta` is the FASTA the index was built from.
+`--max-hits` caps each query at the best N targets by q-value (default 100).
 
 ## Alphabets
 
