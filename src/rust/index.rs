@@ -187,6 +187,13 @@ struct IngestState {
     runs: usize,
     /// Whether every ingested posting has been merged into the on-disk shards.
     shards_written: bool,
+    /// Opened from a schema 2 layout, whose postings exist only inside its old search
+    /// cache. Nothing can be added to such an index; it has to be rebuilt.
+    legacy_layout: bool,
+    /// Whether the database reflects everything ingested: shards, target chunks and
+    /// metadata. False for a new index until its first `finalize`, so an empty index
+    /// still gets a (empty) cache; true after opening a saved one.
+    saved: bool,
     unique_kmers: usize,
     duplicates_skipped: usize,
     /// Frequency summary gathered while the shards were last written.
@@ -202,6 +209,8 @@ impl IngestState {
             postings: Vec::new(),
             runs: 0,
             shards_written: false,
+            legacy_layout: false,
+            saved: false,
             unique_kmers: 0,
             duplicates_skipped: 0,
             stats: None,
@@ -886,6 +895,13 @@ impl ProteomeIndex {
             .collect::<Result<_, _>>()?;
 
         let mut state = self.ingest.lock();
+        if state.legacy_layout {
+            return Err(IndexError::ValidationError {
+                message: "cannot add sequences to an index written by an older version; \
+                          rebuild it with `kmerseek index`"
+                    .to_string(),
+            });
+        }
         let mut batch = WriteBatch::default();
         for (sketch, bytes) in sketches.into_iter().zip(serialized) {
             let md5 = sketch.signature().md5sum.clone();
@@ -905,6 +921,7 @@ impl ProteomeIndex {
                 state.postings.push((hash, idx));
             }
             state.shards_written = false;
+            state.saved = false;
             if state.postings.len() >= self.posting_buffer_capacity {
                 self.write_run(&mut state)?;
             }
@@ -965,11 +982,15 @@ impl ProteomeIndex {
     /// value. Peak memory is one shard's postings. Also gathers the k-mer frequency
     /// summary in the same pass, since that is the only time the whole index is walked.
     ///
-    /// Idempotent: a second call with nothing new ingested only rewrites the metadata.
-    /// A call after more sketches were ingested folds the existing shards in as one more
-    /// run, so `process_fasta` can be called more than once on the same index.
+    /// Idempotent: a second call with nothing new ingested writes nothing, so it is safe
+    /// on an index opened read-only. A call after more sketches were ingested folds the
+    /// existing shards in as one more run, so `process_fasta` can be called more than
+    /// once on the same index.
     pub fn finalize(&self) -> IndexResult<()> {
         let mut state = self.ingest.lock();
+        if state.saved {
+            return Ok(());
+        }
         self.write_run(&mut state)?;
         self.write_target_tail(&state)?;
 
@@ -1018,7 +1039,9 @@ impl ProteomeIndex {
             }
         }
 
-        self.write_metadata(&state)
+        self.write_metadata(&state)?;
+        state.saved = true;
+        Ok(())
     }
 
     /// Sort one shard's runs into posting lists, write the shard, and delete the runs.
@@ -1152,9 +1175,11 @@ impl ProteomeIndex {
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
         state.shards_written = metadata.shards > 0;
+        state.saved = true;
         if metadata.shards == 0 {
-            // A pre-streaming index has no target chunks to continue; adding to it would
-            // need a full rebuild anyway, which `finalize` performs from scratch.
+            // A pre-streaming index has no target chunks to continue, and `ingest`
+            // refuses to add to it.
+            state.legacy_layout = true;
             return Ok(state);
         }
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
@@ -1272,6 +1297,7 @@ impl ProteomeIndex {
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
         state.shards_written = true;
+        state.saved = true;
         *index.ingest.lock() = state;
         Ok(index)
     }
@@ -4128,10 +4154,52 @@ mod tests {
         Ok(())
     }
 
+    /// Rewrite a finished schema 3 index at `db_path` into the schema 2 layout: signatures
+    /// also in `signatures_chunk_0`, the search cache as one `search_cache` value, v2
+    /// metadata with the combined minhash, and none of the schema 3 keys. Returns the
+    /// cache the rewritten index must still yield. No code writes this layout any more.
+    fn rewrite_as_schema_2(index: &ProteomeIndex) -> Result<ComparableCache> {
+        let expected = cache_of(index)?;
+        let stores: Vec<ProteinSketchStore> = expected
+            .0
+            .iter()
+            .map(|md5| -> Result<ProteinSketchStore> {
+                let raw = index.db.get(format!("sig_{md5}"))?.expect("signature stored");
+                Ok(bincode::deserialize(&raw)?)
+            })
+            .collect::<Result<_>>()?;
+        index.db.put(b"signatures_chunk_0", bincode::serialize(&stores)?)?;
+        let cache = SearchCache {
+            target_list: expected.0.clone(),
+            inverted_index: expected.1.clone().into_iter().collect(),
+            kmer_frequencies: expected.2.clone().into_iter().collect(),
+        };
+        index.db.put(b"search_cache", bincode::serialize(&cache)?)?;
+        let mut combined_mins: Vec<u64> = expected.1.keys().copied().collect();
+        combined_mins.sort_unstable();
+        let v2 = ProteomeIndexMetadataV2 {
+            total_signatures: expected.0.len(),
+            chunk_count: 1,
+            combined_mins,
+            combined_abunds: None,
+            moltype: index.moltype().to_string(),
+            ksize: index.ksize(),
+            scaled: index.scaled(),
+            store_raw_sequences: index.store_raw_sequences(),
+            remove_low_complexity: index.remove_low_complexity(),
+        };
+        index.db.put(b"index_metadata", bincode::serialize(&v2)?)?;
+        index.db.put(b"schema_version", bincode::serialize(&2u32)?)?;
+        for shard in 0..INVERTED_INDEX_SHARDS {
+            index.db.delete(ProteomeIndex::shard_key(shard))?;
+        }
+        index.db.delete(ProteomeIndex::targets_key(0))?;
+        Ok(expected)
+    }
+
     /// An index written by schema 2 (one `search_cache` value, signatures also in
     /// `signatures_chunk_{n}` keys, combined minhash in the metadata) still opens for
-    /// search and for a full load. Built by rewriting a current index into that layout,
-    /// since no code writes it any more.
+    /// search and for a full load.
     #[test]
     fn test_schema_2_index_is_still_readable() -> Result<()> {
         let dir = tempdir()?;
@@ -4140,44 +4208,7 @@ mod tests {
             let index = ProteomeIndex::new(&db_path, 12, 1, "hp_lehninger2", true)?;
             index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
             index.save_state()?;
-            let expected = cache_of(&index)?;
-
-            // Rewrite as schema 2: chunked signatures, one search_cache value, v2 metadata.
-            let stores: Vec<ProteinSketchStore> = expected
-                .0
-                .iter()
-                .map(|md5| -> Result<ProteinSketchStore> {
-                    let raw = index.db.get(format!("sig_{md5}"))?.expect("signature stored");
-                    Ok(bincode::deserialize(&raw)?)
-                })
-                .collect::<Result<_>>()?;
-            index.db.put(b"signatures_chunk_0", bincode::serialize(&stores)?)?;
-            let cache = SearchCache {
-                target_list: expected.0.clone(),
-                inverted_index: expected.1.clone().into_iter().collect(),
-                kmer_frequencies: expected.2.clone().into_iter().collect(),
-            };
-            index.db.put(b"search_cache", bincode::serialize(&cache)?)?;
-            let mut combined_mins: Vec<u64> = expected.1.keys().copied().collect();
-            combined_mins.sort_unstable();
-            let v2 = ProteomeIndexMetadataV2 {
-                total_signatures: 25,
-                chunk_count: 1,
-                combined_mins,
-                combined_abunds: None,
-                moltype: "hp_lehninger2".to_string(),
-                ksize: 12,
-                scaled: 1,
-                store_raw_sequences: true,
-                remove_low_complexity: false,
-            };
-            index.db.put(b"index_metadata", bincode::serialize(&v2)?)?;
-            index.db.put(b"schema_version", bincode::serialize(&2u32)?)?;
-            for shard in 0..INVERTED_INDEX_SHARDS {
-                index.db.delete(ProteomeIndex::shard_key(shard))?;
-            }
-            index.db.delete(ProteomeIndex::targets_key(0))?;
-            expected
+            rewrite_as_schema_2(&index)?
         };
 
         let for_search = ProteomeIndex::open_for_search(&db_path)?;
@@ -4328,6 +4359,124 @@ mod tests {
         assert_eq!(index.signature_count(), 0);
         assert_eq!(index.unique_kmer_count(), 0);
         assert!(index.load_search_cache()?.expect("finalized").target_list.is_empty());
+        Ok(())
+    }
+
+    /// A schema 2 cache too large for one value was written as `search_cache_chunk_{i}`
+    /// keys under a `search_cache_chunks` count (PR #48). The reader is kept so such an
+    /// index still opens; the writer is gone, so the chunks are laid down by hand here.
+    /// Reassembly must preserve byte order, and a torn or damaged chunk set must be an
+    /// error rather than a short cache or a quiet "no cache".
+    #[test]
+    fn test_schema_2_chunked_search_cache_is_read_and_checked() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("v2chunks.db");
+        let expected = {
+            let index = ProteomeIndex::new(&db_path, 12, 1, "hp_lehninger2", true)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+            index.save_state()?;
+            let expected = rewrite_as_schema_2(&index)?;
+            let serialized = index.db.get(b"search_cache")?.expect("single value written");
+            index.db.delete(b"search_cache")?;
+            let chunks: Vec<&[u8]> = serialized.chunks(1024).collect();
+            assert!(chunks.len() > 2, "cache must span several chunks for this to mean anything");
+            for (i, chunk) in chunks.iter().enumerate() {
+                index.db.put(ProteomeIndex::search_cache_chunk_key(i), chunk)?;
+            }
+            index.db.put(b"search_cache_chunks", chunks.len().to_string().as_bytes())?;
+            expected
+        };
+        let n_chunks = {
+            let index = ProteomeIndex::open_for_search(&db_path)?;
+            let cache = index.load_search_cache()?.expect("chunked cache is read");
+            assert_eq!(cache.target_list, expected.0);
+            assert_eq!(cache.inverted_index.into_iter().collect::<BTreeMap<_, _>>(), expected.1);
+            String::from_utf8(index.db.get(b"search_cache_chunks")?.unwrap())?
+        };
+
+        let corrupt = |damage: &dyn Fn(&rocksdb::DB) -> Result<()>| -> Result<String> {
+            use rocksdb::{Options, DB};
+            let db = DB::open(&Options::default(), &db_path)?;
+            damage(&db)?;
+            drop(db);
+            let index = ProteomeIndex::open_for_search(&db_path)?;
+            match index.load_search_cache() {
+                Err(crate::errors::IndexError::CorruptIndex(message)) => Ok(message),
+                other => panic!("expected CorruptIndex, got {:?}", other.map(|c| c.is_some())),
+            }
+        };
+        let restore_count = |db: &rocksdb::DB| -> Result<()> {
+            Ok(db.put(b"search_cache_chunks", n_chunks.as_bytes())?)
+        };
+
+        let message = corrupt(&|db| Ok(db.put(b"search_cache_chunks", b"seven")?))?;
+        assert_eq!(message, "search_cache_chunks is not a number: \"seven\"");
+
+        let message = corrupt(&|db| {
+            restore_count(db)?;
+            Ok(db.delete(ProteomeIndex::search_cache_chunk_key(1))?)
+        })?;
+        assert_eq!(
+            message,
+            format!("search cache chunk 1 of {n_chunks} is missing; the index is incomplete and must be rebuilt")
+        );
+
+        let message = corrupt(&|db| Ok(db.delete(b"search_cache_chunks")?))?;
+        assert!(
+            message.starts_with("search cache chunks are present but the chunk count is missing")
+        );
+
+        // With neither a count nor a first chunk there is legitimately no cache.
+        {
+            use rocksdb::{Options, DB};
+            DB::open(&Options::default(), &db_path)?
+                .delete(ProteomeIndex::search_cache_chunk_key(0))?;
+        }
+        assert!(ProteomeIndex::open_for_search(&db_path)?.load_search_cache()?.is_none());
+        Ok(())
+    }
+
+    /// `load` opens read-only, and `finalize` is what `ProteinSearcher::new` and
+    /// `is_equivalent_to` call first, so on a loaded index it must write nothing.
+    #[test]
+    fn test_finalize_on_a_loaded_index_writes_nothing() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("loaded.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+            let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
+            index.store_signatures(vec![sig])?;
+            index.save_state()?;
+        }
+        let loaded = ProteomeIndex::load(&db_path)?;
+        loaded.finalize()?;
+        assert_eq!(loaded.signature_count(), 1);
+        assert_eq!(loaded.unique_kmer_count(), 17);
+        let fresh = ProteomeIndex::new(dir.path().join("fresh.db"), 5, 1, "protein20", true)?;
+        let sig = fresh.create_protein_signature(TEST_PROTEIN, "p")?;
+        fresh.store_signatures(vec![sig])?;
+        assert!(fresh.is_equivalent_to(&loaded)?);
+        Ok(())
+    }
+
+    /// An index in the schema 2 layout cannot take new sequences: its postings live only
+    /// inside the old cache, so new runs would have nothing to merge with.
+    #[test]
+    fn test_adding_to_a_schema_2_index_is_refused() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("v2add.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+            let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
+            index.store_signatures(vec![sig])?;
+            index.save_state()?;
+            rewrite_as_schema_2(&index)?;
+        }
+        let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+        index.load_state()?;
+        let sig = index.create_protein_signature(TEST_KMER, "q")?;
+        let err = index.store_signatures(vec![sig]).unwrap_err();
+        assert!(err.to_string().contains("written by an older version"), "{err}");
         Ok(())
     }
 }

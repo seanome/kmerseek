@@ -155,9 +155,11 @@ compaction was otherwise mapped into the process and counted in RSS, which left
 a slope of ~70 bytes per residue, the on-disk size, after the in-memory
 structures were removed.
 
-Indexes written by schema 2 still open: `load_search_cache` reads their single
-`search_cache` value and `load` their signature chunks. PR #48's chunked cache
-write is superseded.
+Indexes written by schema 2 still open: `load_search_cache` reads their
+`search_cache` value, or the `search_cache_chunk_{i}` keys PR #48 wrote for a
+cache over 4 GiB, and `load` reads their signature chunks. Nothing can be added
+to such an index; `ingest` says to rebuild it. PR #48's writer is removed and
+its reader kept.
 
 ### Measured
 
