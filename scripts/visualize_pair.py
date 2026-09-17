@@ -10,10 +10,13 @@ Two panels, from the JSON that `kmerseek pair` writes:
    matched region outlined. K-mers on a region's diagonal are drawn dark, the scattered
    singles grey.
 
+With --html, also writes a self-contained interactive page: hover a dot for the k-mer and
+its position in both sequences, click a run to move the ribbon onto it, change the flank.
+
 Usage:
     kmerseek pair --query bcl2.fasta --target ced9.fasta --ksize 12 --alphabet hp \\
         --output bcl2_vs_ced9.json
-    python visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/
+    python visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ --html
 """
 
 import argparse
@@ -32,6 +35,7 @@ from matplotlib.patches import Patch, Rectangle
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from visualize_hits import INK, MUTED, SECONDARY_INK, SURFACE, safe_filename, short_label
+from visualize_pair_html import render_html
 
 # Reduced-alphabet classes get a fill colour only when there are few enough to tell apart
 # at a glance (hp and hpc alphabets). Larger alphabets keep the letters and drop the fill.
@@ -425,6 +429,12 @@ def plot_pair(pair, output_paths, flank=10, dpi=200):
     plt.close(fig)
 
 
+def write_html(pair, path, flank=10):
+    title = f"{short_label(pair['query']['name'])} vs {short_label(pair['target']['name'])} shared k-mers"
+    with open(path, "w") as fh:
+        fh.write(render_html(pair, title, flank=flank))
+
+
 def output_basename(pair):
     return f"{safe_filename(pair['query']['name'])}_vs_{safe_filename(pair['target']['name'])}.{pair['moltype']}.k{pair['ksize']}"
 
@@ -435,6 +445,11 @@ def _build_arg_parser():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--flank", type=int, default=10, help="residues shown either side of the longest matched region (default 10)")
     p.add_argument("--dpi", type=int, default=200)
+    p.add_argument(
+        "--html",
+        action="store_true",
+        help="also write a self-contained interactive HTML page (hover a dot for the k-mer, click a run to show it)",
+    )
     return p
 
 
@@ -446,6 +461,9 @@ def main():
     plot_pair(pair, [base + ".png", base + ".svg"], flank=args.flank, dpi=args.dpi)
     print(base + ".png")
     print(base + ".svg")
+    if args.html:
+        write_html(pair, base + ".html", flank=args.flank)
+        print(base + ".html")
 
 
 if __name__ == "__main__":

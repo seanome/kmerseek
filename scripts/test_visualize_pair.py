@@ -147,3 +147,31 @@ def test_protein20_pair_has_no_encoded_rows(pair):
     assert plot.classes == {}
     assert plot.n_rows() == 2
     assert plot.row_labels(plot.window()) == ["CED9_CAEEL 153–191", "BCL2_HUMAN 129–167"]
+
+
+def test_html_embeds_the_pair_and_escapes_script_closers(pair, tmp_path):
+    path = tmp_path / "pair.html"
+    vp.write_html(pair, str(path), flank=7)
+    text = path.read_text()
+    assert "<title>BCL2_HUMAN vs CED9_CAEEL shared k-mers</title>" in text
+    assert 'value="7"' in text
+    assert "const state = { run: 0, flank: 7 };" in text
+    assert '"query_pos": 138, "target_pos": 162, "kmer": "pphhphhphhhh"' in text
+    assert text.count("<script>") == 1 and text.count("</script>") == 1
+
+
+def test_html_never_lets_a_sequence_name_close_the_script():
+    from visualize_pair_html import render_html
+
+    hostile = {
+        "ksize": 3,
+        "moltype": "protein20",
+        "query": {"name": "x</script><b>", "sequence": "APG", "encoded": "APG"},
+        "target": {"name": "y", "sequence": "APG", "encoded": "APG"},
+        "shared_kmers": [],
+        "regions": [],
+    }
+    text = render_html(hostile, "t")
+    assert "x</script>" not in text
+    assert "x<\\/script>" in text
+    assert text.count("</script>") == 1

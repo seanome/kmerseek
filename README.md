@@ -203,8 +203,13 @@ but 19/19 the same hydrophobic/polar class.
 kmerseek pair -q tests/testdata/fasta/bcl2.fasta -t tests/testdata/fasta/ced9.fasta \
     --alphabet hp --ksize 12 -o bcl2_vs_ced9.json
 
-python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/
+python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ --html
 ```
+
+`--html` also writes one self-contained HTML page with the same two panels: hover a dot
+for the k-mer and its residues in both sequences, click a run in the dot plot (or pick it
+from the list) to move the ribbon onto it, and change the flank live. No external
+libraries, so the file works offline.
 
 The first record of each FASTA is used unless `--query-name` / `--target-name` names
 another by its header or its first token (`sp|P10415|BCL2_HUMAN`). `--flank` sets how
