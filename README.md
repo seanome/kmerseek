@@ -182,6 +182,36 @@ the others) -- use it to tame proteome-scale searches where a gene can have doze
 distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
 
+## Visualizing one pair of sequences
+
+`kmerseek pair` compares one query sequence with one target sequence at a chosen
+alphabet and k-mer size and writes JSON listing every shared k-mer with its position in
+both sequences, plus the matched regions those k-mers chain into (the same regions
+`search` reports). `scripts/visualize_pair.py` draws that JSON as two panels: a residue
+ribbon around the longest run of consecutive shared k-mers, with both sequences boxed
+residue by residue, their reduced-alphabet encodings between them, and a tick wherever
+the two encodings agree; and a dot plot of every shared k-mer, query position against
+target position, with every run outlined. Example, human BCL-2 against C. elegans CED-9
+at `hp_lehninger2`, k=12: the 19-residue run is the BH1 motif, 5/19 residues identical
+but 19/19 the same hydrophobic/polar class.
+
+![Shared k-mers between BCL2_HUMAN and CED9_CAEEL](docs/images/bcl2_vs_ced9_pair_example.png)
+
+([SVG version](docs/images/bcl2_vs_ced9_pair_example.svg))
+
+```bash
+kmerseek pair -q tests/testdata/fasta/bcl2.fasta -t tests/testdata/fasta/ced9.fasta \
+    --alphabet hp --ksize 12 -o bcl2_vs_ced9.json
+
+python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/
+```
+
+The first record of each FASTA is used unless `--query-name` / `--target-name` names
+another by its header or its first token (`sp|P10415|BCL2_HUMAN`). `--flank` sets how
+many residues the ribbon shows either side of the run (default 10). Every lone shared
+k-mer is also written to the JSON as a region exactly k residues long; the plot draws
+those as grey singles and outlines only runs of two or more consecutive k-mers.
+
 ## Alphabets
 
 Pick one with `--alphabet` (`-a`). An alphabet is a partition of the 20 amino acids into

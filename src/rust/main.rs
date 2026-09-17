@@ -1,8 +1,8 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::types::{MolType, Scaled};
-use kmerseek::{search::ProteinSearcher, ProteomeIndex};
-use std::path::PathBuf;
+use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
+use std::path::{Path, PathBuf};
 
 #[derive(Parser)]
 #[command(name = "kmerseek")]
@@ -139,6 +139,39 @@ enum Commands {
         /// Set to 1 to process queries one at a time (maximum streaming, minimum memory).
         #[arg(long, default_value = "500")]
         batch_size: usize,
+    },
+    /// Compare one query sequence with one target sequence: list every shared k-mer with
+    /// its position in both, and the matched regions they chain into, as JSON. Plot the
+    /// output with scripts/visualize_pair.py.
+    Pair {
+        /// Query FASTA file path; the first record is used unless --query-name is given
+        #[arg(short, long)]
+        query: PathBuf,
+
+        /// Target FASTA file path; the first record is used unless --target-name is given
+        #[arg(short, long)]
+        target: PathBuf,
+
+        /// Header of the query record to use, either the whole header or its first token
+        /// (e.g. sp|P10415|BCL2_HUMAN)
+        #[arg(long)]
+        query_name: Option<String>,
+
+        /// Header of the target record to use, either the whole header or its first token
+        #[arg(long)]
+        target_name: Option<String>,
+
+        /// Output JSON path (optional - will output to stdout if not provided)
+        #[arg(short, long)]
+        output: Option<PathBuf>,
+
+        /// K-mer size
+        #[arg(short, long, default_value = "10")]
+        ksize: u32,
+
+        /// Reduced amino acid alphabet
+        #[arg(short = 'a', long, default_value = "protein20")]
+        alphabet: ProteinAlphabet,
     },
 }
 
@@ -763,8 +796,38 @@ fn main() -> IndexResult<()> {
                 eprintln!("Average database k-mer frequency: {:.6}", avg_database_kmer_freq);
             }
         }
+        Commands::Pair { query, target, query_name, target_name, output, ksize, alphabet } => {
+            run_pair(&query, &target, query_name, target_name, output, ksize, alphabet.into())?;
+        }
     }
 
+    Ok(())
+}
+
+fn run_pair(
+    query: &Path,
+    target: &Path,
+    query_name: Option<String>,
+    target_name: Option<String>,
+    output: Option<PathBuf>,
+    ksize: u32,
+    moltype: &str,
+) -> IndexResult<()> {
+    let query = pair::read_record(query, query_name.as_deref())?;
+    let target = pair::read_record(target, target_name.as_deref())?;
+    let report = pair::compare_pair(&query, &target, ksize, moltype)?;
+    eprintln!(
+        "{} shared {}-mers in {} matched regions ({})",
+        report.shared_kmers.len(),
+        report.ksize,
+        report.regions.len(),
+        report.moltype
+    );
+    let json = report.to_json()?;
+    match output {
+        Some(path) => std::fs::write(&path, json)?,
+        None => println!("{json}"),
+    }
     Ok(())
 }
 
