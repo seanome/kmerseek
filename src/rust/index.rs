@@ -21,25 +21,24 @@ use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::KmerSize;
 use crate::types::MolType;
 
-/// Schema version for the on-disk index format.
-/// Increment this constant whenever the stored format changes in a backward-incompatible way
-/// (e.g. new fields in the metadata, renamed fields in ProteinSketchStore, etc.).
-/// Indices that predate versioning (schema_version key absent) are treated as version 0.
-pub const SCHEMA_VERSION: u32 = 3;
+/// Schema version of the on-disk index format.
+///
+/// Increment this constant whenever the stored format changes in any way: a field added
+/// to or removed from the metadata, a renamed field in `ProteinSketchStore`, a new key
+/// layout. An index opens only if its stored version equals this one; there is no
+/// migration and no reading of older layouts. bincode is not self-describing, so a
+/// layout mismatch that got past this check would fail with a length error deep inside
+/// deserialization, or read the wrong bytes into a field, instead of saying to rebuild.
+/// Indices that predate versioning (`schema_version` key absent) are treated as version 0.
+///
+/// History: 1 = first versioned layout; 2 = `remove_low_complexity` in the metadata;
+/// 3 = streaming index (`sig_{md5}`, `targets_{n}`, `ii_shard_{s}` keys, no combined
+/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped.
+pub const SCHEMA_VERSION: u32 = 4;
 
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
-
-/// First schema version whose metadata carries `remove_low_complexity`.
-/// Indexes older than this are read through `LegacyProteomeIndexMetadata`.
-const SCHEMA_VERSION_WITH_REMOVE_LOW_COMPLEXITY: u32 = 2;
-
-/// First schema version written by the streaming indexer: signatures only under `sig_{md5}`
-/// keys, the target list in `targets_{n}` chunks, the inverted index in `ii_shard_{s}` keys,
-/// and no combined minhash in the metadata. Older indexes keep a `search_cache` blob and
-/// `signatures_chunk_{n}` keys, which are still read.
-const SCHEMA_VERSION_STREAMING: u32 = 3;
 
 /// Number of hash-range shards the inverted index is split into on disk.
 ///
@@ -68,7 +67,7 @@ pub struct ProteomeIndexKmerStats {
     pub frequency: HashMap<u64, f64>, // Raw frequency for each k-mer hashvalue
 }
 
-/// Index metadata for schema 3 and later.
+/// Index metadata, written last by `finalize` so its presence means the index is complete.
 #[derive(Serialize, Deserialize)]
 struct ProteomeIndexMetadata {
     total_signatures: usize,
@@ -80,80 +79,10 @@ struct ProteomeIndexMetadata {
     remove_low_complexity: bool,
     /// Distinct k-mer hashes across every signature; the number of inverted index keys.
     unique_kmers: usize,
-    /// Inverted index shards on disk. 0 means a pre-streaming index whose inverted index
-    /// is one `search_cache` value.
+    /// Inverted index shards on disk.
     shards: usize,
-    /// `signatures_chunk_{n}` keys of a pre-streaming index. 0 means signatures are read
-    /// from their `sig_{md5}` keys.
-    chunk_count: usize,
     /// Target md5s per `targets_{n}` key.
     target_chunk: usize,
-}
-
-/// Metadata layout of schema 2: carries the combined minhash, which schema 3 dropped
-/// because nothing on the search path reads it and it cost 16 bytes per unique k-mer.
-#[derive(Serialize, Deserialize)]
-struct ProteomeIndexMetadataV2 {
-    total_signatures: usize,
-    chunk_count: usize,
-    combined_mins: Vec<u64>,
-    combined_abunds: Option<Vec<u64>>,
-    moltype: String,
-    ksize: u32,
-    scaled: u32,
-    store_raw_sequences: bool,
-    remove_low_complexity: bool,
-}
-
-/// The metadata layout used before `kmerseek_version` was stamped into indexes.
-///
-/// bincode is not self-describing, so an older blob cannot be deserialized into
-/// the current `ProteomeIndexMetadata` -- it would run out of bytes on the
-/// trailing field. Indexes without a version key are read through this instead.
-#[derive(Serialize, Deserialize)]
-struct LegacyProteomeIndexMetadata {
-    total_signatures: usize,
-    chunk_count: usize,
-    combined_mins: Vec<u64>,
-    combined_abunds: Option<Vec<u64>>,
-    moltype: String,
-    ksize: u32,
-    scaled: u32,
-    store_raw_sequences: bool,
-}
-
-impl From<LegacyProteomeIndexMetadata> for ProteomeIndexMetadataV2 {
-    fn from(legacy: LegacyProteomeIndexMetadata) -> Self {
-        Self {
-            total_signatures: legacy.total_signatures,
-            chunk_count: legacy.chunk_count,
-            combined_mins: legacy.combined_mins,
-            combined_abunds: legacy.combined_abunds,
-            moltype: legacy.moltype,
-            ksize: legacy.ksize,
-            scaled: legacy.scaled,
-            store_raw_sequences: legacy.store_raw_sequences,
-            // Predates the flag, so by definition every k-mer was kept.
-            remove_low_complexity: false,
-        }
-    }
-}
-
-impl From<ProteomeIndexMetadataV2> for ProteomeIndexMetadata {
-    fn from(v2: ProteomeIndexMetadataV2) -> Self {
-        Self {
-            total_signatures: v2.total_signatures,
-            moltype: v2.moltype,
-            ksize: v2.ksize,
-            scaled: v2.scaled,
-            store_raw_sequences: v2.store_raw_sequences,
-            remove_low_complexity: v2.remove_low_complexity,
-            unique_kmers: v2.combined_mins.len(),
-            shards: 0,
-            chunk_count: v2.chunk_count,
-            target_chunk: DEFAULT_TARGET_CHUNK,
-        }
-    }
 }
 
 /// The search structures a `ProteinSearcher` keeps in memory, assembled from the on-disk
@@ -187,9 +116,6 @@ struct IngestState {
     runs: usize,
     /// Whether every ingested posting has been merged into the on-disk shards.
     shards_written: bool,
-    /// Opened from a schema 2 layout, whose postings exist only inside its old search
-    /// cache. Nothing can be added to such an index; it has to be rebuilt.
-    legacy_layout: bool,
     /// Whether the database reflects everything ingested: shards, target chunks and
     /// metadata. False for a new index until its first `finalize`, so an empty index
     /// still gets a (empty) cache; true after opening a saved one.
@@ -209,7 +135,6 @@ impl IngestState {
             postings: Vec::new(),
             runs: 0,
             shards_written: false,
-            legacy_layout: false,
             saved: false,
             unique_kmers: 0,
             duplicates_skipped: 0,
@@ -541,39 +466,52 @@ impl ProteomeIndex {
         }
     }
 
-    /// Schema version an index was written with. Absent means pre-versioning, i.e. 0.
-    fn read_schema_version(db: &DB) -> IndexResult<u32> {
-        match db.get(b"schema_version")? {
-            Some(data) => Ok(bincode::deserialize(&data)?),
-            None => Ok(0),
+    /// The saved metadata of a database, or `None` if nothing was ever finalized into it.
+    ///
+    /// Refuses any schema version but [`SCHEMA_VERSION`], older or newer, before touching
+    /// the metadata bytes: bincode is not self-describing, so a different layout would
+    /// fail deep inside deserialization, or read the wrong bytes into a field, instead of
+    /// saying to rebuild the index or change binaries.
+    fn read_metadata(db: &DB) -> IndexResult<Option<ProteomeIndexMetadata>> {
+        let raw = db.get(b"index_metadata")?;
+        let stored_version: u32 = match db.get(b"schema_version")? {
+            Some(data) => bincode::deserialize(&data)?,
+            // The two keys are written in one batch, so metadata without a version
+            // key is an index from before versioning existed, i.e. version 0.
+            None if raw.is_some() => 0,
+            None => return Ok(None),
+        };
+        if stored_version != SCHEMA_VERSION {
+            return Err(Self::schema_mismatch(db, stored_version));
+        }
+        match raw {
+            Some(raw) => Ok(Some(bincode::deserialize(&raw)?)),
+            None => Ok(None),
         }
     }
 
-    /// Deserialize index metadata, picking the layout by schema version.
-    ///
-    /// bincode is not self-describing, so the layout has to be known up front.
-    /// Schema 3 dropped the combined minhash and the signature chunk count; schema 2
-    /// added `remove_low_complexity`; anything older is read through the legacy struct,
-    /// which defaults it to `false` -- correct, since those indexes kept every k-mer.
-    fn read_metadata(db: &DB, raw: &[u8]) -> IndexResult<ProteomeIndexMetadata> {
-        let schema = Self::read_schema_version(db)?;
-        if schema >= SCHEMA_VERSION_STREAMING {
-            Ok(bincode::deserialize(raw)?)
-        } else if schema >= SCHEMA_VERSION_WITH_REMOVE_LOW_COMPLEXITY {
-            let v2: ProteomeIndexMetadataV2 = bincode::deserialize(raw)?;
-            Ok(v2.into())
-        } else {
-            let legacy: LegacyProteomeIndexMetadata = bincode::deserialize(raw)?;
-            Ok(ProteomeIndexMetadataV2::from(legacy).into())
+    /// The error for an index whose layout this binary does not read. Names the
+    /// kmerseek version that wrote the index when that was stamped, so the reader knows
+    /// which binary would read it.
+    fn schema_mismatch(db: &DB, stored_version: u32) -> IndexError {
+        let built_with = match Self::read_kmerseek_version(db) {
+            Ok(Some(version)) => format!("schema version {stored_version} (kmerseek {version})"),
+            _ => format!("schema version {stored_version}"),
+        };
+        IndexError::ValidationError {
+            message: format!(
+                "Index schema version mismatch: the index was built with {built_with}, but \
+                 this binary (kmerseek {}) reads schema version {}. Rebuild the index with \
+                 `kmerseek index`, or search it with the kmerseek version that built it.",
+                env!("CARGO_PKG_VERSION"),
+                SCHEMA_VERSION
+            ),
         }
     }
 
     /// The saved metadata of this index, or `None` if nothing has been finalized yet.
     fn own_metadata(&self) -> IndexResult<Option<ProteomeIndexMetadata>> {
-        match self.db.get(b"index_metadata")? {
-            Some(raw) => Ok(Some(Self::read_metadata(&self.db, &raw)?)),
-            None => Ok(None),
-        }
+        Self::read_metadata(&self.db)
     }
 
     /// Signatures held in memory: those added with `store_signatures` or read back by
@@ -595,11 +533,6 @@ impl ProteomeIndex {
     /// Get the molecular type
     pub fn moltype(&self) -> &str {
         &self.moltype
-    }
-
-    /// Key of one chunk of a schema 2 search cache too large for a single value.
-    fn search_cache_chunk_key(i: usize) -> Vec<u8> {
-        format!("search_cache_chunk_{i}").into_bytes()
     }
 
     /// Number of k-mers listed in the "most common" / "least common" summaries.
@@ -895,13 +828,6 @@ impl ProteomeIndex {
             .collect::<Result<_, _>>()?;
 
         let mut state = self.ingest.lock();
-        if state.legacy_layout {
-            return Err(IndexError::ValidationError {
-                message: "cannot add sequences to an index written by an older version; \
-                          rebuild it with `kmerseek index`"
-                    .to_string(),
-            });
-        }
         let mut batch = WriteBatch::default();
         for (sketch, bytes) in sketches.into_iter().zip(serialized) {
             let md5 = sketch.signature().md5sum.clone();
@@ -1105,7 +1031,6 @@ impl ProteomeIndex {
             remove_low_complexity: self.remove_low_complexity,
             unique_kmers: state.unique_kmers,
             shards: INVERTED_INDEX_SHARDS,
-            chunk_count: 0,
             target_chunk: self.target_chunk,
         };
         let mut batch = WriteBatch::default();
@@ -1174,14 +1099,8 @@ impl ProteomeIndex {
         let mut state = IngestState::empty();
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
-        state.shards_written = metadata.shards > 0;
+        state.shards_written = true;
         state.saved = true;
-        if metadata.shards == 0 {
-            // A pre-streaming index has no target chunks to continue, and `ingest`
-            // refuses to add to it.
-            state.legacy_layout = true;
-            return Ok(state);
-        }
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
         for chunk in 0..chunks {
             let md5s = self.read_target_chunk(chunk, chunks)?;
@@ -1206,8 +1125,7 @@ impl ProteomeIndex {
         Ok(bincode::deserialize(&raw)?)
     }
 
-    /// Every signature of a saved index, from `sig_{md5}` keys (schema 3) or from the
-    /// `signatures_chunk_{n}` keys of an older index.
+    /// Every signature of a saved index, from its `sig_{md5}` keys.
     fn read_all_signatures(
         db: &DB,
         metadata: &ProteomeIndexMetadata,
@@ -1215,37 +1133,17 @@ impl ProteomeIndex {
         use rayon::prelude::*;
 
         let mut raw: Vec<Vec<u8>> = Vec::new();
-        if metadata.chunk_count == 0 {
-            for item in db.iterator(IteratorMode::From(b"sig_", Direction::Forward)) {
-                let (key, value) = item?;
-                if !key.starts_with(b"sig_") {
-                    break;
-                }
-                raw.push(value.into_vec());
+        for item in db.iterator(IteratorMode::From(b"sig_", Direction::Forward)) {
+            let (key, value) = item?;
+            if !key.starts_with(b"sig_") {
+                break;
             }
-        } else {
-            for chunk in 0..metadata.chunk_count {
-                if let Some(data) = db.get(format!("signatures_chunk_{chunk}").as_bytes())? {
-                    raw.push(data);
-                }
-            }
+            raw.push(value.into_vec());
         }
 
-        let stores: Vec<Vec<ProteinSketchStore>> = raw
-            .par_iter()
-            .map(|bytes| -> IndexResult<Vec<ProteinSketchStore>> {
-                if metadata.chunk_count == 0 {
-                    Ok(vec![bincode::deserialize(bytes)?])
-                } else {
-                    Ok(bincode::deserialize(bytes)?)
-                }
-            })
-            .collect::<Result<_, _>>()?;
-
-        stores
-            .into_par_iter()
-            .flatten()
-            .map(|store| -> IndexResult<(String, ProteinSketch)> {
+        raw.par_iter()
+            .map(|bytes| -> IndexResult<(String, ProteinSketch)> {
+                let store: ProteinSketchStore = bincode::deserialize(bytes)?;
                 let sketch = ProteinSketch::from_efficient_data(
                     store,
                     metadata.moltype.clone(),
@@ -1279,9 +1177,7 @@ impl ProteomeIndex {
         // multiple search processes to query the same index concurrently. This is the
         // only read-only open; `load()` and `get_index_parameters()` build on it.
         let db = DB::open_for_read_only(&opts, path, false)?;
-        Self::reject_newer_schema(&db)?;
-        let raw = db.get(b"index_metadata")?.ok_or(IndexError::NoSavedState)?;
-        let metadata = Self::read_metadata(&db, &raw)?;
+        let metadata = Self::read_metadata(&db)?.ok_or(IndexError::NoSavedState)?;
         let kmerseek_version = Self::read_kmerseek_version(&db)?;
         let index = Self::assemble(
             db,
@@ -1304,15 +1200,11 @@ impl ProteomeIndex {
 
     /// The search structures of this index, assembled from disk.
     ///
-    /// `None` only for a database that was never finalized. A schema 3 index is read
-    /// shard by shard; an older one from its `search_cache` value or chunks. The
-    /// frequency of a k-mer is the length of its posting list, so it is derived rather
-    /// than stored.
+    /// `None` only for a database that was never finalized. The index is read shard by
+    /// shard. The frequency of a k-mer is the length of its posting list, so it is
+    /// derived rather than stored.
     pub fn load_search_cache(&self) -> IndexResult<Option<SearchCache>> {
         let Some(metadata) = self.own_metadata()? else { return Ok(None) };
-        if metadata.shards == 0 {
-            return self.load_schema_2_search_cache();
-        }
 
         let mut target_list: Vec<String> = Vec::with_capacity(metadata.total_signatures);
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
@@ -1338,58 +1230,6 @@ impl ProteomeIndex {
             }
         }
         Ok(Some(SearchCache { target_list, inverted_index, kmer_frequencies }))
-    }
-
-    /// The search cache of a schema 2 index, written either as one `search_cache` value
-    /// or, when too large for one, as `search_cache_chunk_{i}` keys under a
-    /// `search_cache_chunks` count.
-    fn load_schema_2_search_cache(&self) -> IndexResult<Option<SearchCache>> {
-        if let Some(data) = self.db.get(b"search_cache")? {
-            let cache: SearchCache = bincode::deserialize(&data)?;
-            return Ok(Some(cache));
-        }
-
-        let Some(count) = self.db.get(b"search_cache_chunks")? else {
-            // No count key. That is either a database written before the cache existed --
-            // legitimately Ok(None), and the caller falls back to loading every signature
-            // -- or one whose chunk write was interrupted before the count was committed.
-            //
-            // Those two must not be confused. A torn index returning Ok(None) is the
-            // quietest possible failure: the search still runs, on the slow path, against
-            // an index nobody is told is broken. Chunk 0 is written before any other, so
-            // its presence without a count means the write did not finish.
-            if self.db.get(Self::search_cache_chunk_key(0))?.is_some() {
-                return Err(IndexError::CorruptIndex(
-                    "search cache chunks are present but the chunk count is missing: the \
-                     index was interrupted while being written and is incomplete. Rebuild \
-                     it with `kmerseek index`."
-                        .to_string(),
-                ));
-            }
-            return Ok(None);
-        };
-        let count: usize = String::from_utf8_lossy(&count).parse().map_err(|_| {
-            IndexError::CorruptIndex(format!(
-                "search_cache_chunks is not a number: {:?}",
-                String::from_utf8_lossy(&count)
-            ))
-        })?;
-
-        // A missing chunk is an error, never a short cache. Deserializing a truncated
-        // stream would either fail somewhere confusing or, worse, succeed against a
-        // partial inverted index and drop search hits with nothing to show for it.
-        let mut serialized = Vec::new();
-        for i in 0..count {
-            let chunk = self.db.get(Self::search_cache_chunk_key(i))?.ok_or_else(|| {
-                IndexError::CorruptIndex(format!(
-                    "search cache chunk {i} of {count} is missing; the index is \
-                         incomplete and must be rebuilt"
-                ))
-            })?;
-            serialized.extend_from_slice(&chunk);
-        }
-        let cache: SearchCache = bincode::deserialize(&serialized)?;
-        Ok(Some(cache))
     }
 
     /// Load a single signature from RocksDB by its MD5 sum.
@@ -1432,24 +1272,6 @@ impl ProteomeIndex {
     pub fn get_index_parameters<P: AsRef<Path>>(path: P) -> IndexResult<(u32, u32, String)> {
         let index = Self::open_for_search(path)?;
         Ok((index.ksize, index.scaled, index.moltype.clone()))
-    }
-
-    /// Refuse an index written by a newer binary than this one. Without this, a
-    /// newer on-disk layout fails inside bincode with a length mismatch instead
-    /// of a message saying to upgrade.
-    fn reject_newer_schema(db: &DB) -> IndexResult<()> {
-        let stored_version = Self::read_schema_version(db)?;
-        if stored_version > SCHEMA_VERSION {
-            return Err(IndexError::ValidationError {
-                message: format!(
-                    "Index schema version mismatch: index was built with schema version {}, \
-                     but this binary uses schema version {}. \
-                     Please upgrade the binary.",
-                    stored_version, SCHEMA_VERSION
-                ),
-            });
-        }
-        Ok(())
     }
 
     /// Whether two indexes hold the same signatures under the same parameters.
@@ -1905,16 +1727,12 @@ mod tests {
 
     use tempfile::tempdir;
 
-    use crate::index::{
-        ProteomeIndex, ProteomeIndexMetadataV2, SearchCache, SmallestN, INVERTED_INDEX_SHARDS,
-        SCHEMA_VERSION,
-    };
-    use crate::sketch::ProteinSketchStore;
+    use crate::index::{ProteomeIndex, SmallestN, SCHEMA_VERSION};
     use rocksdb::{Direction, IteratorMode};
     use std::cmp::Reverse;
-    // Private to the module; needed to forge a pre-versioning index in
-    // test_unversioned_index_reads_through_legacy_metadata_layout.
-    use super::{LegacyProteomeIndexMetadata, ProteomeIndexMetadata, KMERSEEK_VERSION_KEY};
+    // Private to the module; needed to forge an unstamped index in
+    // test_older_schema_is_rejected_at_open.
+    use super::KMERSEEK_VERSION_KEY;
     use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{
         TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST,
@@ -2452,59 +2270,64 @@ mod tests {
         Ok(())
     }
 
-    /// An index older than schema 2 has no `remove_low_complexity` field in its
-    /// metadata. It must still load, with the flag reading `false`, since such an
-    /// index kept every k-mer by definition.
+    /// An index from an older schema is refused when opened, with a message that names
+    /// both versions and, when it was stamped, the kmerseek version that wrote it. No
+    /// older layout is read: bincode is not self-describing, so reading one would fail
+    /// somewhere inside deserialization, or worse, fill fields from the wrong bytes.
     #[test]
-    fn test_unversioned_index_reads_through_legacy_metadata_layout() -> Result<()> {
-        // Two flavors of old index: one written at schema 1, and one predating
-        // schema versioning entirely (no key, which reads as version 0).
-        for rolled_back in [true, false] {
+    fn test_older_schema_is_rejected_at_open() -> Result<()> {
+        // Three flavors of old index: the previous schema with its version stamp, schema
+        // 1 from before stamping, and one predating schema versioning entirely (no key,
+        // which reads as version 0).
+        let cases = [
+            (
+                Some(SCHEMA_VERSION - 1),
+                true,
+                format!(
+                    "schema version {} (kmerseek {})",
+                    SCHEMA_VERSION - 1,
+                    env!("CARGO_PKG_VERSION")
+                ),
+            ),
+            (Some(1), false, "schema version 1".to_string()),
+            (None, false, "schema version 0".to_string()),
+        ];
+        for (stored, stamped, built_with) in cases {
             let dir = tempdir()?;
-            let db_path = dir.path().join("legacy.db");
+            let db_path = dir.path().join("old.db");
             {
                 let index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
                 let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
                 index.store_signatures(vec![sig])?;
                 index.save_state()?;
-            }
-
-            // Rewrite the index as a pre-versioning one: metadata in the old 8-field
-            // layout, and no kmerseek_version key.
-            {
-                use rocksdb::{Options, DB};
-                let db = DB::open(&Options::default(), &db_path)?;
-                let current: ProteomeIndexMetadata =
-                    bincode::deserialize(&db.get(b"index_metadata")?.unwrap())?;
-                let legacy = LegacyProteomeIndexMetadata {
-                    total_signatures: current.total_signatures,
-                    chunk_count: 0,
-                    combined_mins: Vec::new(),
-                    combined_abunds: None,
-                    moltype: current.moltype,
-                    ksize: current.ksize,
-                    scaled: current.scaled,
-                    store_raw_sequences: current.store_raw_sequences,
-                };
-                db.put(b"index_metadata", bincode::serialize(&legacy)?)?;
-                db.delete(KMERSEEK_VERSION_KEY)?;
-                // Layout is selected by schema_version, so roll that back too --
-                // deleting the provenance key alone would not make this a v1 index.
-                if rolled_back {
-                    db.put(b"schema_version", bincode::serialize(&1u32)?)?;
-                } else {
-                    // Truly ancient: no schema_version key at all, which reads as 0.
-                    db.delete(b"schema_version")?;
+                match stored {
+                    Some(version) => {
+                        index.db.put(b"schema_version", bincode::serialize(&version)?)?
+                    }
+                    None => index.db.delete(b"schema_version")?,
+                }
+                if !stamped {
+                    index.db.delete(KMERSEEK_VERSION_KEY)?;
                 }
             }
+            let expected = format!(
+                "Validation error: Index schema version mismatch: the index was built with \
+                 {built_with}, but this binary (kmerseek {}) reads schema version {}. Rebuild \
+                 the index with `kmerseek index`, or search it with the kmerseek version that \
+                 built it.",
+                env!("CARGO_PKG_VERSION"),
+                SCHEMA_VERSION
+            );
 
-            // The legacy layout still loads, and defaults the flag to false.
-            let reopened = ProteomeIndex::open_for_search(&db_path)?;
-            assert!(!reopened.remove_low_complexity());
-            assert_eq!(reopened.ksize(), 5);
-            assert_eq!(reopened.moltype(), "hp_lehninger2");
-            // No version was ever stamped on these.
-            assert_eq!(reopened.kmerseek_version(), None);
+            // Both open paths refuse: the read-only one that search uses, and the
+            // read-write one that `kmerseek index` continues from.
+            let err = ProteomeIndex::open_for_search(&db_path).err().expect("refused");
+            assert_eq!(err.to_string(), expected);
+            let index = ProteomeIndex::new(&db_path, 5, 1, "hp_lehninger2", true)?;
+            let err = index.load_state().unwrap_err();
+            assert_eq!(err.to_string(), expected);
+            let err = index.load_search_cache().err().expect("refused");
+            assert_eq!(err.to_string(), expected);
         }
 
         Ok(())
@@ -4154,87 +3977,6 @@ mod tests {
         Ok(())
     }
 
-    /// Rewrite a finished schema 3 index at `db_path` into the schema 2 layout: signatures
-    /// also in `signatures_chunk_0`, the search cache as one `search_cache` value, v2
-    /// metadata with the combined minhash, and none of the schema 3 keys. Returns the
-    /// cache the rewritten index must still yield. No code writes this layout any more.
-    fn rewrite_as_schema_2(index: &ProteomeIndex) -> Result<ComparableCache> {
-        let expected = cache_of(index)?;
-        let stores: Vec<ProteinSketchStore> = expected
-            .0
-            .iter()
-            .map(|md5| -> Result<ProteinSketchStore> {
-                let raw = index.db.get(format!("sig_{md5}"))?.expect("signature stored");
-                Ok(bincode::deserialize(&raw)?)
-            })
-            .collect::<Result<_>>()?;
-        index.db.put(b"signatures_chunk_0", bincode::serialize(&stores)?)?;
-        let cache = SearchCache {
-            target_list: expected.0.clone(),
-            inverted_index: expected.1.clone().into_iter().collect(),
-            kmer_frequencies: expected.2.clone().into_iter().collect(),
-        };
-        index.db.put(b"search_cache", bincode::serialize(&cache)?)?;
-        let mut combined_mins: Vec<u64> = expected.1.keys().copied().collect();
-        combined_mins.sort_unstable();
-        let v2 = ProteomeIndexMetadataV2 {
-            total_signatures: expected.0.len(),
-            chunk_count: 1,
-            combined_mins,
-            combined_abunds: None,
-            moltype: index.moltype().to_string(),
-            ksize: index.ksize(),
-            scaled: index.scaled(),
-            store_raw_sequences: index.store_raw_sequences(),
-            remove_low_complexity: index.remove_low_complexity(),
-        };
-        index.db.put(b"index_metadata", bincode::serialize(&v2)?)?;
-        index.db.put(b"schema_version", bincode::serialize(&2u32)?)?;
-        for shard in 0..INVERTED_INDEX_SHARDS {
-            index.db.delete(ProteomeIndex::shard_key(shard))?;
-        }
-        index.db.delete(ProteomeIndex::targets_key(0))?;
-        Ok(expected)
-    }
-
-    /// An index written by schema 2 (one `search_cache` value, signatures also in
-    /// `signatures_chunk_{n}` keys, combined minhash in the metadata) still opens for
-    /// search and for a full load.
-    #[test]
-    fn test_schema_2_index_is_still_readable() -> Result<()> {
-        let dir = tempdir()?;
-        let db_path = dir.path().join("v2.db");
-        let expected = {
-            let index = ProteomeIndex::new(&db_path, 12, 1, "hp_lehninger2", true)?;
-            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
-            index.save_state()?;
-            rewrite_as_schema_2(&index)?
-        };
-
-        let for_search = ProteomeIndex::open_for_search(&db_path)?;
-        let cache = for_search.load_search_cache()?.expect("schema 2 cache is read");
-        assert_eq!(cache.target_list, expected.0);
-        assert_eq!(cache.inverted_index.into_iter().collect::<BTreeMap<_, _>>(), expected.1);
-        assert_eq!(for_search.unique_kmer_count(), expected.1.len());
-        drop(for_search);
-
-        let full = ProteomeIndex::load(&db_path)?;
-        assert_eq!(full.signature_count(), 25);
-        assert_eq!(full.get_signatures().len(), 25);
-
-        drop(full);
-
-        // A schema 2 index whose cache was never written reads as having none, so the
-        // caller can say so rather than fail on a missing key.
-        {
-            use rocksdb::{Options, DB};
-            DB::open(&Options::default(), &db_path)?.delete(b"search_cache")?;
-        }
-        let without_cache = ProteomeIndex::open_for_search(&db_path)?;
-        assert!(without_cache.load_search_cache()?.is_none());
-        Ok(())
-    }
-
     /// The target list is as load-bearing as the shards: a missing or short chunk is an
     /// error, never a shorter target list that would silently misnumber every posting.
     #[test]
@@ -4283,13 +4025,18 @@ mod tests {
             index.db.put(b"schema_version", bincode::serialize(&(SCHEMA_VERSION + 1))?)?;
         }
         let err = ProteomeIndex::get_index_parameters(&db_path).unwrap_err();
-        assert!(
-            err.to_string().contains(&format!(
-                "built with schema version {}, but this binary uses schema version {}",
+        assert_eq!(
+            err.to_string(),
+            format!(
+                "Validation error: Index schema version mismatch: the index was built with \
+                 schema version {} (kmerseek {}), but this binary (kmerseek {}) reads schema \
+                 version {}. Rebuild the index with `kmerseek index`, or search it with the \
+                 kmerseek version that built it.",
                 SCHEMA_VERSION + 1,
+                env!("CARGO_PKG_VERSION"),
+                env!("CARGO_PKG_VERSION"),
                 SCHEMA_VERSION
-            )),
-            "unexpected message: {err}"
+            )
         );
         Ok(())
     }
@@ -4362,80 +4109,6 @@ mod tests {
         Ok(())
     }
 
-    /// A schema 2 cache too large for one value was written as `search_cache_chunk_{i}`
-    /// keys under a `search_cache_chunks` count (PR #48). The reader is kept so such an
-    /// index still opens; the writer is gone, so the chunks are laid down by hand here.
-    /// Reassembly must preserve byte order, and a torn or damaged chunk set must be an
-    /// error rather than a short cache or a quiet "no cache".
-    #[test]
-    fn test_schema_2_chunked_search_cache_is_read_and_checked() -> Result<()> {
-        let dir = tempdir()?;
-        let db_path = dir.path().join("v2chunks.db");
-        let expected = {
-            let index = ProteomeIndex::new(&db_path, 12, 1, "hp_lehninger2", true)?;
-            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
-            index.save_state()?;
-            let expected = rewrite_as_schema_2(&index)?;
-            let serialized = index.db.get(b"search_cache")?.expect("single value written");
-            index.db.delete(b"search_cache")?;
-            let chunks: Vec<&[u8]> = serialized.chunks(1024).collect();
-            assert!(chunks.len() > 2, "cache must span several chunks for this to mean anything");
-            for (i, chunk) in chunks.iter().enumerate() {
-                index.db.put(ProteomeIndex::search_cache_chunk_key(i), chunk)?;
-            }
-            index.db.put(b"search_cache_chunks", chunks.len().to_string().as_bytes())?;
-            expected
-        };
-        let n_chunks = {
-            let index = ProteomeIndex::open_for_search(&db_path)?;
-            let cache = index.load_search_cache()?.expect("chunked cache is read");
-            assert_eq!(cache.target_list, expected.0);
-            assert_eq!(cache.inverted_index.into_iter().collect::<BTreeMap<_, _>>(), expected.1);
-            String::from_utf8(index.db.get(b"search_cache_chunks")?.unwrap())?
-        };
-
-        let corrupt = |damage: &dyn Fn(&rocksdb::DB) -> Result<()>| -> Result<String> {
-            use rocksdb::{Options, DB};
-            let db = DB::open(&Options::default(), &db_path)?;
-            damage(&db)?;
-            drop(db);
-            let index = ProteomeIndex::open_for_search(&db_path)?;
-            match index.load_search_cache() {
-                Err(crate::errors::IndexError::CorruptIndex(message)) => Ok(message),
-                other => panic!("expected CorruptIndex, got {:?}", other.map(|c| c.is_some())),
-            }
-        };
-        let restore_count = |db: &rocksdb::DB| -> Result<()> {
-            Ok(db.put(b"search_cache_chunks", n_chunks.as_bytes())?)
-        };
-
-        let message = corrupt(&|db| Ok(db.put(b"search_cache_chunks", b"seven")?))?;
-        assert_eq!(message, "search_cache_chunks is not a number: \"seven\"");
-
-        let message = corrupt(&|db| {
-            restore_count(db)?;
-            Ok(db.delete(ProteomeIndex::search_cache_chunk_key(1))?)
-        })?;
-        assert_eq!(
-            message,
-            format!("search cache chunk 1 of {n_chunks} is missing; the index is incomplete and must be rebuilt")
-        );
-
-        let message = corrupt(&|db| Ok(db.delete(b"search_cache_chunks")?))?;
-        assert!(
-            message.starts_with("search cache chunks are present but the chunk count is missing")
-        );
-
-        // With neither a count nor a first chunk there is legitimately no cache.
-        {
-            use rocksdb::{Options, DB};
-            DB::open(&Options::default(), &db_path)?
-                .delete(ProteomeIndex::search_cache_chunk_key(0))?;
-        }
-        assert!(ProteomeIndex::open_for_search(&db_path)?.load_search_cache()?.is_none());
-        Ok(())
-    }
-
     /// `load` opens read-only, and `finalize` is what `ProteinSearcher::new` and
     /// `is_equivalent_to` call first, so on a loaded index it must write nothing.
     #[test]
@@ -4456,27 +4129,6 @@ mod tests {
         let sig = fresh.create_protein_signature(TEST_PROTEIN, "p")?;
         fresh.store_signatures(vec![sig])?;
         assert!(fresh.is_equivalent_to(&loaded)?);
-        Ok(())
-    }
-
-    /// An index in the schema 2 layout cannot take new sequences: its postings live only
-    /// inside the old cache, so new runs would have nothing to merge with.
-    #[test]
-    fn test_adding_to_a_schema_2_index_is_refused() -> Result<()> {
-        let dir = tempdir()?;
-        let db_path = dir.path().join("v2add.db");
-        {
-            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
-            let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
-            index.store_signatures(vec![sig])?;
-            index.save_state()?;
-            rewrite_as_schema_2(&index)?;
-        }
-        let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
-        index.load_state()?;
-        let sig = index.create_protein_signature(TEST_KMER, "q")?;
-        let err = index.store_signatures(vec![sig]).unwrap_err();
-        assert!(err.to_string().contains("written by an older version"), "{err}");
         Ok(())
     }
 }
