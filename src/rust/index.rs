@@ -2400,6 +2400,35 @@ mod tests {
         Ok(())
     }
 
+    /// With removal on, a window covering an ambiguous residue is still indexed under both
+    /// readings. Hashing the literal B or Z instead put a hash in the sketch that no query
+    /// k-mer matches and that the position map, which looks up each reading's hash, never
+    /// recorded, so a search silently missed every window covering the residue.
+    #[test]
+    fn test_remove_low_complexity_keeps_both_readings_of_ambiguous_residues() -> Result<()> {
+        let dir = tempdir()?;
+
+        // protein20 so no window is a homopolymer, raw or encoded: removal has nothing to
+        // drop and the count must equal the one with removal off. 21 residues at k=5 gives
+        // 17 windows, and the ambiguous residue at position 18 falls in four of them,
+        // which contribute two k-mers each: 17 + 4 = 21.
+        let sequences = [("PLANTANDANIMALGENBMES", 21), ("PLANTANDANIMALGENZMES", 21)];
+
+        let index_off = ProteomeIndex::new(dir.path().join("off.db"), 5, 1, "protein20", false)?;
+        let mut index_on = ProteomeIndex::new(dir.path().join("on.db"), 5, 1, "protein20", false)?;
+        index_on.set_remove_low_complexity(true);
+
+        for (sequence, expected_kmers) in sequences {
+            let sig_off = index_off.create_protein_signature(sequence, "test_protein")?;
+            let sig_on = index_on.create_protein_signature(sequence, "test_protein")?;
+            assert_eq!(sig_off.kmer_positions().len(), expected_kmers, "{sequence} off");
+            assert_eq!(sig_on.kmer_positions().len(), expected_kmers, "{sequence} on");
+            assert_eq!(sig_on.low_complexity_counts(), (17, 0), "{sequence}");
+        }
+
+        Ok(())
+    }
+
     // Residues 26-55 of human FKBP8 (UniProt Q14318): a genuine 11-residue
     // poly-glutamate tract, real low-complexity sequence rather than an
     // invented motif.
