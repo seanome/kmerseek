@@ -6,10 +6,12 @@ half-open, as in the JSON; text meant for a reader is 1-based inclusive.
 """
 
 import os
+import statistics
 from collections import defaultdict
 
 import polars as pl
 
+from gapped_alignment import global_align
 from visualize_hits import short_label
 
 # What a biologist calls the classes of the hydrophobic/polar alphabets.
@@ -166,15 +168,87 @@ def middle_line(query_row, target_row, query_enc, target_enc, show_class):
     return "".join(out)
 
 
-def run_block(pair, index, run, domains, flank):
-    """Everything one alignment block needs."""
+def gapped_block(pair, run, gap_flank):
+    """The end-to-end gapped alignment of the run and `gap_flank` residues either side, so the
+    run is always traversed. Rows carry `-` for gaps; the class rows carry `-` there too, so a
+    gap column is drawn as a plain box."""
+    q, t = pair["query"], pair["target"]
+    qs, qe, ts, te = run["query_start"], run["query_end"], run["target_start"], run["target_end"]
+    q0, t0 = max(0, qs - gap_flank), max(0, ts - gap_flank)
+    hit = global_align(q["sequence"][q0 : qe + gap_flank], t["sequence"][t0 : te + gap_flank])
+    if hit is None:
+        return None
+    q_enc = _gapped_classes(hit["a_row"], q["encoded"], q0 + hit["a_start"])
+    t_enc = _gapped_classes(hit["b_row"], t["encoded"], t0 + hit["b_start"])
+    columns = run_columns(hit["a_row"], q0 + hit["a_start"], qs, qe)
+    # Identities are counted over the run's own columns, not the flanks, so a chance match
+    # in a flank cannot lift a run; the flanks are there for the gaps that shift the run.
+    in_run = [(a, b) for a, b in zip(hit["a_row"][slice(*columns)], hit["b_row"][slice(*columns)])]
+    return {
+        "run_columns": columns,
+        "query_start": q0 + hit["a_start"],
+        "query_end": q0 + hit["a_end"],
+        "target_start": t0 + hit["b_start"],
+        "target_end": t0 + hit["b_end"],
+        "query_row": hit["a_row"],
+        "target_row": hit["b_row"],
+        "query_enc": q_enc,
+        "target_enc": t_enc,
+        "middle": middle_line(hit["a_row"], hit["b_row"], q_enc, t_enc, show_class=True),
+        "identical": sum(a == b and a != "-" for a, b in in_run),
+        "aligned": sum(a != "-" and b != "-" for a, b in in_run),
+        "window_identical": hit["identical"],
+        "window_aligned": hit["aligned"],
+        "columns": hit["columns"],
+        "score": hit["score"],
+    }
+
+
+def run_columns(query_row, query_start, run_start, run_end):
+    """[first, last) alignment columns whose query residue lies inside the run."""
+    first, last, pos = None, None, query_start
+    for col, ch in enumerate(query_row):
+        if ch == "-":
+            continue
+        if run_start <= pos < run_end:
+            first = col if first is None else first
+            last = col + 1
+        pos += 1
+    return [first, last] if first is not None else [0, 0]
+
+
+def _gapped_classes(row, encoded, start):
+    """The class symbol under each column of an aligned row, `-` at a gap."""
+    out, pos = [], start
+    for ch in row:
+        if ch == "-":
+            out.append("-")
+        else:
+            out.append(encoded[pos])
+            pos += 1
+    return "".join(out)
+
+
+def structural_offset(run, pairs):
+    """How far the run's diagonal sits from the structural alignment over the run's query
+    residues: the median of (structural target partner - run's target partner), or None when
+    the structure aligns none of those residues."""
+    partner = {q: t for q, t, _ in pairs}
+    diagonal = run["target_start"] - run["query_start"]
+    offsets = [partner[i] - (i + diagonal) for i in range(run["query_start"], run["query_end"]) if i in partner]
+    return int(statistics.median(offsets)) if offsets else None
+
+
+def run_block(pair, index, run, domains, flank, gap_flank=None, pairs=None):
+    """Everything one alignment block needs. `structure_offset` is present only when a
+    structural alignment was given."""
     q, t, ksize = pair["query"], pair["target"], pair["ksize"]
     qs, qe, ts, te = run["query_start"], run["query_end"], run["target_start"], run["target_end"]
     left = min(flank, qs, ts)
     right = min(flank, len(q["sequence"]) - qe, len(t["sequence"]) - te)
     ws, we, wts, wte = qs - left, qe + right, ts - left, te + right
     q_row, t_row, q_enc, t_enc = q["sequence"][ws:we], t["sequence"][wts:wte], q["encoded"][ws:we], t["encoded"][wts:wte]
-    return {
+    block = {
         "number": index + 1,
         "query_start": qs,
         "query_end": qe,
@@ -192,7 +266,11 @@ def run_block(pair, index, run, domains, flank):
         "query_enc": q_enc,
         "target_enc": t_enc,
         "middle": middle_line(q_row, t_row, q_enc, t_enc, show_class=flank > 0),
+        "gapped": gapped_block(pair, run, gap_flank) if gap_flank is not None else None,
     }
+    if pairs is not None:
+        block["structure_offset"] = structural_offset(run, pairs)
+    return block
 
 
 def _side(pair, side, domains):
@@ -204,10 +282,13 @@ def _side(pair, side, domains):
     }
 
 
-def build_model(pair, domain_rows=(), flank=0):
-    """The one description both renderers draw from."""
+def build_model(pair, domain_rows=(), flank=0, gap_flank=None, structure=None):
+    """The one description both renderers draw from. `gap_flank` adds a gapped local
+    alignment of each run and that many residues either side; `structure` is the dict
+    `structure_alignment.align_pair` returns, or None."""
     classes = class_residues(pair) if is_reduced(pair) else {}
     domains = {side: domains_for(domain_rows, pair[side]["name"]) for side in ("query", "target")}
+    pairs = structure["pairs"] if structure else None
     return {
         "ksize": pair["ksize"],
         "moltype": pair["moltype"],
@@ -216,11 +297,13 @@ def build_model(pair, domain_rows=(), flank=0):
         "query": _side(pair, "query", domains),
         "target": _side(pair, "target", domains),
         "n_shared": len(pair["shared_kmers"]),
-        "runs": [run_block(pair, i, r, domains, flank) for i, r in enumerate(runs(pair))],
+        "runs": [run_block(pair, i, r, domains, flank, gap_flank, pairs) for i, r in enumerate(runs(pair))],
         "singles": [
             {k: s[k] for k in ("query_pos", "target_pos", "kmer", "query_kmer", "target_kmer")} for s in singles(pair)
         ],
         "flank": flank,
+        "gap_flank": gap_flank,
+        "structure": structure,
     }
 
 
@@ -232,7 +315,26 @@ def title_lines(model):
         second = f"a shared {k}-mer is {k} consecutive residues with the same {kinds} pattern in both proteins"
     else:
         second = f"a shared {k}-mer is {k} consecutive identical residues in both proteins"
-    return [first, second]
+    lines = [first, second]
+    if model.get("structure"):
+        lines.append(structure_line(model))
+    return lines
+
+
+def structure_line(model):
+    st = model["structure"]
+    return (
+        f"{st['aligner']} of {st['query_file']} against {st['target_file']}: TM-score {st['tm_score_query']:.2f} "
+        f"(by {model['query']['label']} length), RMSD {st['rmsd']:.1f} \u00c5 over {st['aligned']} aligned residues"
+    )
+
+
+def structure_phrase(offset):
+    if offset is None:
+        return "not structurally aligned"
+    if abs(offset) <= 1:
+        return "on the structural path"
+    return f"{abs(offset)} residues off the structural path"
 
 
 def run_header(block):
@@ -242,6 +344,11 @@ def run_header(block):
         f"{block['length']} aa",
         f"{block['identical']} identical",
     ]
+    if block.get("gapped"):
+        g = block["gapped"]
+        parts[-1] = f"{block['identical']} identical on the run's diagonal, {g['identical']} of its {g['aligned']} aligned columns after gapped alignment"
     if block["polar"] is not None:
         parts.append(f"{block['polar']} of {block['length']} polar")
+    if "structure_offset" in block:
+        parts.append(structure_phrase(block["structure_offset"]))
     return " · ".join(parts)

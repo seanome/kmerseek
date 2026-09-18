@@ -218,3 +218,65 @@ def test_embed_json_never_lets_a_name_close_the_script():
     assert "x<\\/script>" in out
     page = render_html({"query": {"label": "x</script>"}, "target": {"label": "y"}})
     assert page.count("</script>") == 1
+
+
+# -- gapped identities and the structural path --
+
+USALIGN_REPORT = os.path.join(TESTDATA, "bcl2_vs_ced9.usalign.txt")
+
+
+@pytest.fixture
+def structure():
+    import structure_alignment as sa
+
+    with open(USALIGN_REPORT) as fh:
+        report = sa.parse_report(fh.read())
+    return report | {"aligner": "USalign", "query_file": "AF-P10415-F1-model_v6.cif", "target_file": "AF-P41958-F1-model_v6.cif"}
+
+
+def test_gapped_block_counts_identities_over_the_run_columns(pair, domains):
+    model = pm.build_model(pair, domains, gap_flank=10)
+    bh1 = model["runs"][0]["gapped"]
+    # Run 1 with ten residues either side aligns without a gap; the run's 19 columns hold
+    # the same 5 identities as its diagonal.
+    assert (bh1["query_start"], bh1["query_end"], bh1["target_start"], bh1["target_end"]) == (128, 167, 152, 191)
+    assert bh1["run_columns"] == [10, 29]
+    assert bh1["query_row"][10:29] == "RDGVNWGRIVAFFEFGGVM"
+    assert (bh1["identical"], bh1["aligned"]) == (5, 19)
+    assert bh1["middle"][10:29] == "::::::GR::::::FGG::"
+    assert pm.run_header(model["runs"][0]).startswith(
+        "Run 1 · Bcl-2 × Bcl-2 · 19 aa · 5 identical on the run's diagonal, 5 of its 19 aligned columns after gapped alignment"
+    )
+    # Run 5 sits at CED-9's C terminus, so the window is short there and the alignment gaps.
+    run5 = model["runs"][4]["gapped"]
+    assert "-" in run5["query_row"] + run5["target_row"]
+    assert run5["target_enc"].count("-") == run5["target_row"].count("-")
+
+
+def test_structure_offset_puts_run_1_on_the_path_and_run_3_off_it(pair, domains, structure):
+    model = pm.build_model(pair, domains, structure=structure)
+    offsets = [b["structure_offset"] for b in model["runs"]]
+    assert offsets == [0, -157, 4, -166, -40]
+    assert [pm.structure_phrase(o) for o in offsets[:3]] == [
+        "on the structural path",
+        "157 residues off the structural path",
+        "4 residues off the structural path",
+    ]
+    assert pm.structure_phrase(None) == "not structurally aligned"
+    assert pm.title_lines(model)[2] == (
+        "USalign of AF-P10415-F1-model_v6.cif against AF-P41958-F1-model_v6.cif: TM-score 0.55 (by BCL2_HUMAN length), "
+        "RMSD 2.8 Å over 154 aligned residues"
+    )
+    assert "structure_offset" not in pm.build_model(pair, domains)["runs"][0]
+
+
+def test_figure_and_html_draw_the_structural_path(pair, domains, structure, tmp_path):
+    model = pm.build_model(pair, domains, gap_flank=10, structure=structure)
+    svg = tmp_path / "pair.svg"
+    vp.plot_pair(model, [str(svg)])
+    text = svg.read_text()
+    assert "structural alignment (USalign, TM-score 0.55): every aligned residue pair" in text
+    assert "on the structural path" in text and "4 residues off the structural path" in text
+    assert vp.path_segments([(0, 0, True), (1, 1, True), (5, 9, False)]) == [([0, 1], [0, 1]), ([5], [9])]
+    page = render_html(model)
+    assert '"tm_score_query": 0.55352' in page and '"structure_offset": 4' in page

@@ -13,7 +13,7 @@ import json
 PAIR_CSS = r"""
   :root {
     --ink: #0b0b0b; --secondary: #52514e; --surface: #fcfcfb; --edge: #b8b7b0; --box: #ffffff;
-    --run: #0b0b0b; --single: #6e6d68; --domain: #e8e7e2; --domain-edge: #8d8c86; --flash: #fff3c4;
+    --run: #0b0b0b; --single: #6e6d68; --domain: #e8e7e2; --domain-edge: #8d8c86; --flash: #fff3c4; --structure: #c0392b;
     --c0: #f3e3c3; --c0e: #c9a15a; --c1: #dde9f8; --c1e: #7fa6d6; --c2: #dff0e2; --c2e: #6fae7c; --c3: #ece0f3; --c3e: #a98bc4;
   }
   body { margin: 0; padding: 16px; background: var(--surface); color: var(--ink);
@@ -25,6 +25,7 @@ PAIR_CSS = r"""
   .sw { width: 14px; height: 12px; display: inline-block; border: 1px solid var(--edge); box-sizing: border-box; border-radius: 2px; }
   .seg { width: 22px; height: 0; border-top: 3px solid var(--run); display: inline-block; }
   .dotm { width: 8px; height: 8px; border-radius: 50%; background: var(--single); display: inline-block; }
+  .path { width: 22px; height: 0; border-top: 1.5px solid var(--structure); display: inline-block; }
   .trk { width: 26px; height: 12px; display: inline-block; position: relative; }
   .trk:before { content: ""; position: absolute; left: 0; right: 0; top: 5px; border-top: 1px solid var(--domain-edge); }
   .trk:after { content: ""; position: absolute; left: 8px; width: 10px; top: 1px; height: 9px; background: var(--domain); border: 1px solid var(--domain-edge); }
@@ -72,9 +73,20 @@ function classStyles(m) {
 
 function runHeader(b) {
   const parts = [`Run ${b.number}`, `${b.query_region} × ${b.target_region}`, `${b.length} aa`, `${b.identical} identical`];
+  if (b.gapped) parts[3] = `${b.identical} identical on the run's diagonal, ${b.gapped.identical} of its ${b.gapped.aligned} aligned columns after gapped alignment`;
   if (b.polar !== null && b.polar !== undefined) parts.push(`${b.polar} of ${b.length} polar`);
+  if ("structure_offset" in b) parts.push(structurePhrase(b.structure_offset));
   return parts.join(" · ");
 }
+
+function blockRows(b) {
+  // The gapped alignment when the model has one, else the exact run with any flank.
+  if (b.gapped) return b.gapped;
+  const left = b.query_start - b.window.query_start;
+  return { query_row: b.query_row, target_row: b.target_row, query_enc: b.query_enc, target_enc: b.target_enc, middle: b.middle,
+           query_start: b.window.query_start, target_start: b.window.target_start, run_columns: [left, left + b.length] };
+}
+const residuesBefore = (row, n) => [...row.slice(0, n)].filter(c => c !== "-").length;
 
 function titleLines(m) {
   const q = m.query.label, t = m.target.label, k = m.ksize;
@@ -83,7 +95,18 @@ function titleLines(m) {
   const second = m.classes.length
     ? `a shared ${k}-mer is ${k} consecutive residues with the same ${kinds} pattern in both proteins`
     : `a shared ${k}-mer is ${k} consecutive identical residues in both proteins`;
-  return [first, second];
+  const lines = [first, second];
+  if (m.structure) {
+    const st = m.structure;
+    lines.push(`${st.aligner} of ${st.query_file} against ${st.target_file}: TM-score ${st.tm_score_query.toFixed(2)} (by ${q} length), RMSD ${st.rmsd.toFixed(1)} \u00c5 over ${st.aligned} aligned residues`);
+  }
+  return lines;
+}
+
+function structurePhrase(offset) {
+  if (offset === null || offset === undefined) return "not structurally aligned";
+  if (Math.abs(offset) <= 1) return "on the structural path";
+  return `${Math.abs(offset)} residues off the structural path`;
 }
 
 function renderLegend(m, styles) {
@@ -93,12 +116,33 @@ function renderLegend(m, styles) {
     const sw = el("i", "sw"); const st = styles[c.symbol] || ["var(--box)", "var(--edge)"];
     sw.style.background = st[0]; sw.style.borderColor = st[1]; add(sw, c.label);
   } else add(el("i", "sw"), "residue");
-  add(el("i", "seg"), `run of 2 or more consecutive shared ${m.ksize}-mers (${m.runs.length}), numbered; click one to jump to its alignment`);
+  add(el("i", "seg"), `run of 2 or more consecutive shared ${m.ksize}-mers (${m.runs.length}), numbered and underlined in its alignment; click one to jump to it`);
   add(el("i", "dotm"), `single shared ${m.ksize}-mer (${m.singles.length}); hover for the k-mer`);
   if (m.query.domains.length || m.target.domains.length)
     add(el("i", "trk"), "protein, with its domains as boxes; each domain's span shaded across the plot");
+  if (m.structure)
+    add(el("i", "path"), `structural alignment (${m.structure.aligner}, TM-score ${m.structure.tm_score_query.toFixed(2)}): every aligned residue pair`);
   add(el("b", "mid", "G"), "identical residue, written between the rows");
   return box;
+}
+
+function pathSegments(pairs) {
+  // Runs of consecutive residue pairs, so gaps break the drawn line.
+  const segs = []; let cur = [];
+  for (const [q, t] of pairs) {
+    if (cur.length && (q !== cur[cur.length - 1][0] + 1 || t !== cur[cur.length - 1][1] + 1)) { segs.push(cur); cur = []; }
+    cur.push([q, t]);
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+
+function renderStructurePath(m, svg, sx, sy) {
+  if (!m.structure) return;
+  for (const seg of pathSegments(m.structure.pairs)) {
+    const d = seg.map(([q, t], i) => `${i ? "L" : "M"}${sx(q + 1).toFixed(1)} ${sy(t + 1).toFixed(1)}`).join("");
+    svg.appendChild(svgEl("path", { d: seg.length > 1 ? d : d + "h0.1", fill: "none", stroke: "var(--structure)", "stroke-width": 1.5, "stroke-linecap": "round" }));
+  }
 }
 
 function labelsCollide(side, scale) {
@@ -143,6 +187,7 @@ function renderDotPlot(m, container) {
   for (const p of ticks(tL)) svg.appendChild(svgEl("text", { x: x0 - 6, y: sy(p) + 4, "text-anchor": "end" }, p));
   svg.appendChild(svgEl("text", { x: x0 + pw / 2, y: H - 4, "text-anchor": "middle" }, `${m.query.label} position (aa)`));
   svg.appendChild(svgEl("text", { x: 12, y: y0 + ph / 2, "text-anchor": "middle", transform: `rotate(-90 12 ${y0 + ph / 2})` }, `${m.target.label} position (aa)`));
+  renderStructurePath(m, svg, sx, sy);
   renderSingles(m, svg, sx, sy);
   renderRuns(m, svg, sx, sy, container);
   return svg;
@@ -186,29 +231,34 @@ function renderBlock(m, b, styles) {
   const div = el("div", "block"); div.dataset.run = b.number;
   div.appendChild(el("h3", null, runHeader(b)));
   const wrap = el("div", "wrap"); div.appendChild(wrap);
-  for (let start = 0; start < b.query_row.length; start += WRAP) wrap.appendChild(renderChunk(m, b, styles, start));
+  const rows = blockRows(b);
+  for (let start = 0; start < rows.query_row.length; start += WRAP) wrap.appendChild(renderChunk(m, rows, styles, start));
   return div;
 }
 
-function renderChunk(m, b, styles, start) {
+function renderChunk(m, rows, styles, start) {
   const sl = s => s.slice(start, start + WRAP);
-  const qRow = sl(b.query_row), tRow = sl(b.target_row), qEnc = sl(b.query_enc), tEnc = sl(b.target_enc), mid = sl(b.middle);
+  const qRow = sl(rows.query_row), tRow = sl(rows.target_row), qEnc = sl(rows.query_enc), tEnc = sl(rows.target_enc), mid = sl(rows.middle);
   const n = qRow.length;
   const x0 = Math.max(m.query.label.length, m.target.label.length) * 7 + 52;
-  const svg = svgEl("svg", { width: x0 + n * CELL + 50, height: 3 * ROW + 6 });
-  const row = (y, text, enc, label, first) => {
+  const svg = svgEl("svg", { width: x0 + n * CELL + 50, height: 3 * ROW + 12 });
+  const row = (y, text, enc, label, full, origin) => {
+    const first = origin + residuesBefore(full, start), last = origin + residuesBefore(full, start + n);
     svg.appendChild(svgEl("text", { x: x0 - 8, y: y + BOX / 2 + 4, "text-anchor": "end" }, `${label} ${first + 1}`));
     for (let i = 0; i < n; i++) {
       const st = styles[enc[i]] || ["var(--box)", "var(--edge)"];
       svg.appendChild(svgEl("rect", { x: x0 + i * CELL, y, width: BOX, height: BOX, rx: 2, fill: st[0], stroke: st[1] }));
       svg.appendChild(svgEl("text", { x: x0 + i * CELL + BOX / 2, y: y + BOX / 2 + 4, "text-anchor": "middle", class: "mono" }, text[i]));
     }
-    svg.appendChild(svgEl("text", { x: x0 + n * CELL + 4, y: y + BOX / 2 + 4 }, first + n));
+    svg.appendChild(svgEl("text", { x: x0 + n * CELL + 4, y: y + BOX / 2 + 4 }, last));
   };
-  row(2, qRow, qEnc, m.query.label, b.window.query_start + start);
+  row(2, qRow, qEnc, m.query.label, rows.query_row, rows.query_start);
   for (let i = 0; i < n; i++) if (mid[i] !== " ")
     svg.appendChild(svgEl("text", { x: x0 + i * CELL + BOX / 2, y: ROW + BOX / 2 + 5, "text-anchor": "middle", class: "mono" }, mid[i]));
-  row(2 * ROW + 2, tRow, tEnc, m.target.label, b.window.target_start + start);
+  row(2 * ROW + 2, tRow, tEnc, m.target.label, rows.target_row, rows.target_start);
+  // The run's columns, underlined with the dot plot's run bar.
+  const first = Math.max(rows.run_columns[0], start) - start, last = Math.min(rows.run_columns[1], start + n) - start;
+  if (last > first) svg.appendChild(svgEl("line", { x1: x0 + first * CELL, x2: x0 + (last - 1) * CELL + BOX, y1: 3 * ROW + 7, y2: 3 * ROW + 7, stroke: "var(--run)", "stroke-width": 3 }));
   return svg;
 }
 
@@ -216,9 +266,9 @@ function renderPair(container, m) {
   container.classList.add("pair");
   container.innerHTML = "";
   const styles = classStyles(m);
-  const [first, second] = titleLines(m);
+  const [first, ...rest] = titleLines(m);
   container.appendChild(el("h2", null, first));
-  container.appendChild(el("p", "sub", second));
+  for (const line of rest) container.appendChild(el("p", "sub", line));
   container.appendChild(renderLegend(m, styles));
   container.appendChild(renderDotPlot(m, container));
   if (!m.runs.length) container.appendChild(el("p", "none", `No run to show: no two shared ${m.ksize}-mers are consecutive in both proteins.`));

@@ -9,9 +9,11 @@ loop is covered by a third of unrelated proteins, so a run there is discounted a
 glance and a run in BH1 is not.
 
 Below it, one row per protein with the numbers in the row (length, runs, longest run,
-identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
+identical residues in it after a gapped alignment of the run and its flanks, shared
+k-mers, the ranking statistic, and with --structures the TM-score) and every run drawn as
 a bar at its query coordinates, solid when it has --solid-identical or more identical
-residues and hollow otherwise; overlapping bars get a count. Database entries of one
+residues and hollow otherwise; overlapping bars get a count. The histogram at the top
+counts identities on the exact run, since it is computed from the CSV alone. Database entries of one
 gene (UniProt GN= and OS=) fold into one row, so a family search is not a list of
 TrEMBL copies of the query. Clicking a row opens the pair view underneath it: the dot
 plot with protein tracks and one alignment block per run, the same panel
@@ -45,6 +47,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pair_model import build_model, count_agreement, domains_for, load_domains
+from structure_alignment import align_pair, find_aligner
 from visualize_hits import (
     _target_best_rows,
     _target_tail_probabilities,
@@ -204,9 +207,19 @@ def coverage(rows, query_length, ksize, solid_identical):
 # -- rows --------------------------------------------------------------------------------------
 
 
+def run_identical(block):
+    """Identical residues counted after the gapped alignment when the model has one, else
+    on the exact run."""
+    return block["gapped"]["identical"] if block.get("gapped") else block["identical"]
+
+
 def run_bar(block):
     """What a row's bar and its tooltip need, 0-based half-open as in the model."""
-    return {k: block[k] for k in ("number", "query_start", "query_end", "target_start", "target_end", "length", "identical", "polar")}
+    bar = {k: block[k] for k in ("number", "query_start", "query_end", "target_start", "target_end", "length", "polar")}
+    bar["identical"] = run_identical(block)
+    if "structure_offset" in block:
+        bar["structure_offset"] = block["structure_offset"]
+    return bar
 
 
 def protein_row(rank, target_name, others, stat, row, model):
@@ -224,7 +237,8 @@ def protein_row(rank, target_name, others, stat, row, model):
         "length": model["target"]["length"],
         "n_runs": len(model["runs"]),
         "best_length": best["length"] if best else 0,
-        "best_identical": best["identical"] if best else 0,
+        "best_identical": run_identical(best) if best else 0,
+        "tm_score": model["structure"]["tm_score_query"] if model.get("structure") else None,
         "n_shared": int(row["n_intersecting_hashes"]),
         "stat": stat,
         "runs": [run_bar(b) for b in model["runs"]],
@@ -241,6 +255,14 @@ class SearchReport:
         self.domain_rows = domain_rows
         self.queries = read_fasta(args.query_fasta)
         self.targets = read_fasta(args.target_fasta)
+        self.aligner = find_aligner(args.aligner) if args.structures else None
+        if args.structures and self.aligner is None:
+            print("no USalign or TMalign found; skipping structural alignments", file=sys.stderr)
+
+    def structure(self, query_name, target_name):
+        if not (self.args.structures and self.aligner):
+            return None
+        return align_pair(self.aligner, self.args.structures, query_name, target_name)
 
     def rows_for(self, query_name, rows, workdir):
         ranked = rank_proteins(rows, self.args.max_rows)
@@ -253,7 +275,13 @@ class SearchReport:
         out = []
         for rank, (target_name, others, stat) in enumerate(ranked, start=1):
             pair = run_pair(self.kmerseek, query_fasta, target_fasta, target_name.split()[0], ksize, moltype)
-            model = build_model(pair, self.domain_rows, flank=self.args.flank)
+            model = build_model(
+                pair,
+                self.domain_rows,
+                flank=self.args.flank,
+                gap_flank=None if self.args.no_gapped else self.args.gap_flank,
+                structure=self.structure(query_name, target_name),
+            )
             out.append(protein_row(rank, target_name, others, stat, best[target_name], model))
         return out
 
@@ -282,6 +310,8 @@ class SearchReport:
             "n_entries": len(_target_best_rows(rows)),
             "n_proteins": len(fold_entries(rows)),
             "solid_identical": self.args.solid_identical,
+            "gapped": not self.args.no_gapped,
+            "structures": bool(self.args.structures and self.aligner),
             "max_runs_shown": self.args.max_runs_shown,
             "coverage": coverage(rows, query["length"], ksize, self.args.solid_identical),
             "rows": protein_rows,
@@ -300,6 +330,7 @@ REPORT_CSS = r"""
   select { font: inherit; padding: 2px 4px; }
   .g { display: grid; grid-template-columns: 200px 44px 44px 64px 64px 60px 80px 300px; column-gap: 10px; align-items: center;
        padding: 4px 6px; border-bottom: 1px solid #e3e2dc; }
+  body.with-structures .g { grid-template-columns: 200px 44px 44px 64px 64px 60px 80px 60px 300px; }
   .g.head { color: var(--secondary); font-size: 12px; border-bottom: 1px solid var(--edge); }
   .g.row { cursor: pointer; }
   .g.row:hover { background: #f1f0eb; }
@@ -419,13 +450,17 @@ function headerRows(table) {
   const h = el("div", "g");
   const hl = cell(null, "database entries with a run over this residue");
   hl.appendChild(cell("small", `max ${mx} of ${R.n_entries}, at residue ${at}; ${mxSolid} with a ${SOLID}-or-more-identical run`));
-  h.appendChild(hl); for (let i = 0; i < 6; i++) h.appendChild(cell()); h.appendChild(hist); table.appendChild(h);
+  const blanks = R.structures ? 7 : 6;
+  h.appendChild(hl); for (let i = 0; i < blanks; i++) h.appendChild(cell()); h.appendChild(hist); table.appendChild(h);
   const q = el("div", "g");
   const ql = cell(null, `${Q.label}, the query`); ql.appendChild(cell("small", `${QL} aa`));
-  q.appendChild(ql); for (let i = 0; i < 6; i++) q.appendChild(cell()); q.appendChild(queryLine()); table.appendChild(q);
+  q.appendChild(ql); for (let i = 0; i < blanks; i++) q.appendChild(cell()); q.appendChild(queryLine()); table.appendChild(q);
   const head = el("div", "g head");
-  for (const [cls, text] of [[null, "target, one row per protein"], ["num", "aa"], ["num", "runs"], ["num", "longest run, aa"], ["num", "identical in it"], ["num", `shared ${K}-mers`], ["num", R.stat_name], [null, `runs drawn on the query (residue 1 to ${QL})`]])
-    head.appendChild(cell(cls, text));
+  const identical = R.gapped ? "identical in it, after gapped alignment" : "identical in it";
+  const columns = [[null, "target, one row per protein"], ["num", "aa"], ["num", "runs"], ["num", "longest run, aa"], ["num", identical], ["num", `shared ${K}-mers`], ["num", R.stat_name]];
+  if (R.structures) columns.push(["num", "TM-score"]);
+  columns.push([null, `runs drawn on the query (residue 1 to ${QL})`]);
+  for (const [cls, text] of columns) head.appendChild(cell(cls, text));
   table.appendChild(head);
 }
 
@@ -436,7 +471,9 @@ function proteinRow(row) {
   name.appendChild(cell("small", `${row.entry.split("|").pop()}${row.gene ? " · " + row.gene : ""}${extra}`));
   name.title = row.target_name + (row.other_entries.length ? "\nalso: " + row.other_entries.join(", ") : "");
   g.appendChild(name);
-  for (const v of [row.length, row.runs.length, row.best_length, row.best_identical, row.n_shared, fmtStat(row.stat)]) g.appendChild(cell("num", v));
+  const values = [row.length, row.runs.length, row.best_length, row.best_identical, row.n_shared, fmtStat(row.stat)];
+  if (R.structures) values.push(row.tm_score === null ? "\u2013" : row.tm_score.toFixed(2));
+  for (const v of values) g.appendChild(cell("num", v));
   g.appendChild(track(row));
   g.onclick = () => { open.has(row.rank) ? open.delete(row.rank) : open.add(row.rank); renderTable(); };
   return g;
@@ -465,6 +502,7 @@ function renderTable() {
   }
 }
 
+if (R.structures) document.body.classList.add("with-structures");
 titles(); reportLegend();
 document.getElementById("sort").onchange = renderTable;
 document.getElementById("expandall").onchange = e => { open = e.target.checked ? new Set(R.rows.map(r => r.rank)) : new Set(); renderTable(); };
@@ -523,6 +561,10 @@ def _build_arg_parser():
     p.add_argument("--max-runs-shown", type=int, default=10, help="alignments per opened row, longest first (default 10)")
     p.add_argument("--solid-identical", type=int, default=5, help="identical residues from which a run's bar is drawn solid (default 5)")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run in the alignments")
+    p.add_argument("--gap-flank", type=int, default=10, help="residues either side of each run given to the gapped alignment its identities are counted on (default 10)")
+    p.add_argument("--no-gapped", action="store_true", help="count identities on the exact run only")
+    p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, each row gets a TM-score and its dot plot the structural path")
+    p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--kmerseek", help="path to the kmerseek binary (default: PATH, then target/release, target/debug)")
     return p
 

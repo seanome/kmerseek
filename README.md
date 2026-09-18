@@ -230,6 +230,22 @@ k-mer, click a run's number to jump to its alignment.
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
 long; the figure draws those as singles and gives alignments only to runs.
 
+Identities are counted twice for each run: on the run's own diagonal, and after a gapped
+alignment (Needleman-Wunsch, BLOSUM62, gap open 11, extend 1) of the run and
+`--gap-flank` residues either side (default 10), counted over the run's columns. The
+second number is the one to trust: an exact run in the reduced alphabet can sit a few
+residues off the true alignment, and MCL-1's BH1 run reads 1 identical residue on its
+diagonal but 12 once one gap lines NWGR up. The alignment block shows the gapped
+alignment with the run underlined; `--no-gapped` shows the exact run instead.
+
+`--structures DIR` draws the structural alignment across the dot plot: with USalign or
+TM-align on `PATH` (or `--aligner`), the two proteins' AlphaFold or PDB files in that
+directory (`AF-{accession}-F1-model_v*.cif`, `{accession}.pdb`) are aligned, every
+aligned residue pair is drawn as a thin red path, and each run's header says whether it
+lies on that path. For BCL-2 against CED-9, run 1 (BH1) is on the path and run 3, 9
+residues off run 1's diagonal, is 4 residues off it; only one of the two can be real,
+and the structure says which.
+
 ## Visualizing a whole search
 
 `scripts/visualize_search.py` turns `kmerseek search` output into one HTML report per
@@ -253,6 +269,11 @@ kmerseek search -q bcl2.fasta -t bcl2_family.rocksdb -o results.csv --alphabet h
 python scripts/visualize_search.py --csv results.csv --query-fasta bcl2.fasta \
     --target-fasta bcl2_family.fasta.gz --output-dir report/ --domains pfam_domains.tsv
 ```
+
+The identical-residue column and the solid/hollow bars use the gapped-alignment count
+described above (`--gap-flank`, `--no-gapped`); the histogram counts identities on the
+exact run, since it is computed from the CSV alone. `--structures DIR` adds a TM-score
+column and the structural path to each row's dot plot.
 
 Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
 Benjamini-Hochberg corrected region tail probability; the sort control also offers

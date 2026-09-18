@@ -41,7 +41,8 @@ from matplotlib.lines import Line2D
 from matplotlib.patches import Patch, Rectangle
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pair_model import CLASS_NAMES, build_model, load_domains, run_header, title_lines
+from pair_model import build_model, load_domains, run_header, title_lines
+from structure_alignment import align_pair, find_aligner
 from visualize_hits import INK, SECONDARY_INK, SURFACE, safe_filename
 from visualize_pair_html import render_html
 
@@ -54,6 +55,8 @@ DOMAIN_FILL, DOMAIN_EDGE = "#e8e7e2", "#8d8c86"
 SPAN_SHADE = "#e8e7e2"
 RUN_COLOR = INK
 SINGLE_COLOR = "#6e6d68"
+# The structural alignment's residue pairs, drawn as a thin path under the runs.
+STRUCTURE_COLOR = "#c0392b"
 
 WRAP = 60  # residues per alignment line before wrapping
 RESIDUE_IN = 0.155
@@ -61,6 +64,39 @@ ROW_IN = 0.2
 PLOT_IN = 3.6
 TRACK_IN = 0.42
 FONT = 8
+
+
+def path_segments(pairs):
+    """The structural alignment as runs of consecutive residue pairs, each a list of query
+    positions and the matching target positions, so gaps break the drawn line."""
+    segments, current = [], []
+    for q, t, _ in pairs:
+        if current and (q, t) != (current[-1][0] + 1, current[-1][1] + 1):
+            segments.append(current)
+            current = []
+        current.append((q, t))
+    if current:
+        segments.append(current)
+    return [([q for q, _ in seg], [t for _, t in seg]) for seg in segments]
+
+
+def block_rows(block):
+    """The rows an alignment block shows: the gapped local alignment when the model has
+    one, else the exact run (with any flank)."""
+    g = block.get("gapped")
+    if g:
+        return g
+    left = block["query_start"] - block["window"]["query_start"]
+    return {k: block[k] for k in ("query_row", "target_row", "query_enc", "target_enc", "middle")} | {
+        "query_start": block["window"]["query_start"],
+        "target_start": block["window"]["target_start"],
+        "run_columns": [left, left + block["length"]],
+    }
+
+
+def residues_before(row, n):
+    """Non-gap characters in the first n columns of an aligned row."""
+    return sum(1 for ch in row[:n] if ch != "-")
 
 
 def axis_ticks(length):
@@ -102,20 +138,20 @@ class PairFigure:
 
     @staticmethod
     def chunks(block):
-        return -(-len(block["query_row"]) // WRAP)
+        return -(-len(block_rows(block)["query_row"]) // WRAP)
 
     def height(self):
-        h = 0.6 + 0.2 * self.legend_rows() + 0.25
+        h = 0.15 + 0.22 * len(title_lines(self.m)) + 0.2 * self.legend_rows() + 0.35
         h += TRACK_IN + 0.15 + PLOT_IN + 0.55
         for b in self.m["runs"]:
-            h += 0.32 + self.chunks(b) * (3 * ROW_IN + 0.12)
+            h += 0.32 + self.chunks(b) * (3 * ROW_IN + 0.2)
         return h + 0.2
 
     def width(self):
         """Wide enough for the title (about 0.6 * 9.5 pt per character), the widest
         alignment line, and the dot plot with its target track."""
-        longest = max((len(b["query_row"]) for b in self.m["runs"]), default=0)
-        title_in = len(title_lines(self.m)[0]) * 0.6 * 9.5 / 72 + 0.3
+        longest = max((len(block_rows(b)["query_row"]) for b in self.m["runs"]), default=0)
+        title_in = max(len(line) for line in title_lines(self.m)) * 0.6 * 9.5 / 72 + 0.3
         return max(7.5, title_in, 1.3 + min(longest, WRAP) * RESIDUE_IN + 1.0)
 
     def draw(self):
@@ -139,19 +175,23 @@ class PairFigure:
     # -- title and legend --
 
     def _draw_title(self, fig, y):
-        first, second = title_lines(self.m)
-        self._text(fig, 0.1, y, first, fontsize=9.5, color=INK, va="top")
-        self._text(fig, 0.1, y - 0.22, second, fontsize=8.5, color=SECONDARY_INK, va="top")
-        return y - 0.55
+        lines = title_lines(self.m)
+        self._text(fig, 0.1, y, lines[0], fontsize=9.5, color=INK, va="top")
+        for i, line in enumerate(lines[1:], start=1):
+            self._text(fig, 0.1, y - 0.22 * i, line, fontsize=8.5, color=SECONDARY_INK, va="top")
+        return y - 0.22 * len(lines) - 0.12
 
     def _legend_handles(self):
         k = self.m["ksize"]
         handles = [Patch(facecolor=self.style(c["symbol"])[0], edgecolor=self.style(c["symbol"])[1], label=c["label"]) for c in self.m["classes"]]
         handles = handles or [Patch(facecolor=PLAIN_BOX[0], edgecolor=PLAIN_BOX[1], label="residue")]
-        handles.append(Line2D([], [], color=RUN_COLOR, linewidth=2.2, label=f"run of 2 or more consecutive shared {k}-mers ({len(self.m['runs'])}), numbered"))
+        handles.append(Line2D([], [], color=RUN_COLOR, linewidth=2.2, label=f"run of 2 or more consecutive shared {k}-mers ({len(self.m['runs'])}), numbered; underlined in its alignment"))
         handles.append(Line2D([], [], color=SINGLE_COLOR, marker="o", linestyle="none", markersize=4, label=f"single shared {k}-mer ({len(self.m['singles'])})"))
         if self.has_domains():
             handles.append(Patch(facecolor=DOMAIN_FILL, edgecolor=DOMAIN_EDGE, label="protein, with its domains as boxes; each domain's span shaded across the plot"))
+        if self.m.get("structure"):
+            st = self.m["structure"]
+            handles.append(Line2D([], [], color=STRUCTURE_COLOR, linewidth=1.2, label=f"structural alignment ({st['aligner']}, TM-score {st['tm_score_query']:.2f}): every aligned residue pair"))
         handles.append(Line2D([], [], color=INK, marker="$\\mathtt{G}$", linestyle="none", markersize=6, label="identical residue, written between the rows"))
         return handles
 
@@ -229,7 +269,14 @@ class PairFigure:
         for d in self.m["target"]["domains"]:
             ax.axhspan(d["start"], d["end"] + 1, facecolor=SPAN_SHADE, alpha=0.6, linewidth=0, zorder=0)
 
+    def _draw_structure_path(self, ax):
+        if not self.m.get("structure"):
+            return
+        for qs, ts in path_segments(self.m["structure"]["pairs"]):
+            ax.plot([p + 1 for p in qs], [p + 1 for p in ts], color=STRUCTURE_COLOR, linewidth=1.2, solid_capstyle="round", zorder=2)
+
     def _draw_marks(self, ax):
+        self._draw_structure_path(ax)
         k = self.m["ksize"]
         # A single k-mer is a dot at the centre of the k residues it covers.
         xs = [s["query_pos"] + (k + 1) / 2 for s in self.m["singles"]]
@@ -246,30 +293,43 @@ class PairFigure:
     def _draw_block(self, fig, y, block):
         self._text(fig, 0.1, y - 0.05, run_header(block), fontsize=FONT + 2, color=INK, va="top")
         y -= 0.32
-        for start in range(0, len(block["query_row"]), WRAP):
-            y = self._draw_chunk(fig, y, block, start)
+        rows = block_rows(block)
+        for start in range(0, len(rows["query_row"]), WRAP):
+            y = self._draw_chunk(fig, y, rows, start)
         return y
 
-    def _draw_chunk(self, fig, y, block, start):
-        n = len(block["query_row"][start : start + WRAP])
-        ax = self._axes(fig, 1.3, y - 3 * ROW_IN, n * RESIDUE_IN, 3 * ROW_IN)
+    def _draw_chunk(self, fig, y, rows, start):
+        sl = slice(start, start + WRAP)
+        n = len(rows["query_row"][sl])
+        ax = self._axes(fig, 1.3, y - 3.4 * ROW_IN, n * RESIDUE_IN, 3.4 * ROW_IN)
         ax.set_axis_off()
         ax.set_xlim(-0.5, n - 0.5)
-        ax.set_ylim(-0.5, 2.5)
-        sl = slice(start, start + WRAP)
-        self._draw_row(ax, 2, block["query_row"][sl], block["query_enc"][sl])
-        self._draw_row(ax, 0, block["target_row"][sl], block["target_enc"][sl])
-        for i, ch in enumerate(block["middle"][sl]):
+        ax.set_ylim(-0.9, 2.5)
+        self._draw_run_bar(ax, rows["run_columns"], start, n)
+        self._draw_row(ax, 2, rows["query_row"][sl], rows["query_enc"][sl])
+        self._draw_row(ax, 0, rows["target_row"][sl], rows["target_enc"][sl])
+        for i, ch in enumerate(rows["middle"][sl]):
             if ch != " ":
                 ax.text(i, 1, ch, ha="center", va="center", fontsize=FONT, color=INK, family="monospace")
-        self._draw_coordinates(ax, block, start, n)
-        return y - 3 * ROW_IN - 0.12
+        self._draw_coordinates(ax, rows, start, n)
+        return y - 3.4 * ROW_IN - 0.12
 
-    def _draw_coordinates(self, ax, block, start, n):
-        win = block["window"]
-        for y, label, first in ((2, self.m["query"]["label"], win["query_start"]), (0, self.m["target"]["label"], win["target_start"])):
-            ax.text(-0.9, y, f"{label} {first + start + 1}", ha="right", va="center", fontsize=FONT, color=SECONDARY_INK)
-            ax.text(n - 0.1, y, str(first + start + n), ha="left", va="center", fontsize=FONT, color=SECONDARY_INK)
+    def _draw_run_bar(self, ax, run_columns, start, n):
+        """The run's columns, marked under the target row with the dot plot's run bar."""
+        first, last = max(run_columns[0], start) - start, min(run_columns[1], start + n) - start
+        if last > first:
+            ax.plot([first - 0.4, last - 0.6], [-0.7, -0.7], color=RUN_COLOR, linewidth=2.2, solid_capstyle="butt")
+
+    def _draw_coordinates(self, ax, rows, start, n):
+        """1-based first and last residue of each row in this chunk, gaps not counted."""
+        for y, label, row, origin in (
+            (2, self.m["query"]["label"], rows["query_row"], rows["query_start"]),
+            (0, self.m["target"]["label"], rows["target_row"], rows["target_start"]),
+        ):
+            first = origin + residues_before(row, start)
+            last = origin + residues_before(row, start + n)
+            ax.text(-0.9, y, f"{label} {first + 1}", ha="right", va="center", fontsize=FONT, color=SECONDARY_INK)
+            ax.text(n - 0.1, y, str(last), ha="left", va="center", fontsize=FONT, color=SECONDARY_INK)
 
     def _draw_row(self, ax, y, text, encoded):
         for i, (ch, cls) in enumerate(zip(text, encoded)):
@@ -290,6 +350,21 @@ def write_html(model, path):
         fh.write(render_html(model))
 
 
+def structure_for(args, pair):
+    """The structural alignment for the pair when --structures is given, else None. Missing
+    files or aligner are reported, not fatal."""
+    if not args.structures:
+        return None
+    aligner = find_aligner(args.aligner)
+    if aligner is None:
+        print("no USalign or TMalign found; skipping the structural alignment", file=sys.stderr)
+        return None
+    structure = align_pair(aligner, args.structures, pair["query"]["name"], pair["target"]["name"])
+    if structure is None:
+        print(f"no structure file for both proteins in {args.structures}; skipping the structural alignment", file=sys.stderr)
+    return structure
+
+
 def output_basename(pair):
     return f"{safe_filename(pair['query']['name'])}_vs_{safe_filename(pair['target']['name'])}.{pair['moltype']}.k{pair['ksize']}"
 
@@ -300,6 +375,10 @@ def _build_arg_parser():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="domain tables (TSV, CSV or parquet) for either protein; see the module docstring for columns")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run (default 0); with a flank the middle line uses `:` for same class")
+    p.add_argument("--gap-flank", type=int, default=10, help="residues either side of each run given to the gapped local alignment its identities are counted on (default 10)")
+    p.add_argument("--no-gapped", action="store_true", help="show and count the exact run only, without a gapped alignment")
+    p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, the structural alignment is drawn across the dot plot")
+    p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--dpi", type=int, default=200)
     p.add_argument("--html", action="store_true", help="also write a self-contained interactive HTML page")
     return p
@@ -308,7 +387,13 @@ def _build_arg_parser():
 def main():
     args = _build_arg_parser().parse_args()
     pair = load_pair(args.pair)
-    model = build_model(pair, load_domains(args.domains), flank=args.flank)
+    model = build_model(
+        pair,
+        load_domains(args.domains),
+        flank=args.flank,
+        gap_flank=None if args.no_gapped else args.gap_flank,
+        structure=structure_for(args, pair),
+    )
     os.makedirs(args.output_dir, exist_ok=True)
     base = os.path.join(args.output_dir, output_basename(pair))
     plot_pair(model, [base + ".png", base + ".svg"], dpi=args.dpi)
