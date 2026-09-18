@@ -1565,9 +1565,14 @@ pub fn find_matched_regions(
         return Vec::new();
     }
 
-    // Sort pairs by query position, then by target position
-    // WHY: This allows us to efficiently find consecutive regions in both query and target.
-    query_target_pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    // Sort by diagonal (target position minus query position), then by query position, so
+    // the walk below only ever compares neighbours on one diagonal. Sorting by query
+    // position alone interleaved diagonals whenever a k-mer occurs more than once in the
+    // target: pairs (q, t1), (q, t2), (q+1, t1+1) put (q, t2) between the two that continue
+    // a run, the consecutive check failed, and one exact match came out as several regions
+    // (BCL-2 against its own sequence at hp k=12 reported 144 residues, not 239).
+    let diagonal = |p: &(usize, usize, u64)| p.1 as isize - p.0 as isize;
+    query_target_pairs.sort_by(|a, b| diagonal(a).cmp(&diagonal(b)).then_with(|| a.0.cmp(&b.0)));
 
     // Find all consecutive regions where both query and target positions are consecutive
     let mut consecutive_regions = Vec::new();
@@ -1960,6 +1965,46 @@ mod tests {
     fn bcl2_sketch_k15() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
         ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
+    }
+
+    /// A sequence against itself is one exact match over its whole length, whatever k-mers
+    /// repeat inside it. BCL-2's Ala/Pro/Gly loop repeats several hp 12-mers, which used to
+    /// split this into a 45-residue and a 144-residue region.
+    #[rstest]
+    fn self_hit_is_one_full_length_region(bcl2_sketch_k12: ProteinSketch) {
+        let intersection = bcl2_sketch_k12.intersect(&bcl2_sketch_k12);
+        let regions = find_matched_regions(&bcl2_sketch_k12, &bcl2_sketch_k12, &intersection);
+        let full: Vec<&MatchedRegion> = regions.iter().filter(|r| r.length == 239).collect();
+        assert_eq!(
+            full.len(),
+            1,
+            "regions: {:?}",
+            regions.iter().map(|r| (r.start, r.end, r.target_start)).collect::<Vec<_>>()
+        );
+        assert_eq!(
+            (full[0].start, full[0].end, full[0].target_start, full[0].target_end),
+            (0, 239, 0, 239)
+        );
+        // The other 16 are repeats of the Ala/Pro/Gly loop (and the tail's copy of it), all
+        // off the main diagonal.
+        assert_eq!(regions.len(), 17);
+        assert!(regions.iter().all(|r| r.length == 239 || r.start != r.target_start));
+    }
+
+    /// Two target positions for one query k-mer must not break the run the first one
+    /// continues: (80, 253) and (81, 254) are consecutive on their diagonal even though
+    /// (81, 170) sorts between them by query position.
+    #[rstest]
+    fn a_repeated_kmer_does_not_split_the_run_on_the_other_diagonal(
+        bcl2_sketch_k12: ProteinSketch,
+        ced9_sketch_k12: ProteinSketch,
+    ) {
+        let intersection = bcl2_sketch_k12.intersect(&ced9_sketch_k12);
+        let regions = find_matched_regions(&bcl2_sketch_k12, &ced9_sketch_k12, &intersection);
+        let run =
+            regions.iter().find(|r| r.start == 80 && r.target_start == 253).expect("run at 80/253");
+        assert_eq!((run.end, run.target_end, run.length), (93, 266, 13));
+        assert!(regions.iter().any(|r| r.start == 81 && r.target_start == 170 && r.length == 12));
     }
 
     /// Read the first record from a FASTA file and return name and sequence.
@@ -3599,11 +3644,15 @@ mod tests {
 
     /// Complements `test_pvalue_scopes_combine_with_or`'s BCL2/CED9 example, where the region
     /// scope rescues a hit the query scope rejects, with a real case running the other
-    /// direction. BCL2A1 vs ASPP2/TP53BP2 at k=9, in the same 25-sequence fixture database, is
-    /// an overwhelming whole-protein match (115 shared k-mers scattered across 333 short
+    /// direction. BCL2 vs RTN3 (reticulon-3) at k=9, in the same 25-sequence fixture database,
+    /// is an overwhelming whole-protein match (152 shared k-mers scattered across 217 short
     /// regions) with no single region concentrated enough to pass on its own. Its strongest
-    /// region only reaches p=0.0956 (score ~1.02), below the ~1.301 default cap (p=0.05).
+    /// region only reaches p=0.0533 (score ~1.27), below the ~1.301 default cap (p=0.05).
     /// This shows the OR only needs one scope to hold, in either direction.
+    ///
+    /// The pair used to be BCL2A1 vs ASPP2 (115 k-mers, 333 regions, best p=0.0956). Chaining
+    /// seeds per diagonal merges the pieces a repeated k-mer used to split, and that pair's
+    /// best region became 13 residues at p=0.0491, just over the cap.
     #[test]
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
         let ksize = 9;
@@ -3626,15 +3675,16 @@ mod tests {
         fn find_hit(results: &[SearchResult]) -> Option<&SearchResult> {
             results
                 .iter()
-                .find(|r| r.query_name.contains("B2LA1") && r.target_name.contains("ASPP2"))
+                .find(|r| r.query_name.contains("BCL2_HUMAN") && r.target_name.contains("RTN3"))
         }
 
         // Unfiltered, to inspect the pair's raw numbers.
         let all_results = searcher.search(&query_signatures, &SearchFilters::default())?;
-        let hit = find_hit(&all_results).expect("BCL2A1 vs ASPP2/TP53BP2 should be found");
+        let hit = find_hit(&all_results).expect("BCL2 vs RTN3 should be found");
 
-        assert_eq!(hit.n_intersecting_hashes, 115);
-        assert_relative_eq!(hit.query_poisson_pvalue, 2.356_930_483e-7, epsilon = 1e-15);
+        assert_eq!(hit.n_intersecting_hashes, 152);
+        assert_eq!(hit.matched_regions.len(), 217);
+        assert_relative_eq!(hit.query_poisson_pvalue, 9.961_523_828e-10, epsilon = 1e-18);
         assert!(hit.query_poisson_pvalue < 0.05, "whole-query scope should clearly pass");
 
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
@@ -3644,11 +3694,7 @@ mod tests {
             .iter()
             .map(|region| region.poisson_score)
             .fold(f64::NEG_INFINITY, f64::max);
-        assert_relative_eq!(
-            best_region_score,
-            -0.095_589_196_102_397_8_f64.log10(),
-            epsilon = 1e-12
-        );
+        assert_relative_eq!(best_region_score, 1.272_904_943_544_298, epsilon = 1e-12);
         let default_min_region_score = -0.05_f64.log10();
         assert!(
             best_region_score < default_min_region_score,
