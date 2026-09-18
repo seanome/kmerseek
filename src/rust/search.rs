@@ -14,7 +14,7 @@ use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::karlin_altschul::{
     fit_scores, fit_scores_with_reference, make_decoy, DecoyNull, KaCalibration, SplitMix64,
-    MIN_FIT_POINTS,
+    BIN_WIDTH, MIN_FIT_POINTS,
 };
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -113,6 +113,19 @@ pub struct KaCalibrationReport {
     pub n_regions: usize,
 }
 
+/// What a calibration run is asked for; see `ProteinSearcher::calibrate_ka`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KaCalibrationSettings {
+    pub mismatch_penalty: f64,
+    pub xdrop: f64,
+    /// What the calibration queries are.
+    pub null: DecoyNull,
+    /// For `DecoyNull::Database`: what the reference queries are.
+    pub reference: DecoyNull,
+    pub n_queries: usize,
+    pub seed: u64,
+}
+
 /// The lambda scale and K a search runs with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KaParams {
@@ -135,21 +148,24 @@ impl Display for KaSource {
             KaSource::Flag => write!(f, "--ka-k, closed-form lambda"),
             KaSource::Index(c) | KaSource::Fitted(c) => write!(
                 f,
-                "{}: {} {} queries, {} regions; lambda {:.3} (closed form {:.3} at match probability {:.3}), K {:.4}, fit on scores {}..={}{}, rms {:.3}{}",
+                "{}: {} {} queries, {} regions; slope {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}{}, rms {:.3}{}",
                 if matches!(self, KaSource::Index(_)) { "stored in the index" } else { "fitted now" },
                 c.n_queries,
                 c.null,
                 c.n_regions,
-                c.lambda,
+                c.slope,
                 c.lambda_analytic,
                 c.match_probability,
                 c.k,
-                c.score_lo,
-                c.score_hi,
-                c.bend_score.map_or(String::new(), |b| format!(", relatives from {b}")),
+                c.x_range().0,
+                c.x_range().1,
+                c.bend_score.map_or(String::new(), |b| format!(", relatives from x {:.1}", b as f64 * c.bin_width)),
                 c.rms_residual,
-                c.reference_lambda
-                    .map_or(String::new(), |l| format!("; shuffled reference lambda {l:.3} over the same bins"))
+                c.reference_lambda.map_or(String::new(), |l| format!(
+                    "; {} reference slope {:.3} over the same bins",
+                    c.reference.map_or("shuffled".to_string(), |r| r.to_string()),
+                    l / c.bin_width
+                ))
             ),
         }
     }
@@ -843,41 +859,32 @@ impl ProteinSearcher {
     /// out. The searcher's extension setting is restored afterwards.
     pub fn calibrate_ka(
         &mut self,
-        mismatch_penalty: f64,
-        xdrop: f64,
-        null: DecoyNull,
-        n_queries: usize,
-        seed: u64,
+        settings: KaCalibrationSettings,
     ) -> IndexResult<KaCalibrationReport> {
         let previous = self.extension;
         self.extension = Some(ExtensionParams {
-            mismatch_penalty,
-            xdrop,
+            mismatch_penalty: settings.mismatch_penalty,
+            xdrop: settings.xdrop,
             ka_k: 1.0,
             ka_lambda_scale: 1.0,
             chain_max_gap: 0,
             chain_max_shift: 0,
         });
-        let report = self.run_calibration(mismatch_penalty, xdrop, null, n_queries, seed);
+        let report = self.run_calibration(settings);
         self.extension = previous;
         report
     }
 
-    fn run_calibration(
-        &self,
-        mismatch_penalty: f64,
-        xdrop: f64,
-        null: DecoyNull,
-        n_queries: usize,
-        seed: u64,
-    ) -> IndexResult<KaCalibrationReport> {
+    fn run_calibration(&self, settings: KaCalibrationSettings) -> IndexResult<KaCalibrationReport> {
+        let KaCalibrationSettings { mismatch_penalty, xdrop, null, reference, n_queries, seed } =
+            settings;
         let (queries, match_probability) = self.calibration_queries(null, n_queries, seed)?;
-        let scores = self.calibration_scores(&queries, mismatch_penalty);
-        // The database null is censored against the same queries shuffled.
+        let scores = self.calibration_scores(&queries);
+        // The database null is censored against the same queries shuffled (`reference`).
         let fit = if null == DecoyNull::Database {
-            let (shuffled, _) = self.calibration_queries(DecoyNull::Shuffled, n_queries, seed)?;
-            let reference = self.calibration_scores(&shuffled, mismatch_penalty);
-            fit_scores_with_reference(&scores, &reference)
+            let (shuffled, _) = self.calibration_queries(reference, n_queries, seed)?;
+            let reference_scores = self.calibration_scores(&shuffled);
+            fit_scores_with_reference(&scores, &reference_scores)
         } else {
             fit_scores(&scores)
         };
@@ -897,10 +904,13 @@ impl ProteinSearcher {
             n_regions: scores.len(),
             match_probability,
             lambda_analytic,
-            lambda: fit.lambda,
-            // ln(regions at score S) = ln(K L N (1 - e^-lambda)) - lambda S.
+            // The fit ran on x / BIN_WIDTH, so its slope per bin is slope-per-nat x width.
+            slope: fit.lambda / BIN_WIDTH,
+            // ln(regions in the bin at x) = ln(K L N (1 - e^(-slope w))) - slope x, and
+            // slope w is the fit's slope per bin.
             k: fit.ln_intercept.exp()
                 / (query_residues as f64 * database_kmers as f64 * (1.0 - (-fit.lambda).exp())),
+            bin_width: BIN_WIDTH,
             score_lo: fit.score_lo,
             score_hi: fit.score_hi,
             bend_score: fit.bend_score,
@@ -908,6 +918,7 @@ impl ProteinSearcher {
             survival: fit.survival,
             reference_survival: fit.reference_survival,
             reference_lambda: fit.reference_lambda,
+            reference: (null == DecoyNull::Database).then_some(reference),
         });
         Ok(KaCalibrationReport { fitted, match_probability, n_queries, n_regions: scores.len() })
     }
@@ -948,13 +959,11 @@ impl ProteinSearcher {
         Ok((queries, match_probability))
     }
 
-    /// Score S = matches - penalty x mismatches of every region the calibration queries
-    /// produce, a query's own database entry excluded.
-    fn calibration_scores(
-        &self,
-        queries: &[(String, ProteinSketch)],
-        mismatch_penalty: f64,
-    ) -> Vec<f64> {
+    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
+    /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
+    /// with K = 1 and lambda scale 1 during calibration, so a region's `ka_bits` x ln 2 is
+    /// exactly lambda_pair S with the closed-form per-pair lambda.
+    fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
         let filters = SearchFilters {
             threshold: 0.0,
             min_shared_kmers: 1,
@@ -968,10 +977,9 @@ impl ProteinSearcher {
                     .into_iter()
                     .filter(|r| &r.target_md5 != source_md5)
                     .flat_map(|r| {
-                        r.matched_regions.into_iter().map(|region| {
-                            let matches = (region.length - region.n_mismatches) as f64;
-                            matches - mismatch_penalty * region.n_mismatches as f64
-                        })
+                        r.matched_regions
+                            .into_iter()
+                            .map(|region| region.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH)
                     })
                     .collect::<Vec<f64>>()
             })
@@ -1015,17 +1023,14 @@ impl ProteinSearcher {
     /// The lambda scale and K a search should use for this penalty and X-drop, and where
     /// they came from, in order of preference: `explicit` (`--ka-k`, with the closed-form
     /// lambda); a fit stored in the index for this pair, whatever null it used; a fresh fit
-    /// on `n_queries` `null` calibration queries if that is nonzero. Otherwise an error: an
+    /// on `settings.n_queries` calibration queries if that is nonzero. Otherwise an error: an
     /// E-value without a fit for its own index is not printed.
     pub fn resolve_ka(
         &mut self,
-        mismatch_penalty: f64,
-        xdrop: f64,
         explicit: Option<f64>,
-        null: DecoyNull,
-        n_queries: usize,
-        seed: u64,
+        settings: KaCalibrationSettings,
     ) -> IndexResult<(KaParams, KaSource)> {
+        let KaCalibrationSettings { mismatch_penalty, xdrop, .. } = settings;
         if let Some(k) = explicit {
             return Ok((KaParams { k, lambda_scale: 1.0 }, KaSource::Flag));
         }
@@ -1033,7 +1038,7 @@ impl ProteinSearcher {
             let params = KaParams { k: stored.k, lambda_scale: stored.lambda_scale() };
             return Ok((params, KaSource::Index(stored)));
         }
-        let report = self.calibrate_ka(mismatch_penalty, xdrop, null, n_queries, seed)?;
+        let report = self.calibrate_ka(settings)?;
         match report.fitted {
             Some(fit) => {
                 let params = KaParams { k: fit.k, lambda_scale: fit.lambda_scale() };
@@ -4259,6 +4264,17 @@ mod ka_calibration_tests {
     use crate::tests::test_fixtures::TEST_FASTA_GZ;
     use tempfile::TempDir;
 
+    fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
+        KaCalibrationSettings {
+            mismatch_penalty,
+            xdrop: 8.0,
+            null: DecoyNull::Shuffled,
+            reference: DecoyNull::Shuffled,
+            n_queries,
+            seed: 1,
+        }
+    }
+
     fn searcher_on_first25() -> Result<(TempDir, ProteinSearcher)> {
         let temp_dir = TempDir::new()?;
         let index_path = temp_dir.path().join("index");
@@ -4272,19 +4288,21 @@ mod ka_calibration_tests {
     #[test]
     fn test_calibrate_ka_on_first25_is_stored_and_reused() -> Result<()> {
         let (_dir, mut searcher) = searcher_on_first25()?;
-        let report = searcher.calibrate_ka(2.0, 8.0, DecoyNull::Shuffled, 25, 1)?;
+        let report = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;
         let fit =
             report.fitted.clone().expect("25 shuffled BCL2 queries give thousands of regions");
         assert_eq!(searcher.extension, None, "calibration restores the extension setting");
         // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
         // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
-        // read off the top 8 bins with at least 30 regions.
+        // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
+        // regions, x 7.5 to 11.5 nats.
         assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
         assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
-        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (16, 23, None));
-        assert!((fit.lambda - 0.412_625_788_094_102_55).abs() < 1e-12, "{}", fit.lambda);
-        assert!((fit.k - 0.019_681_992_092_125_743).abs() < 1e-12, "{}", fit.k);
-        assert!((fit.rms_residual - 0.065_339_981_325_111_15).abs() < 1e-12);
+        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
+        assert_eq!(fit.x_range(), (7.5, 11.5));
+        assert!((fit.slope - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.slope);
+        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
+        assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
         // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
         // closed-form lambda is ln of the golden ratio.
         assert!((fit.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
@@ -4292,20 +4310,19 @@ mod ka_calibration_tests {
         assert_eq!(fit.survival[0].1, 9561);
 
         // Same seed, same fit.
-        let again = searcher.calibrate_ka(2.0, 8.0, DecoyNull::Shuffled, 25, 1)?;
+        let again = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;
         assert_eq!(again, report);
 
         searcher.index().put_ka_calibration(&fit)?;
-        let (params, source) = searcher.resolve_ka(2.0, 8.0, None, DecoyNull::Shuffled, 0, 1)?;
-        assert_eq!(params, KaParams { k: fit.k, lambda_scale: fit.lambda / fit.lambda_analytic });
+        let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 0))?;
+        assert_eq!(params, KaParams { k: fit.k, lambda_scale: fit.slope });
         assert_eq!(source, KaSource::Index(fit.clone()));
 
-        let (params, source) =
-            searcher.resolve_ka(2.0, 8.0, Some(0.03), DecoyNull::Shuffled, 0, 1)?;
+        let (params, source) = searcher.resolve_ka(Some(0.03), shuffled_settings(2.0, 0))?;
         assert_eq!((params, source), (KaParams { k: 0.03, lambda_scale: 1.0 }, KaSource::Flag));
 
         // No stored fit for penalty 3 and no queries allowed: refused, not guessed.
-        let err = searcher.resolve_ka(3.0, 8.0, None, DecoyNull::Shuffled, 0, 1).unwrap_err();
+        let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();
         assert!(err.to_string().contains("no Karlin-Altschul fit for penalty 3"), "{err}");
         Ok(())
     }

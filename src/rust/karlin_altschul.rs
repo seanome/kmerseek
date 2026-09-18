@@ -1,20 +1,26 @@
-//! Karlin-Altschul lambda and K for the E-value of an extended region, fitted on the index
-//! itself: the closed forms for an unseeded ungapped search, and the survival-curve fit on
-//! calibration searches that kmerseek actually uses.
+//! Karlin-Altschul K, and a check on lambda, for the E-value of an extended region, fitted
+//! on the index itself.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
-//! unrelated query of m residues and a database of n residues. The closed forms assume
-//! independent positions and count every high-scoring segment. kmerseek only finds a
-//! region that contains an exact k-mer seed, extends it with an X-drop, and works on real
-//! proteins whose hydrophobic runs and helix and strand periodicity are not independent
-//! positions. So lambda and K are read off the search itself: a few hundred database
-//! sequences are searched against the index, and ln(count of regions with score S) is a
-//! straight line in S with slope -lambda and intercept ln(K L N (1 - e^-lambda)), L the
-//! calibration residues and N the database residues (Altschul & Gish 1996; Pearson 1998).
-//! Homologs and hydrophobic runs lift the counts at high scores; the fit stops below that.
-//! The line is fitted to the count at each score, not the count at or above it, because a
-//! plateau of homolog hits far up the score axis adds a constant to every survival count
-//! below it and would flatten the slope there too.
+//! unrelated query of m residues and a database of n residues. lambda is solved per pair
+//! from the two class compositions (`search::karlin_altschul_lambda`), so a pair of two
+//! hydrophobic sequences, whose agreement is what their compositions do by chance, gets
+//! lambda 0 and no significance. K, and whether that per-pair lambda has the right scale,
+//! are read off the search itself: a few hundred database sequences are searched against
+//! the index and every region's normalised score x = lambda_pair S is binned. Under the
+//! model the count at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the
+//! database residues and w the bin width, so ln(count) against x is a line of slope -1
+//! and intercept ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). The fitted
+//! slope is the factor every pair's lambda is multiplied by at search time; 1 means the
+//! closed form holds. Relatives lift the counts at high x; the fit stops below that, where
+//! the real curve starts to rise relative to the same queries shuffled. The fit goes to the
+//! count at each x, not the count at or above it, because a plateau of relatives far up the
+//! axis adds a constant to every survival count below it and would flatten the slope.
+//!
+//! Fitting x rather than the raw score S matters on a proteome: Swiss-Prot holds pairs of
+//! membrane and low-complexity proteins whose raw scores run to 60 and beyond with a slope
+//! near 0.1, while ordinary pairs fall at 0.45. One line cannot serve both. In x each pair
+//! is already on its own scale, and those pairs sit at x = 0.
 
 use serde::{Deserialize, Serialize};
 
@@ -65,6 +71,12 @@ pub enum DecoyNull {
     /// Each query is a database sequence with its residues shuffled: the independent-letter
     /// model BLAST's tables are fitted on (Altschul & Gish 1996).
     Shuffled,
+    /// Each query is a database sequence shuffled so that every dipeptide (each pair of
+    /// neighbouring residues) occurs as often as in the original (Altschul & Erickson 1985;
+    /// sampled as a random Eulerian path, Kandel et al. 1996, the uShuffle k = 2 method).
+    /// Keeps the rate at which a hydrophobic residue follows a hydrophobic one, and with it
+    /// the lengths of hydrophobic runs, which a plain shuffle destroys.
+    ShuffledDipeptide,
     /// Each query is a database sequence read back to front.
     Reversed,
 }
@@ -75,6 +87,7 @@ impl std::fmt::Display for DecoyNull {
             DecoyNull::Database => write!(f, "database"),
             DecoyNull::Reversed => write!(f, "reversed"),
             DecoyNull::Shuffled => write!(f, "shuffled"),
+            DecoyNull::ShuffledDipeptide => write!(f, "shuffled-dipeptide"),
         }
     }
 }
@@ -97,13 +110,19 @@ pub struct KaCalibration {
     /// Regions the calibration queries produced, at any score.
     pub n_regions: usize,
     /// Chance that two positions drawn from the sampled database sequences share a class
-    /// (a of the database against itself), and the closed-form lambda at that a.
+    /// (a of the database against itself), and the closed-form lambda at that a, for
+    /// reporting.
     pub match_probability: f64,
     pub lambda_analytic: f64,
-    /// Slope and intercept of the survival line: the lambda and K a search uses.
-    pub lambda: f64,
+    /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
+    /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
+    /// lambda by this.
+    pub slope: f64,
     pub k: f64,
-    /// Score bins the line was fitted on, inclusive.
+    /// Width of one x bin in nats (`BIN_WIDTH`); `score_lo`, `score_hi`, `bend_score` and
+    /// the survival curves are in bins, so bin b covers x in [b w, (b + 1) w).
+    pub bin_width: f64,
+    /// Bins the line was fitted on, inclusive.
     pub score_lo: i64,
     pub score_hi: i64,
     /// First score bin above the fit that sat above the line: the start of the homolog
@@ -119,19 +138,19 @@ pub struct KaCalibration {
     /// where the fit stops (`fit_scores_with_reference`). Empty and None for other nulls.
     pub reference_survival: Vec<(i64, u64)>,
     pub reference_lambda: Option<f64>,
+    /// How the reference queries were made (`Shuffled` or `ShuffledDipeptide`).
+    pub reference: Option<DecoyNull>,
 }
 
 impl KaCalibration {
-    /// How far the fitted lambda sits from the independent-positions lambda at the
-    /// database's own composition. A search scales every pair's closed-form lambda by
-    /// this, so a pair with the database's composition gets the fitted slope and a pair of
-    /// two hydrophobic sequences still gets lambda 0.
+    /// The factor a search multiplies every pair's closed-form lambda by: the fitted slope.
     pub fn lambda_scale(&self) -> f64 {
-        if self.lambda_analytic > 0.0 {
-            self.lambda / self.lambda_analytic
-        } else {
-            1.0
-        }
+        self.slope
+    }
+
+    /// The fit window in nats of x = lambda_pair S.
+    pub fn x_range(&self) -> (f64, f64) {
+        (self.score_lo as f64 * self.bin_width, (self.score_hi + 1) as f64 * self.bin_width)
     }
 
     /// Number of score bins the line was fitted on.
@@ -139,6 +158,10 @@ impl KaCalibration {
         self.score_hi - self.score_lo + 1
     }
 }
+
+/// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
+/// one raw score unit at lambda 0.45.
+pub const BIN_WIDTH: f64 = 0.5;
 
 /// Fewest regions a score bin needs to enter the fit; below this the Poisson noise in
 /// ln count (about 1 / sqrt(count)) is larger than the effects being fitted.
@@ -211,6 +234,15 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
         .collect()
 }
 
+/// The bins above the most populated one. Below the peak sit the bare seeds and the pairs
+/// whose lambda is small; the Karlin-Altschul tail is what comes after it.
+fn tail_bins(bins: &[(i64, u64)]) -> Vec<(i64, u64)> {
+    match bins.iter().enumerate().max_by_key(|(_, b)| b.1) {
+        Some((peak, _)) => bins[peak + 1..].to_vec(),
+        None => Vec::new(),
+    }
+}
+
 /// Least squares of ln count on score over `points`; returns (slope, intercept).
 fn line_through(points: &[(i64, u64)]) -> (f64, f64) {
     let n = points.len() as f64;
@@ -238,9 +270,10 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 
 /// Fit ln(regions with score S) against S, stopping below the homolog excess.
 ///
-/// Bins with fewer than `MIN_BIN_COUNT` regions are ignored. The lowest bin is skipped too:
-/// it holds every bare seed and says nothing about extension. Starting from the next
-/// `MIN_FIT_POINTS` bins, the line is extended one bin at a time upward and a bin joins
+/// Bins with fewer than `MIN_BIN_COUNT` regions are ignored, and so is everything up to and
+/// including the most populated bin: below it sit the bare seeds and the pairs whose
+/// lambda is small. Starting from the next `MIN_FIT_POINTS` bins, the line is extended one
+/// bin at a time upward and a bin joins
 /// while its ln count is within `BEND_SIGMAS / sqrt(count) + BEND_SLACK` above the line
 /// fitted so far (below it is fine: the seed requirement makes the true curve concave).
 /// The first bin above that is where homologs start to show and where the fit stops. The
@@ -248,7 +281,7 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 /// the scores that decide a hit. None when fewer than `MIN_FIT_POINTS` bins qualify.
 pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
     let usable: Vec<(i64, u64)> =
-        bin_counts(scores).into_iter().skip(1).filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
+        tail_bins(&bin_counts(scores)).into_iter().filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
     if (usable.len() as i64) < MIN_FIT_POINTS {
         return None;
     }
@@ -301,9 +334,8 @@ const REFERENCE_BASE: usize = 8;
 pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<ScoreFit> {
     let reference_bins: std::collections::HashMap<i64, u64> =
         bin_counts(reference).into_iter().collect();
-    let usable: Vec<(i64, u64, u64)> = bin_counts(scores)
+    let usable: Vec<(i64, u64, u64)> = tail_bins(&bin_counts(scores))
         .into_iter()
-        .skip(1)
         .filter_map(|(s, c)| {
             let r = *reference_bins.get(&s)?;
             (c >= MIN_BIN_COUNT && r >= MIN_BIN_COUNT).then_some((s, c, r))
@@ -418,7 +450,81 @@ pub fn make_decoy(raw: &str, null: DecoyNull, rng: &mut SplitMix64) -> String {
             rng.shuffle(&mut residues);
             residues.into_iter().collect()
         }
+        DecoyNull::ShuffledDipeptide => dipeptide_shuffle(raw, rng),
     }
+}
+
+/// A uniformly random rearrangement of `raw` with the same dipeptide counts, the same first
+/// residue and the same last residue (Kandel, Matias, Unger & Winkler 1996).
+///
+/// The residues are the vertices of a graph and each neighbouring pair an edge, so a
+/// rearrangement with the same dipeptide counts is a path that uses every edge once. Such a
+/// path exists when the edges that leave each vertex for the last time form a tree pointing
+/// at the final residue. That tree is drawn with Wilson's loop-erased random walk, weighted
+/// by edge multiplicity, which is the distribution the theorem needs; the other edges out
+/// of each vertex are then shuffled and the path is walked from the first residue.
+pub fn dipeptide_shuffle(raw: &str, rng: &mut SplitMix64) -> String {
+    let bytes = raw.as_bytes();
+    if bytes.len() < 3 {
+        return raw.to_string();
+    }
+    let last = bytes[bytes.len() - 1];
+    // Outgoing edges per residue, as the residue they lead to, in sequence order.
+    let mut out: [Vec<u8>; 256] = std::array::from_fn(|_| Vec::new());
+    for pair in bytes.windows(2) {
+        out[pair[0] as usize].push(pair[1]);
+    }
+    let next = last_edges(&out, last, rng);
+    for (v, edges) in out.iter_mut().enumerate() {
+        if edges.is_empty() {
+            continue;
+        }
+        if v as u8 != last {
+            let target = next[v];
+            let pos = edges.iter().position(|&t| t == target).expect("last edge is an edge");
+            edges.swap_remove(pos);
+            rng.shuffle(edges);
+            edges.push(target);
+        } else {
+            rng.shuffle(edges);
+        }
+    }
+    let mut cursor = [0usize; 256];
+    let mut path = Vec::with_capacity(bytes.len());
+    let mut v = bytes[0];
+    path.push(v);
+    for _ in 1..bytes.len() {
+        let t = out[v as usize][cursor[v as usize]];
+        cursor[v as usize] += 1;
+        path.push(t);
+        v = t;
+    }
+    String::from_utf8(path).expect("a rearrangement of ASCII residues")
+}
+
+/// Wilson's algorithm: for every residue with outgoing edges (other than `root`), the edge
+/// it leaves by for the last time, drawn as a random spanning tree pointing at `root`.
+fn last_edges(out: &[Vec<u8>; 256], root: u8, rng: &mut SplitMix64) -> [u8; 256] {
+    let mut next = [0u8; 256];
+    let mut in_tree = [false; 256];
+    in_tree[root as usize] = true;
+    for start in 0..256usize {
+        if out[start].is_empty() || in_tree[start] {
+            continue;
+        }
+        let mut u = start;
+        while !in_tree[u] {
+            let edges = &out[u];
+            next[u] = edges[rng.below(edges.len())];
+            u = next[u] as usize;
+        }
+        let mut u = start;
+        while !in_tree[u] {
+            in_tree[u] = true;
+            u = next[u] as usize;
+        }
+    }
+    next
 }
 
 #[cfg(test)]
@@ -552,6 +658,38 @@ mod tests {
         assert_eq!(a.len(), 25);
         assert!(a.windows(2).all(|w| w[0] < w[1]));
         assert_eq!(SplitMix64::new(7).sample_indices(10, 25), (0..10).collect::<Vec<_>>());
+    }
+
+    fn dipeptide_counts(s: &str) -> std::collections::BTreeMap<(u8, u8), usize> {
+        let mut counts = std::collections::BTreeMap::new();
+        for w in s.as_bytes().windows(2) {
+            *counts.entry((w[0], w[1])).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// Human BCL2 (P10415, tests/testdata/fasta/bcl2.fasta). Same length, same first and
+    /// last residue, every dipeptide as often as before, a different order, and the same
+    /// order again from the same seed.
+    #[test]
+    fn test_dipeptide_shuffle_keeps_every_dipeptide_count() {
+        let bcl2 = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDAGDVGAAPPGAAPAPGIFSSQPGHTPHPAASRDPVARTSPLQTPAAPGAAAGPALSPVPPVVHLTLRQAGDDFSRRYRRDFAEMSSQLHLTPFTARGRFATVVEELFRDGVNWGRIVAFFEFGGVMCVESVNREMSPLVDNIALWMTEYLNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK";
+        let shuffled = dipeptide_shuffle(bcl2, &mut SplitMix64::new(3));
+        assert_eq!(shuffled.len(), bcl2.len());
+        assert_eq!(dipeptide_counts(&shuffled), dipeptide_counts(bcl2));
+        assert_eq!(shuffled.as_bytes()[0], b'M');
+        assert_eq!(shuffled.as_bytes()[shuffled.len() - 1], b'K');
+        assert_ne!(shuffled, bcl2);
+        assert_eq!(shuffled, dipeptide_shuffle(bcl2, &mut SplitMix64::new(3)));
+        assert_ne!(shuffled, dipeptide_shuffle(bcl2, &mut SplitMix64::new(4)));
+        // A plain shuffle of the same sequence does not keep the dipeptides.
+        assert_ne!(
+            dipeptide_counts(&make_decoy(bcl2, DecoyNull::Shuffled, &mut SplitMix64::new(3))),
+            dipeptide_counts(bcl2)
+        );
+        // Too short to rearrange, or all one residue: returned as is.
+        assert_eq!(dipeptide_shuffle("MK", &mut SplitMix64::new(1)), "MK");
+        assert_eq!(dipeptide_shuffle("AAAAAA", &mut SplitMix64::new(1)), "AAAAAA");
     }
 
     #[test]

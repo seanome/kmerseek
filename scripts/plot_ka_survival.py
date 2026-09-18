@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Plot the score distribution that `kmerseek index --ka-survival-out` wrote, with the
-fitted Karlin-Altschul line and the score bins it was read from.
+"""Plot the distribution of the normalised region score x = lambda_pair * S that
+`kmerseek index --ka-survival-out` wrote, with the fitted Karlin-Altschul line and the bins
+it was read from.
 
     python scripts/plot_ka_survival.py survival_database.csv [survival_shuffled.csv ...] \\
         -o fig.png --subtitle "SCOPe40, hp_thomas_dill2 k = 12, C = 2, X = 8"
 
-One column per CSV. Top row: regions at each score S, the points the line is fitted to.
-Bottom row: the same regions summed (score >= S). Grey band: the bins used. Dotted line:
-30 regions, the floor below which a bin is not fitted. The title of each column gives
-lambda with the standard error of the slope over the fitted bins.
+One column per CSV. Top row: regions in each bin of x, the points the line is fitted to.
+Bottom row: the same regions summed (x at or above the bin). Grey band: the bins used.
+Dotted line: 30 regions, the floor below which a bin is not fitted. The title of each
+column gives the fitted slope (1 means the closed-form per-pair lambda holds) with its
+standard error over the fitted bins, and K.
 """
 
 import argparse
@@ -31,18 +33,20 @@ MIN_BIN_COUNT = 30
 def load(path):
     rows = list(csv.DictReader(open(path)))
     meta = rows[0]
-    scores = [int(r["score"]) for r in rows]
+    scores = [float(r["x"]) for r in rows]
+    width = float(meta["bin_width"])
     survival = [int(r["n_regions_at_least"]) for r in rows]
     density = [survival[i] - (survival[i + 1] if i + 1 < len(survival) else 0) for i in range(len(survival))]
-    window = [int(r["score"]) for r in rows if r["in_fit"] == "true"]
+    window = [float(r["x"]) for r in rows if r["in_fit"] == "true"]
     ref_survival = [int(r["reference_n_regions_at_least"]) if r.get("reference_n_regions_at_least") else 0 for r in rows]
     ref_density = [ref_survival[i] - (ref_survival[i + 1] if i + 1 < len(ref_survival) else 0) for i in range(len(ref_survival))]
-    lam, k = float(meta["lambda"]), float(meta["k"])
+    lam, k = float(meta["slope"]), float(meta["k"])
     residues, kmers = float(meta["query_residues"]), float(meta["database_kmers"])
-    ln_intercept = math.log(k * residues * kmers * (1 - math.exp(-lam)))
+    per_bin = 1 - math.exp(-lam * width)
+    ln_intercept = math.log(k * residues * kmers * per_bin)
     fit_density = [math.exp(ln_intercept - lam * s) for s in scores]
-    fit_survival = [d / (1 - math.exp(-lam)) for d in fit_density]
-    return meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival
+    fit_survival = [d / per_bin for d in fit_density]
+    return meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival, width
 
 
 def slope_standard_error(scores, density, window, lam, ln_intercept):
@@ -54,21 +58,21 @@ def slope_standard_error(scores, density, window, lam, ln_intercept):
     return math.sqrt(sum(r * r for r in residuals) / (n - 2) / sxx)
 
 
-def draw_column(axes, path, first_column):
-    meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival = load(path)
-    lam, k = float(meta["lambda"]), float(meta["k"])
+def draw_column(axes, path, first_column, args_label=None):
+    meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival, width = load(path)
+    lam, k = float(meta["slope"]), float(meta["k"])
     se = slope_standard_error(scores, density, window, lam, ln_intercept)
-    xmax = max(window) + 30
+    xmax = max(window) + 12
     rows = [
-        (density, fit_density, ref_density, "o", "", "regions with score exactly S (observed)"),
-        (survival, fit_survival, ref_survival, "s", "none", "regions with score ≥ S (observed, same regions summed)"),
+        (density, fit_density, ref_density, "o", "", "regions in the bin (observed)"),
+        (survival, fit_survival, ref_survival, "s", "none", "regions at or above the bin (observed, same regions summed)"),
     ]
     for ax, (observed, fitted, reference, marker, face, label) in zip(axes, rows):
         if any(reference):
             keep = [i for i, o in enumerate(reference) if o > 0 and scores[i] <= xmax]
             ax.plot([scores[i] for i in keep], [reference[i] for i in keep], "^", ms=3.5, mfc="none",
-                    color=REFERENCE, label="the same queries shuffled: the fit stops where the real curve rises above this")
-        ax.axvspan(min(window) - 0.5, max(window) + 0.5, color=WINDOW, lw=0,
+                    color=REFERENCE, label="the same queries shuffled keeping dipeptides: the fit stops where the real curve rises above this")
+        ax.axvspan(min(window), max(window) + width, color=WINDOW, lw=0,
                    label=f"score bins the line is fitted on (≥ {MIN_BIN_COUNT} regions each)")
         keep = [i for i, o in enumerate(observed) if o > 0 and scores[i] <= xmax]
         style = dict(mfc=face) if face else {}
@@ -76,17 +80,18 @@ def draw_column(axes, path, first_column):
                 color=OBSERVED, label=label, **style)
         keep = [i for i in range(len(scores)) if scores[i] <= xmax]
         ax.plot([scores[i] for i in keep], [fitted[i] for i in keep], "-", color=FITTED, lw=1.8,
-                label="fitted line, slope −λ")
+                label="fitted line, slope −(λ scale)")
         ax.axhline(MIN_BIN_COUNT, color=FLOOR, ls=":", lw=1,
                    label=f"{MIN_BIN_COUNT} regions: bins below this are not fitted")
         ax.set_yscale("log")
         ax.set_ylim(0.5, max(observed) * 3)
         ax.spines[["top", "right"]].set_visible(False)
-    axes[0].set_title(f"{meta['null']} queries: λ = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
-    axes[1].set_xlabel(f"region score S = matches − {float(meta['mismatch_penalty']):g} × mismatches")
+    label = args_label or f"{meta['null']} queries"
+    axes[0].set_title(f"{label}\nslope = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
+    axes[1].set_xlabel("x = λ_pair · S (nats)")
     if first_column:
-        axes[0].set_ylabel("regions with score exactly S\n(what the line is fitted to)")
-        axes[1].set_ylabel("regions with score ≥ S\n(the same fit, summed)")
+        axes[0].set_ylabel(f"regions in each bin of x ({width:g} nat)\n(what the line is fitted to)")
+        axes[1].set_ylabel("regions with x at or above the bin\n(the same fit, summed)")
 
 
 def main():
@@ -94,23 +99,26 @@ def main():
     parser.add_argument("csv", nargs="+")
     parser.add_argument("-o", "--output", required=True)
     parser.add_argument("--subtitle", default="")
+    parser.add_argument("--labels", nargs="*", default=None, help="one title per CSV, in order")
     args = parser.parse_args()
 
     n = len(args.csv)
     fig, axes = plt.subplots(2, n, figsize=(4.5 * n, 7.6), dpi=150, sharex="col", squeeze=False)
     for j, path in enumerate(args.csv):
-        draw_column([axes[0][j], axes[1][j]], path, first_column=(j == 0))
+        label = args.labels[j] if args.labels and j < len(args.labels) else None
+        draw_column([axes[0][j], axes[1][j]], path, first_column=(j == 0), args_label=label)
     handles = {}
     for ax in (axes[0][0], axes[1][0]):
         for h, l in zip(*ax.get_legend_handles_labels()):
             handles.setdefault(l, h)
-    fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.935),
+    fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.92),
                ncol=2, frameon=False, fontsize=9)
-    title = "λ is the slope and K the intercept of ln(regions at score S); the fit stops where counts rise above the line"
+    title = "The λ scale is the slope and K the intercept of ln(regions at x); the fit stops where the real curve rises above the shuffled one"
+    title += "\nS = matches − C × mismatches; λ_pair is the closed-form lambda for the pair's own compositions; ± is the slope's standard error"
     if args.subtitle:
-        title += "\n" + args.subtitle + ", ± is the slope's standard error"
+        title += "\n" + args.subtitle
     fig.suptitle(title, fontsize=11, x=0.02, ha="left", y=1.0)
-    fig.tight_layout(rect=(0, 0, 1, 0.86))
+    fig.tight_layout(rect=(0, 0, 1, 0.83))
     fig.savefig(args.output, bbox_inches="tight")
     if args.output.endswith(".png"):
         fig.savefig(args.output[:-4] + ".svg", bbox_inches="tight")

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::IndexResult;
-use kmerseek::karlin_altschul::{karlin_altschul_k_theory, DecoyNull, KaCalibration};
-use kmerseek::search::KaSource;
+use kmerseek::karlin_altschul::{DecoyNull, KaCalibration};
+use kmerseek::search::{KaCalibrationSettings, KaSource};
 use kmerseek::types::MolType;
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
@@ -91,6 +91,13 @@ enum Commands {
         /// matches the forward helices and strands.
         #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
         ka_null: DecoyNull,
+
+        /// For `--ka-null database`: how the reference queries that decide where the fit
+        /// stops are made. `shuffled-dipeptide` keeps each pair of neighbouring residues as
+        /// often as in the original, so hydrophobic runs survive and only relatives and
+        /// periodicity lift the real curve above it; `shuffled` keeps composition only.
+        #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
+        ka_reference: DecoyNull,
 
         /// Write the survival curve the fit was read from (score, regions with score >= it,
         /// and the fit) to this CSV, for plotting with scripts/plot_ka_survival.py.
@@ -191,6 +198,10 @@ enum Commands {
         /// What the calibration queries are when a fit runs here; see `kmerseek index --help`.
         #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
         ka_null: DecoyNull,
+
+        /// The reference for `--ka-null database` when a fit runs here; see `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
+        ka_reference: DecoyNull,
 
         /// Chain extended regions on one diagonal at most this many residues apart into one
         /// region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
@@ -329,6 +340,7 @@ fn main() -> IndexResult<()> {
             ka_queries,
             ka_seed,
             ka_null,
+            ka_reference,
             ka_survival_out,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
@@ -420,15 +432,15 @@ fn main() -> IndexResult<()> {
                 index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
                 if ka_queries > 0 {
-                    calibrate_index(
-                        index,
-                        extend_mismatch_penalty,
-                        extend_xdrop,
-                        ka_null,
-                        ka_queries,
-                        ka_seed,
-                        ka_survival_out.as_deref(),
-                    )?;
+                    let settings = KaCalibrationSettings {
+                        mismatch_penalty: extend_mismatch_penalty,
+                        xdrop: extend_xdrop,
+                        null: ka_null,
+                        reference: ka_reference,
+                        n_queries: ka_queries,
+                        seed: ka_seed,
+                    };
+                    calibrate_index(index, settings, ka_survival_out.as_deref())?;
                 } else {
                     eprintln!(
                         "Skipping the Karlin-Altschul fit (--ka-queries 0); a search will \
@@ -458,6 +470,7 @@ fn main() -> IndexResult<()> {
             ka_queries,
             ka_seed,
             ka_null,
+            ka_reference,
             chain_max_gap,
             chain_max_shift,
             verbose,
@@ -554,14 +567,15 @@ fn main() -> IndexResult<()> {
             let mut searcher = ProteinSearcher::load(&target)?;
             if extend_mismatch_penalty > 0.0 {
                 use kmerseek::search::ExtensionParams;
-                let (ka, source) = searcher.resolve_ka(
-                    extend_mismatch_penalty,
-                    extend_xdrop,
-                    ka_k,
-                    ka_null,
-                    ka_queries,
-                    ka_seed,
-                )?;
+                let settings = KaCalibrationSettings {
+                    mismatch_penalty: extend_mismatch_penalty,
+                    xdrop: extend_xdrop,
+                    null: ka_null,
+                    reference: ka_reference,
+                    n_queries: ka_queries,
+                    seed: ka_seed,
+                };
+                let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
                 eprintln!(
                     "  Karlin-Altschul: K {:.4}, lambda scale {:.3} ({source})",
                     ka.k, ka.lambda_scale
@@ -954,13 +968,14 @@ fn assign_encoding(
 fn warn_on_short_fit(fit: &KaCalibration) {
     if fit.n_fit_points() < kmerseek::karlin_altschul::FIT_WINDOW {
         eprintln!(
-            "  WARNING: the fit has only {} score bins ({}..={}) below the homolog excess at {}. \
+            "  WARNING: the fit has only {} bins (x {:.1}..{:.1}) below the relatives at x {}. \
              Related sequences are dense in this database; the slope is read close to the \
-             seed and lambda may be low. More --ka-queries gives a second opinion.",
+             seed. More --ka-queries gives a second opinion.",
             fit.n_fit_points(),
-            fit.score_lo,
-            fit.score_hi,
-            fit.bend_score.map_or("none".to_string(), |b| b.to_string())
+            fit.x_range().0,
+            fit.x_range().1,
+            fit.bend_score
+                .map_or("none".to_string(), |b| format!("{:.1}", b as f64 * fit.bin_width))
         );
     }
 }
@@ -971,22 +986,26 @@ fn warn_on_short_fit(fit: &KaCalibration) {
 /// each is visible.
 fn calibrate_index(
     index: ProteomeIndex,
-    mismatch_penalty: f64,
-    xdrop: f64,
-    null: DecoyNull,
-    n_queries: usize,
-    seed: u64,
+    settings: KaCalibrationSettings,
     survival_out: Option<&std::path::Path>,
 ) -> IndexResult<()> {
+    use kmerseek::karlin_altschul::karlin_altschul_k_theory;
+    let KaCalibrationSettings { mismatch_penalty, xdrop, null, reference, n_queries, .. } =
+        settings;
     eprintln!(
-        "Fitting Karlin-Altschul lambda and K on {n_queries} {null} sequences (penalty {mismatch_penalty}, X-drop {xdrop})..."
+        "Fitting Karlin-Altschul lambda and K on {n_queries} {null} sequences (penalty {mismatch_penalty}, X-drop {xdrop}){}...",
+        if null == DecoyNull::Database {
+            format!(", censored against the same sequences {reference}")
+        } else {
+            String::new()
+        }
     );
     let mut searcher = ProteinSearcher::new(index);
-    let report = searcher.calibrate_ka(mismatch_penalty, xdrop, null, n_queries, seed)?;
+    let report = searcher.calibrate_ka(settings)?;
     let theory_k = karlin_altschul_k_theory(report.match_probability, mismatch_penalty)
         .map_or("none".to_string(), |k| format!("{k:.4}"));
     eprintln!(
-        "  Closed form at the database's own match probability {:.3}: K {theory_k} (independent positions, no seed)",
+        "  Closed form at the database's own match probability {:.3}: K {theory_k} (independent positions, no seed, one lambda for every pair)",
         report.match_probability
     );
     match report.fitted {
@@ -1011,50 +1030,57 @@ fn calibrate_index(
     Ok(())
 }
 
-/// One row per score bin: the count of regions at or above it, the fitted line's count,
-/// and whether the bin was inside the fit window.
+/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
+/// line's count, the reference count, and whether the bin was inside the fit window.
 fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResult<()> {
     let mut w = csv::Writer::from_path(path)?;
     w.write_record([
-        "score",
+        "x",
         "n_regions_at_least",
         "fitted_n_regions_at_least",
         "reference_n_regions_at_least",
         "in_fit",
-        "lambda",
+        "slope",
         "k",
         "lambda_analytic",
         "match_probability",
         "null",
+        "reference",
         "mismatch_penalty",
         "xdrop",
         "n_queries",
         "query_residues",
         "database_kmers",
+        "bin_width",
     ])?;
-    // The fit is a line through ln(regions at score S); its survival is the same line
-    // divided by (1 - e^-lambda).
-    let ln_intercept = (fit.k * fit.query_residues as f64 * fit.database_kmers as f64).ln();
+    // The fit is a line through ln(regions in the bin at x); its survival is the same line
+    // divided by (1 - e^(-slope w)).
+    let per_bin = 1.0 - (-fit.slope * fit.bin_width).exp();
+    let ln_intercept =
+        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
     let reference: std::collections::HashMap<i64, u64> =
         fit.reference_survival.iter().copied().collect();
-    for &(score, count) in &fit.survival {
-        let fitted = (ln_intercept - fit.lambda * score as f64).exp();
+    for &(bin, count) in &fit.survival {
+        let x = bin as f64 * fit.bin_width;
+        let fitted = (ln_intercept - fit.slope * x).exp() / per_bin;
         w.write_record([
-            score.to_string(),
+            format!("{x:.3}"),
             count.to_string(),
             format!("{fitted:.3}"),
-            reference.get(&score).map_or(String::new(), |r| r.to_string()),
-            (fit.score_lo <= score && score <= fit.score_hi).to_string(),
-            fit.lambda.to_string(),
+            reference.get(&bin).map_or(String::new(), |r| r.to_string()),
+            (fit.score_lo <= bin && bin <= fit.score_hi).to_string(),
+            fit.slope.to_string(),
             fit.k.to_string(),
             fit.lambda_analytic.to_string(),
             fit.match_probability.to_string(),
             fit.null.to_string(),
+            fit.reference.map_or(String::new(), |r| r.to_string()),
             fit.mismatch_penalty.to_string(),
             fit.xdrop.to_string(),
             fit.n_queries.to_string(),
             fit.query_residues.to_string(),
             fit.database_kmers.to_string(),
+            fit.bin_width.to_string(),
         ])?;
     }
     w.flush()?;
