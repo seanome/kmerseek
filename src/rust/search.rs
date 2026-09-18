@@ -38,6 +38,10 @@ pub struct SearchFilters {
     /// heuristic cutoff on a ranking score, not a statistically calibrated significance
     /// threshold.
     pub min_region_score: f64,
+    /// Drop a target whose sketch is the query's own (same md5). On for all-vs-all searches
+    /// of one index against itself, where every query would otherwise hit itself; off when a
+    /// FASTA is searched against an index, where the query's identical entry is a real hit.
+    pub skip_self_matches: bool,
 }
 
 impl Default for SearchFilters {
@@ -58,6 +62,7 @@ impl Default for SearchFilters {
             min_shared_kmers: 0,
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
+            skip_self_matches: false,
         }
     }
 }
@@ -593,6 +598,9 @@ pub struct ProteinSearcher {
     /// allowing concurrent reads from rayon's par_iter() in search_one(). Memory grows
     /// only as candidates are accessed — hot targets are cached, cold ones are never loaded.
     sig_cache: DashMap<String, ProteinSketch>,
+    /// Other entry names stored under each target md5 (see `ProteomeIndex::aliases`). A hit
+    /// on the md5 is reported once more under each of them.
+    aliases: HashMap<String, Vec<String>>,
     /// K-mer frequencies across the query proteome, set via set_query_frequencies() before
     /// searching. None = single-pass mode; joint_kmer_freq will be 0.0 for all results.
     query_kmer_frequencies: Option<HashMap<u64, usize>>,
@@ -615,7 +623,7 @@ impl ProteinSearcher {
     pub fn new(index: ProteomeIndex) -> IndexResult<Self> {
         index.finalize()?;
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
-        Ok(Self::from_cache(index, cache))
+        Self::from_cache(index, cache)
     }
 
     /// Load a searcher from a saved index.
@@ -627,22 +635,44 @@ impl ProteinSearcher {
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
         let (targets, kmers) = (cache.target_list.len(), cache.inverted_index.len());
         eprintln!("Loaded search cache: {targets} targets, {kmers} k-mers indexed");
-        Ok(Self::from_cache(index, cache))
+        Self::from_cache(index, cache)
     }
 
-    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
+    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> IndexResult<Self> {
         let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
         let db_n_kmers = stats.kmer_frequencies.values().sum();
-        Self {
+        let aliases = index.aliases()?;
+        Ok(Self {
             index,
             stats,
             target_list: cache.target_list,
             inverted_index: cache.inverted_index,
             sig_cache: DashMap::new(),
+            aliases,
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
-        }
+        })
+    }
+
+    /// `result` again under every other entry name stored with its target's sketch. Those
+    /// entries have the same k-mer set, so every statistic and region is the same; only the
+    /// name differs.
+    fn alias_results(&self, result: &SearchResult) -> Vec<SearchResult> {
+        let Some(names) = self.aliases.get(&result.target_md5) else {
+            return Vec::new();
+        };
+        names
+            .iter()
+            .map(|name| {
+                let mut copy = result.clone();
+                copy.target_name = name.clone();
+                for region in &mut copy.matched_regions {
+                    region.target_name = name.clone();
+                }
+                copy
+            })
+            .collect()
     }
 
     /// Prepare a query for efficient batch searching
@@ -819,7 +849,7 @@ impl ProteinSearcher {
         //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
         //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
         let sigs = self.index.get_signatures();
-        candidate_set
+        let mut results: Vec<SearchResult> = candidate_set
             .par_iter()
             .filter_map(|&idx| {
                 let md5 = &self.target_list[idx as usize];
@@ -840,7 +870,13 @@ impl ProteinSearcher {
                 self.sig_cache.insert(md5.clone(), target);
                 result
             })
-            .collect()
+            .collect();
+        if self.aliases.is_empty() {
+            return results;
+        }
+        let extra: Vec<SearchResult> = results.iter().flat_map(|r| self.alias_results(r)).collect();
+        results.extend(extra);
+        results
     }
 
     /// Perform all-vs-all search without cloning signatures
@@ -859,6 +895,8 @@ impl ProteinSearcher {
     /// Vector of SearchResult containing all similarity metrics, sorted by containment score
     #[must_use = "search results should be used to process query matches"]
     pub fn search_all_vs_all(&self, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
+        // Every query is a target here, so its hit on itself is dropped.
+        let filters = &SearchFilters { skip_self_matches: true, ..*filters };
         // Collect all signatures as owned ProteinSketch values to use as queries.
         // Two paths: in-memory DashMap (slow path / old DBs) or on-demand RocksDB (fast path).
         let all_queries: Vec<ProteinSketch> = {
@@ -946,12 +984,11 @@ impl ProteinSearcher {
         filters: &SearchFilters,
         total_queries: usize,
     ) -> Option<SearchResult> {
-        // Skip self-matches by comparing MD5 sums
-        // WHY: In all-vs-all searches, we don't want to compare a signature against itself.
-        // MD5 sum is a unique identifier for each signature, so comparing MD5 sums is the
-        // most reliable way to detect self-matches. This is idiomatic Rust - we use early
-        // returns to avoid unnecessary computation when we know the result will be invalid.
-        if query.sketch.signature().md5sum == target.signature().md5sum {
+        // In an all-vs-all search every query is also a target, and its hit on itself says
+        // nothing. When a FASTA is searched against an index, the query's identical entry is
+        // a real hit (BCL-2 against a database holding BCL2_HUMAN), so the skip is opt-in.
+        if filters.skip_self_matches && query.sketch.signature().md5sum == target.signature().md5sum
+        {
             return None;
         }
 
@@ -1962,6 +1999,45 @@ mod tests {
         ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
     }
 
+    /// Two database entries with the same sequence are one sketch in the index; a query that
+    /// hits it is reported under both names, and a query identical to it is not dropped as a
+    /// self-match unless the search is all-vs-all.
+    #[test]
+    fn identical_entries_are_each_reported_and_the_query_itself_is_a_hit() -> Result<()> {
+        let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let (ced9_name, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(
+            &fasta,
+            format!(">{bcl2_name}\n{bcl2}\n>copy of BCL2\n{bcl2}\n>{ced9_name}\n{ced9}\n"),
+        )?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+
+        let query =
+            ProteinSketch::from_protein_sequence("bcl2 query", &bcl2, 12, 1, "hp_lehninger2")?;
+        let mut names: Vec<String> = searcher
+            .search_one(&query, &SearchFilters::default(), 1)
+            .iter()
+            .map(|r| r.target_name.clone())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec!["copy of BCL2".to_string(), bcl2_name.clone(), ced9_name.clone()]);
+        let results = searcher.search_one(&query, &SearchFilters::default(), 1);
+        let copy = results.iter().find(|r| r.target_name == "copy of BCL2").unwrap();
+        let original = results.iter().find(|r| r.target_name == bcl2_name).unwrap();
+        assert_eq!(copy.n_intersecting_hashes, original.n_intersecting_hashes);
+        assert_eq!(copy.target_md5, original.target_md5);
+        assert!(copy.matched_regions.iter().all(|m| m.target_name == "copy of BCL2"));
+
+        // All-vs-all drops every query's hit on its own sketch, under either name.
+        let all = searcher.search_all_vs_all(&SearchFilters::default())?;
+        assert!(all.iter().all(|r| r.query_md5 != r.target_md5), "self-hits should be skipped");
+        Ok(())
+    }
+
     /// Read the first record from a FASTA file and return name and sequence.
     ///
     /// WHY: This helper function eliminates code duplication in tests. It provides a simple
@@ -2592,6 +2668,7 @@ mod tests {
             target_list: Vec::new(),
             inverted_index: HashMap::new(),
             sig_cache: DashMap::new(),
+            aliases: HashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
