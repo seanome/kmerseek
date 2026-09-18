@@ -956,8 +956,7 @@ fn warn_on_short_fit(fit: &KaCalibration) {
         eprintln!(
             "  WARNING: the fit has only {} score bins ({}..={}) below the homolog excess at {}. \
              Related sequences are dense in this database; the slope is read close to the \
-             seed and lambda may be low. More --ka-queries or --ka-null shuffled gives a \
-             second opinion.",
+             seed and lambda may be low. More --ka-queries gives a second opinion.",
             fit.n_fit_points(),
             fit.score_lo,
             fit.score_hi,
@@ -1020,6 +1019,7 @@ fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResul
         "score",
         "n_regions_at_least",
         "fitted_n_regions_at_least",
+        "reference_n_regions_at_least",
         "in_fit",
         "lambda",
         "k",
@@ -1035,12 +1035,15 @@ fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResul
     // The fit is a line through ln(regions at score S); its survival is the same line
     // divided by (1 - e^-lambda).
     let ln_intercept = (fit.k * fit.query_residues as f64 * fit.database_kmers as f64).ln();
+    let reference: std::collections::HashMap<i64, u64> =
+        fit.reference_survival.iter().copied().collect();
     for &(score, count) in &fit.survival {
         let fitted = (ln_intercept - fit.lambda * score as f64).exp();
         w.write_record([
             score.to_string(),
             count.to_string(),
             format!("{fitted:.3}"),
+            reference.get(&score).map_or(String::new(), |r| r.to_string()),
             (fit.score_lo <= score && score <= fit.score_hi).to_string(),
             fit.lambda.to_string(),
             fit.k.to_string(),

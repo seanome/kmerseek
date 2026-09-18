@@ -654,8 +654,9 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "Closed form at the database's own match probability 0.500: K 0.1631",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 25 database queries, 9838 regions; lambda 0.388 (closed form 0.481 \
-             at match probability 0.500), K 0.0141, fit on scores 16..=23, rms 0.112",
+            "fitted now: 25 database queries, 9838 regions; lambda 0.396 (closed form 0.481 \
+             at match probability 0.500), K 0.0160, fit on scores 14..=21, relatives from 22, \
+             rms 0.102; shuffled reference lambda 0.399 over the same bins",
         ))
         .stderr(predicate::str::contains(
             "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
@@ -678,7 +679,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         };
 
     search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
-        "Karlin-Altschul: K 0.0141, lambda scale 0.807 (stored in the index: 25 database queries, 9838 regions",
+        "Karlin-Altschul: K 0.0160, lambda scale 0.824 (stored in the index: 25 database queries, 9838 regions",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
@@ -690,7 +691,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         .stderr(predicate::str::contains("no Karlin-Altschul fit for penalty 3, X-drop 8"));
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.1089, lambda scale 0.919 (fitted now: 25 database queries, 9854 regions; lambda 0.560",
+            "Karlin-Altschul: K 0.0673, lambda scale 0.860 (fitted now: 25 database queries, 9854 regions; lambda 0.524",
         ),
     );
     Ok(())

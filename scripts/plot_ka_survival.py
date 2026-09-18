@@ -21,6 +21,7 @@ matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 OBSERVED = "#1f77b4"
+REFERENCE = "#7f7f7f"
 FITTED = "#d62728"
 WINDOW = "#cfcfcf"
 FLOOR = "#111111"
@@ -34,12 +35,14 @@ def load(path):
     survival = [int(r["n_regions_at_least"]) for r in rows]
     density = [survival[i] - (survival[i + 1] if i + 1 < len(survival) else 0) for i in range(len(survival))]
     window = [int(r["score"]) for r in rows if r["in_fit"] == "true"]
+    ref_survival = [int(r["reference_n_regions_at_least"]) if r.get("reference_n_regions_at_least") else 0 for r in rows]
+    ref_density = [ref_survival[i] - (ref_survival[i + 1] if i + 1 < len(ref_survival) else 0) for i in range(len(ref_survival))]
     lam, k = float(meta["lambda"]), float(meta["k"])
     residues, kmers = float(meta["query_residues"]), float(meta["database_kmers"])
     ln_intercept = math.log(k * residues * kmers * (1 - math.exp(-lam)))
     fit_density = [math.exp(ln_intercept - lam * s) for s in scores]
     fit_survival = [d / (1 - math.exp(-lam)) for d in fit_density]
-    return meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept
+    return meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival
 
 
 def slope_standard_error(scores, density, window, lam, ln_intercept):
@@ -52,15 +55,19 @@ def slope_standard_error(scores, density, window, lam, ln_intercept):
 
 
 def draw_column(axes, path, first_column):
-    meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept = load(path)
+    meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival = load(path)
     lam, k = float(meta["lambda"]), float(meta["k"])
     se = slope_standard_error(scores, density, window, lam, ln_intercept)
     xmax = max(window) + 30
     rows = [
-        (density, fit_density, "o", "", "regions with score exactly S (observed)"),
-        (survival, fit_survival, "s", "none", "regions with score ≥ S (observed, same regions summed)"),
+        (density, fit_density, ref_density, "o", "", "regions with score exactly S (observed)"),
+        (survival, fit_survival, ref_survival, "s", "none", "regions with score ≥ S (observed, same regions summed)"),
     ]
-    for ax, (observed, fitted, marker, face, label) in zip(axes, rows):
+    for ax, (observed, fitted, reference, marker, face, label) in zip(axes, rows):
+        if any(reference):
+            keep = [i for i, o in enumerate(reference) if o > 0 and scores[i] <= xmax]
+            ax.plot([scores[i] for i in keep], [reference[i] for i in keep], "^", ms=3.5, mfc="none",
+                    color=REFERENCE, label="the same queries shuffled: the fit stops where the real curve rises above this")
         ax.axvspan(min(window) - 0.5, max(window) + 0.5, color=WINDOW, lw=0,
                    label=f"score bins the line is fitted on (≥ {MIN_BIN_COUNT} regions each)")
         keep = [i for i, o in enumerate(observed) if o > 0 and scores[i] <= xmax]

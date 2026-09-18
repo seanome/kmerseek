@@ -58,8 +58,9 @@ pub fn karlin_altschul_k_theory(a: f64, penalty: f64) -> Option<f64> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
-    /// in; related pairs are cut off as the upward bend of the survival curve (Altschul's
-    /// tutorial, approach i; Collins et al. 1988; Pearson 1998).
+    /// in; related pairs are cut off where the curve starts to rise relative to the same
+    /// queries shuffled, which are searched alongside (Altschul's tutorial, approach i;
+    /// Collins et al. 1988; Pearson 1998). Costs two calibration searches.
     Database,
     /// Each query is a database sequence with its residues shuffled: the independent-letter
     /// model BLAST's tables are fitted on (Altschul & Gish 1996).
@@ -113,6 +114,11 @@ pub struct KaCalibration {
     /// Regions with score >= s, for every s from the smallest score seen up to the largest,
     /// for plotting the curve the fit was read from.
     pub survival: Vec<(i64, u64)>,
+    /// For the `Database` null: the same queries shuffled, searched the same way, and the
+    /// slope of that curve over the fit window. The ratio of the two curves is what decides
+    /// where the fit stops (`fit_scores_with_reference`). Empty and None for other nulls.
+    pub reference_survival: Vec<(i64, u64)>,
+    pub reference_lambda: Option<f64>,
 }
 
 impl KaCalibration {
@@ -164,6 +170,10 @@ pub struct ScoreFit {
     pub bend_score: Option<i64>,
     pub rms_residual: f64,
     pub survival: Vec<(i64, u64)>,
+    /// Shuffled-sequence reference curve and its slope over the same window, when the fit
+    /// was censored against one (`fit_scores_with_reference`); empty and None otherwise.
+    pub reference_survival: Vec<(i64, u64)>,
+    pub reference_lambda: Option<f64>,
 }
 
 /// Count of regions with score >= s for every integer s from the smallest to the largest
@@ -267,7 +277,92 @@ pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
         bend_score,
         rms_residual: rms_residual(window, slope, ln_intercept),
         survival: survival_counts(scores),
+        reference_survival: Vec::new(),
+        reference_lambda: None,
     })
+}
+
+/// Bins the ratio baseline is fitted on: the lowest usable ones, where real and shuffled
+/// sequences agree best (on SCOPe40 their slopes differ by 1% over scores 20 to 27).
+const REFERENCE_BASE: usize = 8;
+
+/// Fit ln(regions with score S) against S for `scores`, stopping where the curve starts to
+/// rise relative to `reference`, the same queries shuffled.
+///
+/// The single-curve test in `fit_scores` sees a step. Relatives below 40% identity come
+/// in as a ramp: on SCOPe40 the real-sequence slope falls away from the shuffled one from
+/// score 32 while the step test fires at 40. Here the ratio ln(count) - ln(reference count)
+/// is taken per bin; a line through its lowest `REFERENCE_BASE` usable bins is the
+/// baseline (a constant ratio is a K difference, a gentle slope is sequence structure),
+/// and a bin joins while its ratio is within `BEND_SIGMAS` Poisson standard deviations
+/// plus `BEND_SLACK` of that baseline. Because the reference has the same finite-length
+/// concavity as the real curve, the ratio also cancels that, which the step test could not.
+/// The line is then read off the highest `FIT_WINDOW` accepted bins, as in `fit_scores`.
+pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<ScoreFit> {
+    let reference_bins: std::collections::HashMap<i64, u64> =
+        bin_counts(reference).into_iter().collect();
+    let usable: Vec<(i64, u64, u64)> = bin_counts(scores)
+        .into_iter()
+        .skip(1)
+        .filter_map(|(s, c)| {
+            let r = *reference_bins.get(&s)?;
+            (c >= MIN_BIN_COUNT && r >= MIN_BIN_COUNT).then_some((s, c, r))
+        })
+        .collect();
+    if (usable.len() as i64) < MIN_FIT_POINTS {
+        return None;
+    }
+    let ratio = |&(s, c, r): &(i64, u64, u64)| (s as f64, (c as f64).ln() - (r as f64).ln());
+    let base: Vec<(f64, f64)> = usable.iter().take(REFERENCE_BASE).map(ratio).collect();
+    let (slope, intercept) = line_through_f64(&base);
+    let mut accepted = base.len();
+    let mut bend_score = None;
+    while accepted < usable.len() {
+        let (s, c, r) = usable[accepted];
+        let (x, y) = ratio(&usable[accepted]);
+        let sigma = (1.0 / c as f64 + 1.0 / r as f64).sqrt();
+        if y - (intercept + slope * x) > BEND_SIGMAS * sigma + BEND_SLACK {
+            bend_score = Some(s);
+            break;
+        }
+        accepted += 1;
+    }
+    let window: Vec<(i64, u64)> = usable[accepted.saturating_sub(FIT_WINDOW as usize)..accepted]
+        .iter()
+        .map(|&(s, c, _)| (s, c))
+        .collect();
+    let reference_window: Vec<(i64, u64)> = usable
+        [accepted.saturating_sub(FIT_WINDOW as usize)..accepted]
+        .iter()
+        .map(|&(s, _, r)| (s, r))
+        .collect();
+    let (slope, ln_intercept) = line_through(&window);
+    if slope >= 0.0 {
+        return None;
+    }
+    Some(ScoreFit {
+        lambda: -slope,
+        ln_intercept,
+        score_lo: window[0].0,
+        score_hi: window[window.len() - 1].0,
+        bend_score,
+        rms_residual: rms_residual(&window, slope, ln_intercept),
+        survival: survival_counts(scores),
+        reference_survival: survival_counts(reference),
+        reference_lambda: Some(-line_through(&reference_window).0),
+    })
+}
+
+/// Least squares of y on x; returns (slope, intercept).
+fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
+    let n = points.len() as f64;
+    let (mx, my) =
+        (points.iter().map(|p| p.0).sum::<f64>() / n, points.iter().map(|p| p.1).sum::<f64>() / n);
+    let (sxx, sxy) = points.iter().fold((0.0, 0.0), |(sxx, sxy), &(x, y)| {
+        (sxx + (x - mx) * (x - mx), sxy + (x - mx) * (y - my))
+    });
+    let slope = if sxx > 0.0 { sxy / sxx } else { 0.0 };
+    (slope, my - slope * mx)
 }
 
 /// Deterministic generator for picking calibration queries, so an index built twice from
@@ -393,6 +488,41 @@ mod tests {
         assert_eq!((bent.score_lo, bent.score_hi, bent.bend_score), (14, 21, Some(27)));
         assert!((bent.lambda - clean.lambda).abs() < 1e-12);
         assert_eq!(bent.survival[0], (12, scores.len() as u64));
+    }
+
+    /// Reference: 400,000 e^(-0.4 (s - 12)) regions at score >= s. Real: 1.5x that (a K
+    /// difference, a constant ratio) plus relatives coming in as a ramp from score 24,
+    /// 150 e^(-0.05 (s - 24)) per bin. A step test would not see a ramp; the ratio test
+    /// stops two bins after it starts and the slope is read below it, 4% low from the two
+    /// ramp bins inside the window.
+    #[test]
+    fn test_fit_scores_with_reference_stops_where_the_ratio_rises() {
+        let at_least = |x: i64, scale: f64| {
+            (scale * 400_000.0 * (-0.4 * (x - 12) as f64).exp()).round() as i64
+        };
+        let (mut reference, mut real, mut plain) = (Vec::new(), Vec::new(), Vec::new());
+        for s in 12..=44 {
+            let per_bin =
+                |scale: f64| (at_least(s, scale) - at_least(s + 1, scale)).max(0) as usize;
+            reference.extend(std::iter::repeat_n(s as f64, per_bin(1.0)));
+            plain.extend(std::iter::repeat_n(s as f64, per_bin(1.5)));
+            let ramp = if s >= 24 {
+                (150.0 * (-0.05 * (s - 24) as f64).exp()).round() as usize
+            } else {
+                0
+            };
+            real.extend(std::iter::repeat_n(s as f64, per_bin(1.5) + ramp));
+        }
+        let fit = fit_scores_with_reference(&real, &reference).unwrap();
+        assert_eq!((fit.bend_score, fit.score_lo, fit.score_hi), (Some(26), 18, 25), "{fit:?}");
+        assert!((fit.lambda - 0.385).abs() < 0.005, "{}", fit.lambda);
+        assert!((fit.reference_lambda.unwrap() - 0.4).abs() < 0.005, "{:?}", fit.reference_lambda);
+        assert_eq!(fit.reference_survival[0], (12, reference.len() as u64));
+
+        // Without the ramp the fit runs to the count floor; the constant ratio is harmless.
+        let fit = fit_scores_with_reference(&plain, &reference).unwrap();
+        assert_eq!((fit.bend_score, fit.score_lo, fit.score_hi), (None, 26, 33), "{fit:?}");
+        assert!((fit.lambda - 0.4).abs() < 0.005, "{}", fit.lambda);
     }
 
     #[test]

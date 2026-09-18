@@ -13,7 +13,8 @@ use statrs::distribution::{DiscreteCDF, Poisson};
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::karlin_altschul::{
-    fit_scores, make_decoy, DecoyNull, KaCalibration, SplitMix64, MIN_FIT_POINTS,
+    fit_scores, fit_scores_with_reference, make_decoy, DecoyNull, KaCalibration, SplitMix64,
+    MIN_FIT_POINTS,
 };
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -134,7 +135,7 @@ impl Display for KaSource {
             KaSource::Flag => write!(f, "--ka-k, closed-form lambda"),
             KaSource::Index(c) | KaSource::Fitted(c) => write!(
                 f,
-                "{}: {} {} queries, {} regions; lambda {:.3} (closed form {:.3} at match probability {:.3}), K {:.4}, fit on scores {}..={}{}, rms {:.3}",
+                "{}: {} {} queries, {} regions; lambda {:.3} (closed form {:.3} at match probability {:.3}), K {:.4}, fit on scores {}..={}{}, rms {:.3}{}",
                 if matches!(self, KaSource::Index(_)) { "stored in the index" } else { "fitted now" },
                 c.n_queries,
                 c.null,
@@ -145,8 +146,10 @@ impl Display for KaSource {
                 c.k,
                 c.score_lo,
                 c.score_hi,
-                c.bend_score.map_or(String::new(), |b| format!(", bend at {b}")),
-                c.rms_residual
+                c.bend_score.map_or(String::new(), |b| format!(", relatives from {b}")),
+                c.rms_residual,
+                c.reference_lambda
+                    .map_or(String::new(), |l| format!("; shuffled reference lambda {l:.3} over the same bins"))
             ),
         }
     }
@@ -870,12 +873,20 @@ impl ProteinSearcher {
     ) -> IndexResult<KaCalibrationReport> {
         let (queries, match_probability) = self.calibration_queries(null, n_queries, seed)?;
         let scores = self.calibration_scores(&queries, mismatch_penalty);
+        // The database null is censored against the same queries shuffled.
+        let fit = if null == DecoyNull::Database {
+            let (shuffled, _) = self.calibration_queries(DecoyNull::Shuffled, n_queries, seed)?;
+            let reference = self.calibration_scores(&shuffled, mismatch_penalty);
+            fit_scores_with_reference(&scores, &reference)
+        } else {
+            fit_scores(&scores)
+        };
         let n_queries = queries.len();
         let query_residues: u64 =
             queries.iter().map(|(_, q)| q.get_raw_sequence().map_or(0, |r| r.len() as u64)).sum();
         let database_kmers = self.db_n_kmers as u64;
         let lambda_analytic = karlin_altschul_lambda(match_probability, mismatch_penalty);
-        let fitted = fit_scores(&scores).map(|fit| KaCalibration {
+        let fitted = fit.map(|fit| KaCalibration {
             mismatch_penalty,
             xdrop,
             null,
@@ -895,6 +906,8 @@ impl ProteinSearcher {
             bend_score: fit.bend_score,
             rms_residual: fit.rms_residual,
             survival: fit.survival,
+            reference_survival: fit.reference_survival,
+            reference_lambda: fit.reference_lambda,
         });
         Ok(KaCalibrationReport { fitted, match_probability, n_queries, n_regions: scores.len() })
     }
