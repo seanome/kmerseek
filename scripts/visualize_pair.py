@@ -63,6 +63,14 @@ TRACK_IN = 0.42
 FONT = 8
 
 
+def axis_ticks(length):
+    """1, every 100 residues (200 past 600 aa, 500 past 1500), and the length; a round tick
+    within 5% of the length would overlap its label."""
+    step = 100 if length <= 600 else 200 if length <= 1500 else 500
+    rounds = [t for t in range(step, length, step) if length - t > length * 0.05]
+    return [1, *rounds, length]
+
+
 def load_pair(path):
     with open(path) as fh:
         return json.load(fh)
@@ -171,8 +179,8 @@ class PairFigure:
     def _style_axes(self, ax, q, t):
         ax.set_xlim(1, q["length"])
         ax.set_ylim(1, t["length"])
-        ax.set_xticks(sorted({1, q["length"]} | set(range(100, q["length"], 100))))
-        ax.set_yticks(sorted({1, t["length"]} | set(range(100, t["length"], 100))))
+        ax.set_xticks(axis_ticks(q["length"]))
+        ax.set_yticks(axis_ticks(t["length"]))
         ax.tick_params(labelsize=FONT, colors=SECONDARY_INK)
         for s in ("top", "right"):
             ax.spines[s].set_visible(False)

@@ -1,18 +1,29 @@
 #!/usr/bin/env python3
-"""Render one interactive HTML report per query from `kmerseek search` output, laid out
-like a Foldseek results page.
+"""Render one interactive HTML report per query from `kmerseek search` output.
 
-One row per target hit, ordered by Benjamini-Hochberg corrected region tail probability
-(q-value), with the numbers in the row: runs of consecutive shared k-mers, shared k-mers,
-containment, whole-query p-value, best region score, q-value, and a bar showing where
-the hit's runs land on the query. Clicking a row opens the pair view underneath it: the
-dot plot with protein tracks and every run's alignment, the same panel
+The query is the shared axis. It is drawn once at the top as a line with its domains
+(from --domains), under a histogram of how many database entries have a run over each
+residue: grey for any run, black for a run with --solid-identical or more identical
+residues. That histogram is the noise map: a low-complexity stretch such as the BCL-2
+loop is covered by a third of unrelated proteins, so a run there is discounted at a
+glance and a run in BH1 is not.
+
+Below it, one row per protein with the numbers in the row (length, runs, longest run,
+identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
+a bar at its query coordinates, solid when it has --solid-identical or more identical
+residues and hollow otherwise; overlapping bars get a count. Database entries of one
+gene (UniProt GN= and OS=) fold into one row, so a family search is not a list of
+TrEMBL copies of the query. Clicking a row opens the pair view underneath it: the dot
+plot with protein tracks and one alignment block per run, the same panel
 visualize_pair.py draws.
 
-The pair view needs every shared k-mer, which the search CSV does not carry, so this
-script runs `kmerseek pair` once per hit on the query and target sequences taken from
-the two FASTA files. --domains takes the same Pfam-style tables as visualize_pair.py and
-labels both proteins.
+Rows are ordered by `region_evalue` when the CSV has it (kmerseek >= 0.5) and otherwise
+by the Benjamini-Hochberg corrected region tail probability. Sorting by identical
+residues or run length instead puts composition-driven hits (p53, POU4F1) among family
+members, which is why the ranking statistic is the default.
+
+The pair view needs every shared k-mer, which the CSV does not carry, so this script runs
+`kmerseek pair` once per row on sequences taken from the two FASTA files.
 
 Usage:
     kmerseek search -q queries.fasta -t targets.rocksdb -o results.csv --alphabet hp --ksize 12
@@ -25,13 +36,15 @@ import gzip
 import html
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
+from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from pair_model import build_model, domains_for, load_domains
+from pair_model import build_model, count_agreement, domains_for, load_domains
 from visualize_hits import (
     _target_best_rows,
     _target_tail_probabilities,
@@ -101,16 +114,13 @@ def run_pair(kmerseek, query_fasta, target_fasta, target_name, ksize, moltype):
     return json.loads(out.stdout)
 
 
-# -- hits ----------------------------------------------------------------------------------
+# -- headers and ranking --------------------------------------------------------------------
 
 
-def rank_targets(rows, max_hits):
-    """[(target_name, best row, q-value)] ordered by q-value then best region score,
-    capped at max_hits distinct targets."""
-    best = _target_best_rows(rows)
-    q = benjamini_hochberg(_target_tail_probabilities(rows))
-    ranked = sorted(best, key=lambda t: (q[t], -float(best[t]["region_poisson_score"])))
-    return [(t, best[t], q[t]) for t in ranked[:max_hits]]
+def header_field(header, key):
+    """`GN=BCL2` style field of a UniProt header, or None."""
+    m = re.search(rf"(?:^|\s){key}=(.+?)(?=\s\w\w?=|$)", header)
+    return m.group(1) if m else None
 
 
 def description(header):
@@ -119,24 +129,111 @@ def description(header):
     return rest.split(" OS=")[0]
 
 
-def hit_entry(rank, target_name, row, q_value, model):
+def protein_key(header):
+    """What folds database entries into one protein row: gene and organism when the
+    header has them (gene lower-cased with punctuation dropped, since TrEMBL writes
+    bcl-2 for BCL2), else the header itself."""
+    gene, organism = header_field(header, "GN"), header_field(header, "OS")
+    if not gene:
+        return (header, None)
+    return (re.sub(r"[^a-z0-9]", "", gene.lower()), organism)
+
+
+def ranking(rows):
+    """{target_name: (statistic, is_evalue)} for ordering rows: region_evalue when the CSV
+    carries it, else the BH q-value of the best region's tail probability."""
+    best = _target_best_rows(rows)
+    if "region_evalue" in rows[0]:
+        return {t: float(r["region_evalue"]) for t, r in best.items()}, True
+    return benjamini_hochberg(_target_tail_probabilities(rows)), False
+
+
+def fold_entries(rows):
+    """{protein key: [target names]} for every target in the CSV."""
+    groups = defaultdict(list)
+    for name in _target_best_rows(rows):
+        groups[protein_key(name)].append(name)
+    return groups
+
+
+def rank_proteins(rows, max_rows):
+    """[(representative target name, other entry names, statistic)] one per protein,
+    best statistic first, capped at max_rows."""
+    stat, _ = ranking(rows)
+    best = _target_best_rows(rows)
+    # Best statistic first, then the higher region score; on a full tie the reviewed (sp|)
+    # entry represents the protein.
+    order = lambda n: (stat[n], -float(best[n]["region_poisson_score"]), not n.startswith("sp|"))
+    proteins = []
+    for names in fold_entries(rows).values():
+        names.sort(key=order)
+        proteins.append((names[0], names[1:], stat[names[0]]))
+    proteins.sort(key=lambda p: order(p[0]))
+    return proteins[:max_rows]
+
+
+# -- histogram over the query ----------------------------------------------------------------
+
+
+def region_identical(row):
+    return count_agreement(row["region_subseq"], row["target_subseq"])
+
+
+def coverage(rows, query_length, ksize, solid_identical):
+    """Per query residue (0-based), how many database entries have a run over it, and how
+    many have one with at least solid_identical identical residues. From the CSV alone, so
+    it counts every entry the search reported, not only the rows shown."""
+    any_run, solid = [0] * query_length, [0] * query_length
+    per_target = defaultdict(lambda: (set(), set()))
+    for row in rows:
+        if int(row["region_length"]) <= ksize:
+            continue
+        span = range(int(row["region_start"]), int(row["region_end"]))
+        covered, covered_solid = per_target[row["target_name"]]
+        covered.update(span)
+        if region_identical(row) >= solid_identical:
+            covered_solid.update(span)
+    for covered, covered_solid in per_target.values():
+        for i in covered:
+            any_run[i] += 1
+        for i in covered_solid:
+            solid[i] += 1
+    return {"any": any_run, "solid": solid}
+
+
+# -- rows --------------------------------------------------------------------------------------
+
+
+def run_bar(block):
+    """What a row's bar and its tooltip need, 0-based half-open as in the model."""
+    return {k: block[k] for k in ("number", "query_start", "query_end", "target_start", "target_end", "length", "identical", "polar")}
+
+
+def protein_row(rank, target_name, others, stat, row, model):
+    best = model["runs"][0] if model["runs"] else None
     return {
         "rank": rank,
-        "target": model["target"]["label"],
+        "label": model["target"]["label"],
         "target_name": target_name,
+        "entry": target_name.split()[0],
+        "gene": header_field(target_name, "GN"),
+        "organism": header_field(target_name, "OS"),
         "description": description(target_name),
+        "n_entries": 1 + len(others),
+        "other_entries": [o.split()[0] for o in others],
+        "length": model["target"]["length"],
         "n_runs": len(model["runs"]),
+        "best_length": best["length"] if best else 0,
+        "best_identical": best["identical"] if best else 0,
         "n_shared": int(row["n_intersecting_hashes"]),
-        "containment": float(row["containment"]),
-        "query_pvalue": float(row["query_poisson_pvalue"]),
-        "region_score": float(row["region_poisson_score"]),
-        "q_value": q_value,
+        "stat": stat,
+        "runs": [run_bar(b) for b in model["runs"]],
         "model": model,
     }
 
 
 class SearchReport:
-    """Builds the per-query hit list, running `kmerseek pair` for each hit."""
+    """Builds the per-query report, running `kmerseek pair` for each protein row."""
 
     def __init__(self, args, kmerseek, domain_rows):
         self.args = args
@@ -145,19 +242,20 @@ class SearchReport:
         self.queries = read_fasta(args.query_fasta)
         self.targets = read_fasta(args.target_fasta)
 
-    def hits_for(self, query_name, rows, workdir):
-        ranked = rank_targets(rows, self.args.max_hits)
+    def rows_for(self, query_name, rows, workdir):
+        ranked = rank_proteins(rows, self.args.max_rows)
+        best = _target_best_rows(rows)
         ksize, moltype = int(rows[0]["ksize"]), rows[0]["moltype"]
         query_fasta = os.path.join(workdir, "query.fasta")
         write_fasta(query_fasta, {query_name: self.queries[query_name]})
         target_fasta = os.path.join(workdir, "targets.fasta")
         write_fasta(target_fasta, {t: self.targets[t] for t, _, _ in ranked})
-        hits = []
-        for rank, (target_name, row, q_value) in enumerate(ranked, start=1):
+        out = []
+        for rank, (target_name, others, stat) in enumerate(ranked, start=1):
             pair = run_pair(self.kmerseek, query_fasta, target_fasta, target_name.split()[0], ksize, moltype)
             model = build_model(pair, self.domain_rows, flank=self.args.flank)
-            hits.append(hit_entry(rank, target_name, row, q_value, model))
-        return hits
+            out.append(protein_row(rank, target_name, others, stat, best[target_name], model))
+        return out
 
     def query_track(self, query_name):
         return {
@@ -167,137 +265,209 @@ class SearchReport:
             "domains": domains_for(self.domain_rows, query_name),
         }
 
-    def render(self, query_name, rows):
+    def report(self, query_name, rows):
         with tempfile.TemporaryDirectory() as workdir:
-            hits = self.hits_for(query_name, rows, workdir)
-        report = {
-            "query": self.query_track(query_name),
-            "ksize": int(rows[0]["ksize"]),
+            protein_rows = self.rows_for(query_name, rows, workdir)
+        ksize = int(rows[0]["ksize"])
+        _, is_evalue = ranking(rows)
+        query = self.query_track(query_name)
+        return {
+            "query": query,
+            "ksize": ksize,
             "moltype": rows[0]["moltype"],
-            "alphabet": hits[0]["model"]["alphabet"] if hits else rows[0]["moltype"],
-            "n_targets_tested": len(_target_best_rows(rows)),
-            "hits": hits,
+            "alphabet": protein_rows[0]["model"]["alphabet"] if protein_rows else rows[0]["moltype"],
+            "classes": protein_rows[0]["model"]["classes"] if protein_rows else [],
+            "stat_name": "E-value" if is_evalue else "q-value",
+            "stat_note": "Karlin-Altschul E-value of the best region" if is_evalue else "Benjamini-Hochberg corrected tail probability of the best region",
+            "n_entries": len(_target_best_rows(rows)),
+            "n_proteins": len(fold_entries(rows)),
+            "solid_identical": self.args.solid_identical,
+            "max_runs_shown": self.args.max_runs_shown,
+            "coverage": coverage(rows, query["length"], ksize, self.args.solid_identical),
+            "rows": protein_rows,
         }
-        return render_report(report)
+
+    def render(self, query_name, rows):
+        return render_report(self.report(query_name, rows))
 
 
 # -- HTML ----------------------------------------------------------------------------------
 
 REPORT_CSS = r"""
-  h1 { font-size: 16px; font-weight: 600; margin: 0 0 2px; }
-  .meta { color: var(--secondary); margin: 0 0 12px; }
-  .qtrack { margin: 4px 0 14px; }
-  table { border-collapse: collapse; width: 100%; font-size: 13px; }
-  th, td { text-align: left; padding: 6px 10px; border-bottom: 1px solid #e3e2dc; vertical-align: middle; white-space: nowrap; }
-  th { color: var(--secondary); font-weight: 600; cursor: pointer; user-select: none; }
-  th.num, td.num { text-align: right; font-variant-numeric: tabular-nums; }
-  th.sorted:after { content: " \25BE"; }
-  th.sorted.asc:after { content: " \25B4"; }
-  td.desc { max-width: 260px; overflow: hidden; text-overflow: ellipsis; color: var(--secondary); }
-  tr.hit { cursor: pointer; }
-  tr.hit:hover { background: #f1f0eb; }
-  tr.hit.open { background: #ecebe4; }
-  tr.detail td { padding: 12px 10px 18px; white-space: normal; background: #fafaf7; }
-  .close { float: right; font: inherit; border: 1px solid var(--edge); background: #fff; border-radius: 4px; padding: 2px 8px; cursor: pointer; }
-  .bar svg { display: block; }
+  h1 { font-size: 16px; font-weight: 600; margin: 0 0 4px; }
+  .sub { color: var(--secondary); margin: 0 0 10px; max-width: 90ch; }
+  .controls { display: flex; flex-wrap: wrap; gap: 16px; align-items: center; margin: 0 0 8px; color: var(--secondary); font-size: 12px; }
+  select { font: inherit; padding: 2px 4px; }
+  .g { display: grid; grid-template-columns: 200px 44px 44px 64px 64px 60px 80px 300px; column-gap: 10px; align-items: center;
+       padding: 4px 6px; border-bottom: 1px solid #e3e2dc; }
+  .g.head { color: var(--secondary); font-size: 12px; border-bottom: 1px solid var(--edge); }
+  .g.row { cursor: pointer; }
+  .g.row:hover { background: #f1f0eb; }
+  .g.row.open { background: #ecebe4; }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .small { font-size: 12px; color: var(--secondary); }
+  .exp { padding: 8px 6px 14px 22px; border-bottom: 1px solid #e3e2dc; background: #fafaf7; }
+  .exp .shown { color: var(--secondary); font-size: 12px; margin: 6px 0 0; }
+  rect.reg { fill: var(--domain); stroke: var(--domain-edge); stroke-width: 0.6; }
+  rect.run { fill: var(--run); }
+  rect.runlow { fill: none; stroke: var(--run); stroke-width: 1; }
+  path.cov { fill: var(--single); }
+  path.cov5 { fill: var(--run); }
+  line.pl { stroke: var(--domain-edge); stroke-width: 1.2; }
+  line.ax { stroke: var(--edge); stroke-width: 0.6; }
+  text.pile { font-size: 9px; fill: var(--run); font-weight: 600; }
+  .legend .runlow-sw { width: 18px; height: 8px; display: inline-block; border: 1px solid var(--run); box-sizing: border-box; }
+  .legend .cov-sw { display: inline-block; width: 14px; height: 12px; position: relative; }
+  .legend .cov-sw:before { content: ""; position: absolute; left: 0; width: 6px; top: 0; bottom: 0; background: var(--single); }
+  .legend .cov-sw:after { content: ""; position: absolute; left: 8px; width: 6px; top: 6px; bottom: 0; background: var(--run); }
   .scroll { overflow-x: auto; }
 """
 
 REPORT_JS = r"""
 const R = __REPORT__;
-const BAR_W = 220, BAR_H = 22;
+const K = R.ksize, Q = R.query, QL = Q.length, TW = 300, PX = TW / QL, SOLID = R.solid_identical;
+const X = p => (p - 1) * PX;   // p is 1-based
+const fmtStat = v => v === 0 ? "0" : v < 1e-3 ? v.toExponential(2) : v.toFixed(3);
+const bestRun = r => r.runs[0] || { length: 0, identical: 0 };
+const SORTS = {
+  stat: [r => [r.stat, -bestRun(r).length], `${R.stat_name} (${R.stat_note})`],
+  identical: [r => [-bestRun(r).identical, -bestRun(r).length], "identical residues in the longest run"],
+  longest: [r => [-bestRun(r).length, -bestRun(r).identical], "length of the longest run"],
+  runs: [r => [-r.runs.length, -bestRun(r).length], "number of runs"],
+  shared: [r => [-r.n_shared, -bestRun(r).length], `shared ${K}-mers`],
+};
+let open = new Set();
 
-function positionBar(track, model) {
-  // The query as a line with its domain boxes; each run of the hit as a dark segment on it.
-  const scale = BAR_W / track.length;
-  const svg = svgEl("svg", { width: BAR_W + 44, height: BAR_H });
-  const x = p => 22 + (p - 1) * scale;
-  svg.appendChild(svgEl("line", { x1: x(1), x2: x(track.length), y1: 11, y2: 11, stroke: "var(--domain-edge)" }));
-  for (const d of track.domains)
-    svg.appendChild(svgEl("rect", { x: x(d.start), y: 6, width: (d.end - d.start + 1) * scale, height: 10, fill: "var(--domain)", stroke: "var(--domain-edge)" }));
-  for (const s of model.singles)
-    svg.appendChild(svgEl("circle", { cx: x(s.query_pos + (model.ksize + 1) / 2), cy: 11, r: 1.6, fill: "var(--single)" }));
-  for (const b of model.runs)
-    svg.appendChild(svgEl("line", { x1: x(b.query_start + 1), x2: x(b.query_end), y1: 11, y2: 11, stroke: "var(--run)", "stroke-width": 4, "stroke-linecap": "round" }));
-  svg.appendChild(svgEl("text", { x: 18, y: 15, "text-anchor": "end", "font-size": 9 }, 1));
-  svg.appendChild(svgEl("text", { x: x(track.length) + 4, y: 15, "font-size": 9 }, track.length));
-  return svg;
+function titles() {
+  const kinds = R.classes.map(c => c.label.split(" (")[0]).join("/");
+  document.getElementById("title").textContent =
+    `${Q.label} against ${R.n_entries} database entries (${R.n_proteins} proteins): shared ${K}-mers in the ${R.alphabet}`;
+  document.getElementById("definition").textContent =
+    (R.classes.length ? `A shared ${K}-mer is ${K} consecutive residues with the same ${kinds} pattern in both proteins. ` : `A shared ${K}-mer is ${K} consecutive identical residues. `) +
+    `A run is 2 or more consecutive shared ${K}-mers on one diagonal. Entries of one gene fold into one row; the ` +
+    `${R.rows.length} rows shown are the best by ${R.stat_name}. Click a row for its dot plot and alignments; hover a bar for its coordinates.`;
+  const sel = document.getElementById("sort");
+  for (const [key, [, label]] of Object.entries(SORTS)) { const o = document.createElement("option"); o.value = key; o.textContent = label; sel.appendChild(o); }
 }
 
-function queryTrack(track) {
-  // The query alone, wider, with domain names, above the table.
-  const W = 520, scale = W / track.length;
-  const svg = svgEl("svg", { width: W + 60, height: 40 });
-  const x = p => 30 + (p - 1) * scale;
-  svg.appendChild(svgEl("line", { x1: x(1), x2: x(track.length), y1: 26, y2: 26, stroke: "var(--domain-edge)" }));
-  track.domains.forEach((d, i) => {
-    svg.appendChild(svgEl("rect", { x: x(d.start), y: 20, width: (d.end - d.start + 1) * scale, height: 12, fill: "var(--domain)", stroke: "var(--domain-edge)" }));
-    svg.appendChild(svgEl("text", { x: x((d.start + d.end) / 2), y: 14 - (labelsCollide(track, scale) && i % 2 ? 11 : 0), "text-anchor": "middle" }, d.name));
+function reportLegend() {
+  const box = document.getElementById("legend");
+  const add = (mark, text) => { const s = el("span"); s.innerHTML = mark + " " + text; box.appendChild(s); };
+  add(`<i class="seg"></i>`, `run of consecutive shared ${K}-mers with ${SOLID} or more identical residues`);
+  add(`<i class="runlow-sw"></i>`, `run with fewer than ${SOLID} identical residues`);
+  add(`<i class="cov-sw"></i>`, `database entries with any run over this query residue (grey) and with a ${SOLID}-or-more-identical run (black)`);
+  add(`<i class="trk"></i>`, "query protein, with its domains as boxes");
+  for (const c of R.classes) { const st = classStyles({ classes: R.classes })[c.symbol]; add(`<i class="sw" style="background:${st[0]};border-color:${st[1]}"></i>`, c.label); }
+  add(`<b class="mid">G</b>`, "identical residue, written between the rows");
+}
+
+function areaPath(vals, mx, H) {
+  let d = `M0 ${H}`;
+  vals.forEach((v, i) => { const y = (H - v / mx * H).toFixed(1); d += `L${X(i + 1).toFixed(1)} ${y}L${X(i + 2).toFixed(1)} ${y}`; });
+  return d + `L${TW} ${H}Z`;
+}
+
+function histogram() {
+  const { any, solid } = R.coverage, mx = Math.max(1, ...any), H = 40;
+  const svg = svgEl("svg", { width: TW, height: H + 4 });
+  svg.appendChild(svgEl("path", { class: "cov", d: areaPath(any, mx, H) }));
+  svg.appendChild(svgEl("path", { class: "cov5", d: areaPath(solid, mx, H) }));
+  svg.appendChild(svgEl("line", { class: "ax", x1: 0, x2: TW, y1: H, y2: H }));
+  return [svg, mx, any.indexOf(mx) + 1, Math.max(0, ...solid)];
+}
+
+function queryLine() {
+  const svg = svgEl("svg", { width: TW, height: 34 });
+  svg.appendChild(svgEl("line", { class: "pl", x1: 0, x2: TW, y1: 9, y2: 9 }));
+  const stagger = labelsCollide(Q, PX);
+  Q.domains.forEach((d, i) => {
+    svg.appendChild(svgEl("rect", { class: "reg", x: X(d.start), y: 2, width: X(d.end + 1) - X(d.start), height: 14, rx: 2 }));
+    svg.appendChild(svgEl("text", { x: (X(d.start) + X(d.end + 1)) / 2, y: 30 - (stagger && i % 2 ? 0 : 0), "text-anchor": "middle" }, d.name));
   });
-  svg.appendChild(svgEl("text", { x: 26, y: 30, "text-anchor": "end", "font-size": 9 }, 1));
-  svg.appendChild(svgEl("text", { x: x(track.length) + 4, y: 30, "font-size": 9 }, track.length));
   return svg;
 }
 
-const fmtP = p => p === 0 ? "0" : p < 1e-3 ? p.toExponential(2) : p.toFixed(3);
-const COLUMNS = [
-  ["rank", "#", "num"], ["target", "Target", ""], ["description", "Description", "desc"],
-  ["n_runs", "Runs", "num"], ["n_shared", `Shared ${R.ksize}-mers`, "num"], ["containment", "Containment", "num"],
-  ["query_pvalue", "Query p-value", "num"], ["region_score", "Best region score", "num"], ["q_value", "q-value", "num"],
-  ["bar", "Position in query", ""],
-];
-let sortKey = "rank", sortAsc = true, openRank = null;
+function piles(runs) {
+  // Runs that overlap on the query, so a count can sit over the pile.
+  const sorted = [...runs].sort((a, b) => a.query_start - b.query_start), out = [];
+  for (const r of sorted) {
+    const last = out[out.length - 1];
+    if (last && r.query_start < last.end) { last.n++; last.end = Math.max(last.end, r.query_end); }
+    else out.push({ start: r.query_start, end: r.query_end, n: 1 });
+  }
+  return out.filter(p => p.n > 1);
+}
 
-function cellText(h, key) {
-  if (key === "containment") return h.containment.toFixed(3);
-  if (key === "query_pvalue" || key === "q_value") return fmtP(h[key]);
-  if (key === "region_score") return h.region_score.toFixed(2);
-  return String(h[key]);
+function track(row) {
+  const svg = svgEl("svg", { width: TW, height: 18 });
+  for (const r of row.runs) {
+    const solid = r.identical >= SOLID;
+    const rect = svgEl("rect", solid
+      ? { class: "run", x: X(r.query_start + 1), y: 6, width: Math.max(r.length * PX, 2), height: 8 }
+      : { class: "runlow", x: X(r.query_start + 1) + 0.5, y: 6.5, width: Math.max(r.length * PX - 1, 1), height: 7 });
+    rect.appendChild(svgEl("title", {}, `${Q.label} ${r.query_start + 1}–${r.query_end} × ${row.label} ${r.target_start + 1}–${r.target_end}: ${r.length} aa, ${r.identical} identical` + (r.polar === null ? "" : `, ${r.polar} polar`)));
+    svg.appendChild(rect);
+  }
+  for (const p of piles(row.runs)) svg.appendChild(svgEl("text", { class: "pile", x: (X(p.start + 1) + X(p.end + 1)) / 2, y: 5, "text-anchor": "middle" }, p.n));
+  return svg;
+}
+
+function cell(cls, text) { const d = el("div", cls); if (text !== undefined) d.textContent = text; return d; }
+
+function headerRows(table) {
+  const [hist, mx, at, mxSolid] = histogram();
+  const h = el("div", "g");
+  const hl = cell(null, "database entries with a run over this residue");
+  hl.appendChild(cell("small", `max ${mx} of ${R.n_entries}, at residue ${at}; ${mxSolid} with a ${SOLID}-or-more-identical run`));
+  h.appendChild(hl); for (let i = 0; i < 6; i++) h.appendChild(cell()); h.appendChild(hist); table.appendChild(h);
+  const q = el("div", "g");
+  const ql = cell(null, `${Q.label}, the query`); ql.appendChild(cell("small", `${QL} aa`));
+  q.appendChild(ql); for (let i = 0; i < 6; i++) q.appendChild(cell()); q.appendChild(queryLine()); table.appendChild(q);
+  const head = el("div", "g head");
+  for (const [cls, text] of [[null, "target, one row per protein"], ["num", "aa"], ["num", "runs"], ["num", "longest run, aa"], ["num", "identical in it"], ["num", `shared ${K}-mers`], ["num", R.stat_name], [null, `runs drawn on the query (residue 1 to ${QL})`]])
+    head.appendChild(cell(cls, text));
+  table.appendChild(head);
+}
+
+function proteinRow(row) {
+  const g = el("div", "g row" + (open.has(row.rank) ? " open" : ""));
+  const name = cell(null, row.description || row.label);
+  const extra = row.n_entries > 1 ? ` · ${row.n_entries - 1} more ${row.n_entries > 2 ? "entries" : "entry"} of this gene` : "";
+  name.appendChild(cell("small", `${row.entry.split("|").pop()}${row.gene ? " · " + row.gene : ""}${extra}`));
+  name.title = row.target_name + (row.other_entries.length ? "\nalso: " + row.other_entries.join(", ") : "");
+  g.appendChild(name);
+  for (const v of [row.length, row.runs.length, row.best_length, row.best_identical, row.n_shared, fmtStat(row.stat)]) g.appendChild(cell("num", v));
+  g.appendChild(track(row));
+  g.onclick = () => { open.has(row.rank) ? open.delete(row.rank) : open.add(row.rank); renderTable(); };
+  return g;
+}
+
+function expansion(row) {
+  const d = el("div", "exp");
+  const panel = el("div");
+  d.appendChild(panel);
+  const shown = Math.min(row.runs.length, R.max_runs_shown);
+  const m = shown < row.runs.length ? { ...row.model, runs: row.model.runs.slice(0, shown) } : row.model;
+  renderPair(panel, m);
+  if (shown < row.runs.length) d.appendChild(el("p", "shown", `Showing the ${shown} longest of ${row.runs.length} runs.`));
+  return d;
 }
 
 function renderTable() {
-  const table = document.getElementById("hits");
+  const table = document.getElementById("table");
   table.innerHTML = "";
-  const head = el("tr");
-  for (const [key, label, cls] of COLUMNS) {
-    const th = el("th", cls + (key === sortKey ? " sorted" + (sortAsc ? " asc" : "") : ""), label);
-    if (key !== "bar") th.onclick = () => { sortAsc = key === sortKey ? !sortAsc : key === "target" || key === "description"; sortKey = key; renderTable(); };
-    head.appendChild(th);
-  }
-  table.appendChild(head);
-  const hits = [...R.hits].sort((a, b) => (a[sortKey] < b[sortKey] ? -1 : a[sortKey] > b[sortKey] ? 1 : 0) * (sortAsc ? 1 : -1));
-  for (const h of hits) {
-    const tr = el("tr", "hit" + (h.rank === openRank ? " open" : ""));
-    for (const [key, , cls] of COLUMNS) {
-      const td = el("td", cls);
-      if (key === "bar") { td.className = "bar"; td.appendChild(positionBar(R.query, h.model)); }
-      else td.textContent = cellText(h, key);
-      if (key === "description") td.title = h.target_name;
-      tr.appendChild(td);
-    }
-    tr.onclick = () => { openRank = openRank === h.rank ? null : h.rank; renderTable(); };
-    table.appendChild(tr);
-    if (h.rank === openRank) table.appendChild(detailRow(h));
+  headerRows(table);
+  const key = SORTS[document.getElementById("sort").value][0];
+  const cmp = (a, b) => { const ka = key(a), kb = key(b); for (let i = 0; i < ka.length; i++) if (ka[i] !== kb[i]) return ka[i] < kb[i] ? -1 : 1; return 0; };
+  for (const row of [...R.rows].sort(cmp)) {
+    table.appendChild(proteinRow(row));
+    if (open.has(row.rank)) table.appendChild(expansion(row));
   }
 }
 
-function detailRow(h) {
-  const tr = el("tr", "detail"), td = el("td");
-  td.colSpan = COLUMNS.length;
-  const close = el("button", "close", "close");
-  close.onclick = e => { e.stopPropagation(); openRank = null; renderTable(); };
-  td.appendChild(close);
-  const panel = el("div");
-  td.appendChild(panel);
-  renderPair(panel, h.model);
-  tr.appendChild(td);
-  tr.onclick = e => e.stopPropagation();
-  return tr;
-}
-
-document.getElementById("title").textContent = `${R.query.label}: ${R.hits.length} of ${R.n_targets_tested} targets, ${R.alphabet}, k=${R.ksize}`;
-document.getElementById("meta").textContent = `${R.query.name} (${R.query.length} aa). Rows are ordered by Benjamini-Hochberg corrected region tail probability (q-value); click a column to sort, click a row to open its alignments.`;
-document.getElementById("qtrack").appendChild(queryTrack(R.query));
+titles(); reportLegend();
+document.getElementById("sort").onchange = renderTable;
+document.getElementById("expandall").onchange = e => { open = e.target.checked ? new Set(R.rows.map(r => r.rank)) : new Set(); renderTable(); };
 renderTable();
 """
 
@@ -311,14 +481,13 @@ REPORT_PAGE = r"""<!DOCTYPE html>
 </head>
 <body>
 <h1 id="title"></h1>
-<p class="meta" id="meta"></p>
-<div class="legend">
-  <span><i class="trk"></i> query protein, with its domains as boxes</span>
-  <span><i class="seg"></i> run of 2 or more consecutive shared k-mers, on the query</span>
-  <span><i class="dotm"></i> single shared k-mer</span>
+<p class="sub" id="definition"></p>
+<div class="controls">
+  <label>sort rows by <select id="sort"></select></label>
+  <label><input type="checkbox" id="expandall"> expand every row</label>
 </div>
-<div class="qtrack" id="qtrack"></div>
-<div class="scroll"><table id="hits"></table></div>
+<div class="legend" id="legend"></div>
+<div class="scroll"><div id="table"></div></div>
 <script>
 __PAIR_JS__
 __REPORT_JS__
@@ -350,7 +519,9 @@ def _build_arg_parser():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--query-name", help="one query's header, or its first token; default every query in the CSV")
     p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="Pfam-style domain tables for queries and targets")
-    p.add_argument("--max-hits", type=int, default=100, help="targets per query, best q-value first (default 100)")
+    p.add_argument("--max-rows", type=int, default=100, help="protein rows per query, best ranking statistic first (default 100)")
+    p.add_argument("--max-runs-shown", type=int, default=10, help="alignments per opened row, longest first (default 10)")
+    p.add_argument("--solid-identical", type=int, default=5, help="identical residues from which a run's bar is drawn solid (default 5)")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run in the alignments")
     p.add_argument("--kmerseek", help="path to the kmerseek binary (default: PATH, then target/release, target/debug)")
     return p

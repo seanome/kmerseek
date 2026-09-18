@@ -233,22 +233,37 @@ long; the figure draws those as singles and gives alignments only to runs.
 ## Visualizing a whole search
 
 `scripts/visualize_search.py` turns `kmerseek search` output into one HTML report per
-query, laid out like a Foldseek results page: one row per target hit with the numbers
-in the row (runs, shared k-mers, containment, whole-query p-value, best region score,
-Benjamini-Hochberg q-value) and a bar showing where the hit's runs land on the query.
-Click a row and the pair view above opens underneath it. Columns sort on click.
+query. The query is the shared axis: it is drawn once at the top as a line with its
+domains, under a histogram of how many database entries have a run over each residue
+(grey for any run, black for a run with 5 or more identical residues). That histogram
+is the noise map: the BCL-2 loop is covered by a third of unrelated proteins because
+Ala/Pro/Gly stretches match it letter for letter, so a run there is discounted at a
+glance and a run in BH1 is not.
+
+Below it, one row per protein with the numbers in the row (length, runs, longest run,
+identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
+a bar at its query coordinates, solid when it has 5 or more identical residues and
+hollow otherwise; overlapping bars get a count. Database entries of one gene fold into
+one row, so a family search is not a list of TrEMBL copies of the query. Click a row
+and the pair view above opens underneath it.
 
 ```bash
-kmerseek search -q ced9.fasta -t bcl2_family.rocksdb -o results.csv --alphabet hp --ksize 12
+kmerseek search -q bcl2.fasta -t bcl2_family.rocksdb -o results.csv --alphabet hp --ksize 12
 
-python scripts/visualize_search.py --csv results.csv --query-fasta ced9.fasta \
+python scripts/visualize_search.py --csv results.csv --query-fasta bcl2.fasta \
     --target-fasta bcl2_family.fasta.gz --output-dir report/ --domains pfam_domains.tsv
 ```
 
-The pair view needs every shared k-mer, which the CSV does not carry, so the script
-runs `kmerseek pair` once per hit (under a second for 24 hits) on sequences taken from
-the two FASTA files; `--target-fasta` is the FASTA the index was built from.
-`--max-hits` caps each query at the best N targets by q-value (default 100).
+Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
+Benjamini-Hochberg corrected region tail probability; the sort control also offers
+identical residues, run length, run count and shared k-mers, which put
+composition-driven hits (p53, POU4F1) among the family members and show why the
+ranking statistic is the default. The pair view needs every shared k-mer, which the
+CSV does not carry, so the script runs `kmerseek pair` once per row (1.3 s for 40
+rows) on sequences from the two FASTA files; `--target-fasta` is the FASTA the index
+was built from. `--max-rows` caps each query (default 100), `--max-runs-shown` caps the
+alignments per opened row (default 10, longest first), `--solid-identical` sets the
+solid-bar threshold (default 5).
 
 ## Alphabets
 

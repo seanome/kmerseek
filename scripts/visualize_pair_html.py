@@ -135,7 +135,10 @@ function renderDotPlot(m, container) {
   // Axes with 1-based ticks.
   svg.appendChild(svgEl("line", { x1: x0, x2: x0 + pw, y1: y0 + ph, y2: y0 + ph, stroke: "var(--secondary)" }));
   svg.appendChild(svgEl("line", { x1: x0, x2: x0, y1: y0, y2: y0 + ph, stroke: "var(--secondary)" }));
-  const ticks = L => [1, ...Array.from({ length: Math.floor((L - 1) / 100) }, (_, i) => (i + 1) * 100), L];
+  // 1, every 100 residues (200 past 600 aa, 500 past 1500), and the length; a round tick
+  // within 5% of the length would overlap its label.
+  const ticks = L => { const step = L <= 600 ? 100 : L <= 1500 ? 200 : 500;
+    return [1, ...Array.from({ length: Math.floor((L - 1) / step) }, (_, i) => (i + 1) * step).filter(t => L - t > L * 0.05), L]; };
   for (const p of ticks(qL)) svg.appendChild(svgEl("text", { x: sx(p), y: y0 + ph + 14, "text-anchor": "middle" }, p));
   for (const p of ticks(tL)) svg.appendChild(svgEl("text", { x: x0 - 6, y: sy(p) + 4, "text-anchor": "end" }, p));
   svg.appendChild(svgEl("text", { x: x0 + pw / 2, y: H - 4, "text-anchor": "middle" }, `${m.query.label} position (aa)`));
