@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """Plot the score distribution that `kmerseek index --ka-survival-out` wrote, with the
-fitted Karlin-Altschul line and the score range it was read from.
+fitted Karlin-Altschul line and the score bins it was read from.
 
-    python scripts/plot_ka_survival.py survival_database.csv [survival_shuffled.csv ...] -o fig.png
+    python scripts/plot_ka_survival.py survival_database.csv [survival_shuffled.csv ...] \\
+        -o fig.png --subtitle "SCOPe40, hp_thomas_dill2 k = 12, C = 2, X = 8"
 
-One panel per CSV. Dots: regions with score >= S. Line: the fit, K L N e^(-lambda S).
-Shaded band: the score bins the line was fitted on. Dashed vertical line: the first score
-bin above the fit whose count sat above the line, where related sequences start to show.
+One column per CSV. Top row: regions at each score S, the points the line is fitted to.
+Bottom row: the same regions summed (score >= S). Grey band: the bins used. Dotted line:
+30 regions, the floor below which a bin is not fitted. The title of each column gives
+lambda with the standard error of the slope over the fitted bins.
 """
 
 import argparse
@@ -21,75 +23,87 @@ import matplotlib.pyplot as plt
 OBSERVED = "#1f77b4"
 FITTED = "#d62728"
 WINDOW = "#cfcfcf"
-EXCESS = "#111111"
+FLOOR = "#111111"
+MIN_BIN_COUNT = 30
 
 
-def read_curve(path):
+def load(path):
     rows = list(csv.DictReader(open(path)))
     meta = rows[0]
     scores = [int(r["score"]) for r in rows]
-    observed = [int(r["n_regions_at_least"]) for r in rows]
-    fitted = [float(r["fitted_n_regions_at_least"]) for r in rows]
+    survival = [int(r["n_regions_at_least"]) for r in rows]
+    density = [survival[i] - (survival[i + 1] if i + 1 < len(survival) else 0) for i in range(len(survival))]
     window = [int(r["score"]) for r in rows if r["in_fit"] == "true"]
-    return meta, scores, observed, fitted, window
+    lam, k = float(meta["lambda"]), float(meta["k"])
+    residues, kmers = float(meta["query_residues"]), float(meta["database_kmers"])
+    ln_intercept = math.log(k * residues * kmers * (1 - math.exp(-lam)))
+    fit_density = [math.exp(ln_intercept - lam * s) for s in scores]
+    fit_survival = [d / (1 - math.exp(-lam)) for d in fit_density]
+    return meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept
 
 
-def excess_start(scores, observed, fitted, window):
-    """First score above the fit window where the observed count sits above the line by
-    more than two Poisson standard deviations, or None."""
-    for s, o, f in zip(scores, observed, fitted):
-        if s <= max(window) or o < 1:
-            continue
-        if math.log(o) - math.log(f) > 2.0 / math.sqrt(o) + 0.05:
-            return s
-    return None
+def slope_standard_error(scores, density, window, lam, ln_intercept):
+    points = [(s, d) for s, d in zip(scores, density) if s in window and d > 0]
+    n = len(points)
+    mean_s = sum(s for s, _ in points) / n
+    sxx = sum((s - mean_s) ** 2 for s, _ in points)
+    residuals = [math.log(d) - (ln_intercept - lam * s) for s, d in points]
+    return math.sqrt(sum(r * r for r in residuals) / (n - 2) / sxx)
 
 
-def draw_panel(ax, path, show_ylabel):
-    meta, scores, observed, fitted, window = read_curve(path)
-    lam = float(meta["lambda"])
-    k = float(meta["k"])
-    penalty = float(meta["mismatch_penalty"])
-    keep = [i for i, o in enumerate(observed) if o >= 1]
-    ax.axvspan(min(window) - 0.5, max(window) + 0.5, color=WINDOW, lw=0,
-               label="score bins the line was fitted on")
-    ax.plot([scores[i] for i in keep], [observed[i] for i in keep], "o", ms=3.5,
-            color=OBSERVED, label="regions with score ≥ S (observed)")
-    ax.plot(scores, fitted, "-", color=FITTED, lw=1.8,
-            label="fitted line K·L·N·e^(−λS)")
-    start = excess_start(scores, observed, fitted, window)
-    if start is not None:
-        ax.axvline(start, color=EXCESS, ls="--", lw=1.2,
-                   label="first score where counts rise above the line (related sequences)")
-    ax.set_yscale("log")
-    ax.set_ylim(0.5, max(observed) * 3)
-    ax.set_xlim(min(scores) - 1, max(min(scores) + 60, max(window) + 15))
-    ax.set_title(f"{meta['null']} queries: λ = {lam:.3f}, K = {k:.4f}", fontsize=10, loc="left")
-    ax.set_xlabel(f"region score S = matches − {penalty:g} × mismatches")
-    if show_ylabel:
-        ax.set_ylabel(f"regions with score ≥ S\n({meta['n_queries']} calibration queries)")
-    ax.spines[["top", "right"]].set_visible(False)
+def draw_column(axes, path, first_column):
+    meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept = load(path)
+    lam, k = float(meta["lambda"]), float(meta["k"])
+    se = slope_standard_error(scores, density, window, lam, ln_intercept)
+    xmax = max(window) + 30
+    rows = [
+        (density, fit_density, "o", "", "regions with score exactly S (observed)"),
+        (survival, fit_survival, "s", "none", "regions with score ≥ S (observed, same regions summed)"),
+    ]
+    for ax, (observed, fitted, marker, face, label) in zip(axes, rows):
+        ax.axvspan(min(window) - 0.5, max(window) + 0.5, color=WINDOW, lw=0,
+                   label=f"score bins the line is fitted on (≥ {MIN_BIN_COUNT} regions each)")
+        keep = [i for i, o in enumerate(observed) if o > 0 and scores[i] <= xmax]
+        style = dict(mfc=face) if face else {}
+        ax.plot([scores[i] for i in keep], [observed[i] for i in keep], marker, ms=3.5,
+                color=OBSERVED, label=label, **style)
+        keep = [i for i in range(len(scores)) if scores[i] <= xmax]
+        ax.plot([scores[i] for i in keep], [fitted[i] for i in keep], "-", color=FITTED, lw=1.8,
+                label="fitted line, slope −λ")
+        ax.axhline(MIN_BIN_COUNT, color=FLOOR, ls=":", lw=1,
+                   label=f"{MIN_BIN_COUNT} regions: bins below this are not fitted")
+        ax.set_yscale("log")
+        ax.set_ylim(0.5, max(observed) * 3)
+        ax.spines[["top", "right"]].set_visible(False)
+    axes[0].set_title(f"{meta['null']} queries: λ = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
+    axes[1].set_xlabel(f"region score S = matches − {float(meta['mismatch_penalty']):g} × mismatches")
+    if first_column:
+        axes[0].set_ylabel("regions with score exactly S\n(what the line is fitted to)")
+        axes[1].set_ylabel("regions with score ≥ S\n(the same fit, summed)")
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("csv", nargs="+")
     parser.add_argument("-o", "--output", required=True)
-    parser.add_argument("--title", default="λ and K are read off the straight part of the curve; related sequences lift the right-hand end")
+    parser.add_argument("--subtitle", default="")
     args = parser.parse_args()
 
     n = len(args.csv)
-    fig, axes = plt.subplots(1, n, figsize=(4.6 * n, 4.4), dpi=150, sharey=True, squeeze=False)
-    for i, (ax, path) in enumerate(zip(axes[0], args.csv)):
-        draw_panel(ax, path, show_ylabel=(i == 0))
-    handles, labels = axes[0][0].get_legend_handles_labels()
-    seen = {}
-    for h, l in zip(handles, labels):
-        seen.setdefault(l, h)
-    fig.legend(seen.values(), seen.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.93),
+    fig, axes = plt.subplots(2, n, figsize=(4.5 * n, 7.6), dpi=150, sharex="col", squeeze=False)
+    for j, path in enumerate(args.csv):
+        draw_column([axes[0][j], axes[1][j]], path, first_column=(j == 0))
+    handles = {}
+    for ax in (axes[0][0], axes[1][0]):
+        for h, l in zip(*ax.get_legend_handles_labels()):
+            handles.setdefault(l, h)
+    fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.935),
                ncol=2, frameon=False, fontsize=9)
-    fig.suptitle(args.title, fontsize=11, x=0.02, ha="left", y=0.99)
-    fig.tight_layout(rect=(0, 0, 1, 0.84))
+    title = "λ is the slope and K the intercept of ln(regions at score S); the fit stops where counts rise above the line"
+    if args.subtitle:
+        title += "\n" + args.subtitle + ", ± is the slope's standard error"
+    fig.suptitle(title, fontsize=11, x=0.02, ha="left", y=1.0)
+    fig.tight_layout(rect=(0, 0, 1, 0.86))
     fig.savefig(args.output, bbox_inches="tight")
     if args.output.endswith(".png"):
         fig.savefig(args.output[:-4] + ".svg", bbox_inches="tight")
