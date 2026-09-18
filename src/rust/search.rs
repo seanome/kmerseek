@@ -159,7 +159,11 @@ impl Display for KaSource {
                 c.k,
                 c.x_range().0,
                 c.x_range().1,
-                c.bend_score.map_or(String::new(), |b| format!(", relatives from x {:.1}", b as f64 * c.bin_width)),
+                c.bend_score.map_or(String::new(), |b| format!(
+                    ", {} x {:.1}",
+                    if c.null == DecoyNull::Database { "relatives from" } else { "counts rise above the line from" },
+                    b as f64 * c.bin_width
+                )),
                 c.rms_residual,
                 c.reference_lambda.map_or(String::new(), |l| format!(
                     "; {} reference slope {:.3} over the same bins",
