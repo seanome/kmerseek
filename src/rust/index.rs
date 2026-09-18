@@ -2224,7 +2224,7 @@ mod tests {
     use super::{LegacyProteomeIndexMetadata, ProteomeIndexMetadata, KMERSEEK_VERSION_KEY};
     use crate::sketch::ProteinSketch;
     use crate::tests::test_fixtures::{
-        TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
+        TEST_CED9_FASTA, TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST, TEST_PROTEIN,
     };
     use crate::tests::test_utils;
     use std::collections::{BTreeMap, HashMap};
@@ -4531,6 +4531,98 @@ mod tests {
                 "error should name the missing chunk, got: {err}"
             ),
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_garbled_chunk_count_is_an_error() -> Result<()> {
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("garbled.db"), 10, 1, "protein20", false)?;
+        index.db.put(b"search_cache_chunks", b"three")?;
+        match index.load_search_cache() {
+            Ok(_) => panic!("a count that is not a number must not load"),
+            Err(err) => assert_eq!(
+                err.to_string(),
+                "Corrupt index: search_cache_chunks is not a number: \"three\""
+            ),
+        }
+        Ok(())
+    }
+
+    /// An index from before the search cache existed still searches, through the slow
+    /// path that loads every signature, and finds what the cached path finds.
+    #[test]
+    fn test_search_without_a_cache_takes_the_slow_path() -> Result<()> {
+        use crate::search::{ProteinSearcher, SearchFilters};
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let path = dir.path().join("uncached.db");
+        let index = ProteomeIndex::new(&path, 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        index.save_state()?;
+        assert!(index.load_search_cache()?.is_some(), "save_state writes the cache");
+        // A cache this small sits under one key; a large one is chunked with a count.
+        index.db.delete(b"search_cache")?;
+        index.db.delete(b"search_cache_chunks")?;
+        assert!(index.load_search_cache()?.is_none());
+        drop(index);
+
+        let query_index =
+            ProteomeIndex::new(dir.path().join("query.db"), 12, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, 1000)?;
+        let queries: Vec<ProteinSketch> =
+            query_index.get_signatures().iter().map(|e| e.value().clone()).collect();
+        assert_eq!(queries.len(), 1);
+        let searcher = ProteinSearcher::load(&path)?;
+        let results = searcher.search(&queries, &SearchFilters::default())?;
+        assert_eq!(results.len(), 25, "CED9 hits every protein of the BCL2 family");
+        let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+        assert_eq!(bcl2.n_intersecting_hashes, 24, "the same 24 shared k-mers as the cached path");
+        Ok(())
+    }
+
+    #[test]
+    fn test_put_ka_calibration_replaces_the_fit_for_the_same_penalty_and_xdrop() -> Result<()> {
+        use crate::karlin_altschul::{DecoyNull, KaCalibration};
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("ka.db"), 10, 1, "protein20", false)?;
+        let fit = |penalty: f64, xdrop: f64, k: f64| KaCalibration {
+            mismatch_penalty: penalty,
+            xdrop,
+            null: DecoyNull::Shuffled,
+            seed: 1,
+            n_queries: 25,
+            query_residues: 9288,
+            database_kmers: 8340,
+            n_regions: 9561,
+            match_probability: 0.5,
+            lambda_analytic: 0.481,
+            slope: 0.806,
+            k,
+            bin_width: 0.5,
+            score_lo: 15,
+            score_hi: 22,
+            bend_score: None,
+            rms_residual: 0.086,
+            survival: vec![(12, 9561)],
+            reference_survival: Vec::new(),
+            reference_lambda: None,
+            reference: None,
+        };
+        assert_eq!(index.ka_calibrations()?, Vec::new());
+        index.put_ka_calibration(&fit(2.0, 8.0, 0.0197))?;
+        index.put_ka_calibration(&fit(3.0, 8.0, 0.0673))?;
+        assert_eq!(index.ka_calibrations()?.len(), 2);
+
+        // A refit under the same penalty and X-drop takes the old fit's place.
+        index.put_ka_calibration(&fit(2.0, 8.0, 0.0210))?;
+        let all = index.ka_calibrations()?;
+        assert_eq!(all.len(), 2);
+        assert_eq!(index.ka_calibration(2.0, 8.0)?.map(|c| c.k), Some(0.0210));
+        assert_eq!(index.ka_calibration(3.0, 8.0)?.map(|c| c.k), Some(0.0673));
+        assert_eq!(index.ka_calibration(2.0, 6.0)?, None);
         Ok(())
     }
 }

@@ -650,6 +650,69 @@ mod tests {
         assert_eq!(fit_scores(&[]), None);
     }
 
+    /// Counts that grow with the score describe no exponential tail; neither fit will read
+    /// a lambda off them.
+    #[test]
+    fn test_fits_refuse_a_rising_curve() {
+        let mut rising = vec![12.0; 100];
+        for (score, n) in [(13.0, 30), (14.0, 40), (15.0, 50), (16.0, 60)] {
+            rising.extend(std::iter::repeat_n(score, n));
+        }
+        assert_eq!(fit_scores(&rising), None);
+        let mut flat = vec![12.0; 100];
+        for score in [13.0, 14.0, 15.0, 16.0] {
+            flat.extend(std::iter::repeat_n(score, 45));
+        }
+        assert_eq!(fit_scores_with_reference(&rising, &flat), None);
+        // The same counts falling with the score fit fine. Least squares through ln(count)
+        // at scores 13..=16 gives slope -(3 ln(60/30) + ln(50/40)) / 10 = -ln(10) / 10.
+        let mut falling = vec![12.0; 100];
+        for (score, n) in [(13.0, 60), (14.0, 50), (15.0, 40), (16.0, 30)] {
+            falling.extend(std::iter::repeat_n(score, n));
+        }
+        assert!((fit_scores(&falling).unwrap().lambda - 10f64.ln() / 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_calibration_reads_its_fit_window_in_x() {
+        let fit = KaCalibration {
+            mismatch_penalty: 2.0,
+            xdrop: 8.0,
+            null: DecoyNull::Database,
+            seed: 1,
+            n_queries: 25,
+            query_residues: 9288,
+            database_kmers: 8340,
+            n_regions: 9838,
+            match_probability: 0.5,
+            lambda_analytic: 0.481,
+            slope: 0.806,
+            k: 0.0115,
+            bin_width: BIN_WIDTH,
+            score_lo: 15,
+            score_hi: 22,
+            bend_score: None,
+            rms_residual: 0.086,
+            survival: vec![(12, 9838)],
+            reference_survival: Vec::new(),
+            reference_lambda: None,
+            reference: Some(DecoyNull::ShuffledDipeptide),
+        };
+        // The slope of ln(count) against lambda_pair S is the lambda scale itself; the
+        // window is bins 15..=22 of width 0.5, so x from 7.5 up to but not including 11.5.
+        assert_eq!(fit.lambda_scale(), 0.806);
+        assert_eq!(fit.n_fit_points(), 8);
+        assert_eq!(fit.x_range(), (7.5, 11.5));
+    }
+
+    #[test]
+    fn test_decoy_null_names_match_the_flag_values() {
+        assert_eq!(DecoyNull::Database.to_string(), "database");
+        assert_eq!(DecoyNull::Shuffled.to_string(), "shuffled");
+        assert_eq!(DecoyNull::ShuffledDipeptide.to_string(), "shuffled-dipeptide");
+        assert_eq!(DecoyNull::Reversed.to_string(), "reversed");
+    }
+
     #[test]
     fn test_sampler_is_deterministic_and_distinct() {
         let a = SplitMix64::new(7).sample_indices(1000, 25);

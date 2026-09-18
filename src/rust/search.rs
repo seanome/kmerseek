@@ -240,7 +240,8 @@ fn match_probability(p: &HashMap<u8, f64>, q: &HashMap<u8, f64>) -> f64 {
 /// i.e. a < penalty / (1 + penalty). Above that, agreement is what these two compositions
 /// do by default and no run of it is surprising: returns 0. The left side is convex with
 /// value 1 at x = 0 and slope a - penalty (1-a) there, so bisection on [0, hi] with hi
-/// pushed out until f(hi) > 1 is safe.
+/// pushed out until f(hi) > 1 is safe; e^hi overflows by hi = 1024, so with a > 0 that
+/// takes at most ten doublings.
 pub fn karlin_altschul_lambda(a: f64, penalty: f64) -> f64 {
     let b = 1.0 - a;
     if a <= 0.0 || a.is_nan() || a - penalty * b >= 0.0 {
@@ -250,9 +251,6 @@ pub fn karlin_altschul_lambda(a: f64, penalty: f64) -> f64 {
     let mut hi = 1.0;
     while f(hi) <= 1.0 {
         hi *= 2.0;
-        if hi > 1e6 {
-            return 0.0;
-        }
     }
     let (mut lo, mut hi) = (0.0, hi);
     for _ in 0..80 {
@@ -2184,10 +2182,10 @@ pub fn extend_regions(
     for r in extended {
         if let Some(last) = merged.last_mut() {
             if diagonal(last) == diagonal(&r) && r.start <= last.end {
-                if r.end > last.end {
-                    last.end = r.end;
-                    last.target_end = r.target_end;
-                }
+                // The union of the two spans. Both walks past the later seed see the same
+                // residues from the same score, so in practice the ends already agree.
+                last.end = last.end.max(r.end);
+                last.target_end = last.target_end.max(r.target_end);
                 last.n_shared += r.n_shared;
                 continue;
             }
@@ -2259,10 +2257,9 @@ pub fn chain_regions(
     let mut out: Vec<MatchedRegion> = Vec::with_capacity(sorted.len());
     let mut chain: Vec<MatchedRegion> = Vec::new();
     let ln_kmn = (params.ka_k * m * n_t).ln();
+    // Called only with a member in the chain: inside the loop after `chain.last()` found
+    // one, and after the loop, which pushed at least the last region.
     let flush = |chain: &mut Vec<MatchedRegion>, out: &mut Vec<MatchedRegion>| {
-        if chain.is_empty() {
-            return;
-        }
         if chain.len() == 1 {
             out.push(chain.pop().unwrap());
             return;
@@ -2912,35 +2909,49 @@ mod tests {
         Ok(())
     }
 
+    /// The HP pattern behind `one_flip_pair` and `one_deletion_pair`: 25 positions with no
+    /// repeated 8-mer, so at k=8 the only shared k-mers between two copies sit on one
+    /// diagonal.
+    const HP_PATTERN: &str = "hpphhpphphphhppphhhppphhp";
+
+    /// A protein whose Lehninger HP encoding is `pattern`. h-class residues cycle through
+    /// AFILMV and p-class through DEKNQR, so two sketches built from the same pattern share
+    /// their encoding but not their raw sequence.
+    fn sketch_from_hp_pattern(name: &str, pattern: &str) -> ProteinSketch {
+        let (h, p) = ("AFILMV".as_bytes(), "DEKNQR".as_bytes());
+        let mut hi = 0usize;
+        let mut pi = 0usize;
+        let seq: String = pattern
+            .bytes()
+            .map(|c| {
+                let r = if c == b'h' {
+                    hi += 1;
+                    h[hi % h.len()]
+                } else {
+                    pi += 1;
+                    p[pi % p.len()]
+                };
+                r as char
+            })
+            .collect();
+        ProteinSketch::from_protein_sequence(name, &seq, 8, 1, "hp").unwrap()
+    }
+
     /// Two sequences whose HP encodings agree on 25 positions except one flip in the
-    /// middle. The pattern has no repeated 8-mer, so at k=8 the only shared k-mers sit on
-    /// the main diagonal; residues cycle so the raw sequences differ too.
+    /// middle, so the exact runs are 0..12 and 13..25 on the main diagonal.
     fn one_flip_pair() -> (ProteinSketch, ProteinSketch) {
-        // h-class residues cycle through AFILMV, p-class through DEKNQR (Lehninger).
-        let pattern = "hpphhpphphphhppphhhppphhp";
-        let flip_at = 12;
-        let build = |name: &str, flip: bool| {
-            let (h, p) = ("AFILMV".as_bytes(), "DEKNQR".as_bytes());
-            let mut hi = 0usize;
-            let mut pi = 0usize;
-            let seq: String = pattern
-                .bytes()
-                .enumerate()
-                .map(|(i, c)| {
-                    let is_h = (c == b'h') != (flip && i == flip_at);
-                    let r = if is_h {
-                        hi += 1;
-                        h[hi % h.len()]
-                    } else {
-                        pi += 1;
-                        p[pi % p.len()]
-                    };
-                    r as char
-                })
-                .collect();
-            ProteinSketch::from_protein_sequence(name, &seq, 8, 1, "hp").unwrap()
-        };
-        (build("q", false), build("t", true))
+        let flipped = format!("{}p{}", &HP_PATTERN[..12], &HP_PATTERN[13..]);
+        assert_eq!(&HP_PATTERN[12..13], "h", "position 12 is the h that gets flipped");
+        (sketch_from_hp_pattern("q", HP_PATTERN), sketch_from_hp_pattern("t", &flipped))
+    }
+
+    /// The same pattern against itself with position 9 deleted from the target, so the
+    /// exact runs are 0..9 on the main diagonal and 10..25 one diagonal over (target
+    /// 9..24): one alignment with a one-residue indel in it. Position 9 is the one
+    /// deletion that leaves no other shared 8-mer and lets neither run cross the gap.
+    fn one_deletion_pair() -> (ProteinSketch, ProteinSketch) {
+        let deleted = format!("{}{}", &HP_PATTERN[..9], &HP_PATTERN[10..]);
+        (sketch_from_hp_pattern("q", HP_PATTERN), sketch_from_hp_pattern("t", &deleted))
     }
 
     #[test]
@@ -3029,6 +3040,176 @@ mod tests {
         );
         assert_eq!(kept.len(), 2);
         assert!(kept.iter().all(|r| r.n_chained == 1));
+    }
+
+    /// Where a region sits and what it counts; the fields `extend_regions` and
+    /// `chain_regions` promise to leave alone when they have nothing to work with.
+    fn region_span(r: &MatchedRegion) -> (u32, u32, u32, u32, u32, u32) {
+        (r.start, r.end, r.target_start, r.target_end, r.n_shared, r.n_mismatches)
+    }
+
+    #[test]
+    fn test_chain_regions_spans_a_one_residue_deletion() {
+        // Two exact runs on neighbouring diagonals: one alignment with a one-residue indel.
+        let (q, t) = one_deletion_pair();
+        let exact = find_matched_regions(&q, &t, &q.intersect(&t));
+        assert_eq!(exact.len(), 2, "{exact:?}");
+        assert_eq!(region_span(&exact[0]), (0, 9, 0, 9, 2, 0));
+        assert_eq!(region_span(&exact[1]), (10, 25, 9, 24, 8, 0));
+        let params = ExtensionParams {
+            mismatch_penalty: 9.0,
+            xdrop: 8.0,
+            ka_k: 0.03,
+            ka_lambda_scale: 1.0,
+            chain_max_gap: 5,
+            chain_max_shift: 1,
+        };
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let chain = |params: ExtensionParams| {
+            chain_regions(
+                exact.clone(),
+                qe.as_bytes(),
+                te.as_bytes(),
+                q.get_raw_sequence(),
+                t.get_raw_sequence(),
+                params,
+                0.5,
+                25.0,
+                24.0,
+                100.0,
+            )
+        };
+        let chained = chain(params);
+        assert_eq!(chained.len(), 1, "{chained:?}");
+        let c = &chained[0];
+        // The query span is one residue longer than the target span, so the mismatches are
+        // the members' own, summed: none. The raw spans run to each sequence's own end.
+        assert_eq!(region_span(c), (0, 25, 0, 24, 10, 0));
+        assert_eq!((c.n_chained, c.length), (2, 25));
+        assert_eq!(c.subseq, q.get_raw_sequence().unwrap());
+        assert_eq!(c.target_subseq, t.get_raw_sequence().unwrap());
+        assert_eq!(c.moltype_seq, te);
+        // Karlin-Altschul sum statistic for two members: each contributes lambda S - ln(K m
+        // n_t) with S its run length (no mismatches), and P(T >= t) = e^-t t / 2 for r = 2.
+        let t_sum = 0.5 * (9.0 + 15.0) - 2.0 * (0.03 * 25.0 * 24.0f64).ln();
+        let p = (-t_sum).exp() * t_sum / 2.0;
+        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(c.evalue, 0.619_041_406_804_322, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_bits, -p.ln() / std::f64::consts::LN_2, epsilon = 1e-12);
+        // Held to one diagonal, the two runs stay apart.
+        let same_diagonal = chain(ExtensionParams { chain_max_shift: 0, ..params });
+        assert_eq!(same_diagonal.len(), 2);
+        assert!(same_diagonal.iter().all(|r| r.n_chained == 1));
+    }
+
+    #[test]
+    fn test_extend_and_chain_leave_regions_alone_without_sequences() {
+        // A sketch built without stored sequences has nothing to walk along, so the seeds
+        // come back as they were. One region alone has nothing to chain with either.
+        let (q, t) = one_flip_pair();
+        let exact = find_matched_regions(&q, &t, &q.intersect(&t));
+        assert_eq!(exact.len(), 2);
+        let bare = |name: &str, seq: &str| {
+            let mut s = ProteinSketch::new(name, 8, 1, "hp").unwrap();
+            s.add_protein(seq, false).unwrap();
+            s
+        };
+        let bq = bare("q", q.get_raw_sequence().unwrap());
+        let bt = bare("t", t.get_raw_sequence().unwrap());
+        assert_eq!((bq.get_raw_sequence(), bq.get_moltype_sequence()), (None, None));
+        assert_eq!(find_matched_regions(&bq, &bt, &bq.intersect(&bt)).len(), 0);
+        let params = ExtensionParams {
+            mismatch_penalty: 2.0,
+            xdrop: 8.0,
+            ka_k: 0.1,
+            ka_lambda_scale: 1.0,
+            chain_max_gap: 5,
+            chain_max_shift: 0,
+        };
+        let spans: Vec<_> = exact.iter().map(region_span).collect();
+        let unextended = extend_regions(exact.clone(), &bq, &bt, params);
+        assert_eq!(unextended.iter().map(region_span).collect::<Vec<_>>(), spans);
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let chain = |regions: Vec<MatchedRegion>, raw: Option<(&str, &str)>| {
+            let (q_raw, t_raw) = raw.map_or((None, None), |(a, b)| (Some(a), Some(b)));
+            chain_regions(
+                regions,
+                qe.as_bytes(),
+                te.as_bytes(),
+                q_raw,
+                t_raw,
+                params,
+                0.5,
+                25.0,
+                25.0,
+                100.0,
+            )
+        };
+        let unchained = chain(exact.clone(), None);
+        assert_eq!(unchained.iter().map(region_span).collect::<Vec<_>>(), spans);
+        let raw = Some((q.get_raw_sequence().unwrap(), t.get_raw_sequence().unwrap()));
+        let alone = chain(exact[..1].to_vec(), raw);
+        assert_eq!(alone.iter().map(region_span).collect::<Vec<_>>(), spans[..1]);
+    }
+
+    #[test]
+    fn test_lgamma_reflects_below_one_half() {
+        // Gamma(1/4) = 3.6256... is reached through the reflection formula; Gamma(1/2) =
+        // sqrt(pi) and Gamma(5) = 4! come straight from the series.
+        assert_relative_eq!(libm_lgamma(0.25), 3.625_609_908_221_908f64.ln(), epsilon = 1e-10);
+        assert_relative_eq!(libm_lgamma(0.5), std::f64::consts::PI.sqrt().ln(), epsilon = 1e-10);
+        assert_relative_eq!(libm_lgamma(5.0), 24f64.ln(), epsilon = 1e-10);
+    }
+
+    /// A searcher over one target, the flipped half of `one_flip_pair`, at hp k=8.
+    fn searcher_on_flipped_target(dir: &TempDir) -> Result<ProteinSearcher> {
+        let (_, t) = one_flip_pair();
+        let fasta = dir.path().join("target.fasta");
+        std::fs::write(&fasta, format!(">t\n{}\n", t.get_raw_sequence().unwrap()))?;
+        let index = ProteomeIndex::new(dir.path().join("index"), 8, 1, "hp", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        Ok(ProteinSearcher::new(index))
+    }
+
+    #[test]
+    fn test_search_chains_regions_when_asked() -> Result<()> {
+        // Through the searcher: a penalty the X-drop cannot absorb keeps the two seeds
+        // apart, and chaining joins them into one region with the sum statistic's E-value.
+        let dir = TempDir::new()?;
+        let mut searcher = searcher_on_flipped_target(&dir)?;
+        let (q, _) = one_flip_pair();
+        let strict = ExtensionParams {
+            mismatch_penalty: 9.0,
+            xdrop: 8.0,
+            ka_k: 0.03,
+            ka_lambda_scale: 1.0,
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        };
+        searcher.set_extension(Some(strict));
+        let apart = searcher.search(std::slice::from_ref(&q), &SearchFilters::default())?;
+        assert_eq!(apart.len(), 1);
+        let spans: Vec<_> = apart[0].matched_regions.iter().map(region_span).collect();
+        assert_eq!(spans, vec![(0, 12, 0, 12, 5, 0), (13, 25, 13, 25, 5, 0)]);
+        assert!(apart[0].matched_regions.iter().all(|r| r.n_chained == 1));
+
+        searcher.set_extension(Some(ExtensionParams { chain_max_gap: 5, ..strict }));
+        let chained = searcher.search(std::slice::from_ref(&q), &SearchFilters::default())?;
+        assert_eq!(chained.len(), 1);
+        let regions = &chained[0].matched_regions;
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let c = &regions[0];
+        assert_eq!(region_span(c), (0, 25, 0, 25, 10, 1));
+        assert_eq!((c.n_chained, c.length), (2, 25));
+        // The query is 12 h and 13 p, the target 11 h and 14 p, so a = (12*11 + 13*14)/625;
+        // both members score 12 against ln(K m n_t) = ln(0.03 * 25 * 25); one target.
+        let lambda = karlin_altschul_lambda(314.0 / 625.0, 9.0);
+        let t_sum = 2.0 * (lambda * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
+        let p = (-t_sum).exp() * t_sum / 2.0;
+        assert_relative_eq!(c.evalue, p, epsilon = 1e-12);
+        assert_relative_eq!(c.evalue, 0.000_128_092_796_225_336_54, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_bits, -p.ln() / std::f64::consts::LN_2, epsilon = 1e-12);
+        Ok(())
     }
 
     #[test]
