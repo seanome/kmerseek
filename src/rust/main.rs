@@ -111,6 +111,45 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         ka_survival_out: Option<PathBuf>,
     },
+    /// Fit and store the Karlin-Altschul lambda and K of an existing index for one more
+    /// mismatch penalty and X-drop. `kmerseek index` fits one pair at build time; a search
+    /// with a different `--extend-mismatch-penalty` then either finds a fit stored here or
+    /// has to fit its own on every run.
+    Calibrate {
+        /// Index directory, as written by `kmerseek index`. Opened read-write, so no
+        /// search may have it open at the same time.
+        #[arg(short, long)]
+        target: PathBuf,
+
+        /// The `--extend-mismatch-penalty` the fit is for.
+        #[arg(long, default_value = "2.0")]
+        extend_mismatch_penalty: f64,
+
+        /// The `--extend-xdrop` the fit assumes.
+        #[arg(long, default_value = "8.0")]
+        extend_xdrop: f64,
+
+        /// How many database sequences to search against the index to fit lambda and K.
+        #[arg(long, default_value = "200")]
+        ka_queries: usize,
+
+        /// Seed for picking the calibration sequences, so the fit is reproducible.
+        #[arg(long, default_value = "1")]
+        ka_seed: u64,
+
+        /// What the calibration queries are; see `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
+        ka_null: DecoyNull,
+
+        /// For `--ka-null database`: how the reference queries are made; see
+        /// `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
+        ka_reference: DecoyNull,
+
+        /// Write the survival curve the fit was read from to this CSV.
+        #[arg(long, value_name = "PATH")]
+        ka_survival_out: Option<PathBuf>,
+    },
     /// Search query sequences against a protein database
     Search {
         /// Query FASTA file path
@@ -964,6 +1003,33 @@ fn main() -> IndexResult<()> {
                 eprintln!("Average TF-IDF: {:.6}", avg_tfidf);
                 eprintln!("Average database k-mer frequency: {:.6}", avg_database_kmer_freq);
             }
+        }
+        Commands::Calibrate {
+            target,
+            extend_mismatch_penalty,
+            extend_xdrop,
+            ka_queries,
+            ka_seed,
+            ka_null,
+            ka_reference,
+            ka_survival_out,
+        } => {
+            if ka_queries == 0 {
+                return Err(
+                    anyhow::anyhow!("--ka-queries must be at least 1 to fit anything").into()
+                );
+            }
+            eprintln!("Opening index {} read-write", target.display());
+            let index = ProteomeIndex::open_for_calibration(&target)?;
+            let settings = KaCalibrationSettings {
+                mismatch_penalty: extend_mismatch_penalty,
+                xdrop: extend_xdrop,
+                null: ka_null,
+                reference: ka_reference,
+                n_queries: ka_queries,
+                seed: ka_seed,
+            };
+            calibrate_index(index, settings, ka_survival_out.as_deref())?;
         }
         Commands::Pair { query, target, query_name, target_name, output, ksize, alphabet } => {
             run_pair(&query, &target, query_name, target_name, output, ksize, alphabet.into())?;

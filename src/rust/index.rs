@@ -1193,6 +1193,21 @@ impl ProteomeIndex {
         // multiple search processes to query the same index concurrently. This is the
         // only read-only open; `load()` and `get_index_parameters()` build on it.
         let db = DB::open_for_read_only(&opts, path, false)?;
+        Self::from_saved_db(db)
+    }
+
+    /// Open a finished index read-write, to store a Karlin-Altschul fit in it
+    /// (`kmerseek calibrate`). Takes the exclusive LOCK file, so nothing else may have
+    /// the index open; every other reader goes through `open_for_search`.
+    pub fn open_for_calibration<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
+        let opts = Self::create_rocksdb_options(false);
+        let db = DB::open(&opts, path)?;
+        Self::from_saved_db(db)
+    }
+
+    /// The struct around an already-open database that holds a saved index: metadata
+    /// read, ingest state marked saved so `finalize` is a no-op and `ingest` refuses.
+    fn from_saved_db(db: DB) -> IndexResult<Self> {
         let metadata = Self::read_metadata(&db)?.ok_or(IndexError::NoSavedState)?;
         let kmerseek_version = Self::read_kmerseek_version(&db)?;
         let index = Self::assemble(

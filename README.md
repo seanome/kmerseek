@@ -176,6 +176,16 @@ SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
 different-fold hit at E <= 0.01.
 
+A fit holds for one (penalty, X-drop) pair, and `kmerseek index` stores the one for the
+penalty and X-drop it was given (2 and 8 by default). To search the same index at a second
+penalty without refitting on every run, store a second fit:
+
+```bash
+kmerseek calibrate -t proteome.db --extend-mismatch-penalty 1.6 --extend-xdrop 6.5 --ka-queries 200
+```
+
+The index is opened read-write for this, so run it before any search has the index open.
+
 `--chain-max-gap G --chain-max-shift D` chains colinear extended regions that are at most
 G residues apart on the query and at most D diagonals apart (a net indel of up to D)
 into one region, scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993);
