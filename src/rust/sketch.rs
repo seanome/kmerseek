@@ -461,6 +461,10 @@ impl ProteinSketch {
             // Reused across windows so the custom-HP path allocates once, not once
             // per k-mer.
             let mut encoded: Vec<u8> = Vec::with_capacity(ksize);
+            // Only consulted for a window that covers B, J or Z; the whole-sequence check
+            // keeps the common case free of it.
+            let sequence_has_ambiguous_residues = has_ambiguous_residues(sequence.as_bytes());
+            let encode = Self::residue_encoder(residue_classes, encoding_fn);
 
             self.kmer_windows_examined = 0;
             self.low_complexity_kmers_removed = 0;
@@ -469,6 +473,31 @@ impl ProteinSketch {
                 self.kmer_windows_examined += 1;
                 if is_homopolymer_kmer(kmer.as_bytes()) {
                     self.low_complexity_kmers_removed += 1;
+                    continue;
+                }
+                if sequence_has_ambiguous_residues && has_ambiguous_residues(kmer.as_bytes()) {
+                    // The same expansion the branch above does with removal off. Hashing
+                    // the literal B, J or Z put a hash in the sketch that no query k-mer
+                    // matches and that the position map, which looks up each reading's
+                    // hash, never recorded, so a search silently missed every window
+                    // covering the residue. A reading that is a homopolymer in the encoded
+                    // alphabet is dropped like any other; the window counts as removed
+                    // only when none of its readings survive.
+                    let Some(readings) = disambiguate_kmer(kmer.as_bytes(), &encode) else {
+                        self.low_complexity_kmers_removed += 1;
+                        continue;
+                    };
+                    let mut kept = 0usize;
+                    for reading in readings {
+                        if is_hp_moltype && is_homopolymer_kmer(&reading) {
+                            continue;
+                        }
+                        self.signature.minhash.add_hash(_hash_murmur(&reading, SEED));
+                        kept += 1;
+                    }
+                    if kept == 0 {
+                        self.low_complexity_kmers_removed += 1;
+                    }
                     continue;
                 }
                 let hashval = if let Some(table) = table {
