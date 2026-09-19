@@ -173,6 +173,12 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         # One shared k-mer (region_n_shared_kmers above), so the IDF sum equals its mean.
         "region_tfidf": 3.2,
         "region_mean_idf": 3.2,
+        # An exact region, as every region is without --extend-mismatch-penalty: no
+        # mismatches, no Karlin-Altschul score, no E-value, not chained.
+        "region_n_mismatches": 0,
+        "region_ka_bits": 0.0,
+        "region_evalue": float("inf"),
+        "region_n_chained": 1,
     }
 
 

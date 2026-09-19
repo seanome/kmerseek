@@ -6,6 +6,7 @@ pub mod hash_functions;
 pub mod index;
 pub mod io;
 pub mod iterators;
+pub mod karlin_altschul;
 pub mod kmer;
 pub mod metrics;
 pub mod pair;

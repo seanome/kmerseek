@@ -822,3 +822,162 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
         .stdout(predicate::str::contains("\"kmer\": \"APG\""));
     Ok(())
 }
+
+/// `--extend-mismatch-penalty` grows regions past their exact seeds and reports the
+/// mismatches inside; without it every region is exact and the new column reads 0.
+#[test]
+fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            target_index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+        ])
+        .assert()
+        .success();
+
+    let run = |extra: &[&str],
+               out: &std::path::Path|
+     -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            target_index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "0.7",
+        ]);
+        cmd.args(extra);
+        cmd.assert().success();
+        let mut reader = csv::Reader::from_path(out)?;
+        Ok(reader.deserialize::<SearchResultCsv>().collect::<Result<Vec<_>, _>>()?)
+    };
+
+    let exact = run(&[], &temp_dir.path().join("exact.csv"))?;
+    let extended = run(
+        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8"],
+        &temp_dir.path().join("extended.csv"),
+    )?;
+
+    // Off: the same 218 records (219 lines with the header) as test_cli_search_bcl2_ced9,
+    // all exact. 242 before #62 joined regions that repeat a k-mer on one diagonal.
+    assert_eq!(exact.len(), 218);
+    assert!(exact.iter().all(|r| r.region_n_mismatches == 0));
+    assert!(exact.iter().all(|r| r.region_n_shared_kmers == r.region_length - 12 + 1));
+
+    // On: regions only grow or merge, so there are no more rows than before, at least one
+    // region now spans a mismatch, and n_shared never exceeds what the span could hold.
+    assert!(!extended.is_empty());
+    assert!(extended.len() <= exact.len(), "{} vs {}", extended.len(), exact.len());
+    assert!(extended.iter().any(|r| r.region_n_mismatches > 0));
+    for r in &extended {
+        assert!(r.region_length >= 12);
+        assert!(r.region_n_shared_kmers <= r.region_length - 12 + 1);
+        assert_eq!(r.region_subseq.len() as u32, r.region_length);
+        assert_eq!(r.target_subseq.len() as u32, r.region_length);
+    }
+    let bcl2_exact: Vec<_> =
+        exact.iter().filter(|r| r.target_name.contains("BCL2_HUMAN")).collect();
+    let bcl2_ext: Vec<_> =
+        extended.iter().filter(|r| r.target_name.contains("BCL2_HUMAN")).collect();
+    assert!(bcl2_ext.len() <= bcl2_exact.len());
+    assert!(
+        bcl2_ext.iter().map(|r| r.region_length).max()
+            >= bcl2_exact.iter().map(|r| r.region_length).max(),
+        "the longest BCL2/CED9 region can only get longer"
+    );
+    Ok(())
+}
+
+/// `kmerseek index` fits the lambda scale and K for its penalty and X-drop and stores them;
+/// `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty that
+/// was never fitted when `--ka-queries 0` forbids fitting one now, and fits one otherwise.
+#[test]
+fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting Karlin-Altschul lambda and K on 25 database sequences (penalty 2, X-drop 8), \
+             censored against the same sequences shuffled-dipeptide",
+        ))
+        .stderr(predicate::str::contains(
+            "Closed form at the database's own match probability 0.500: K 0.1631",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 25 database queries, 9838 regions; slope 0.806 per nat of lambda_pair S \
+             (1 = closed form holds; closed form 0.481 at the database's match probability \
+             0.500), K 0.0115, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
+             slope 0.760 over the same bins",
+        ))
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
+        ));
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            let mut cmd = Command::cargo_bin("kmerseek")?;
+            cmd.args([
+                "search",
+                "--query",
+                TEST_CED9_FASTA,
+                "--target",
+                index_path.to_str().unwrap(),
+                "--output",
+                temp_dir.path().join("out.csv").to_str().unwrap(),
+            ]);
+            cmd.args(extra);
+            Ok(cmd.assert())
+        };
+
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: K 0.0115, lambda scale 0.806 (stored in the index: 25 database queries, 9838 regions",
+    ));
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0300, lambda scale 1.000 (--ka-k, closed-form lambda)",
+        ),
+    );
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("no Karlin-Altschul fit for penalty 3, X-drop 8"));
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.1264, lambda scale 0.962 (fitted now: 25 database queries, 9854 regions; slope 0.962",
+        ),
+    );
+    Ok(())
+}

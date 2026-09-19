@@ -19,8 +19,10 @@ TrEMBL copies of the query. Clicking a row opens the pair view underneath it: th
 plot with protein tracks and one alignment block per run, the same panel
 visualize_pair.py draws.
 
-Rows are ordered by `region_evalue` when the CSV has it (kmerseek >= 0.5) and otherwise
-by the Benjamini-Hochberg corrected region tail probability. Sorting by identical
+Rows are ordered by `region_evalue` when the search computed one (kmerseek >= 0.4 with
+`--extend-mismatch-penalty`; the column is always written, and holds `inf` on every row
+of an exact search) and otherwise by the Benjamini-Hochberg corrected region tail
+probability. Sorting by identical
 residues or run length instead puts composition-driven hits (p53, POU4F1) among family
 members, which is why the ranking statistic is the default.
 
@@ -37,6 +39,7 @@ import argparse
 import gzip
 import html
 import json
+import math
 import os
 import re
 import shutil
@@ -143,10 +146,16 @@ def protein_key(header):
 
 
 def ranking(rows):
-    """{target_name: (statistic, is_evalue)} for ordering rows: region_evalue when the CSV
-    carries it, else the BH q-value of the best region's tail probability."""
+    """{target_name: (statistic, is_evalue)} for ordering rows: region_evalue when the search
+    computed one, else the BH q-value of the best region's tail probability.
+
+    kmerseek 0.4 writes `region_evalue` on every row and sets it to `inf` unless the search
+    ran with `--extend-mismatch-penalty`, so the column's presence says nothing; a finite
+    value on any row does."""
     best = _target_best_rows(rows)
-    if "region_evalue" in rows[0]:
+    if "region_evalue" in rows[0] and any(
+        math.isfinite(float(r["region_evalue"])) for r in rows
+    ):
         return {t: float(r["region_evalue"]) for t, r in best.items()}, True
     return benjamini_hochberg(_target_tail_probabilities(rows)), False
 

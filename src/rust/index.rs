@@ -17,6 +17,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
+use crate::karlin_altschul::KaCalibration;
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::KmerSize;
 use crate::types::MolType;
@@ -59,6 +60,12 @@ const DEFAULT_TARGET_CHUNK: usize = 4096;
 /// Each pair is 16 bytes, so the default buffer is 256 MB. This is the only structure
 /// during indexing whose size is chosen rather than dictated by the data.
 const DEFAULT_POSTING_BUFFER: usize = 1 << 24;
+
+/// RocksDB key holding the fitted Karlin-Altschul K values, one per (mismatch penalty,
+/// X-drop) pair the index was calibrated for: a bincode `Vec<KaCalibration>`. Its own key,
+/// not a metadata field, so an index without it still reads and the metadata layout is
+/// untouched.
+const KA_CALIBRATION_KEY: &[u8] = b"ka_calibration";
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -1345,6 +1352,38 @@ impl ProteomeIndex {
     /// Get the raw sequence storage configuration
     pub fn store_raw_sequences(&self) -> bool {
         self.store_raw_sequences
+    }
+
+    /// Every Karlin-Altschul K fitted for this index, in the order they were stored.
+    /// Empty for an index that was never calibrated.
+    pub fn ka_calibrations(&self) -> IndexResult<Vec<KaCalibration>> {
+        match self.db.get(KA_CALIBRATION_KEY)? {
+            Some(bytes) => Ok(bincode::deserialize(&bytes)?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The fitted K for this mismatch penalty and X-drop, if the index has one.
+    pub fn ka_calibration(
+        &self,
+        mismatch_penalty: f64,
+        xdrop: f64,
+    ) -> IndexResult<Option<KaCalibration>> {
+        Ok(self
+            .ka_calibrations()?
+            .into_iter()
+            .find(|c| c.mismatch_penalty == mismatch_penalty && c.xdrop == xdrop))
+    }
+
+    /// Store a fitted K, replacing any earlier fit for the same penalty and X-drop.
+    pub fn put_ka_calibration(&self, calibration: &KaCalibration) -> IndexResult<()> {
+        let mut all = self.ka_calibrations()?;
+        all.retain(|c| {
+            c.mismatch_penalty != calibration.mismatch_penalty || c.xdrop != calibration.xdrop
+        });
+        all.push(calibration.clone());
+        self.db.put(KA_CALIBRATION_KEY, bincode::serialize(&all)?)?;
+        Ok(())
     }
 
     /// Generate a filename based on the index parameters

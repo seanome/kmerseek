@@ -59,8 +59,10 @@ def test_protein_key_folds_trembl_copies_of_one_gene():
     assert vs.protein_key("gene1 some description") == ("gene1 some description", None)
 
 
-def test_ranking_falls_back_to_q_value_without_region_evalue(rows):
+def test_ranking_falls_back_to_q_value_when_no_region_has_an_evalue(rows):
+    # The fixture is an exact search: region_evalue is inf on every row.
     _, rows = rows
+    assert all(r["region_evalue"] == float("inf") for r in rows)
     stat, is_evalue = vs.ranking(rows)
     assert not is_evalue
     assert len(stat) == 24
