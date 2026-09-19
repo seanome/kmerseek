@@ -50,7 +50,7 @@ def test_fixture_is_bcl2_vs_ced9_at_hp_k12(pair):
     assert pair["query"]["name"].startswith("sp|P10415|BCL2_HUMAN")
     assert pair["target"]["name"].startswith("sp|P41958|CED9_CAEEL")
     assert len(pair["shared_kmers"]) == 27
-    assert len(pair["regions"]) == 14
+    assert len(pair["regions"]) == 13
 
 
 def test_class_residues_reads_the_lehninger_partition_off_the_sequences(pair):
@@ -58,9 +58,9 @@ def test_class_residues_reads_the_lehninger_partition_off_the_sequences(pair):
 
 
 def test_runs_drop_single_kmer_regions(pair):
-    assert [r["length"] for r in pm.runs(pair)] == [19, 14, 14, 13, 13]
+    assert [r["length"] for r in pm.runs(pair)] == [19, 14, 14, 13, 13, 13]
     assert pm.runs(pair)[0] == BH1
-    assert len(pm.singles(pair)) == 9
+    assert len(pm.singles(pair)) == 7
     assert (30, 94) in [(k["query_pos"], k["target_pos"]) for k in pm.singles(pair)]
 
 
@@ -133,7 +133,8 @@ def test_run_blocks_are_numbered_longest_first_with_regions_and_counts(model):
         "Run 2 · BH4 × no region · 14 aa · 2 identical · 1 of 14 polar",
         "Run 3 · Bcl-2 × Bcl-2 · 14 aa · 2 identical · 6 of 14 polar",
         "Run 4 · no region × no region · 13 aa · 2 identical · 1 of 13 polar",
-        "Run 5 · no region × no region · 13 aa · 2 identical · 4 of 13 polar",
+        "Run 5 · no region × no region · 13 aa · 1 identical · 1 of 13 polar",
+        "Run 6 · no region × no region · 13 aa · 2 identical · 4 of 13 polar",
     ]
     bh1 = model["runs"][0]
     assert bh1["query_row"] == "RDGVNWGRIVAFFEFGGVM"
@@ -179,11 +180,11 @@ def test_figure_writes_png_and_svg_with_every_run_and_legend_entry(model, tmp_pa
     text = svg.read_text()
     for expected in (
         "hydrophobic (A F G I L M P V W Y)",
-        "run of 2 or more consecutive shared 12-mers (5), numbered",
-        "single shared 12-mer (9)",
+        "run of 2 or more consecutive shared 12-mers (6), numbered",
+        "single shared 12-mer (7)",
         "protein, with its domains as boxes; each domain's span shaded across the plot",
         "Run 1 · Bcl-2 × Bcl-2 · 19 aa · 5 identical · 5 of 19 polar",
-        "Run 5 · no region × no region · 13 aa · 2 identical · 4 of 13 polar",
+        "Run 6 · no region × no region · 13 aa · 2 identical · 4 of 13 polar",
         "BCL2_HUMAN position (aa)",
         "CED9_CAEEL position (aa)",
         "BH4",
@@ -247,16 +248,16 @@ def test_gapped_block_counts_identities_over_the_run_columns(pair, domains):
     assert pm.run_header(model["runs"][0]).startswith(
         "Run 1 · Bcl-2 × Bcl-2 · 19 aa · 5 identical on the run's diagonal, 5 of its 19 aligned columns after gapped alignment"
     )
-    # Run 5 sits at CED-9's C terminus, so the window is short there and the alignment gaps.
-    run5 = model["runs"][4]["gapped"]
-    assert "-" in run5["query_row"] + run5["target_row"]
-    assert run5["target_enc"].count("-") == run5["target_row"].count("-")
+    # Run 6 sits at CED-9's C terminus, so the window is short there and the alignment gaps.
+    run6 = model["runs"][5]["gapped"]
+    assert "-" in run6["query_row"] + run6["target_row"]
+    assert run6["target_enc"].count("-") == run6["target_row"].count("-")
 
 
 def test_structure_offset_puts_run_1_on_the_path_and_run_3_off_it(pair, domains, structure):
     model = pm.build_model(pair, domains, structure=structure)
     offsets = [b["structure_offset"] for b in model["runs"]]
-    assert offsets == [0, -157, 4, -166, -40]
+    assert offsets == [0, -157, 4, -166, -154, -40]
     assert [pm.structure_phrase(o) for o in offsets[:3]] == [
         "on the structural path",
         "157 residues off the structural path",

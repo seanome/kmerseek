@@ -784,7 +784,7 @@ fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error
         output.to_str().unwrap(),
     ]);
     cmd.assert().success().stderr(predicate::str::contains(
-        "27 shared 12-mers in 14 matched regions (hp_lehninger2)",
+        "27 shared 12-mers in 13 matched regions (hp_lehninger2)",
     ));
 
     let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&output)?)?;

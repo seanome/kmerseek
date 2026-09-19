@@ -232,6 +232,13 @@
       "length": 13
     },
     {
+      "query_start": 80,
+      "query_end": 93,
+      "target_start": 253,
+      "target_end": 266,
+      "length": 13
+    },
+    {
       "query_start": 200,
       "query_end": 213,
       "target_start": 267,
@@ -260,24 +267,10 @@
       "length": 12
     },
     {
-      "query_start": 80,
-      "query_end": 92,
-      "target_start": 253,
-      "target_end": 265,
-      "length": 12
-    },
-    {
       "query_start": 81,
       "query_end": 93,
       "target_start": 170,
       "target_end": 182,
-      "length": 12
-    },
-    {
-      "query_start": 81,
-      "query_end": 93,
-      "target_start": 254,
-      "target_end": 266,
       "length": 12
     },
     {

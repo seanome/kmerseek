@@ -4,7 +4,7 @@ Run with: /Users/olga/anaconda3/envs/kmerseek-dev/bin/python3 -m pytest scripts/
 
 The search fixture is CED-9 (tests/testdata/fasta/ced9.fasta) searched against the
 25-protein BCL-2 family FASTA at hp_lehninger2 k=12 with every filter open
-(--max-query-pvalue 1 --min-region-score 0): 362 rows, 24 targets. The Pfam table is
+(--max-query-pvalue 1 --min-region-score 0): 330 rows, 24 targets. The Pfam table is
 those targets' rows from Pfam-A.regions.
 """
 
@@ -65,7 +65,7 @@ def test_ranking_falls_back_to_q_value_without_region_evalue(rows):
     assert not is_evalue
     assert len(stat) == 24
     fbx10 = next(t for t in stat if "FBX10_HUMAN" in t)
-    assert stat[fbx10] == pytest.approx(1.36e-5, rel=0.05)
+    assert stat[fbx10] == pytest.approx(9.08e-6, rel=0.05)
 
 
 def test_rank_proteins_orders_by_statistic_and_caps(rows):
@@ -73,7 +73,7 @@ def test_rank_proteins_orders_by_statistic_and_caps(rows):
     ranked = vs.rank_proteins(rows, max_rows=100)
     assert len(ranked) == 24  # every fixture target is a different gene
     names = [t.split("|")[2].split()[0] for t, _, _ in ranked]
-    assert names[:3] == ["FBX10_HUMAN", "B2L14_HUMAN", "BAK_HUMAN"]
+    assert names[:3] == ["RTN3_HUMAN", "FBX10_HUMAN", "B2L14_HUMAN"]
     assert [others for _, others, _ in ranked] == [[]] * 24
     stats = [s for _, _, s in ranked]
     assert stats == sorted(stats)
@@ -84,7 +84,7 @@ def test_coverage_counts_entries_per_query_residue(rows):
     _, rows = rows
     cov = vs.coverage(rows, query_length=280, ksize=12, solid_identical=5)
     assert len(cov["any"]) == 280 and len(cov["solid"]) == 280
-    assert max(cov["any"]) == 12
+    assert max(cov["any"]) == 13
     assert cov["any"].index(max(cov["any"])) == 173  # 0-based: residue 174, inside BH1
     assert max(cov["solid"]) == 3
     assert all(s <= a for s, a in zip(cov["solid"], cov["any"]))
@@ -111,13 +111,13 @@ def test_report_end_to_end(rows, tmp_path):
     query_name, rows = rows
     args = vs._build_arg_parser().parse_args([
         "--csv", SEARCH_CSV, "--query-fasta", CED9_FASTA, "--target-fasta", TARGETS_FASTA,
-        "--output-dir", str(tmp_path), "--domains", *DOMAIN_TABLES, "--max-rows", "12",
+        "--output-dir", str(tmp_path), "--domains", *DOMAIN_TABLES, "--max-rows", "13",
     ])
     report = vs.SearchReport(args, _kmerseek(), vs.load_domains(args.domains)).report(query_name, rows)
     assert report["query"]["label"] == "CED9_CAEEL"
     assert report["query"]["domains"] == [{"name": "BH4", "start": 76, "end": 101}, {"name": "Bcl-2", "start": 116, "end": 221}]
     assert report["stat_name"] == "q-value"
-    assert (report["n_entries"], report["n_proteins"], len(report["rows"])) == (24, 24, 12)
+    assert (report["n_entries"], report["n_proteins"], len(report["rows"])) == (24, 24, 13)  # BCL2_HUMAN ranks 13th by q-value
     bcl2 = next(r for r in report["rows"] if r["label"] == "BCL2_HUMAN")
     assert (bcl2["length"], bcl2["n_runs"], bcl2["best_length"], bcl2["best_identical"], bcl2["n_shared"]) == (239, 6, 19, 5, 24)
     assert bcl2["runs"][0] == {"number": 1, "query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19, "identical": 5, "polar": 5}
