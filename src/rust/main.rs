@@ -463,8 +463,13 @@ fn main() -> IndexResult<()> {
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters =
-                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
+            let filters = SearchFilters {
+                threshold,
+                min_shared_kmers,
+                max_query_pvalue,
+                min_region_score,
+                skip_self_matches: false,
+            };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
