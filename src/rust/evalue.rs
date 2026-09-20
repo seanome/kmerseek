@@ -1,4 +1,6 @@
-//! Fitting the constants of the E-value of an extended region on the search itself.
+//! The E-value of an extended region: Karlin-Altschul K and r_database fitted on the index
+//! itself, and the decoys the fit is read against. `docs/evalue.md` walks through it with
+//! the figures.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
 //! unrelated query of m residues and a database of n residues. lambda is solved per pair
@@ -16,6 +18,11 @@
 //! goes to the count at each x, not the count at or above it, because a plateau of
 //! relatives far up the axis adds a constant to every survival count below it and would
 //! flatten the slope.
+//!
+//! Fitting x rather than the raw score S matters on a proteome: Swiss-Prot holds pairs of
+//! membrane and low-complexity proteins whose raw scores run to 60 and beyond with a slope
+//! near 0.1, while ordinary pairs fall at 0.45. One line cannot serve both. In x each pair
+//! is already on its own scale, and those pairs sit at x = 0.
 //!
 //! The sequences searched for a fit are calibration queries. Each one is made from a
 //! database sequence. A decoy is a calibration query changed so that it has no relative
@@ -474,11 +481,13 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
 /// or how often a hydrophobic residue follows another, and loses its relatives in the
 /// database, so the regions it finds are chance matches.
 ///
-/// What each choice keeps and loses: on SCOPe40 domains the three scrambled nulls agree
-/// (r_database 1.04) and real domains give 0.95; on full-length proteins real sequences
-/// give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides already pulls the
-/// shuffle to 0.94, so hydrophobic runs alone explain a third of the gap. (Measured in
-/// PR #54; the figures land with the docs at the end of the stack that splits it.)
+/// What each choice keeps and loses, and what it does to the fit, is measured in
+/// `docs/evalue.md` and drawn in `docs/images/ka_fit_grid_nulls_by_database.png` (every
+/// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
+/// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
+/// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on full-length
+/// proteins real sequences give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides
+/// already pulls the shuffle to 0.94, so hydrophobic runs alone explain a third of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
