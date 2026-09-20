@@ -86,9 +86,9 @@ pub struct ExtensionParams {
     /// (`KaCalibration`), or set by hand with `--ka-k`.
     pub ka_k: f64,
     /// Multiplier on every pair's closed-form lambda: the fitted lambda over the
-    /// closed-form lambda at the database's own composition (`KaCalibration::lambda_scale`).
+    /// closed-form lambda at the database's own composition (`KaCalibration::r_database`).
     /// 1.0 keeps the closed form, which assumes independent positions.
-    pub ka_lambda_scale: f64,
+    pub ka_r_database: f64,
     /// Chain colinear regions at most this many residues apart (on the query) into one
     /// region scored with Karlin-Altschul sum statistics. 0 leaves every region on its own.
     /// See `chain_regions`.
@@ -126,11 +126,11 @@ pub struct KaCalibrationSettings {
     pub seed: u64,
 }
 
-/// The lambda scale and K a search runs with.
+/// The r_database and K a search runs with.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KaParams {
     pub k: f64,
-    pub lambda_scale: f64,
+    pub r_database: f64,
 }
 
 /// Where the lambda and K in use came from; see `ProteinSearcher::resolve_ka`.
@@ -868,7 +868,7 @@ impl ProteinSearcher {
             mismatch_penalty: settings.mismatch_penalty,
             xdrop: settings.xdrop,
             ka_k: 1.0,
-            ka_lambda_scale: 1.0,
+            ka_r_database: 1.0,
             chain_max_gap: 0,
             chain_max_shift: 0,
         });
@@ -963,7 +963,7 @@ impl ProteinSearcher {
 
     /// Normalised score x = lambda_pair S of every region the calibration queries produce,
     /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
-    /// with K = 1 and lambda scale 1 during calibration, so a region's `ka_bits` x ln 2 is
+    /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
     /// exactly lambda_pair S with the closed-form per-pair lambda.
     fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
         let filters = SearchFilters {
@@ -1022,7 +1022,7 @@ impl ProteinSearcher {
         Ok(Some(target))
     }
 
-    /// The lambda scale and K a search should use for this penalty and X-drop, and where
+    /// The r_database and K a search should use for this penalty and X-drop, and where
     /// they came from, in order of preference: `explicit` (`--ka-k`, with the closed-form
     /// lambda); a fit stored in the index for this pair, whatever null it used; a fresh fit
     /// on `settings.n_queries` calibration queries if that is nonzero. Otherwise an error: an
@@ -1034,16 +1034,16 @@ impl ProteinSearcher {
     ) -> IndexResult<(KaParams, KaSource)> {
         let KaCalibrationSettings { mismatch_penalty, xdrop, .. } = settings;
         if let Some(k) = explicit {
-            return Ok((KaParams { k, lambda_scale: 1.0 }, KaSource::Flag));
+            return Ok((KaParams { k, r_database: 1.0 }, KaSource::Flag));
         }
         if let Some(stored) = self.index.ka_calibration(mismatch_penalty, xdrop)? {
-            let params = KaParams { k: stored.k, lambda_scale: stored.lambda_scale() };
+            let params = KaParams { k: stored.k, r_database: stored.r_database() };
             return Ok((params, KaSource::Index(stored)));
         }
         let report = self.calibrate_ka(settings)?;
         match report.fitted {
             Some(fit) => {
-                let params = KaParams { k: fit.k, lambda_scale: fit.lambda_scale() };
+                let params = KaParams { k: fit.k, r_database: fit.r_database() };
                 Ok((params, KaSource::Fitted(fit)))
             }
             None => Err(anyhow::anyhow!(
@@ -1546,7 +1546,7 @@ impl ProteinSearcher {
                     &class_composition(t_enc.as_bytes()),
                 );
                 let ka_lambda =
-                    karlin_altschul_lambda(a, params.mismatch_penalty) * params.ka_lambda_scale;
+                    karlin_altschul_lambda(a, params.mismatch_penalty) * params.ka_r_database;
                 let m = q_enc.len() as f64;
                 let n = self.db_n_kmers as f64;
                 for region in result.matched_regions.iter_mut() {
@@ -2998,7 +2998,7 @@ mod tests {
             mismatch_penalty: 9.0,
             xdrop: 8.0,
             ka_k: 0.03,
-            ka_lambda_scale: 1.0,
+            ka_r_database: 1.0,
             chain_max_gap: 5,
             chain_max_shift: 0,
         };
@@ -3234,7 +3234,7 @@ mod tests {
             mismatch_penalty: 2.0,
             xdrop: 8.0,
             ka_k: 0.1,
-            ka_lambda_scale: 1.0,
+            ka_r_database: 1.0,
             chain_max_gap: 0,
             chain_max_shift: 0,
         };
@@ -3255,7 +3255,7 @@ mod tests {
             mismatch_penalty: 9.0,
             xdrop: 8.0,
             ka_k: 0.1,
-            ka_lambda_scale: 1.0,
+            ka_r_database: 1.0,
             chain_max_gap: 0,
             chain_max_shift: 0,
         };
@@ -3273,7 +3273,7 @@ mod tests {
             mismatch_penalty: 0.0,
             xdrop: 8.0,
             ka_k: 0.1,
-            ka_lambda_scale: 1.0,
+            ka_r_database: 1.0,
             chain_max_gap: 0,
             chain_max_shift: 0,
         };
@@ -3296,7 +3296,7 @@ mod tests {
             mismatch_penalty: 2.0,
             xdrop: 8.0,
             ka_k: 0.1,
-            ka_lambda_scale: 1.0,
+            ka_r_database: 1.0,
             chain_max_gap: 0,
             chain_max_shift: 0,
         };
@@ -4500,11 +4500,11 @@ mod ka_calibration_tests {
 
         searcher.index().put_ka_calibration(&fit)?;
         let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 0))?;
-        assert_eq!(params, KaParams { k: fit.k, lambda_scale: fit.slope });
+        assert_eq!(params, KaParams { k: fit.k, r_database: fit.slope });
         assert_eq!(source, KaSource::Index(fit.clone()));
 
         let (params, source) = searcher.resolve_ka(Some(0.03), shuffled_settings(2.0, 0))?;
-        assert_eq!((params, source), (KaParams { k: 0.03, lambda_scale: 1.0 }, KaSource::Flag));
+        assert_eq!((params, source), (KaParams { k: 0.03, r_database: 1.0 }, KaSource::Flag));
 
         // No stored fit for penalty 3 and no queries allowed: refused, not guessed.
         let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();

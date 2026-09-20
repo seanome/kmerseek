@@ -144,7 +144,7 @@ pub struct KaCalibration {
 
 impl KaCalibration {
     /// The factor a search multiplies every pair's closed-form lambda by: the fitted slope.
-    pub fn lambda_scale(&self) -> f64 {
+    pub fn r_database(&self) -> f64 {
         self.slope
     }
 

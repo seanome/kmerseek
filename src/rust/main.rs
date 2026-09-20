@@ -577,8 +577,8 @@ fn main() -> IndexResult<()> {
                 };
                 let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
                 eprintln!(
-                    "  Karlin-Altschul: K {:.4}, lambda scale {:.3} ({source})",
-                    ka.k, ka.lambda_scale
+                    "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
+                    ka.k, ka.r_database
                 );
                 if let KaSource::Index(fit) | KaSource::Fitted(fit) = &source {
                     warn_on_short_fit(fit);
@@ -587,7 +587,7 @@ fn main() -> IndexResult<()> {
                     mismatch_penalty: extend_mismatch_penalty,
                     xdrop: extend_xdrop,
                     ka_k: ka.k,
-                    ka_lambda_scale: ka.lambda_scale,
+                    ka_r_database: ka.r_database,
                     chain_max_gap,
                     chain_max_shift,
                 }));

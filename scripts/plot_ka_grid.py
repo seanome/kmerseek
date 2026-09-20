@@ -43,21 +43,21 @@ for i, (null_label, suffix) in enumerate(nulls):
             ax.set_yscale("log"); ax.set_ylim(0.5, 3e7); ax.set_xlim(0, xmax)
             ax.spines[["top", "right"]].set_visible(False)
             if r == 0:
-                ax.set_title(f"{null_label} | {db_label}\nλ correction = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=9, loc="left")
+                ax.set_title(f"{null_label} | {db_label}\nr_database = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=9, loc="left")
             if j == 0:
                 ax.set_ylabel("regions in the bin" if r == 0 else "regions at or above the bin", fontsize=9)
             if r == 1 and i == len(nulls) - 1:
                 ax.set_xlabel("x = λ_pair · S (nats)")
 handles = [plt.Line2D([], [], marker="o", color=OBSERVED, ls="", ms=4, label="regions in each 0.5-nat bin of x (observed)"),
            plt.Line2D([], [], marker="s", color=OBSERVED, mfc="none", ls="", ms=4, label="regions at or above the bin (same regions summed)"),
-           plt.Line2D([], [], color=FITTED, lw=1.6, label="fitted line: its slope, sign flipped, is the λ correction; K from its height"),
+           plt.Line2D([], [], color=FITTED, lw=1.6, label="fitted line: its slope, sign flipped, is r_database; K from its height"),
            plt.Rectangle((0, 0), 1, 1, color=WINDOW, label="the 8 bins the line is fitted on (≥ 30 regions each)"),
            plt.Line2D([], [], color=FLOOR, ls=":", lw=1, label="30 regions: bins below this are not fitted")]
 if include_database:
     handles.insert(2, plt.Line2D([], [], marker="^", color=REFERENCE, mfc="none", ls="", ms=4, label="same queries shuffled keeping dipeptides (reference for where the database fit stops)"))
 fig.legend(handles=handles, loc="upper center", bbox_to_anchor=(0.5, 0.985 if include_database else 0.98), ncol=2, frameon=False, fontsize=9)
 fig.suptitle("Calibration queries under each null (rows) against each database (columns); hp_thomas_dill2 k = 12, C = 2, X = 8, 200 queries\n"
-             "x = λ_pair · S: the pair's closed-form λ times the region score S = matches − 2 × mismatches; λ correction 1 means the closed form holds",
+             "x = λ_pair · S: the pair's closed-form λ times the region score S = matches − 2 × mismatches; r_database 1 means the closed form holds",
              fontsize=11, x=0.02, ha="left", y=1.0)
 fig.tight_layout(rect=(0, 0, 1, 0.955 if include_database else 0.945))
 fig.savefig(out, bbox_inches="tight")

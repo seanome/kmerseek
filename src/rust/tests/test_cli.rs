@@ -624,7 +624,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-/// `kmerseek index` fits the lambda scale and K for its penalty and X-drop and stores them;
+/// `kmerseek index` fits r_database and K for its penalty and X-drop and stores them;
 /// `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty that
 /// was never fitted when `--ka-queries 0` forbids fitting one now, and fits one otherwise.
 #[test]
@@ -681,11 +681,11 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         };
 
     search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
-        "Karlin-Altschul: K 0.0115, lambda scale 0.806 (stored in the index: 25 database queries, 9838 regions",
+        "Karlin-Altschul: K 0.0115, r_database 0.806 (stored in the index: 25 database queries, 9838 regions",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.0300, lambda scale 1.000 (--ka-k, closed-form lambda)",
+            "Karlin-Altschul: K 0.0300, r_database 1.000 (--ka-k, closed-form lambda)",
         ),
     );
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?
@@ -693,7 +693,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         .stderr(predicate::str::contains("no Karlin-Altschul fit for penalty 3, X-drop 8"));
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.1264, lambda scale 0.962 (fitted now: 25 database queries, 9854 regions; slope 0.962",
+            "Karlin-Altschul: K 0.1264, r_database 0.962 (fitted now: 25 database queries, 9854 regions; slope 0.962",
         ),
     );
     Ok(())

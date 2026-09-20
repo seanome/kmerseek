@@ -9,7 +9,7 @@ it was read from.
 One column per CSV. Top row: regions in each bin of x, the points the line is fitted to.
 Bottom row: the same regions summed (x at or above the bin). Grey band: the bins used.
 Dotted line: 30 regions, the floor below which a bin is not fitted. The title of each
-column gives the λ correction (1 means the closed-form per-pair lambda holds) with its
+column gives r_database (1 means the closed-form per-pair lambda holds) with its
 standard error over the fitted bins, and K.
 """
 
@@ -80,14 +80,14 @@ def draw_column(axes, path, first_column, args_label=None):
                 color=OBSERVED, label=label, **style)
         keep = [i for i in range(len(scores)) if scores[i] <= xmax]
         ax.plot([scores[i] for i in keep], [fitted[i] for i in keep], "-", color=FITTED, lw=1.8,
-                label="fitted line: its slope, sign flipped, is the λ correction; K from its height")
+                label="fitted line: its slope, sign flipped, is r_database; K from its height")
         ax.axhline(MIN_BIN_COUNT, color=FLOOR, ls=":", lw=1,
                    label=f"{MIN_BIN_COUNT} regions: bins below this are not fitted")
         ax.set_yscale("log")
         ax.set_ylim(0.5, max(observed) * 3)
         ax.spines[["top", "right"]].set_visible(False)
     label = args_label or f"{meta['null']} queries"
-    axes[0].set_title(f"{label}\nλ correction = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
+    axes[0].set_title(f"{label}\nr_database = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
     axes[1].set_xlabel("x = λ_pair · S (nats)")
     if first_column:
         axes[0].set_ylabel(f"regions in each bin of x ({width:g} nat)\n(what the line is fitted to)")
@@ -113,7 +113,7 @@ def main():
             handles.setdefault(l, h)
     fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.92),
                ncol=2, frameon=False, fontsize=9)
-    title = "The λ correction is the slope and K the height of ln(regions at x); the fit stops where the real curve rises above the shuffled one"
+    title = "r_database is the slope and K the height of ln(regions at x); the fit stops where the real curve rises above the shuffled one"
     title += "\nS = matches − C × mismatches; λ_pair is the closed-form lambda for the pair's own compositions; ± is the slope's standard error"
     if args.subtitle:
         title += "\n" + args.subtitle
