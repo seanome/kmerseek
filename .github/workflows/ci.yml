@@ -52,6 +52,23 @@ jobs:
           cargo run --bin kmerseek --no-default-features -- --help
           cargo run --bin kmerseek --no-default-features -- index --help
 
+  python-scripts:
+    name: Test Python scripts
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install pytest matplotlib polars
+
+      - name: Run tests
+        run: python -m pytest scripts/ -v
+
   release:
     name: Release Build
     runs-on: ubuntu-latest
