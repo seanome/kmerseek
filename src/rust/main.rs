@@ -110,6 +110,11 @@ enum Commands {
         /// periodicity lift the real curve above it; `shuffled` keeps composition only.
         #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
         ka_reference: DecoyNull,
+
+        /// Write the survival curve the fit was read from (score, regions with score >= it,
+        /// and the fit) to this CSV, for plotting with scripts/plot_ka_survival.py.
+        #[arg(long, value_name = "PATH")]
+        ka_survival_out: Option<PathBuf>,
     },
     /// Search query sequences against a protein database
     Search {
@@ -374,6 +379,7 @@ fn main() -> IndexResult<()> {
             ka_seed,
             ka_null,
             ka_reference,
+            ka_survival_out,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
@@ -487,7 +493,7 @@ fn main() -> IndexResult<()> {
                         n_queries: ka_queries,
                         seed: ka_seed,
                     };
-                    calibrate_index(index, settings)?;
+                    calibrate_index(index, settings, ka_survival_out.as_deref())?;
                 } else {
                     eprintln!(
                         "Skipping the Karlin-Altschul fit (--ka-queries 0); a search will \
