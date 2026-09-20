@@ -81,7 +81,7 @@ def path_segments(pairs):
 
 
 def block_rows(block):
-    """The rows an alignment block shows: the gapped local alignment when the model has
+    """The rows an alignment block shows: the gapped alignment when the model has
     one, else the exact run (with any flank)."""
     g = block.get("gapped")
     if g:
@@ -375,7 +375,7 @@ def _build_arg_parser():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="domain tables (TSV, CSV or parquet) for either protein; see the module docstring for columns")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run (default 0); with a flank the middle line uses `:` for same class")
-    p.add_argument("--gap-flank", type=int, default=10, help="residues either side of each run given to the gapped local alignment its identities are counted on (default 10)")
+    p.add_argument("--gap-flank", type=int, default=10, help="residues either side of each run given to the gapped alignment its identities are counted on (default 10)")
     p.add_argument("--no-gapped", action="store_true", help="show and count the exact run only, without a gapped alignment")
     p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, the structural alignment is drawn across the dot plot")
     p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")

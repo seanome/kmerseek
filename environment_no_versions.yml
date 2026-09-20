@@ -6,6 +6,7 @@ channels:
 dependencies:
   - _libgcc_mutex
   - _openmp_mutex
+  - biopython
   - bitarray
   - bitstring
   - brotli

@@ -231,8 +231,9 @@ Every lone shared k-mer is also written to the JSON as a region exactly k residu
 long; the figure draws those as singles and gives alignments only to runs.
 
 Identities are counted twice for each run: on the run's own diagonal, and after a gapped
-alignment (Needleman-Wunsch, BLOSUM62, gap open 11, extend 1) of the run and
-`--gap-flank` residues either side (default 10), counted over the run's columns. The
+end-to-end alignment (Biopython's `PairwiseAligner` with BLAST's protein defaults:
+BLOSUM62, gap open 11, extend 1) of the run and `--gap-flank` residues either side
+(default 10), counted over the run's columns. The
 second number is the one to trust: an exact run in the reduced alphabet can sit a few
 residues off the true alignment, and MCL-1's BH1 run reads 1 identical residue on its
 diagonal but 12 once one gap lines NWGR up. The alignment block shows the gapped

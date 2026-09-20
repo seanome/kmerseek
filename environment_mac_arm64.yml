@@ -4,6 +4,7 @@ channels:
   - bioconda
   - defaults
 dependencies:
+  - biopython
   - bitarray
   - bitstring
   - brotli
