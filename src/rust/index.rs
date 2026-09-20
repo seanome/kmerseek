@@ -170,6 +170,13 @@ pub struct SearchCache {
     pub kmer_frequencies: HashMap<u64, usize>,
 }
 
+/// RocksDB key recording `name` as another entry with the sketch `md5`. The `_` after the
+/// md5 keeps the prefix for one sketch from matching a longer md5 (hex has no `_`), and an
+/// empty `name` gives that prefix.
+fn alias_key(md5: &str, name: &str) -> Vec<u8> {
+    format!("alias_{md5}_{name}").into_bytes()
+}
+
 /// Everything the streaming indexer carries between batches. Bounded in size: the
 /// posting buffer is capped, the target tail is at most one chunk, and `seen` is one
 /// u64 per signature.
@@ -196,9 +203,6 @@ struct IngestState {
     saved: bool,
     unique_kmers: usize,
     duplicates_skipped: usize,
-    /// Names of the sketches skipped as duplicates, by the md5 they duplicated. Written to
-    /// `aliases_{md5}` so search can report every entry that shares a sketch.
-    aliases: HashMap<String, Vec<String>>,
     /// Frequency summary gathered while the shards were last written.
     stats: Option<KmerFrequencySummary>,
 }
@@ -216,7 +220,6 @@ impl IngestState {
             saved: false,
             unique_kmers: 0,
             duplicates_skipped: 0,
-            aliases: HashMap::new(),
             stats: None,
         }
     }
@@ -889,7 +892,9 @@ impl ProteomeIndex {
     /// memory flat in the corpus size.
     ///
     /// A sketch whose key was already written is stored once, under the name it was first
-    /// seen with; the later names go to `aliases_{md5}`, so search reports each of them.
+    /// seen with. Each later name gets its own `alias_{md5}_{name}` key, so a sequence seen
+    /// many times costs one small write per copy and search can list the names of a hit
+    /// with one prefix seek (`aliases_of`).
     fn ingest(&self, sketches: Vec<ProteinSketch>, retain: bool) -> IndexResult<()> {
         use rayon::prelude::*;
 
@@ -914,9 +919,7 @@ impl ProteomeIndex {
             })?;
             if !state.seen.insert(key) {
                 state.duplicates_skipped += 1;
-                let names = state.aliases.entry(md5.clone()).or_default();
-                names.push(sketch.signature().name.clone());
-                batch.put(format!("aliases_{md5}").into_bytes(), bincode::serialize(names)?);
+                batch.put(alias_key(&md5, &sketch.signature().name), b"");
                 state.saved = false;
                 continue;
             }
@@ -1190,7 +1193,6 @@ impl ProteomeIndex {
             state.legacy_layout = true;
             return Ok(state);
         }
-        state.aliases = self.aliases()?;
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
         for chunk in 0..chunks {
             let md5s = self.read_target_chunk(chunk, chunks)?;
@@ -1492,18 +1494,17 @@ impl ProteomeIndex {
         Ok(true)
     }
 
-    /// Every name stored as a duplicate of another sketch, by the md5 it duplicates: the
-    /// entries whose k-mer set another entry already had, and which search reports under the
-    /// same statistics as that entry.
-    pub fn aliases(&self) -> IndexResult<HashMap<String, Vec<String>>> {
-        let mut aliases = HashMap::new();
-        for item in self.db.iterator(IteratorMode::From(b"aliases_", Direction::Forward)) {
-            let (key, value) = item?;
-            let Some(md5) = key.strip_prefix(b"aliases_") else { break };
-            let names: Vec<String> = bincode::deserialize(&value)?;
-            aliases.insert(String::from_utf8_lossy(md5).into_owned(), names);
+    /// The other names stored with the sketch `md5`: entries whose k-mer set the entry
+    /// under `md5` already had. In byte order of the names, not the order they were seen.
+    pub fn aliases_of(&self, md5: &str) -> IndexResult<Vec<String>> {
+        let prefix = alias_key(md5, "");
+        let mut names = Vec::new();
+        for item in self.db.iterator(IteratorMode::From(&prefix, Direction::Forward)) {
+            let (key, _) = item?;
+            let Some(name) = key.strip_prefix(prefix.as_slice()) else { break };
+            names.push(String::from_utf8_lossy(name).into_owned());
         }
-        Ok(aliases)
+        Ok(names)
     }
 
     /// Print index statistics
@@ -4152,10 +4153,8 @@ mod tests {
         // 17 5-mers in TEST_PROTEIN and 7 in TEST_KMER, none shared.
         assert_eq!(inverted.len(), 24);
         assert!(inverted.values().all(|targets| targets.len() == 1));
-        assert_eq!(
-            index.aliases()?,
-            HashMap::from([(targets[0].clone(), vec!["second".to_string()])])
-        );
+        assert_eq!(index.aliases_of(&targets[0])?, vec!["second".to_string()]);
+        assert_eq!(index.aliases_of(&targets[1])?, Vec::<String>::new());
         Ok(())
     }
 
@@ -4180,10 +4179,7 @@ mod tests {
         index.save_state()?;
         let (targets, _, _) = cache_of(&index)?;
         assert_eq!(targets.len(), 2);
-        assert_eq!(
-            index.aliases()?,
-            HashMap::from([(targets[0].clone(), vec!["b".to_string(), "c".to_string()])])
-        );
+        assert_eq!(index.aliases_of(&targets[0])?, vec!["b".to_string(), "c".to_string()]);
         Ok(())
     }
 
