@@ -184,12 +184,17 @@ root of `a e^λ + (1 - a) e^(-Cλ) = 1`. When `a ≥ C / (1 + C)` no positive ro
 which is what two hydrophobic runs look like, and the region gets 0 bits and no
 significance: agreement is what those two compositions do by default. `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
-seed length, the penalty, the give-up margin and the database, so it has to be measured
-on decoys for the index in use and passed with `--ka-k`:
+seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
+it on the index itself (`--ka-queries`, 200 by default): it searches that many of the
+index's own sequences against it, and reads K and a correction to λ, `r_database`, off
+the straight line that ln(regions at score S) makes against S below the related pairs.
+A search with the penalty and give-up margin the index was fitted for reads the fit
+back; with another pair it fits its own before searching, or takes `--ka-k`:
 
 ```bash
+kmerseek index --input proteome.fasta --output proteome.db --ksize 10 --alphabet hp
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
-    --extend-mismatch-penalty 2 --ka-k 0.03 --output hits.csv
+    --extend-mismatch-penalty 2 --output hits.csv
 ```
 
 ## Visualizing hits
