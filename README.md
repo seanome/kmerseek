@@ -225,7 +225,8 @@ token or UniProt accession, so the `*_pfam_domains.parquet` tables built from
 Pfam-A.regions work as they are. `--flank N` shows N residues either side of each run
 and switches the middle line to BLAST's: the letter where identical, `:` where only the
 class agrees. `--html` also writes one self-contained page: hover a single for its
-k-mer, click a run's number to jump to its alignment.
+k-mer, click a run's number to jump to its alignment
+([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/bcl2_vs_ced9_pair_example.html)).
 
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
 long; the figure draws those as singles and gives alignments only to runs.
