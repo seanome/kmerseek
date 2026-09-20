@@ -2362,30 +2362,101 @@ mod tests {
         Ok(())
     }
 
+    /// Distinct k-mers with removal off and on, and the readings removal dropped.
+    #[derive(Clone, Copy)]
+    struct ReadingCounts {
+        off: usize,
+        on: usize,
+        dropped: usize,
+    }
+
+    const fn counts(off: usize, on: usize, dropped: usize) -> ReadingCounts {
+        ReadingCounts { off, on, dropped }
+    }
+
+    /// The counts for the two sequences in the test below at k=5, scaled=1, under every
+    /// alphabet. Worked out from the published partitions by hand, not read off kmerseek.
+    ///
+    /// Under protein20 the two readings of B (D, N) and of Z (E, Q) are different k-mers,
+    /// so the four windows covering the ambiguous residue contribute two each: 17 + 4 =
+    /// 21. Anything below 21 is two readings or two windows encoding to the same k-mer:
+    /// dayhoff6, gbmr7 and mmseqs12 put D and N in one class (and E and Q), so both
+    /// readings collapse and the count is 17; the two-class HP alphabets merge many
+    /// unrelated windows too. Under gbmr7 `ANIMA` and the E reading of `ENZME` both
+    /// encode to `adaaa`, so the Z sequence loses one more.
+    ///
+    /// Removal drops a reading whose encoding is a run of one class, such as `IMALG`
+    /// under the Lehninger split (`hhhhh`) or `ANTAN` under gbmr4 (`aaaaa`). Every raw
+    /// window here has at least two residues, so nothing is dropped under protein20, and
+    /// dayhoff6 is sourmash-encoded without the encoded check.
+    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 19] = [
+        // moltype, then the counts for the B sequence and for the Z sequence
+        ("protein20", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("dayhoff6", [counts(17, 17, 0), counts(17, 17, 0)]),
+        ("hp_lehninger2", [counts(14, 13, 1), counts(14, 13, 1)]),
+        ("hp_thomas_dill2", [counts(15, 15, 0), counts(15, 15, 0)]),
+        ("hp_kyte_doolittle2", [counts(15, 15, 0), counts(15, 15, 0)]),
+        ("hp_thomas_dill_no_c2", [counts(15, 15, 0), counts(15, 15, 0)]),
+        ("hp_lehninger_c_nonpolar2", [counts(14, 13, 1), counts(14, 13, 1)]),
+        ("hp_lehninger_hpc3", [counts(14, 13, 1), counts(14, 13, 1)]),
+        ("hp_pbotc_1st_ed2", [counts(14, 14, 0), counts(14, 14, 0)]),
+        ("gbmr4", [counts(14, 13, 4), counts(14, 13, 4)]),
+        ("polarity4", [counts(21, 20, 1), counts(21, 20, 1)]),
+        ("wwmj5", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("gbmr7", [counts(17, 17, 0), counts(16, 16, 0)]),
+        ("funcgroups8", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("sdm12", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("mmseqs12", [counts(17, 17, 0), counts(17, 17, 0)]),
+        ("wass14", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("hsdm17", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("uniprot18", [counts(21, 21, 0), counts(21, 21, 0)]),
+    ];
+
     /// With removal on, a window covering an ambiguous residue is still indexed under both
-    /// readings. Hashing the literal B or Z instead put a hash in the sketch that no query
-    /// k-mer matches and that the position map, which looks up each reading's hash, never
-    /// recorded, so a search silently missed every window covering the residue.
+    /// readings, under every alphabet. Hashing the literal B or Z instead put a hash in the
+    /// sketch that no query k-mer matches and that the position map, which looks up each
+    /// reading's hash, never recorded, so a search silently missed every window covering
+    /// the residue: the count with removal on came out at most 13, the windows that do not
+    /// cover it, whatever the alphabet.
     #[test]
     fn test_remove_low_complexity_keeps_both_readings_of_ambiguous_residues() -> Result<()> {
+        use crate::alphabets::Alphabet;
+
         let dir = tempdir()?;
+        // 21 residues at k=5 gives 17 windows; the ambiguous residue at position 18 falls
+        // in four of them.
+        let sequences = ["PLANTANDANIMALGENBMES", "PLANTANDANIMALGENZMES"];
+        let expected: HashMap<&str, _> = AMBIGUOUS_READINGS_PER_ALPHABET.into_iter().collect();
 
-        // protein20 so no window is a homopolymer, raw or encoded: removal has nothing to
-        // drop and the count must equal the one with removal off. 21 residues at k=5 gives
-        // 17 windows, and the ambiguous residue at position 18 falls in four of them,
-        // which contribute two k-mers each: 17 + 4 = 21.
-        let sequences = [("PLANTANDANIMALGENBMES", 21), ("PLANTANDANIMALGENZMES", 21)];
+        for alphabet in Alphabet::all() {
+            let moltype = alphabet.to_moltype();
+            let per_sequence = expected.get(moltype).unwrap_or_else(|| {
+                panic!("{moltype} has no entry in AMBIGUOUS_READINGS_PER_ALPHABET")
+            });
+            let index_off = ProteomeIndex::new(
+                dir.path().join(format!("{moltype}_off.db")),
+                5,
+                1,
+                moltype,
+                false,
+            )?;
+            let mut index_on = ProteomeIndex::new(
+                dir.path().join(format!("{moltype}_on.db")),
+                5,
+                1,
+                moltype,
+                false,
+            )?;
+            index_on.set_remove_low_complexity(true);
 
-        let index_off = ProteomeIndex::new(dir.path().join("off.db"), 5, 1, "protein20", false)?;
-        let mut index_on = ProteomeIndex::new(dir.path().join("on.db"), 5, 1, "protein20", false)?;
-        index_on.set_remove_low_complexity(true);
-
-        for (sequence, expected_kmers) in sequences {
-            let sig_off = index_off.create_protein_signature(sequence, "test_protein")?;
-            let sig_on = index_on.create_protein_signature(sequence, "test_protein")?;
-            assert_eq!(sig_off.kmer_positions().len(), expected_kmers, "{sequence} off");
-            assert_eq!(sig_on.kmer_positions().len(), expected_kmers, "{sequence} on");
-            assert_eq!(sig_on.low_complexity_counts(), (17, 0), "{sequence}");
+            for (sequence, want) in sequences.iter().zip(per_sequence) {
+                let sig_off = index_off.create_protein_signature(sequence, "test_protein")?;
+                let sig_on = index_on.create_protein_signature(sequence, "test_protein")?;
+                assert_eq!(sig_off.kmer_positions().len(), want.off, "{moltype} {sequence} off");
+                assert_eq!(sig_on.kmer_positions().len(), want.on, "{moltype} {sequence} on");
+                let removed = sig_on.low_complexity_counts();
+                assert_eq!(removed, (17, want.dropped), "{moltype} {sequence}");
+            }
         }
 
         Ok(())

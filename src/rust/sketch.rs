@@ -164,10 +164,11 @@ impl<'de> Deserialize<'de> for ProteinSketch {
 struct KmerEncoder {
     residue_classes: Option<&'static HashMap<u8, u8>>,
     encoding_fn: fn(u8) -> u8,
-    // Whether encoded k-mers are over the h/p alphabet, so a run in one is low
-    // complexity. hp_lehninger2 is encoded by sourmash rather than through a table of
-    // ours, so it has no residue_classes entry but still produces h/p k-mers.
-    is_hp_moltype: bool,
+    // Whether a reading whose encoding is a run of one class also counts as low
+    // complexity: every reduced alphabet except dayhoff6, which sourmash encodes without
+    // the check. hp_lehninger2 is also sourmash-encoded, so it has no residue_classes
+    // entry, but its h/p k-mers get the check.
+    drops_encoded_runs: bool,
     encoded: Vec<u8>,
 }
 
@@ -180,7 +181,7 @@ impl KmerEncoder {
         Ok(Self {
             residue_classes,
             encoding_fn: get_encoding_fn_from_moltype(moltype)?,
-            is_hp_moltype: residue_classes.is_some() || moltype == "hp_lehninger2",
+            drops_encoded_runs: residue_classes.is_some() || moltype == "hp_lehninger2",
             encoded: Vec::with_capacity(ksize),
         })
     }
@@ -206,9 +207,9 @@ impl KmerEncoder {
     }
 
     /// Whether a k-mer is a homopolymer as raw amino acids (e.g. "EEEEE", any moltype)
-    /// or, for HP-family moltypes, after encoding (e.g. "hhhhh", which a run of
-    /// *different* hydrophobic residues like "LIVMA" also gives). A k-mer that passes is
-    /// left encoded so `hash_encoded` can use it without a second pass.
+    /// or, when `drops_encoded_runs`, after encoding (e.g. "hhhhh" under an HP alphabet,
+    /// which a run of *different* hydrophobic residues like "LIVMA" also gives). A k-mer
+    /// that passes is left encoded so `hash_encoded` can use it without a second pass.
     fn is_low_complexity(&mut self, kmer: &[u8]) -> bool {
         use crate::kmer::is_homopolymer_kmer;
 
@@ -216,7 +217,7 @@ impl KmerEncoder {
             return true;
         }
         let encoded_is_run = is_homopolymer_kmer(self.encode(kmer));
-        self.is_hp_moltype && encoded_is_run
+        self.drops_encoded_runs && encoded_is_run
     }
 }
 
