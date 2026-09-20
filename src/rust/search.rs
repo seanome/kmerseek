@@ -73,7 +73,8 @@ impl Default for SearchFilters {
 }
 
 /// Score subtracted per encoded position where query and target disagree, unless
-/// `--extend-mismatch-penalty` sets another. Every benchmark uses 2.
+/// `--extend-mismatch-penalty` sets another. Every benchmark and every fitted constant in
+/// `docs/evalue.md` uses 2.
 pub const DEFAULT_MISMATCH_PENALTY: f64 = 2.0;
 
 /// The give-up margin unless `--extend-xdrop` sets another. With a penalty of 2, four
