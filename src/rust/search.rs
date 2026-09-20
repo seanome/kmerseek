@@ -969,7 +969,7 @@ impl ProteinSearcher {
         for idx in picks {
             let md5 = md5s[idx].clone();
             let Some(target) = self.target_sketch(&md5)? else { continue };
-            if let Some(encoded) = target.get_moltype_sequence() {
+            if let Some(encoded) = target.get_class_sequence() {
                 for b in encoded.bytes() {
                     *class_counts.entry(b).or_insert(0.0) += 1.0;
                 }
@@ -1557,7 +1557,7 @@ impl ProteinSearcher {
         // Only meaningful with a mismatch penalty, which is the score's mismatch term.
         if let Some(params) = self.extension {
             if let (Some(q_enc), Some(t_enc)) =
-                (query.sketch.get_moltype_sequence(), target.get_moltype_sequence())
+                (query.sketch.get_class_sequence(), target.get_class_sequence())
             {
                 let a = match_probability(
                     &class_composition(q_enc.as_bytes()),
@@ -2364,8 +2364,8 @@ pub fn extend_regions(
         return regions;
     }
     let (Some(q_enc), Some(t_enc), Some(q_raw), Some(t_raw)) = (
-        query_sketch.get_moltype_sequence(),
-        target_sketch.get_moltype_sequence(),
+        query_sketch.get_class_sequence(),
+        target_sketch.get_class_sequence(),
         query_sketch.get_raw_sequence(),
         target_sketch.get_raw_sequence(),
     ) else {

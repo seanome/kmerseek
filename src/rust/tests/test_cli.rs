@@ -1056,3 +1056,72 @@ fn test_cli_calibrate_stores_a_second_penalty() -> Result<(), Box<dyn std::error
         .stderr(predicate::str::contains("--ka-queries must be at least 1"));
     Ok(())
 }
+
+/// protein20 stores no encoded copy of a sequence (it equals the raw one), and the
+/// extension, the Karlin-Altschul fit and the E-value all read class compositions off the
+/// encoded copy: every protein20 index saw a match probability of 0, fitted nothing, and
+/// every protein20 "extended" search came back exact with E = inf. All three now fall
+/// back to the raw sequence. The 25-sequence fixture is too small for a fit to converge,
+/// so the search is given K, and CED-9 shares few exact 4-mers with it, so every filter is
+/// open; the check is on what the fix changes: the composition the fit sees, the
+/// extension, and finite E-values.
+#[test]
+fn test_cli_protein20_extends_and_scores_ka() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "4",
+            "--alphabet",
+            "protein20",
+            "--extend-mismatch-penalty",
+            "0.14",
+            "--extend-xdrop",
+            "0.56",
+            "--ka-queries",
+            "25",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("match probability 0.061"));
+
+    let out = temp_dir.path().join("hits.csv");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            "0.14",
+            "--extend-xdrop",
+            "0.56",
+            "--ka-k",
+            "0.03",
+            "--max-query-pvalue",
+            "1",
+            "--min-region-score",
+            "0",
+            "--min-shared-kmers",
+            "1",
+            "--threshold",
+            "0",
+        ])
+        .assert()
+        .success();
+    let rows: Vec<SearchResultCsv> =
+        csv::Reader::from_path(&out)?.deserialize().collect::<Result<Vec<_>, _>>()?;
+    assert!(!rows.is_empty());
+    assert!(rows.iter().any(|r| r.region_n_mismatches > 0), "nothing was extended");
+    assert!(rows.iter().any(|r| r.region_evalue.is_finite()), "no region got an E-value");
+    Ok(())
+}

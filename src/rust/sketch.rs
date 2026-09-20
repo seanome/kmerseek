@@ -366,6 +366,15 @@ impl ProteinSketch {
         self.efficient_data.as_ref()?.get_encoded_sequence()
     }
 
+    /// The sequence in the alphabet's class symbols, for anything that reads class
+    /// compositions or compares positions class by class. protein20 stores no encoded copy
+    /// (it would duplicate the raw sequence), so there the raw sequence IS the encoded
+    /// one; before this fallback the Karlin-Altschul fit and E-values saw an empty
+    /// composition for every protein20 sketch and fitted nothing.
+    pub fn get_class_sequence(&self) -> Option<&str> {
+        self.get_moltype_sequence().or_else(|| self.get_raw_sequence())
+    }
+
     /// The per-residue encoder for an alphabet, as sourmash would hash it.
     ///
     /// WHY the two cases differ in capitalization: for a table-backed alphabet the sequence
