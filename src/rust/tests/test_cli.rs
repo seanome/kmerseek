@@ -317,7 +317,9 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             assert_eq!(&record?[col], expected);
             rows += 1;
         }
-        assert_eq!(rows, 362, "ced9 against the 25-sequence bcl2 index at k=12");
+        // 330 regions: chaining seeds per diagonal merges the pieces a repeated k-mer used to
+        // split (362 before).
+        assert_eq!(rows, 330, "ced9 against the 25-sequence bcl2 index at k=12");
     }
 
     Ok(())
@@ -458,11 +460,13 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Verify CSV file is not empty
     let csv_content = std::fs::read_to_string(&output_csv)?;
     assert!(!csv_content.is_empty(), "CSV file should not be empty");
-    // WHY: 364 (fully unfiltered) drops to 243 once --max-pvalue 0.7 excludes matches that
-    // aren't enriched above chance in this small, BCL2-heavy fixture database (see comment above).
+    // WHY: --max-pvalue 0.7 excludes matches that aren't enriched above chance in this small,
+    // BCL2-heavy fixture database (see comment above). 218 regions plus the header: chaining
+    // seeds per diagonal merges the pieces a repeated k-mer used to split, which is why this
+    // was 243 before.
     assert!(
-        csv_content.lines().count() == 243,
-        "CSV should have 243 rows, found {} rows",
+        csv_content.lines().count() == 219,
+        "CSV should have 219 rows, found {} rows",
         csv_content.lines().count()
     );
 
