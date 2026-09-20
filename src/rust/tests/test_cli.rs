@@ -524,6 +524,9 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
             // Verify TF-IDF is meaningful (should not be 0 with multiple signatures)
             assert_relative_eq!(record.query_tfidf, 565.119680433367, epsilon = 1e-5);
+            // Folddisco-style coverage score: IDF sum over the 24 shared k-mers times
+            // 239^-0.5 (BCL2_HUMAN's length). Same value as the compare test in search.rs.
+            assert_relative_eq!(record.coverage_score, 2.361544022707993, epsilon = 1e-5);
         }
     }
 
