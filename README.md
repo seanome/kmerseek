@@ -97,6 +97,47 @@ Removal is **off by default**; existing indexes and workflows are unaffected.
 Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 `hhhhhhhhhp` is kept.
 
+### Indexing a large proteome: `--scaled`
+
+Nearly all of an index's cost is per k-mer: at k=10 each residue adds about 660
+bytes of k-mer bookkeeping during indexing on top of ~20 bytes that do not depend on
+the k-mer count, and about 79 bytes on disk. `--scaled N` keeps only the k-mers whose
+hash falls in the lowest `1/N` of the hash space (FracMinHash), so the same k-mer is
+kept or dropped in every sequence and the per-k-mer cost falls almost linearly with N:
+
+```bash
+kmerseek index -i uniref50.fasta.gz --ksize 10 --scaled 5
+```
+
+| `--scaled` | indexing memory per residue | index on disk per residue |
+|---|---|---|
+| 1 | 683 B | 79 B |
+| 2 | 362 B | 40 B |
+| 5 | 162 B | 17 B |
+| 10 | 87 B | 9.7 B |
+
+(Measured on a 55,486-sequence UniRef50 sample at k=10, protein20. The memory column
+is for the indexer in this release, which holds every k-mer in memory until the index
+is written; with it, Swiss-Prot's 208 M residues need ~140 GB at scaled=1 and ~18 GB
+at scaled=10.)
+
+The value is stored in the index and search reads it back, so `search` takes no
+`--scaled` flag and cannot disagree with the database.
+
+What sampling costs is sensitivity to short matches. A matched region is reported
+from any one of its k-mers that survived the cutoff: search grows that k-mer back out
+along the stored sequences to the full exact match, so a reported region is always
+the whole match, never a fragment. A match none of whose k-mers survived is missed.
+A region with `n` k-mers survives with probability `1 - (1 - 1/N)^n`: at
+`--scaled 5`, a 12-residue match at k=12 (one k-mer) is found 20% of the time, a
+19-residue match (8 k-mers) 83% of the time. The `region_n_shared_kmers` column then
+counts surviving k-mers, and the region Poisson score is computed against an
+expectation summed over the same survivors, so the two stay comparable.
+
+![CED9 vs BCL2 regions at scaled 1, 2, 5 and 10](docs/images/scaled_region_survival.png)
+
+Choose N from the shortest match you need to see reliably, not from k. The cap is 10.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
@@ -255,11 +296,11 @@ Total matches: 21
 
 ### Amino acid disambiguation
 
-Three one-letter codes stand for a pair of residues rather than a single one, because the
+Three letters stand for a pair of amino acids rather than a single one, because the
 method that produced the sequence could not tell the pair apart. Asn and Gln deamidate to
 Asp and Glu during acid hydrolysis, and Ile and Leu have the same mass:
 
-| code | name | stands for |
+| letter | name | stands for |
 |---|---|---|
 | `B` | Asx | `D` (Asp, aspartate) or `N` (Asn, asparagine) |
 | `J` | Xle | `I` (Ile, isoleucine) or `L` (Leu, leucine) |
@@ -306,15 +347,18 @@ Where each k-mer count comes from:
   `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
   at 14.
 
-A k-mer may carry at most one ambiguous residue, so disambiguating turns it into two
-k-mers and no more. A k-mer carrying a second is dropped rather than indexed under part of
-its readings, which would make matching depend on which subset was kept.
+Every ambiguous residue in a k-mer expands, so a k-mer carrying *n* of them becomes 2^*n*
+k-mers. Indexing every reading rather than a chosen subset keeps matching from depending on
+which reading was kept.
 
-Capping at one rather than allowing *n* codes and 2^*n* k-mers keeps the index from growing
-on the sequences that inform it least. A k-mer covering several codes comes from a stretch
-the source method could barely read, so most of its readings are guesses about a region
-that was never determined. SwissProt holds about 900 non-canonical residues in 207.6 M, so
-two in one k-mer should be rare.
+The expansion is affordable because ambiguous residues are rare and stay sparse within any one
+window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
+across 146 of its 575_748 sequences. The densest window at any k up to 30, in Swiss-Prot and
+among UniRef50 representatives alike, holds 9, so the worst single k-mer expands to 512
+readings, and expansion grows the index by 0.0012% at k=4 and 0.034% at k=30. A k-mer
+carrying more than 10 is dropped, which bounds memory on a pathological input such as a long
+run of `B`. At the default `--ksize 10` that can never happen, and no window in either
+database reaches it at any k up to 30.
 
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,

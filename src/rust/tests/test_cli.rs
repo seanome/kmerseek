@@ -4,6 +4,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 use approx::assert_relative_eq;
+use rstest::rstest;
 
 use crate::alphabets::Alphabet;
 use crate::search::SearchResultCsv;
@@ -523,6 +524,9 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
             // Verify TF-IDF is meaningful (should not be 0 with multiple signatures)
             assert_relative_eq!(record.query_tfidf, 565.119680433367, epsilon = 1e-5);
+            // Folddisco-style coverage score: IDF sum over the 24 shared k-mers times
+            // 239^-0.5 (BCL2_HUMAN's length). Same value as the compare test in search.rs.
+            assert_relative_eq!(record.coverage_score, 2.361544022707993, epsilon = 1e-5);
         }
     }
 
@@ -537,5 +541,225 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Verify we found BCL2_HUMAN in the results
     assert!(found_bcl2, "Should find a match with BCL2_HUMAN in the search results");
 
+    Ok(())
+}
+
+/// Index the 25-sequence test FASTA at `ksize`/`scaled` in `hp_lehninger2`, search CED9
+/// against it with every result filter open, and return the rows hitting BCL2_HUMAN sorted
+/// by query start. `scaled` is read back from the database, so `search` takes no flag.
+fn index_and_search_bcl2(
+    ksize: u32,
+    scaled: u32,
+) -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            target_index_path.to_str().unwrap(),
+            "--ksize",
+            &ksize.to_string(),
+            "--scaled",
+            &scaled.to_string(),
+            "--alphabet",
+            "hp_lehninger2",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!("Scaled: {scaled}")));
+
+    let output_csv = temp_dir.path().join("hits.csv");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            target_index_path.to_str().unwrap(),
+            "--output",
+            output_csv.to_str().unwrap(),
+            "--ksize",
+            &ksize.to_string(),
+            "--alphabet",
+            "hp_lehninger2",
+            "--min-shared-kmers",
+            "0",
+            "--max-query-pvalue",
+            "1.0",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(format!("Scaled: {scaled} (detected: {scaled})")));
+
+    let mut rows = Vec::new();
+    for record in csv::Reader::from_path(&output_csv)?.deserialize::<SearchResultCsv>() {
+        let record = record?;
+        assert_eq!(record.scaled, scaled);
+        if record.target_name.contains("BCL2_HUMAN") {
+            rows.push(record);
+        }
+    }
+    rows.sort_by_key(|r| (r.region_start, r.target_start));
+    Ok(rows)
+}
+
+/// `--scaled 5` keeps about a fifth of the k-mers. The same CED9 vs BCL2 search then reports
+/// exactly the four regions the unit tests fix for this pair at scaled=5 (see
+/// `test_sampled_regions_scaled_5_exact`), each spanning the whole exact match, with
+/// `region_n_shared_kmers` counting only the kept k-mers.
+#[test]
+fn test_cli_index_scaled_5_search_regions() -> Result<(), Box<dyn std::error::Error>> {
+    let rows = index_and_search_bcl2(12, 5)?;
+    let regions: Vec<_> = rows
+        .iter()
+        .map(|r| {
+            (
+                r.region_start,
+                r.region_end,
+                r.target_start,
+                r.target_end,
+                r.region_n_shared_kmers,
+                r.region_subseq.as_str(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        regions,
+        [
+            (145, 159, 130, 144, 1, "FSLYQDVVRTVGNA"),
+            (162, 181, 138, 157, 1, "QCPMSYGRLIGLISFGGFV"),
+            (253, 266, 80, 93, 1, "MIGAGVTAGAIGI"),
+            (267, 280, 200, 213, 2, "GVVVCGRMMFSLK"),
+        ]
+    );
+    for r in &rows {
+        assert_eq!(r.n_intersecting_hashes, 5);
+    }
+    Ok(())
+}
+
+/// The BH1 match between CED9 and BCL2, CED9 162..181 against BCL2 138..157:
+///
+/// ```text
+/// Ced9 pr: …RTVGNAQTD QCPMSYGRLIGLISFGGFV AAKMMESVE…
+/// Ced9 hp: …pphhphppp pphhphhphhhhhphhhhh hhphhpphp…
+///                     |||||||||||||||||||
+/// BCL2 hp: …hhphhpphh pphhphhphhhhhphhhhh phpphppph…
+/// BCL2 pr: …FATVVEELF RDGVNWGRIVAFFEFGGVM CVESVNREM…
+/// ```
+///
+/// Whenever any of its k-mers survives the cutoff the CLI reports the whole 19-residue
+/// stretch, both residue strings and the encoding intact, and `region_n_shared_kmers` counts
+/// the survivors: 8, 4 and 1 of its 8 k-mers at k=12, and 5, 5, 3 and 1 of its 5 at k=15.
+/// At k=12 and scaled=10 all 8 hash above the cutoff and the match is missed, which is what
+/// the README's survival formula predicts for a match this short at that sampling rate.
+#[rstest]
+#[case::k12_scaled_1(12, 1, Some(8))]
+#[case::k12_scaled_2(12, 2, Some(4))]
+#[case::k12_scaled_5(12, 5, Some(1))]
+#[case::k12_scaled_10(12, 10, None)]
+#[case::k15_scaled_1(15, 1, Some(5))]
+#[case::k15_scaled_2(15, 2, Some(5))]
+#[case::k15_scaled_5(15, 5, Some(3))]
+#[case::k15_scaled_10(15, 10, Some(1))]
+fn test_cli_landmark_region_across_scaled(
+    #[case] ksize: u32,
+    #[case] scaled: u32,
+    #[case] n_shared: Option<u32>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let rows = index_and_search_bcl2(ksize, scaled)?;
+    let landmark: Vec<_> =
+        rows.iter().filter(|r| r.region_start == 162 && r.target_start == 138).collect();
+    let Some(n_shared) = n_shared else {
+        assert!(landmark.is_empty(), "k={ksize} scaled={scaled}: {landmark:?}");
+        return Ok(());
+    };
+    assert_eq!(landmark.len(), 1, "k={ksize} scaled={scaled}");
+    let r = landmark[0];
+    assert_eq!(r.region_end, 181);
+    assert_eq!(r.target_end, 157);
+    assert_eq!(r.region_subseq, "QCPMSYGRLIGLISFGGFV");
+    assert_eq!(r.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+    assert_eq!(r.moltype_seq, "pphhphhphhhhhphhhhh");
+    assert_eq!(r.region_length, 19);
+    assert_eq!(r.region_n_shared_kmers, n_shared);
+    Ok(())
+}
+
+/// Two indexes are compared sketch for sketch, so `--query-is-index` refuses a query index
+/// whose scaled differs from the target's instead of reaching the assertion in
+/// `find_matched_regions`.
+#[test]
+fn test_cli_query_is_index_rejects_scaled_mismatch() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let mut dbs = Vec::new();
+    for scaled in ["1", "5"] {
+        let db = temp_dir.path().join(format!("scaled_{scaled}.db"));
+        Command::cargo_bin("kmerseek")?
+            .args([
+                "index",
+                "--input",
+                TEST_FASTA_GZ,
+                "--output",
+                db.to_str().unwrap(),
+                "--ksize",
+                "12",
+                "--scaled",
+                scaled,
+                "--alphabet",
+                "hp_lehninger2",
+            ])
+            .assert()
+            .success();
+        dbs.push(db);
+    }
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "search",
+            "--query",
+            dbs[1].to_str().unwrap(),
+            "--query-is-index",
+            "--target",
+            dbs[0].to_str().unwrap(),
+            "--output",
+            temp_dir.path().join("hits.csv").to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp_lehninger2",
+        ])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains(
+            "Query index (ksize=12, scaled=5, alphabet=hp_lehninger2) was not built with the \
+             target's parameters (ksize=12, scaled=1, alphabet=hp_lehninger2)",
+        ));
+    Ok(())
+}
+
+/// A bad `--scaled` is rejected before any database is created.
+#[test]
+fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    for (value, message) in [("0", "must be greater than 0"), ("11", "Scaled value too large")] {
+        let db = temp_dir.path().join(format!("scaled_{value}.db"));
+        Command::cargo_bin("kmerseek")?
+            .args([
+                "index",
+                "--input",
+                TEST_FASTA_GZ,
+                "--output",
+                db.to_str().unwrap(),
+                "--scaled",
+                value,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert!(!db.exists(), "--scaled {value} must not leave a database behind");
+    }
     Ok(())
 }

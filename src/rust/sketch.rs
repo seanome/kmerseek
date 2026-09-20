@@ -222,22 +222,23 @@ impl KmerEncoder {
 
 /// The k-mer windows of one sequence, each expanded into its readings: the window itself
 /// when it carries no ambiguous residue, otherwise each way of resolving it (see
-/// `disambiguate_kmer`, which also drops a window carrying two).
+/// `disambiguate_kmer`, which also drops a window carrying more than
+/// `MAX_AMBIGUOUS_RESIDUES_PER_KMER`).
 struct Readings<'a> {
     residues: &'a [u8],
     ksize: usize,
-    // Checked once for the whole sequence: almost none carry an ambiguous residue
-    // (roughly 900 non-canonical residues in SwissProt's 207.6 M), so the per-window
-    // check is skipped entirely for nearly every sequence.
+    // Checked once for the whole sequence: almost none carry an ambiguous residue (146 of
+    // Swiss-Prot 2026_03's 575_748 sequences), so the per-window check is skipped
+    // entirely for nearly every sequence.
     has_ambiguous: bool,
 }
 
 impl<'a> Readings<'a> {
     fn new(sequence: &'a str, ksize: usize) -> Self {
-        use crate::aminoacid::has_ambiguity_codes;
+        use crate::aminoacid::has_ambiguous_residues;
 
         let residues = sequence.as_bytes();
-        Self { residues, ksize, has_ambiguous: has_ambiguity_codes(residues) }
+        Self { residues, ksize, has_ambiguous: has_ambiguous_residues(residues) }
     }
 
     fn window_count(&self) -> usize {
@@ -247,11 +248,11 @@ impl<'a> Readings<'a> {
     /// Call `f` with each window's start position and reading. A callback rather than an
     /// iterator so the unambiguous case, nearly every window, borrows instead of copying.
     fn for_each(&self, mut f: impl FnMut(usize, &[u8])) {
-        use crate::aminoacid::{disambiguate_kmer, has_ambiguity_codes};
+        use crate::aminoacid::{disambiguate_kmer, has_ambiguous_residues};
 
         for i in 0..self.window_count() {
             let kmer = &self.residues[i..i + self.ksize];
-            if !self.has_ambiguous || !has_ambiguity_codes(kmer) {
+            if !self.has_ambiguous || !has_ambiguous_residues(kmer) {
                 f(i, kmer);
                 continue;
             }
@@ -484,7 +485,7 @@ impl ProteinSketch {
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
         use crate::alphabets::alphabet_table;
-        use crate::aminoacid::has_ambiguity_codes;
+        use crate::aminoacid::has_ambiguous_residues;
         use crate::hash_functions::encode_by_alphabet;
 
         let moltype_str = self.moltype.to_string();
@@ -498,7 +499,7 @@ impl ProteinSketch {
         // false, and the branches below keep every k-mer.
         if self.remove_low_complexity {
             self.add_windows_without_low_complexity(sequence, &mut encoder);
-        } else if has_ambiguity_codes(sequence.as_bytes()) {
+        } else if has_ambiguous_residues(sequence.as_bytes()) {
             // B, J and Z each stand for two residues (B is Asp or Asn, J is Ile or Leu, Z
             // is Glu or Gln). Rather than committing to one, index every window under both
             // readings, so a query carrying either residue matches.

@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
-use kmerseek::errors::IndexResult;
-use kmerseek::types::MolType;
+use kmerseek::errors::{IndexError, IndexResult};
+use kmerseek::types::{MolType, Scaled};
 use kmerseek::{search::ProteinSearcher, ProteomeIndex};
 use std::path::PathBuf;
 
@@ -29,6 +29,15 @@ enum Commands {
         #[arg(short, long, default_value = "10")]
         ksize: u32,
 
+        /// Keep only k-mers whose hash falls in the lowest 1/scaled of the hash space
+        /// (FracMinHash). 1 keeps every k-mer. Indexing memory and index size fall
+        /// almost linearly with this value. A match is found from any one kept k-mer
+        /// and reported at its full length; a match none of whose k-mers were kept is
+        /// missed, which is likelier the shorter it is. Stored in the index; search
+        /// reads it back. Maximum 10.
+        #[arg(short, long, default_value = "1")]
+        scaled: u32,
+
         /// Reduced amino acid alphabet to index with
         #[arg(short = 'a', long, default_value = "protein20")]
         alphabet: ProteinAlphabet,
@@ -43,11 +52,9 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         kmer_stats_out: Option<PathBuf>,
 
-        /// Skip persisting a searchable index -- compute and write --kmer-stats-out only,
-        /// with no RocksDB writes at all. Requires --kmer-stats-out. Use this when you only
-        /// want the frequency spectrum, not a database to search later: it avoids both the
-        /// SearchCache's RocksDB single-value size limit (~4 GiB) and the filesystem I/O load
-        /// of chunked signature storage, neither of which stats-only output needs.
+        /// Do not keep a searchable index: build it in a scratch directory that is removed
+        /// on exit, and write only --kmer-stats-out. Requires --kmer-stats-out. Use this
+        /// when you only want the frequency spectrum, not a database to search later.
         #[arg(long, requires = "kmer_stats_out")]
         stats_only: bool,
 
@@ -234,6 +241,7 @@ fn main() -> IndexResult<()> {
             input,
             output,
             ksize,
+            scaled,
             alphabet,
             progress_interval,
             kmer_stats_out,
@@ -242,13 +250,25 @@ fn main() -> IndexResult<()> {
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
-            // Scaled factor is always 1 (captures all k-mers)
-            let scaled: u32 = 1;
+            // Fail on a bad value here, before any database is created.
+            let scaled = Scaled::new(scaled)
+                .map_err(|message| IndexError::ConfigurationError {
+                    field: "scaled".to_string(),
+                    message,
+                })?
+                .get();
 
             let effective_moltype: &'static str = alphabet.into();
 
+            // --stats-only builds in a scratch directory that is removed on exit. The
+            // index is still written there: the streaming indexer sorts k-mers on disk,
+            // so there is no in-memory path that could produce the spectrum without it.
+            let scratch = if stats_only { Some(tempfile::tempdir()?) } else { None };
+
             // Determine output path
-            let output_path = if let Some(output) = output {
+            let output_path = if let Some(scratch) = &scratch {
+                scratch.path().join("stats-only.kmerseek.rocksdb")
+            } else if let Some(output) = output {
                 eprintln!("Output database: {}", output.display());
                 output
             } else {
@@ -313,12 +333,13 @@ fn main() -> IndexResult<()> {
             }
 
             if stats_only {
-                // --stats-only: skip persisting a searchable index entirely (see
-                // save_kmer_stats_only's doc comment for why). kmer_stats_out is
-                // guaranteed Some here -- clap's `requires = "kmer_stats_out"` enforces it.
+                // kmer_stats_out is guaranteed Some here -- clap's
+                // `requires = "kmer_stats_out"` enforces it.
                 let kmer_stats_out =
                     kmer_stats_out.expect("clap requires kmer_stats_out with stats_only");
-                index.save_kmer_stats_only(&kmer_stats_out)?;
+                index.save_state_with_kmer_stats(Some(&kmer_stats_out))?;
+                drop(index);
+                drop(scratch);
                 eprintln!("Stats-only run completed successfully (no index persisted).");
             } else {
                 // Enable compactions for better read performance
@@ -477,6 +498,26 @@ fn main() -> IndexResult<()> {
                 // Load pre-indexed query database
                 eprintln!("Loading pre-indexed query database...");
                 let query_index = ProteomeIndex::load(&query)?;
+                // Sketches from two indexes are compared as they are, so the two must agree
+                // on every sketch parameter. A scaled mismatch would otherwise reach
+                // find_matched_regions, which asserts it.
+                let query_params =
+                    (query_index.ksize(), query_index.scaled(), query_index.moltype());
+                let target_params = (final_ksize, final_scaled, detected_moltype.as_str());
+                if query_params != target_params {
+                    return Err(IndexError::ValidationError {
+                        message: format!(
+                            "Query index (ksize={}, scaled={}, alphabet={}) was not built with \
+                             the target's parameters (ksize={}, scaled={}, alphabet={})",
+                            query_params.0,
+                            query_params.1,
+                            query_params.2,
+                            target_params.0,
+                            target_params.1,
+                            target_params.2,
+                        ),
+                    });
+                }
                 let query_signatures: Vec<_> = query_index
                     .get_signatures()
                     .iter()
@@ -852,17 +893,10 @@ fn validate_and_assign_parameters(
         }
     };
 
-    // Scaled is always 1 (captures all k-mers). The database is authoritative, so
-    // error out if it was built with a different scaled factor.
-    if detected_scaled != 1 {
-        return Err(kmerseek::errors::IndexError::ValidationError {
-            message: format!(
-                "Scaled factor mismatch: database has scaled={}, but kmerseek only supports scaled=1.",
-                detected_scaled
-            ),
-        });
-    }
-    let final_scaled = 1;
+    // Query sketches must use the database's scaled factor, or the FracMinHash cutoffs
+    // disagree and shared k-mers go unseen. There is no --scaled on search, so the
+    // detected value is the only one.
+    let final_scaled = detected_scaled;
 
     // Validate and assign encoding
     let final_alphabet = assign_encoding(user_encoding, detected_moltype)?;
