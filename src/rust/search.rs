@@ -3517,7 +3517,7 @@ mod tests {
         let index_path = temp_dir.path().join("index");
         let index = ProteomeIndex::new(&index_path, ksize, 1, "protein20", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(index);
+        let searcher = ProteinSearcher::new(index)?;
 
         // BCL2_HUMAN (P10415) residues 1-32 with the Asp at index 9 written as B (Asp or Asn).
         let with_b = "MAHAGRTGYBNREIVMKYIHYKLSQRGYEWDA";
