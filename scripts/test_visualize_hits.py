@@ -170,6 +170,8 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_poisson_score": region_poisson_score,
         "region_tail_probability": region_tail_probability,
         "region_enrichment": region_enrichment,
+        # Exact region (no --extend-mismatch-penalty), so nothing inside it disagrees.
+        "region_n_mismatches": 0,
     }
 
 
