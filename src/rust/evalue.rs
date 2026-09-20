@@ -652,8 +652,12 @@ pub fn short_fit_warning(fit: &KaCalibration) -> Option<String> {
 /// Fit r_database and K on `settings.n_queries` calibration queries of the index just
 /// built and store the fit in the index. Also prints the closed-form lambda and K for the
 /// database's own composition, so the effect of the seed requirement and of real sequence
-/// structure on each is visible.
-pub fn calibrate_index(index: ProteomeIndex, settings: KaCalibrationSettings) -> IndexResult<()> {
+/// structure on each is visible. `survival_out` gets the curve the fit was read from.
+pub fn calibrate_index(
+    index: ProteomeIndex,
+    settings: KaCalibrationSettings,
+    survival_out: Option<&std::path::Path>,
+) -> IndexResult<()> {
     let KaCalibrationSettings { scoring, null, reference, n_queries, .. } = settings;
     let ExtensionScoring { mismatch_penalty, xdrop } = scoring;
     eprintln!(
@@ -678,6 +682,10 @@ pub fn calibrate_index(index: ProteomeIndex, settings: KaCalibrationSettings) ->
             if let Some(warning) = short_fit_warning(&fit) {
                 eprintln!("  {warning}");
             }
+            if let Some(path) = survival_out {
+                write_survival_csv(path, &fit)?;
+                eprintln!("  Survival curve written to {}", path.display());
+            }
             searcher.index().put_ka_calibration(&fit)?;
             eprintln!(
                 "  Stored in the index for --extend-mismatch-penalty {mismatch_penalty} --extend-xdrop {xdrop}"
@@ -689,6 +697,64 @@ pub fn calibrate_index(index: ProteomeIndex, settings: KaCalibrationSettings) ->
             report.n_queries, report.n_regions
         ),
     }
+    Ok(())
+}
+
+/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
+/// line's count, the reference count, and whether the bin was inside the fit window.
+/// `scripts/plot_ka_survival.py` draws it.
+pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResult<()> {
+    let mut w = csv::Writer::from_path(path)?;
+    w.write_record([
+        "x",
+        "n_regions_at_least",
+        "fitted_n_regions_at_least",
+        "reference_n_regions_at_least",
+        "in_fit",
+        "r_database",
+        "k",
+        "lambda_analytic",
+        "match_probability",
+        "null",
+        "reference",
+        "mismatch_penalty",
+        "xdrop",
+        "n_queries",
+        "query_residues",
+        "database_kmers",
+        "bin_width",
+    ])?;
+    // The fit is a line through ln(regions in the bin at x); its survival is the same line
+    // divided by (1 - e^(-r_database w)).
+    let per_bin = 1.0 - (-fit.r_database * fit.bin_width).exp();
+    let ln_intercept =
+        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+    let reference: std::collections::HashMap<i64, u64> =
+        fit.reference_survival.iter().copied().collect();
+    for &(bin, count) in &fit.survival {
+        let x = bin as f64 * fit.bin_width;
+        let fitted = (ln_intercept - fit.r_database * x).exp() / per_bin;
+        w.write_record([
+            format!("{x:.3}"),
+            count.to_string(),
+            format!("{fitted:.3}"),
+            reference.get(&bin).map_or(String::new(), |r| r.to_string()),
+            (fit.score_lo <= bin && bin <= fit.score_hi).to_string(),
+            fit.r_database.to_string(),
+            fit.k.to_string(),
+            fit.lambda_analytic.to_string(),
+            fit.match_probability.to_string(),
+            fit.null.to_string(),
+            fit.reference.map_or(String::new(), |r| r.to_string()),
+            fit.scoring.mismatch_penalty.to_string(),
+            fit.scoring.xdrop.to_string(),
+            fit.n_queries.to_string(),
+            fit.query_residues.to_string(),
+            fit.database_kmers.to_string(),
+            fit.bin_width.to_string(),
+        ])?;
+    }
+    w.flush()?;
     Ok(())
 }
 

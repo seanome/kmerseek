@@ -1123,3 +1123,132 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     );
     Ok(())
 }
+
+/// One calibration query gives too few score bins to fit, so nothing is stored; three
+/// give a fit that leans on the seed end of the curve, which the index step says out
+/// loud and writes out as a survival curve.
+#[test]
+fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index = |n_queries: &str, null: &str, survival: &std::path::Path| {
+        let out = temp_dir.path().join(format!("index_{n_queries}_{null}.db"));
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            out.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            n_queries,
+            "--ka-null",
+            null,
+            "--ka-survival-out",
+            survival.to_str().unwrap(),
+        ]);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+
+    let unfit = temp_dir.path().join("unfit.csv");
+    index("1", "database", &unfit)?.success().stderr(predicate::str::contains(
+        "1 queries gave only 420 regions, too few score bins to fit; nothing stored.",
+    ));
+    assert!(!unfit.exists(), "no fit, no curve to write");
+
+    // Shuffled queries have no relatives, so no reference is searched and none is announced.
+    index("3", "shuffled", &temp_dir.path().join("shuffled.csv"))?
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting r_database and K on 3 shuffled sequences (mismatch penalty 2, give-up margin 8)...",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 3 shuffled queries, 789 regions; r_database 0.896 per nat of lambda_pair S",
+        ))
+        .stderr(predicate::str::contains("K 0.0191, fit on x 6.5..8.5, rms 0.070\n"));
+
+    let survival = temp_dir.path().join("survival.csv");
+    index("3", "database", &survival)?
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting r_database and K on 3 database sequences (mismatch penalty 2, give-up \
+             margin 8); the fit stops where their counts rise above the same sequences \
+             shuffled-dipeptide...",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 3 database queries, 903 regions; r_database 0.730 per nat of lambda_pair S \
+             (1 = closed form holds; closed form 0.481 at the database's match probability \
+             0.500), K 0.0082, fit on x 6.0..9.0, rms 0.184; shuffled-dipeptide reference \
+             slope 0.712 over the same bins",
+        ))
+        .stderr(predicate::str::contains(
+            "WARNING: the fit has only 6 bins (x 6.0..9.0) below the relatives at x none.",
+        ))
+        .stderr(predicate::str::contains(format!(
+            "Survival curve written to {}",
+            survival.display()
+        )));
+
+    let mut reader = csv::Reader::from_path(&survival)?;
+    assert_eq!(
+        reader.headers()?.iter().collect::<Vec<_>>(),
+        [
+            "x",
+            "n_regions_at_least",
+            "fitted_n_regions_at_least",
+            "reference_n_regions_at_least",
+            "in_fit",
+            "r_database",
+            "k",
+            "lambda_analytic",
+            "match_probability",
+            "null",
+            "reference",
+            "mismatch_penalty",
+            "xdrop",
+            "n_queries",
+            "query_residues",
+            "database_kmers",
+            "bin_width",
+        ]
+    );
+    let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
+    assert_eq!(rows.len(), 62, "one row per half-nat bin of x from 4.5 to 35");
+    assert_eq!((&rows[0][0], &rows[61][0]), ("4.500", "35.000"));
+    // The lowest bin holds every region (903 seeds and up); the fit window is x 6.0..9.0.
+    assert_eq!(&rows[0][1], "903");
+    assert_eq!(&rows[0][4], "false");
+    let in_fit: Vec<&str> = rows.iter().filter(|r| &r[4] == "true").map(|r| &r[0]).collect();
+    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500"]);
+    // Lowest bin: 903 regions, the fitted line far above at 1955.245 (the seed floor bends
+    // the curve there), 864 in the shuffled-dipeptide reference.
+    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("903", "1955.245", "864"));
+    // The top bin is one region, below the fitted line's resolution, and the reference
+    // never got there.
+    assert_eq!((&rows[61][1], &rows[61][2], &rows[61][3]), ("1", "0.000", ""));
+    // Fit constants repeat on every row.
+    let constants = |r: &csv::StringRecord| r.iter().skip(5).map(str::to_owned).collect::<Vec<_>>();
+    assert!(rows.iter().all(|r| constants(r) == constants(&rows[0])));
+    assert_eq!(
+        constants(&rows[0]),
+        [
+            "0.7304804242524211",
+            "0.008235243224364983",
+            "0.48120853696601995",
+            "0.5000011360087127",
+            "database",
+            "shuffled-dipeptide",
+            "2",
+            "8",
+            "3",
+            "762",
+            "8340",
+            "0.5"
+        ]
+    );
+    Ok(())
+}
