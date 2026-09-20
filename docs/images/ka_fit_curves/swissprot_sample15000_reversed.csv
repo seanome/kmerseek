@@ -1,4 +1,4 @@
-x,n_regions_at_least,fitted_n_regions_at_least,reference_n_regions_at_least,in_fit,slope,k,lambda_analytic,match_probability,null,reference,mismatch_penalty,xdrop,n_queries,query_residues,database_kmers,bin_width
+x,n_regions_at_least,fitted_n_regions_at_least,reference_n_regions_at_least,in_fit,r_database,k,lambda_analytic,match_probability,null,reference,mismatch_penalty,xdrop,n_queries,query_residues,database_kmers,bin_width
 0.000,58682321,5430393767.627,,false,0.8583991549047305,0.016503753841006247,0.4499970535423192,0.5108115744279745,reversed,,2,8,200,71748,4586050,0.5
 0.500,58681762,3535349174.758,,false,0.8583991549047305,0.016503753841006247,0.4499970535423192,0.5108115744279745,reversed,,2,8,200,71748,4586050,0.5
 1.000,58680986,2301618321.304,,false,0.8583991549047305,0.016503753841006247,0.4499970535423192,0.5108115744279745,reversed,,2,8,200,71748,4586050,0.5

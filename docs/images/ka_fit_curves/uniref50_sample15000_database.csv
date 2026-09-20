@@ -1,4 +1,4 @@
-x,n_regions_at_least,fitted_n_regions_at_least,reference_n_regions_at_least,in_fit,slope,k,lambda_analytic,match_probability,null,reference,mismatch_penalty,xdrop,n_queries,query_residues,database_kmers,bin_width
+x,n_regions_at_least,fitted_n_regions_at_least,reference_n_regions_at_least,in_fit,r_database,k,lambda_analytic,match_probability,null,reference,mismatch_penalty,xdrop,n_queries,query_residues,database_kmers,bin_width
 0.000,50946936,3203423705.030,50020475,false,0.8264683926965516,0.01388558487985401,0.42782263924999075,0.5185214875668276,database,shuffled-dipeptide,2,8,200,59508,3876813,0.5
 0.500,50870905,2119088300.675,49945144,false,0.8264683926965516,0.01388558487985401,0.42782263924999075,0.5185214875668276,database,shuffled-dipeptide,2,8,200,59508,3876813,0.5
 1.000,50840197,1401792469.415,49911314,false,0.8264683926965516,0.01388558487985401,0.42782263924999075,0.5185214875668276,database,shuffled-dipeptide,2,8,200,59508,3876813,0.5

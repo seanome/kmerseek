@@ -40,7 +40,7 @@ def load(path):
     window = [float(r["x"]) for r in rows if r["in_fit"] == "true"]
     ref_survival = [int(r["reference_n_regions_at_least"]) if r.get("reference_n_regions_at_least") else 0 for r in rows]
     ref_density = [ref_survival[i] - (ref_survival[i + 1] if i + 1 < len(ref_survival) else 0) for i in range(len(ref_survival))]
-    lam, k = float(meta["slope"]), float(meta["k"])
+    lam, k = float(meta["r_database"]), float(meta["k"])
     residues, kmers = float(meta["query_residues"]), float(meta["database_kmers"])
     per_bin = 1 - math.exp(-lam * width)
     ln_intercept = math.log(k * residues * kmers * per_bin)
@@ -60,7 +60,7 @@ def slope_standard_error(scores, density, window, lam, ln_intercept):
 
 def draw_column(axes, path, first_column, args_label=None):
     meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival, width = load(path)
-    lam, k = float(meta["slope"]), float(meta["k"])
+    lam, k = float(meta["r_database"]), float(meta["k"])
     se = slope_standard_error(scores, density, window, lam, ln_intercept)
     xmax = max(window) + 12
     rows = [

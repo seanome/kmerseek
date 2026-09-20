@@ -25,7 +25,7 @@ for i, (null_label, suffix) in enumerate(nulls):
     for j, (db_label, pattern) in enumerate(datasets):
         path = pattern.format(suffix)
         meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival, width = load(path)
-        lam, k = float(meta["slope"]), float(meta["k"])
+        lam, k = float(meta["r_database"]), float(meta["k"])
         se = slope_standard_error(scores, density, window, lam, ln_intercept)
         xmax = 30
         for r, (observed, fitted, reference, marker, face) in enumerate([(density, fit_density, ref_density, "o", ""), (survival, fit_survival, ref_survival, "s", "none")]):

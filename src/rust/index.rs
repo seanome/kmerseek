@@ -17,7 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
-use crate::karlin_altschul::KaCalibration;
+use crate::evalue::KaCalibration;
+use crate::search::ExtensionScoring;
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::KmerSize;
 use crate::types::MolType;
@@ -32,8 +33,8 @@ pub const SCHEMA_VERSION: u32 = 3;
 /// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
 
-/// RocksDB key holding the fitted Karlin-Altschul K values, one per (mismatch penalty,
-/// X-drop) pair the index was calibrated for: a bincode `Vec<KaCalibration>`. Its own key,
+/// RocksDB key holding the fitted r_database and K values, one per (mismatch penalty,
+/// give-up margin) pair the index was calibrated for: a bincode `Vec<KaCalibration>`. Its own key,
 /// not a metadata field, so an index without it still reads and the metadata layout is
 /// untouched.
 const KA_CALIBRATION_KEY: &[u8] = b"ka_calibration";
@@ -1518,24 +1519,15 @@ impl ProteomeIndex {
         }
     }
 
-    /// The fitted K for this mismatch penalty and X-drop, if the index has one.
-    pub fn ka_calibration(
-        &self,
-        mismatch_penalty: f64,
-        xdrop: f64,
-    ) -> IndexResult<Option<KaCalibration>> {
-        Ok(self
-            .ka_calibrations()?
-            .into_iter()
-            .find(|c| c.mismatch_penalty == mismatch_penalty && c.xdrop == xdrop))
+    /// The fit for this mismatch penalty and give-up margin, if the index has one.
+    pub fn ka_calibration(&self, scoring: ExtensionScoring) -> IndexResult<Option<KaCalibration>> {
+        Ok(self.ka_calibrations()?.into_iter().find(|c| c.scoring == scoring))
     }
 
-    /// Store a fitted K, replacing any earlier fit for the same penalty and X-drop.
+    /// Store a fit, replacing any earlier fit for the same penalty and give-up margin.
     pub fn put_ka_calibration(&self, calibration: &KaCalibration) -> IndexResult<()> {
         let mut all = self.ka_calibrations()?;
-        all.retain(|c| {
-            c.mismatch_penalty != calibration.mismatch_penalty || c.xdrop != calibration.xdrop
-        });
+        all.retain(|c| c.scoring != calibration.scoring);
         all.push(calibration.clone());
         self.db.put(KA_CALIBRATION_KEY, bincode::serialize(&all)?)?;
         Ok(())
@@ -4519,47 +4511,30 @@ mod tests {
         Ok(())
     }
 
+    /// Fits are stored under their mismatch penalty and give-up margin: a second fit for
+    /// the same pair replaces the first, a fit for another pair sits beside it, and a pair
+    /// never fitted has none. Only the key and K are read back; `KaCalibration::placeholder`
+    /// carries no fit numbers, and the round trip of a real fit is tested in
+    /// `search::tests::test_calibrate_ka_on_first25_is_stored_and_reused`.
     #[test]
-    fn test_put_ka_calibration_replaces_the_fit_for_the_same_penalty_and_xdrop() -> Result<()> {
-        use crate::karlin_altschul::{DecoyNull, KaCalibration};
+    fn test_ka_calibration_is_keyed_by_penalty_and_give_up_margin() -> Result<()> {
+        use crate::evalue::KaCalibration;
+        use crate::search::ExtensionScoring;
         use tempfile::tempdir;
         let dir = tempdir()?;
         let index = ProteomeIndex::new(dir.path().join("ka.db"), 10, 1, "protein20", false)?;
-        let fit = |penalty: f64, xdrop: f64, k: f64| KaCalibration {
-            mismatch_penalty: penalty,
-            xdrop,
-            null: DecoyNull::Shuffled,
-            seed: 1,
-            n_queries: 25,
-            query_residues: 9288,
-            database_kmers: 8340,
-            n_regions: 9561,
-            match_probability: 0.5,
-            lambda_analytic: 0.481,
-            slope: 0.806,
-            k,
-            bin_width: 0.5,
-            score_lo: 15,
-            score_hi: 22,
-            bend_score: None,
-            rms_residual: 0.086,
-            survival: vec![(12, 9561)],
-            reference_survival: Vec::new(),
-            reference_lambda: None,
-            reference: None,
-        };
+        let scoring =
+            |mismatch_penalty: f64, xdrop: f64| ExtensionScoring { mismatch_penalty, xdrop };
         assert_eq!(index.ka_calibrations()?, Vec::new());
-        index.put_ka_calibration(&fit(2.0, 8.0, 0.0197))?;
-        index.put_ka_calibration(&fit(3.0, 8.0, 0.0673))?;
+        index.put_ka_calibration(&KaCalibration::placeholder(scoring(2.0, 8.0), 0.01))?;
+        index.put_ka_calibration(&KaCalibration::placeholder(scoring(3.0, 8.0), 0.02))?;
         assert_eq!(index.ka_calibrations()?.len(), 2);
 
-        // A refit under the same penalty and X-drop takes the old fit's place.
-        index.put_ka_calibration(&fit(2.0, 8.0, 0.0210))?;
-        let all = index.ka_calibrations()?;
-        assert_eq!(all.len(), 2);
-        assert_eq!(index.ka_calibration(2.0, 8.0)?.map(|c| c.k), Some(0.0210));
-        assert_eq!(index.ka_calibration(3.0, 8.0)?.map(|c| c.k), Some(0.0673));
-        assert_eq!(index.ka_calibration(2.0, 6.0)?, None);
+        index.put_ka_calibration(&KaCalibration::placeholder(scoring(2.0, 8.0), 0.03))?;
+        assert_eq!(index.ka_calibrations()?.len(), 2);
+        assert_eq!(index.ka_calibration(scoring(2.0, 8.0))?.map(|c| c.k), Some(0.03));
+        assert_eq!(index.ka_calibration(scoring(3.0, 8.0))?.map(|c| c.k), Some(0.02));
+        assert_eq!(index.ka_calibration(scoring(2.0, 6.0))?, None);
         Ok(())
     }
 }

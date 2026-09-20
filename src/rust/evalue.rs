@@ -1,5 +1,6 @@
-//! Karlin-Altschul K, and a check on lambda, for the E-value of an extended region, fitted
-//! on the index itself.
+//! The E-value of an extended region: Karlin-Altschul K and r_database fitted on the index
+//! itself, and the decoys the fit is read against. `docs/evalue.md` walks through it with
+//! the figures.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
 //! unrelated query of m residues and a database of n residues. lambda is solved per pair
@@ -10,10 +11,11 @@
 //! the index and every region's normalised score x = lambda_pair S is binned. Under the
 //! model the count at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the
 //! database residues and w the bin width, so ln(count) against x is a line of slope -1
-//! and intercept ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). The fitted
-//! slope is the factor every pair's lambda is multiplied by at search time; 1 means the
-//! closed form holds. Relatives lift the counts at high x; the fit stops below that, where
-//! the real curve starts to rise relative to the same queries shuffled. The fit goes to the
+//! and intercept ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). Minus the
+//! fitted slope is r_database, the factor every pair's lambda is multiplied by at search
+//! time; 1 means the closed form holds. Related pairs lift the counts at high x; the fit
+//! stops below that, where the real curve starts to rise above the same queries shuffled.
+//! The fit goes to the
 //! count at each x, not the count at or above it, because a plateau of relatives far up the
 //! axis adds a constant to every survival count below it and would flatten the slope.
 //!
@@ -24,10 +26,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::search::karlin_altschul_lambda;
+use crate::errors::IndexResult;
+use crate::index::ProteomeIndex;
+use crate::search::{
+    karlin_altschul_lambda, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource,
+    ProteinSearcher,
+};
 
 /// Karlin-Altschul K for +1 / -penalty scoring with match probability `a`, counting every
-/// high-scoring segment of an ungapped comparison (no seed requirement, no X-drop).
+/// high-scoring segment of an ungapped comparison (no seed requirement, no give-up margin).
 ///
 /// When the only positive score is +1 every ascending ladder step of the random walk is
 /// exactly 1, and K has the closed form E[X e^(lambda X)] (1 - e^-lambda), with
@@ -48,36 +55,35 @@ pub fn karlin_altschul_k_theory(a: f64, penalty: f64) -> Option<f64> {
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
 }
 
-/// Which sequences are searched to fit lambda and K.
+/// Which sequences are searched to fit r_database and K.
 ///
-/// Measured on 300 human BCL2-related proteins at hp k=12, penalty 2, X-drop 8, 200
-/// calibration queries each (local slope of ln count vs score, per 4-score window):
-///
-/// - `Database`: 0.35 to 0.36 up to score 20, then the line bends upward into 1,800
-///   regions of family hits reaching score 1,688. The bend is what the fit cuts off.
-/// - `Shuffled`: 0.37 rising to 0.44 between scores 12 and 32, no bend. Straight enough,
-///   but shuffling removes the hydrophobic runs and the periodicity real unrelated proteins
-///   have, so the null is too easy and its E-values too small.
-/// - `Reversed`: 0.36 falling to 0.18 between scores 12 and 48. A helix or a strand reads
-///   much the same backwards in a hydrophobic/polar alphabet, so reversed family members
-///   still hit the query one element at a time; the leak sits at the scores the fit needs.
+/// What each choice keeps and loses, and what it does to the fit, is measured in
+/// `docs/evalue.md` and drawn in `docs/images/ka_fit_grid_nulls_by_database.png` (every
+/// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
+/// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
+/// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on full-length
+/// proteins real sequences give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides
+/// already pulls the shuffle to 0.94, so hydrophobic runs alone explain a third of the gap.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
-    /// in; related pairs are cut off where the curve starts to rise relative to the same
-    /// queries shuffled, which are searched alongside (Altschul's tutorial, approach i;
+    /// in; the fit stops where the counts start to rise above the same queries shuffled,
+    /// which are searched alongside as the reference (Altschul's tutorial, approach i;
     /// Collins et al. 1988; Pearson 1998). Costs two calibration searches.
     Database,
     /// Each query is a database sequence with its residues shuffled: the independent-letter
-    /// model BLAST's tables are fitted on (Altschul & Gish 1996).
+    /// model BLAST's tables are fitted on (Altschul & Gish 1996). Too easy a null on real
+    /// proteins, whose hydrophobic runs and helix and strand periodicity a shuffle destroys.
     Shuffled,
     /// Each query is a database sequence shuffled so that every dipeptide (each pair of
     /// neighbouring residues) occurs as often as in the original (Altschul & Erickson 1985;
     /// sampled as a random Eulerian path, Kandel et al. 1996, the uShuffle k = 2 method).
     /// Keeps the rate at which a hydrophobic residue follows a hydrophobic one, and with it
-    /// the lengths of hydrophobic runs, which a plain shuffle destroys.
+    /// the lengths of hydrophobic runs. The default reference for `Database`.
     ShuffledDipeptide,
-    /// Each query is a database sequence read back to front.
+    /// Each query is a database sequence read back to front. In a hydrophobic/polar
+    /// alphabet a helix or a strand reads much the same backwards, so reversed family
+    /// members still match the query one element at a time; a check, not a null to fit on.
     Reversed,
 }
 
@@ -92,17 +98,25 @@ impl std::fmt::Display for DecoyNull {
     }
 }
 
-/// One fitted (lambda, K), stored in the index under `ka_calibration` and looked up at
-/// search time by (mismatch_penalty, xdrop). The seed length and alphabet are the index's.
+/// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
+/// at search time by its `scoring`. The seed length and alphabet are the index's.
+///
+/// The fit is a straight line through ln(regions in each bin of x = lambda_pair S).
+/// Minus its slope is `r_database`; its height gives `k` (see `line_through`). Bins are
+/// `bin_width` nats wide, so every field named "score" below is a bin index: bin b covers
+/// x in [b w, (b + 1) w).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct KaCalibration {
-    pub mismatch_penalty: f64,
-    pub xdrop: f64,
+    /// Mismatch penalty and give-up margin the fit is for. A search with a different pair
+    /// cannot use this fit.
+    pub scoring: ExtensionScoring,
+    /// What the calibration queries were.
     pub null: DecoyNull,
     /// Seed of the query sampler, so the fit can be reproduced.
     pub seed: u64,
-    /// Calibration queries searched, and their residues added up (L in ln(K L N)).
+    /// Calibration queries searched.
     pub n_queries: usize,
+    /// Residues in the calibration queries added up: L in ln(K L N).
     pub query_residues: u64,
     /// The database size the E-value uses for n: the index's k-mer count stands in for its
     /// residue count.
@@ -110,42 +124,48 @@ pub struct KaCalibration {
     /// Regions the calibration queries produced, at any score.
     pub n_regions: usize,
     /// Chance that two positions drawn from the sampled database sequences share a class
-    /// (a of the database against itself), and the closed-form lambda at that a, for
-    /// reporting.
+    /// (a of the database against itself). For reporting only: the search solves lambda
+    /// per pair.
     pub match_probability: f64,
+    /// The closed-form lambda at `match_probability`, for reporting next to `r_database`.
     pub lambda_analytic: f64,
     /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
     /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
     /// lambda by this.
-    pub slope: f64,
+    pub r_database: f64,
+    /// Karlin-Altschul K: the line's height with the query residues, database size and bin
+    /// width divided out.
     pub k: f64,
-    /// Width of one x bin in nats (`BIN_WIDTH`); `score_lo`, `score_hi`, `bend_score` and
-    /// the survival curves are in bins, so bin b covers x in [b w, (b + 1) w).
+    /// Width of one x bin in nats (`BIN_WIDTH`).
     pub bin_width: f64,
-    /// Bins the line was fitted on, inclusive.
+    /// First bin the line was fitted on.
     pub score_lo: i64,
+    /// Last bin the line was fitted on, inclusive.
     pub score_hi: i64,
-    /// First score bin above the fit that sat above the line: the start of the homolog
-    /// bend. None when the fit ran out of counts first.
+    /// First bin above the fit that sat above the line: where related pairs begin. None
+    /// when the fit ran out of counts first.
     pub bend_score: Option<i64>,
     /// Root mean square of the fit residuals in ln count.
     pub rms_residual: f64,
-    /// Regions with score >= s, for every s from the smallest score seen up to the largest,
-    /// for plotting the curve the fit was read from.
+    /// Regions with score >= s, for every bin s from the smallest score seen up to the
+    /// largest, for plotting the curve the fit was read from.
     pub survival: Vec<(i64, u64)>,
-    /// For the `Database` null: the same queries shuffled, searched the same way, and the
-    /// slope of that curve over the fit window. The ratio of the two curves is what decides
-    /// where the fit stops (`fit_scores_with_reference`). Empty and None for other nulls.
+    /// For the `Database` null: the same queries shuffled, searched the same way. The ratio
+    /// of the two curves is what decides where the fit stops
+    /// (`fit_scores_with_reference`). Empty for other nulls.
     pub reference_survival: Vec<(i64, u64)>,
+    /// Minus the slope of the reference curve over the fit window, per bin. None for nulls
+    /// other than `Database`.
     pub reference_lambda: Option<f64>,
-    /// How the reference queries were made (`Shuffled` or `ShuffledDipeptide`).
+    /// How the reference queries were made (`Shuffled` or `ShuffledDipeptide`). None for
+    /// nulls other than `Database`.
     pub reference: Option<DecoyNull>,
 }
 
 impl KaCalibration {
-    /// The factor a search multiplies every pair's closed-form lambda by: the fitted slope.
-    pub fn r_database(&self) -> f64 {
-        self.slope
+    /// The two numbers a search takes from the fit.
+    pub fn ka_params(&self) -> KaParams {
+        KaParams { k: self.k, r_database: self.r_database }
     }
 
     /// The fit window in nats of x = lambda_pair S.
@@ -157,6 +177,35 @@ impl KaCalibration {
     pub fn n_fit_points(&self) -> i64 {
         self.score_hi - self.score_lo + 1
     }
+
+    /// A record with nothing in it but its key and K, for tests of how fits are stored
+    /// and looked up. No number in it comes from a fit; a real one is in
+    /// `search::tests::test_calibrate_ka_on_first25_is_stored_and_reused`.
+    #[cfg(test)]
+    pub(crate) fn placeholder(scoring: ExtensionScoring, k: f64) -> Self {
+        Self {
+            scoring,
+            null: DecoyNull::Shuffled,
+            seed: 0,
+            n_queries: 0,
+            query_residues: 0,
+            database_kmers: 0,
+            n_regions: 0,
+            match_probability: 0.0,
+            lambda_analytic: 0.0,
+            r_database: 0.0,
+            k,
+            bin_width: BIN_WIDTH,
+            score_lo: 0,
+            score_hi: 0,
+            bend_score: None,
+            rms_residual: 0.0,
+            survival: Vec::new(),
+            reference_survival: Vec::new(),
+            reference_lambda: None,
+            reference: None,
+        }
+    }
 }
 
 /// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
@@ -167,35 +216,47 @@ pub const BIN_WIDTH: f64 = 0.5;
 /// ln count (about 1 / sqrt(count)) is larger than the effects being fitted.
 pub const MIN_BIN_COUNT: u64 = 30;
 
-/// The fit uses at most this many score bins, the highest ones below the homolog excess,
-/// so the slope is read as close to the decision tail as that excess allows.
+/// The fit uses at most this many score bins, the highest ones below the related pairs,
+/// so the slope is read as close to the decision tail as those pairs allow.
 pub const FIT_WINDOW: i64 = 8;
 
 /// Fewest bins a fit is accepted on.
 pub const MIN_FIT_POINTS: i64 = 4;
 
 /// A bin whose ln count sits more than this many Poisson standard deviations above the
-/// line fitted to the bins below it starts the homolog excess.
+/// line fitted to the bins below it is where related pairs begin.
 const BEND_SIGMAS: f64 = 2.0;
 
 /// Slack added to the bend test, in ln count, so a bin one region above the line at large
 /// counts does not end the fit.
 const BEND_SLACK: f64 = 0.05;
 
-/// Slope and intercept of ln(regions with score S) against S, and where it was read.
+/// The line fitted to ln(regions in the bin at score S) against S, and where it was read.
+/// Scores here are bin indices, not nats; `ProteinSearcher::run_calibration` converts.
 #[derive(Debug, Clone, PartialEq)]
 pub struct ScoreFit {
+    /// Minus the fitted slope, per bin. Becomes `KaCalibration::r_database` once divided
+    /// by the bin width.
     pub lambda: f64,
-    /// ln(K L N (1 - e^-lambda)): the line's value at score 0.
+    /// The line's value at score 0: ln(K L N (1 - e^-lambda)). Becomes
+    /// `KaCalibration::k` once L, N and the bin width are divided out.
     pub ln_intercept: f64,
+    /// First bin the line was fitted on.
     pub score_lo: i64,
+    /// Last bin the line was fitted on, inclusive.
     pub score_hi: i64,
+    /// First bin above the fit that sat above the line; None when the fit ran out of
+    /// counts first.
     pub bend_score: Option<i64>,
+    /// Root mean square of the fit residuals in ln count.
     pub rms_residual: f64,
+    /// Regions with score >= s for every bin s, the curve the fit was read from.
     pub survival: Vec<(i64, u64)>,
-    /// Shuffled-sequence reference curve and its slope over the same window, when the fit
-    /// was censored against one (`fit_scores_with_reference`); empty and None otherwise.
+    /// The reference curve when the fit stopped against one
+    /// (`fit_scores_with_reference`); empty otherwise.
     pub reference_survival: Vec<(i64, u64)>,
+    /// Minus the reference curve's slope over the same window, per bin; None without a
+    /// reference.
     pub reference_lambda: Option<f64>,
 }
 
@@ -244,6 +305,11 @@ fn tail_bins(bins: &[(i64, u64)]) -> Vec<(i64, u64)> {
 }
 
 /// Least squares of ln count on score over `points`; returns (slope, intercept).
+///
+/// Under the model ln(count at score s) = ln(K L N (1 - e^-w)) - r_database s, so the two
+/// numbers map onto the two constants: minus the slope is r_database (the factor on every
+/// pair's closed-form lambda), and the intercept, once L, N and the bin width w are
+/// divided out, is K (Altschul & Gish 1996; Pearson 1998).
 fn line_through(points: &[(i64, u64)]) -> (f64, f64) {
     let n = points.len() as f64;
     let (sx, sy) =
@@ -268,7 +334,7 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
     (ss / points.len() as f64).sqrt()
 }
 
-/// Fit ln(regions with score S) against S, stopping below the homolog excess.
+/// Fit ln(regions with score S) against S, stopping below the related pairs.
 ///
 /// Bins with fewer than `MIN_BIN_COUNT` regions are ignored, and so is everything up to and
 /// including the most populated bin: below it sit the bare seeds and the pairs whose
@@ -527,25 +593,161 @@ fn last_edges(out: &[Vec<u8>; 256], root: u8, rng: &mut SplitMix64) -> [u8; 256]
     next
 }
 
+/// Say so when the related pairs left the fit fewer bins than `FIT_WINDOW`: the slope is
+/// then read from the seed end of the curve, where the seed requirement still shapes it.
+pub fn warn_on_short_fit(fit: &KaCalibration) {
+    if fit.n_fit_points() < FIT_WINDOW {
+        eprintln!(
+            "  WARNING: the fit has only {} bins (x {:.1}..{:.1}) below the relatives at x {}. \
+             Related sequences are dense in this database; the slope is read close to the \
+             seed. More --ka-queries gives a second opinion.",
+            fit.n_fit_points(),
+            fit.x_range().0,
+            fit.x_range().1,
+            fit.bend_score
+                .map_or("none".to_string(), |b| format!("{:.1}", b as f64 * fit.bin_width))
+        );
+    }
+}
+
+/// Fit r_database and K on `settings.n_queries` calibration queries of the index just
+/// built and store the fit in the index. Also prints the closed-form lambda and K for the
+/// database's own composition, so the effect of the seed requirement and of real sequence
+/// structure on each is visible. `survival_out` gets the curve the fit was read from.
+pub fn calibrate_index(
+    index: ProteomeIndex,
+    settings: KaCalibrationSettings,
+    survival_out: Option<&std::path::Path>,
+) -> IndexResult<()> {
+    let KaCalibrationSettings { scoring, null, reference, n_queries, .. } = settings;
+    let ExtensionScoring { mismatch_penalty, xdrop } = scoring;
+    eprintln!(
+        "Fitting r_database and K on {n_queries} {null} sequences (mismatch penalty {mismatch_penalty}, give-up margin {xdrop}){}...",
+        if null == DecoyNull::Database {
+            format!("; the fit stops where their counts rise above the same sequences {reference}")
+        } else {
+            String::new()
+        }
+    );
+    let mut searcher = ProteinSearcher::new(index)?;
+    let report = searcher.calibrate_ka(settings)?;
+    let theory_k = karlin_altschul_k_theory(report.match_probability, mismatch_penalty)
+        .map_or("none".to_string(), |k| format!("{k:.4}"));
+    eprintln!(
+        "  Closed form at the database's own match probability {:.3}: K {theory_k} (independent positions, no seed, one lambda for every pair)",
+        report.match_probability
+    );
+    match report.fitted {
+        Some(fit) => {
+            eprintln!("  {}", KaSource::Fitted(fit.clone()));
+            warn_on_short_fit(&fit);
+            if let Some(path) = survival_out {
+                write_survival_csv(path, &fit)?;
+                eprintln!("  Survival curve written to {}", path.display());
+            }
+            searcher.index().put_ka_calibration(&fit)?;
+            eprintln!(
+                "  Stored in the index for --extend-mismatch-penalty {mismatch_penalty} --extend-xdrop {xdrop}"
+            );
+        }
+        None => eprintln!(
+            "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
+             A search will have to fit its own r_database and K (--ka-queries) or be given --ka-k.",
+            report.n_queries, report.n_regions
+        ),
+    }
+    Ok(())
+}
+
+/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
+/// line's count, the reference count, and whether the bin was inside the fit window.
+/// `scripts/plot_ka_survival.py` draws it.
+pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResult<()> {
+    let mut w = csv::Writer::from_path(path)?;
+    w.write_record([
+        "x",
+        "n_regions_at_least",
+        "fitted_n_regions_at_least",
+        "reference_n_regions_at_least",
+        "in_fit",
+        "r_database",
+        "k",
+        "lambda_analytic",
+        "match_probability",
+        "null",
+        "reference",
+        "mismatch_penalty",
+        "xdrop",
+        "n_queries",
+        "query_residues",
+        "database_kmers",
+        "bin_width",
+    ])?;
+    // The fit is a line through ln(regions in the bin at x); its survival is the same line
+    // divided by (1 - e^(-r_database w)).
+    let per_bin = 1.0 - (-fit.r_database * fit.bin_width).exp();
+    let ln_intercept =
+        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+    let reference: std::collections::HashMap<i64, u64> =
+        fit.reference_survival.iter().copied().collect();
+    for &(bin, count) in &fit.survival {
+        let x = bin as f64 * fit.bin_width;
+        let fitted = (ln_intercept - fit.r_database * x).exp() / per_bin;
+        w.write_record([
+            format!("{x:.3}"),
+            count.to_string(),
+            format!("{fitted:.3}"),
+            reference.get(&bin).map_or(String::new(), |r| r.to_string()),
+            (fit.score_lo <= bin && bin <= fit.score_hi).to_string(),
+            fit.r_database.to_string(),
+            fit.k.to_string(),
+            fit.lambda_analytic.to_string(),
+            fit.match_probability.to_string(),
+            fit.null.to_string(),
+            fit.reference.map_or(String::new(), |r| r.to_string()),
+            fit.scoring.mismatch_penalty.to_string(),
+            fit.scoring.xdrop.to_string(),
+            fit.n_queries.to_string(),
+            fit.query_residues.to_string(),
+            fit.database_kmers.to_string(),
+            fit.bin_width.to_string(),
+        ])?;
+    }
+    w.flush()?;
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_fixtures::TEST_BLC2_FASTA;
 
+    /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
+    /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,
+    /// so e^lambda = q / p, and K = E[X e^(lambda X)] (1 - e^-lambda) when the only positive
+    /// step is +1. Written out: E[X e^(lambda X)] = p (q/p) - q (p/q) = q - p and
+    /// 1 - e^-lambda = 1 - p/q, so K = (q - p)(q - p) / q. Ewens & Grant, Statistical
+    /// Methods in Bioinformatics (2nd ed., 2005), reach the same (q - p)^2 / q for this walk
+    /// in their BLAST chapter.
     #[test]
-    fn test_k_theory_matches_textbook_plus_minus_one_case() {
-        // Steps +1 with p = 0.3 and -1 with q = 0.7: K = (q - p)^2 / q (Ewens & Grant,
-        // Statistical Methods in Bioinformatics, the BLAST random-walk chapter).
-        let k = karlin_altschul_k_theory(0.3, 1.0).unwrap();
-        assert!((k - 0.16 / 0.7).abs() < 1e-12, "{k}");
+    fn test_k_theory_matches_the_plus_minus_one_random_walk() {
+        let (p, q) = (0.3, 0.7);
+        let k = karlin_altschul_k_theory(p, 1.0).unwrap();
+        assert!((k - (q - p) * (q - p) / q).abs() < 1e-12, "{k}");
     }
 
+    /// Balanced two-class composition (a = 0.5) with penalty 2: the lambda equation
+    /// 0.5 e^lambda + 0.5 e^-2lambda = 1 becomes y^3 - 2 y^2 + 1 = 0 in y = e^lambda, whose
+    /// root above 1 is the golden ratio phi. Then E[X e^(lambda X)] = a phi - 2 (1 - a) / phi^2
+    /// = phi / 2 - 1 / phi^2 and 1 - e^-lambda = 1 - 1 / phi; K is their product, 0.1631.
+    /// A simulated 4-million-step walk with these steps gave 458 high-scoring segments where
+    /// this K predicts 478.
     #[test]
     fn test_k_theory_balanced_hp_at_penalty_two() {
-        // a = 0.5, C = 2: lambda = ln(golden ratio), e^lambda = phi, e^-2lambda = 1/phi^2.
-        // E[X e^(lambda X)] = phi/2 - 1/phi^2 and (1 - e^-lambda) = 1 - 1/phi.
+        let (a, penalty) = (0.5, 2.0);
         let phi = (1.0 + 5f64.sqrt()) / 2.0;
-        let expected = (phi / 2.0 - 1.0 / (phi * phi)) * (1.0 - 1.0 / phi);
-        let k = karlin_altschul_k_theory(0.5, 2.0).unwrap();
+        let expected = (a * phi - penalty * (1.0 - a) / (phi * phi)) * (1.0 - 1.0 / phi);
+        let k = karlin_altschul_k_theory(a, penalty).unwrap();
         assert!((k - expected).abs() < 1e-12, "{k} vs {expected}");
         assert!((k - 0.1631).abs() < 5e-4, "{k}");
     }
@@ -567,68 +769,89 @@ mod tests {
         assert!(survival_counts(&[]).is_empty());
     }
 
-    /// Exact exponential counts: 4000 e^(-0.4 (s - 12)) regions at score >= s for
-    /// s = 12..=30, so 4000 (1 - e^-0.4) e^(-0.4 (s - 12)) at score s. Then 400 extra
-    /// regions at score 27, a homolog bump. The fit reads the slope off the bins below the
-    /// bump, to within rounding of the counts to whole regions, and the bump does not reach
-    /// the bins below it the way it would on the survival curve.
+    /// Made-up counts that follow the model exactly: N_SEED regions at score >= SEED_SCORE,
+    /// falling as e^(-TRUE_LAMBDA (s - SEED_SCORE)) up to score 30, so each bin holds
+    /// N_SEED (1 - e^-TRUE_LAMBDA) e^(-TRUE_LAMBDA (s - SEED_SCORE)) regions. Then a bump
+    /// of BUMP extra regions at score 27, standing in for related pairs. The fit reads
+    /// TRUE_LAMBDA off the bins below the bump, to within rounding of the counts to whole
+    /// regions, and the bump does not reach the bins below it the way it would on the
+    /// survival curve.
     #[test]
     fn test_fit_scores_recovers_slope_and_stops_at_homolog_excess() {
-        let at_least = |x: i64| (4000.0 * (-0.4 * (x - 12) as f64).exp()).round() as i64;
+        const N_SEED: f64 = 4000.0;
+        const SEED_SCORE: i64 = 12;
+        const TRUE_LAMBDA: f64 = 0.4;
+        const BUMP: usize = 400;
+        let at_least =
+            |x: i64| (N_SEED * (-TRUE_LAMBDA * (x - SEED_SCORE) as f64).exp()).round() as i64;
         let mut scores = Vec::new();
-        for s in 12..=30 {
+        for s in SEED_SCORE..=30 {
             let exactly = (at_least(s) - at_least(s + 1)).max(0) as usize;
             scores.extend(std::iter::repeat_n(s as f64, exactly));
         }
         let clean = fit_scores(&scores).unwrap();
-        // Bins 13..=21 hold at least 30 regions; the top 8 of them are the window.
+        // Bins 13..=21 hold at least MIN_BIN_COUNT regions; the top FIT_WINDOW of them are
+        // the window.
         assert_eq!((clean.score_lo, clean.score_hi, clean.bend_score), (14, 21, None));
-        assert!((clean.lambda - 0.4).abs() < 0.01, "{}", clean.lambda);
-        let expected_intercept = (4000.0 * (1.0 - (-0.4f64).exp())).ln() + 0.4 * 12.0;
+        assert!((clean.lambda - TRUE_LAMBDA).abs() < 0.01, "{}", clean.lambda);
+        let expected_intercept =
+            (N_SEED * (1.0 - (-TRUE_LAMBDA).exp())).ln() + TRUE_LAMBDA * SEED_SCORE as f64;
         assert!((clean.ln_intercept - expected_intercept).abs() < 0.1, "{}", clean.ln_intercept);
         assert!(clean.rms_residual < 0.03, "{}", clean.rms_residual);
-        assert_eq!(clean.survival[0], (12, scores.len() as u64));
+        assert_eq!(clean.survival[0], (SEED_SCORE, scores.len() as u64));
 
-        scores.extend(std::iter::repeat_n(27.0, 400));
+        scores.extend(std::iter::repeat_n(27.0, BUMP));
         let bent = fit_scores(&scores).unwrap();
         assert_eq!((bent.score_lo, bent.score_hi, bent.bend_score), (14, 21, Some(27)));
         assert!((bent.lambda - clean.lambda).abs() < 1e-12);
-        assert_eq!(bent.survival[0], (12, scores.len() as u64));
+        assert_eq!(bent.survival[0], (SEED_SCORE, scores.len() as u64));
     }
 
-    /// Reference: 400,000 e^(-0.4 (s - 12)) regions at score >= s. Real: 1.5x that (a K
-    /// difference, a constant ratio) plus relatives coming in as a ramp from score 24,
-    /// 150 e^(-0.05 (s - 24)) per bin. A step test would not see a ramp; the ratio test
-    /// stops two bins after it starts and the slope is read below it, 4% low from the two
-    /// ramp bins inside the window.
+    /// Made-up counts again. Reference: N_SEED e^(-TRUE_LAMBDA (s - SEED_SCORE)) regions at
+    /// score >= s. Real: K_RATIO times that (a K difference, a constant ratio) plus related
+    /// pairs coming in as a ramp from RAMP_START, RAMP_HEIGHT e^(-RAMP_DECAY (s - RAMP_START))
+    /// per bin. A step test would not see a ramp; the ratio test stops two bins after it
+    /// starts and the slope is read below it, 4% low from the two ramp bins inside the
+    /// window.
     #[test]
     fn test_fit_scores_with_reference_stops_where_the_ratio_rises() {
+        const N_SEED: f64 = 400_000.0;
+        const SEED_SCORE: i64 = 12;
+        const TRUE_LAMBDA: f64 = 0.4;
+        const K_RATIO: f64 = 1.5;
+        const RAMP_START: i64 = 24;
+        const RAMP_HEIGHT: f64 = 150.0;
+        const RAMP_DECAY: f64 = 0.05;
         let at_least = |x: i64, scale: f64| {
-            (scale * 400_000.0 * (-0.4 * (x - 12) as f64).exp()).round() as i64
+            (scale * N_SEED * (-TRUE_LAMBDA * (x - SEED_SCORE) as f64).exp()).round() as i64
         };
         let (mut reference, mut real, mut plain) = (Vec::new(), Vec::new(), Vec::new());
-        for s in 12..=44 {
+        for s in SEED_SCORE..=44 {
             let per_bin =
                 |scale: f64| (at_least(s, scale) - at_least(s + 1, scale)).max(0) as usize;
             reference.extend(std::iter::repeat_n(s as f64, per_bin(1.0)));
-            plain.extend(std::iter::repeat_n(s as f64, per_bin(1.5)));
-            let ramp = if s >= 24 {
-                (150.0 * (-0.05 * (s - 24) as f64).exp()).round() as usize
+            plain.extend(std::iter::repeat_n(s as f64, per_bin(K_RATIO)));
+            let ramp = if s >= RAMP_START {
+                (RAMP_HEIGHT * (-RAMP_DECAY * (s - RAMP_START) as f64).exp()).round() as usize
             } else {
                 0
             };
-            real.extend(std::iter::repeat_n(s as f64, per_bin(1.5) + ramp));
+            real.extend(std::iter::repeat_n(s as f64, per_bin(K_RATIO) + ramp));
         }
         let fit = fit_scores_with_reference(&real, &reference).unwrap();
         assert_eq!((fit.bend_score, fit.score_lo, fit.score_hi), (Some(26), 18, 25), "{fit:?}");
         assert!((fit.lambda - 0.385).abs() < 0.005, "{}", fit.lambda);
-        assert!((fit.reference_lambda.unwrap() - 0.4).abs() < 0.005, "{:?}", fit.reference_lambda);
-        assert_eq!(fit.reference_survival[0], (12, reference.len() as u64));
+        assert!(
+            (fit.reference_lambda.unwrap() - TRUE_LAMBDA).abs() < 0.005,
+            "{:?}",
+            fit.reference_lambda
+        );
+        assert_eq!(fit.reference_survival[0], (SEED_SCORE, reference.len() as u64));
 
         // Without the ramp the fit runs to the count floor; the constant ratio is harmless.
         let fit = fit_scores_with_reference(&plain, &reference).unwrap();
         assert_eq!((fit.bend_score, fit.score_lo, fit.score_hi), (None, 26, 33), "{fit:?}");
-        assert!((fit.lambda - 0.4).abs() < 0.005, "{}", fit.lambda);
+        assert!((fit.lambda - TRUE_LAMBDA).abs() < 0.005, "{}", fit.lambda);
     }
 
     #[test]
@@ -641,11 +864,12 @@ mod tests {
 
     #[test]
     fn test_fit_scores_needs_enough_bins() {
-        // Three usable bins after the skipped seed bin: too few.
+        // Three bins with at least MIN_BIN_COUNT regions after the skipped seed bin: fewer
+        // than MIN_FIT_POINTS.
         let mut scores = vec![12.0; 100];
         scores.extend(vec![13.0; 60]);
         scores.extend(vec![14.0; 40]);
-        scores.extend(vec![15.0; 31]);
+        scores.extend(vec![15.0; MIN_BIN_COUNT as usize + 1]);
         assert_eq!(fit_scores(&scores), None);
         assert_eq!(fit_scores(&[]), None);
     }
@@ -673,36 +897,20 @@ mod tests {
         assert!((fit_scores(&falling).unwrap().lambda - 10f64.ln() / 10.0).abs() < 1e-12);
     }
 
+    /// The window is stored in bins; `x_range` gives it back in nats. Bins 15..=22 of width
+    /// 0.5 cover x from 7.5 up to but not including 11.5.
     #[test]
     fn test_calibration_reads_its_fit_window_in_x() {
         let fit = KaCalibration {
-            mismatch_penalty: 2.0,
-            xdrop: 8.0,
-            null: DecoyNull::Database,
-            seed: 1,
-            n_queries: 25,
-            query_residues: 9288,
-            database_kmers: 8340,
-            n_regions: 9838,
-            match_probability: 0.5,
-            lambda_analytic: 0.481,
-            slope: 0.806,
-            k: 0.0115,
-            bin_width: BIN_WIDTH,
             score_lo: 15,
             score_hi: 22,
-            bend_score: None,
-            rms_residual: 0.086,
-            survival: vec![(12, 9838)],
-            reference_survival: Vec::new(),
-            reference_lambda: None,
-            reference: Some(DecoyNull::ShuffledDipeptide),
+            bin_width: 0.5,
+            r_database: 0.806,
+            ..KaCalibration::placeholder(ExtensionScoring::default(), 0.0115)
         };
-        // The slope of ln(count) against lambda_pair S is the lambda scale itself; the
-        // window is bins 15..=22 of width 0.5, so x from 7.5 up to but not including 11.5.
-        assert_eq!(fit.r_database(), 0.806);
         assert_eq!(fit.n_fit_points(), 8);
         assert_eq!(fit.x_range(), (7.5, 11.5));
+        assert_eq!(fit.ka_params(), KaParams { k: 0.0115, r_database: 0.806 });
     }
 
     #[test]
@@ -731,12 +939,24 @@ mod tests {
         counts
     }
 
-    /// Human BCL2 (P10415, tests/testdata/fasta/bcl2.fasta). Same length, same first and
-    /// last residue, every dipeptide as often as before, a different order, and the same
-    /// order again from the same seed.
+    /// The one sequence in a FASTA file, header dropped and lines joined.
+    fn read_single_fasta(path: &str) -> String {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with('>'))
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    /// Human BCL2 (P10415, `TEST_BLC2_FASTA`). Same length, same first and last residue,
+    /// every dipeptide as often as before, a different order, and the same order again from
+    /// the same seed.
     #[test]
     fn test_dipeptide_shuffle_keeps_every_dipeptide_count() {
-        let bcl2 = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDAGDVGAAPPGAAPAPGIFSSQPGHTPHPAASRDPVARTSPLQTPAAPGAAAGPALSPVPPVVHLTLRQAGDDFSRRYRRDFAEMSSQLHLTPFTARGRFATVVEELFRDGVNWGRIVAFFEFGGVMCVESVNREMSPLVDNIALWMTEYLNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK";
+        let bcl2 = read_single_fasta(TEST_BLC2_FASTA);
+        let bcl2 = bcl2.as_str();
+        assert_eq!(bcl2.len(), 239, "BCL2_HUMAN is 239 residues");
         let shuffled = dipeptide_shuffle(bcl2, &mut SplitMix64::new(3));
         assert_eq!(shuffled.len(), bcl2.len());
         assert_eq!(dipeptide_counts(&shuffled), dipeptide_counts(bcl2));
