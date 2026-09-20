@@ -170,6 +170,8 @@ pub enum KaSource {
     /// Given on the command line (`--ka-k`), with the closed-form lambda per pair
     /// (r_database 1).
     Given,
+    /// A fit stored in the index when it was built.
+    Index(Box<KaCalibration>),
     /// A fit run just now, before the search.
     Fitted(Box<KaCalibration>),
 }
@@ -178,6 +180,7 @@ impl Display for KaSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             KaSource::Given => write!(f, "--ka-k, closed-form lambda"),
+            KaSource::Index(fit) => write!(f, "stored in the index: {fit}"),
             KaSource::Fitted(fit) => write!(f, "fitted now: {fit}"),
         }
     }
@@ -1045,9 +1048,9 @@ impl ProteinSearcher {
 
     /// The r_database and K a search should use for `settings.scoring`, and where they
     /// came from, in order of preference: `explicit` (`--ka-k`, with the closed-form
-    /// lambda); a fresh fit on `settings.n_queries` calibration queries if that is
-    /// nonzero. Otherwise an error: an E-value without a fit for its own index is not
-    /// printed.
+    /// lambda); a fit stored in the index for this scoring, whatever null it used; a fresh
+    /// fit on `settings.n_queries` calibration queries if that is nonzero. Otherwise an
+    /// error: an E-value without a fit for its own index is not printed.
     pub fn resolve_ka(
         &mut self,
         explicit: Option<f64>,
@@ -1056,12 +1059,16 @@ impl ProteinSearcher {
         if let Some(k) = explicit {
             return Ok((KaParams { k, r_database: 1.0 }, KaSource::Given));
         }
+        if let Some(stored) = self.index.ka_calibration(settings.scoring)? {
+            return Ok((stored.ka_params(), KaSource::Index(Box::new(stored))));
+        }
         let ExtensionScoring { mismatch_penalty, xdrop } = settings.scoring;
         if settings.n_queries == 0 {
             return Err(anyhow::anyhow!(
                 "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
-                 margin {xdrop}, and --ka-queries 0 forbids fitting one now. Search with \
-                 --ka-queries set, or pass --ka-k."
+                 margin {xdrop}, and --ka-queries 0 forbids fitting one now. Rebuild the \
+                 index with that penalty and give-up margin, search with --ka-queries set, or \
+                 pass --ka-k."
             )
             .into());
         }
@@ -1071,8 +1078,9 @@ impl ProteinSearcher {
             None => Err(anyhow::anyhow!(
                 "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
                  margin {xdrop}: {} calibration queries gave {} regions, fewer than the \
-                 {MIN_FIT_POINTS} score bins of {MIN_BIN_COUNT} regions the fit needs. Search \
-                 with --ka-queries set higher, or pass --ka-k.",
+                 {MIN_FIT_POINTS} score bins of {MIN_BIN_COUNT} regions the fit needs. Rebuild \
+                 the index with --ka-queries set higher, search with --ka-queries, or pass \
+                 --ka-k.",
                 report.n_queries,
                 report.n_regions,
             )
@@ -4560,10 +4568,11 @@ mod ka_calibration_tests {
         Ok((temp_dir, ProteinSearcher::new(index)?))
     }
 
-    /// The fit is reproducible from the seed, `resolve_ka` runs it when asked and refuses
-    /// when not allowed to, and `--ka-k` wins over it.
+    /// The fit is reproducible from the seed, is stored under its scoring and found again
+    /// by `resolve_ka`, which otherwise runs it when asked and refuses when not allowed
+    /// to, and `--ka-k` wins over it.
     #[test]
-    fn test_calibrate_ka_on_first25() -> Result<()> {
+    fn test_calibrate_ka_on_first25_is_stored_and_reused() -> Result<()> {
         let (_dir, mut searcher) = searcher_on_first25()?;
         let report = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;
         let fit =
@@ -4594,10 +4603,16 @@ mod ka_calibration_tests {
         assert_eq!(params, fit.ka_params());
         assert_eq!(source, KaSource::Fitted(Box::new(fit.clone())));
 
+        searcher.index().put_ka_calibration(&fit)?;
+        let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 0))?;
+        assert_eq!(params, fit.ka_params());
+        assert_eq!(source, KaSource::Index(Box::new(fit.clone())));
+
         let (params, source) = searcher.resolve_ka(Some(0.03), shuffled_settings(2.0, 0))?;
         assert_eq!((params, source), (KaParams { k: 0.03, r_database: 1.0 }, KaSource::Given));
 
-        // No queries allowed and no K given: refused, not guessed.
+        // No stored fit for penalty 3, no queries allowed and no K given: refused, not
+        // guessed.
         let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();
         assert!(
             err.to_string().contains(
