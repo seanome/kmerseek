@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::search::{ExtensionParams, ExtensionScoring, DEFAULT_XDROP};
+use kmerseek::search::{ExtensionParams, ExtensionScoring, KaParams, DEFAULT_XDROP};
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
 use std::path::{Path, PathBuf};
@@ -143,6 +143,14 @@ enum Commands {
         /// fallen this far below its best.
         #[arg(long, default_value_t = DEFAULT_XDROP)]
         extend_xdrop: f64,
+
+        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions,
+        /// with the closed-form lambda solved per pair from the two sequences' class
+        /// compositions. K depends on the alphabet, seed length, penalty, give-up margin and
+        /// database, so it has to be measured on decoys for the index in use. Required with
+        /// --extend-mismatch-penalty, and unused without it.
+        #[arg(long)]
+        ka_k: Option<f64>,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
@@ -418,6 +426,7 @@ fn main() -> IndexResult<()> {
             remove_low_complexity: remove_low_complexity_arg,
             extend_mismatch_penalty,
             extend_xdrop,
+            ka_k,
             verbose,
             query_is_index,
             batch_size,
@@ -518,11 +527,27 @@ fn main() -> IndexResult<()> {
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
             if extend_mismatch_penalty > 0.0 {
+                let Some(k) = ka_k else {
+                    return Err(anyhow::anyhow!(
+                        "--extend-mismatch-penalty needs --ka-k, the Karlin-Altschul K \
+                         measured for this index, to give the extended regions an E-value"
+                    )
+                    .into());
+                };
+                if k <= 0.0 || k.is_nan() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-k must be positive (got {k}); K is the fraction of the m x n \
+                         cells that can start a region"
+                    )
+                    .into());
+                }
+                eprintln!("  Karlin-Altschul: K {k:.4}, closed-form lambda per pair");
                 searcher.set_extension(Some(ExtensionParams {
                     scoring: ExtensionScoring {
                         mismatch_penalty: extend_mismatch_penalty,
                         xdrop: extend_xdrop,
                     },
+                    ka: KaParams { k },
                 }));
             }
 
