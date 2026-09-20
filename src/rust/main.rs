@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::evalue::{short_fit_warning, DecoyNull};
+use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
 use kmerseek::search::{
-    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_XDROP,
+    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_MISMATCH_PENALTY,
+    DEFAULT_XDROP,
 };
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
@@ -70,6 +71,52 @@ enum Commands {
         /// time, so you do not repeat it when searching.
         #[arg(long, default_value = "false")]
         remove_low_complexity: bool,
+
+        /// Fit the r_database and K that `kmerseek search` uses for E-values, for this
+        /// mismatch penalty (the `--extend-mismatch-penalty` a search will pass). They
+        /// depend on the alphabet, the seed length, the penalty, the give-up margin and the
+        /// database, so they are fitted here, on this index, and stored in it. A search
+        /// with a different penalty or give-up margin refits on the fly.
+        #[arg(long, default_value_t = DEFAULT_MISMATCH_PENALTY)]
+        extend_mismatch_penalty: f64,
+
+        /// The give-up margin (`--extend-xdrop`) the fit assumes.
+        #[arg(long, default_value_t = DEFAULT_XDROP)]
+        extend_xdrop: f64,
+
+        /// How many database sequences to search against the index to fit r_database and
+        /// K. ln(regions at score S) is a straight line in S; minus its slope is r_database
+        /// and its height gives K. Related pairs bend it upward, and the fit stops below
+        /// them. 0 skips the fit, and a search then has to fit its own or be given --ka-k.
+        #[arg(long, default_value = "200")]
+        ka_queries: usize,
+
+        /// Seed for picking the calibration sequences, so the fit is reproducible.
+        #[arg(long, default_value = "1")]
+        ka_seed: u64,
+
+        /// The sequences the line is fitted to. `database` (default): the database
+        /// sequences as they are, so the fit sees the hydrophobic runs and helix
+        /// periodicity real proteins have. Some of them have relatives in the database, and
+        /// the fit stops below the scores those relatives reach (see --ka-reference). The
+        /// other three are decoys, database sequences changed so that they have no relative
+        /// and every region they find is a chance match. `shuffled`: residues shuffled,
+        /// which keeps composition only. `shuffled-dipeptide`: shuffled keeping every pair
+        /// of neighbouring residues as often as in the original, which keeps hydrophobic
+        /// runs. `reversed`: read back to front, which in a hydrophobic/polar alphabet
+        /// still matches forward helices and strands.
+        #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
+        ka_null: DecoyNull,
+
+        /// Used only with `--ka-null database`, to decide where the fit stops. The same
+        /// calibration sequences are shuffled this way and searched too. Shuffled sequences
+        /// have no relatives, so the score at which the real sequences' region counts rise
+        /// above the shuffled ones' is where relatives begin, and bins from there up are
+        /// left out of the fit. These sequences only mark that point; the line is not
+        /// fitted to them. `shuffled-dipeptide` (default) keeps hydrophobic runs, so only
+        /// relatives lift the real counts above it; `shuffled` keeps composition only.
+        #[arg(long, value_enum, default_value_t = DecoyNull::default())]
+        ka_reference: DecoyNull,
     },
     /// Search query sequences against a protein database
     Search {
@@ -148,9 +195,11 @@ enum Commands {
         extend_xdrop: f64,
 
         /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
-        /// Optional: without it, r_database and K are fitted on --ka-queries database
-        /// sequences before the search. With it, no fit runs, and every pair's lambda is
-        /// used as the closed form gives it (r_database 1).
+        /// Optional: without it, the r_database and K fitted when the index was built (for
+        /// its penalty and give-up margin) are used, or, for another penalty or give-up
+        /// margin, a fit on --ka-queries database sequences runs before the search. With
+        /// it, no fit is read or run, and every pair's lambda is used as the closed form
+        /// gives it (r_database 1).
         ///
         /// The closed form: with +1 for each position where query and target fall in the
         /// same class and -C for each where they differ, lambda is the positive root of
@@ -162,11 +211,9 @@ enum Commands {
         #[arg(long)]
         ka_k: Option<f64>,
 
-        /// Calibration queries to fit r_database and K on before the search, when --ka-k is
-        /// unset. They are sequences of the target index, searched against it; ln(regions
-        /// at score S) is a straight line in S, minus its slope is r_database and its
-        /// height gives K. Related pairs bend it upward, and the fit stops below them. 0
-        /// refuses to search without a fit.
+        /// Calibration queries to fit r_database and K on when the index has no fit for
+        /// this penalty and give-up margin and --ka-k is unset. 0 refuses to search without
+        /// a fit.
         #[arg(long, default_value = "200")]
         ka_queries: usize,
 
@@ -174,26 +221,11 @@ enum Commands {
         #[arg(long, default_value = "1")]
         ka_seed: u64,
 
-        /// The sequences the line is fitted to. `database` (default): the database
-        /// sequences as they are, so the fit sees the hydrophobic runs and helix
-        /// periodicity real proteins have. Some of them have relatives in the database, and
-        /// the fit stops below the scores those relatives reach (see --ka-reference). The
-        /// other three are decoys, database sequences changed so that they have no relative
-        /// and every region they find is a chance match. `shuffled`: residues shuffled,
-        /// which keeps composition only. `shuffled-dipeptide`: shuffled keeping every pair
-        /// of neighbouring residues as often as in the original, which keeps hydrophobic
-        /// runs. `reversed`: read back to front, which in a hydrophobic/polar alphabet
-        /// still matches forward helices and strands.
+        /// What the calibration queries are when a fit runs here; see `kmerseek index --help`.
         #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
         ka_null: DecoyNull,
 
-        /// Used only with `--ka-null database`, to decide where the fit stops. The same
-        /// calibration sequences are shuffled this way and searched too. Shuffled sequences
-        /// have no relatives, so the score at which the real sequences' region counts rise
-        /// above the shuffled ones' is where relatives begin, and bins from there up are
-        /// left out of the fit. These sequences only mark that point; the line is not
-        /// fitted to them. `shuffled-dipeptide` (default) keeps hydrophobic runs, so only
-        /// relatives lift the real counts above it; `shuffled` keeps composition only.
+        /// The reference for `--ka-null database` when a fit runs here; see `kmerseek index --help`.
         #[arg(long, value_enum, default_value_t = DecoyNull::default())]
         ka_reference: DecoyNull,
 
@@ -351,6 +383,12 @@ fn main() -> IndexResult<()> {
             kmer_stats_out,
             stats_only,
             remove_low_complexity,
+            extend_mismatch_penalty,
+            extend_xdrop,
+            ka_queries,
+            ka_seed,
+            ka_null,
+            ka_reference,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
@@ -452,6 +490,25 @@ fn main() -> IndexResult<()> {
 
                 // Save the index state for loading
                 index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
+
+                if ka_queries > 0 {
+                    let settings = KaCalibrationSettings {
+                        scoring: ExtensionScoring {
+                            mismatch_penalty: extend_mismatch_penalty,
+                            xdrop: extend_xdrop,
+                        },
+                        null: ka_null,
+                        reference: ka_reference,
+                        n_queries: ka_queries,
+                        seed: ka_seed,
+                    };
+                    calibrate_index(index, settings)?;
+                } else {
+                    eprintln!(
+                        "Skipping the Karlin-Altschul fit (--ka-queries 0); a search will \
+                         have to fit r_database and K itself or be given --ka-k."
+                    );
+                }
 
                 eprintln!("Indexing completed successfully!");
                 eprintln!("Database saved to: {}", output_path.display());
@@ -601,7 +658,7 @@ fn main() -> IndexResult<()> {
                     "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
                     ka.k, ka.r_database
                 );
-                if let KaSource::Fitted(fit) = &source {
+                if let KaSource::Index(fit) | KaSource::Fitted(fit) = &source {
                     if let Some(warning) = short_fit_warning(fit) {
                         eprintln!("  {warning}");
                     }
