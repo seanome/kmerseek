@@ -21,6 +21,8 @@
 //! integer step. The searcher that produces the scores and the record that stores the
 //! result are the next PRs of the stack that splits PR #54.
 
+use serde::{Deserialize, Serialize};
+
 /// Fewest regions a score bin needs to enter the fit; below this the Poisson noise in
 /// ln count (about 1 / sqrt(count)) is larger than the effects being fitted.
 pub const MIN_BIN_COUNT: u64 = 30;
@@ -276,9 +278,183 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
     (slope, my - slope * mx)
 }
 
+/// Which sequences are searched to fit r_database and K.
+///
+/// What each choice keeps and loses: on SCOPe40 domains the three scrambled nulls agree
+/// (r_database 1.04) and real domains give 0.95; on full-length proteins real sequences
+/// give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides already pulls the
+/// shuffle to 0.94, so hydrophobic runs alone explain a third of the gap. (Measured in
+/// PR #54; the figures land with the docs at the end of the stack that splits it.)
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+pub enum DecoyNull {
+    /// Database sequences as they are, searched against the index. Everything real stays
+    /// in; the fit stops where the counts start to rise above the same queries shuffled,
+    /// which are searched alongside as the reference (Altschul's tutorial, approach i;
+    /// Collins et al. 1988; Pearson 1998). Costs two calibration searches.
+    Database,
+    /// Each query is a database sequence with its residues shuffled: the independent-letter
+    /// model BLAST's tables are fitted on (Altschul & Gish 1996). Too easy a null on real
+    /// proteins, whose hydrophobic runs and helix and strand periodicity a shuffle destroys.
+    Shuffled,
+    /// Each query is a database sequence shuffled so that every dipeptide (each pair of
+    /// neighbouring residues) occurs as often as in the original (Altschul & Erickson 1985;
+    /// sampled as a random Eulerian path, Kandel et al. 1996, the uShuffle k = 2 method).
+    /// Keeps the rate at which a hydrophobic residue follows a hydrophobic one, and with it
+    /// the lengths of hydrophobic runs. The default reference for `Database`.
+    ShuffledDipeptide,
+    /// Each query is a database sequence read back to front. In a hydrophobic/polar
+    /// alphabet a helix or a strand reads much the same backwards, so reversed family
+    /// members still match the query one element at a time; a check, not a null to fit on.
+    Reversed,
+}
+
+impl std::fmt::Display for DecoyNull {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            DecoyNull::Database => write!(f, "database"),
+            DecoyNull::Reversed => write!(f, "reversed"),
+            DecoyNull::Shuffled => write!(f, "shuffled"),
+            DecoyNull::ShuffledDipeptide => write!(f, "shuffled-dipeptide"),
+        }
+    }
+}
+
+/// Deterministic generator for picking calibration queries, so an index built twice from
+/// the same FASTA stores the same fit. splitmix64 (Steele, Lea & Flood 2014).
+pub struct SplitMix64(u64);
+
+impl SplitMix64 {
+    pub fn new(seed: u64) -> Self {
+        Self(seed)
+    }
+
+    pub fn next_u64(&mut self) -> u64 {
+        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = self.0;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A uniform index below `n`.
+    pub fn below(&mut self, n: usize) -> usize {
+        (self.next_u64() % n as u64) as usize
+    }
+
+    /// `count` distinct indices below `n` (all of them when `count >= n`), in order.
+    pub fn sample_indices(&mut self, n: usize, count: usize) -> Vec<usize> {
+        if count >= n {
+            return (0..n).collect();
+        }
+        let mut chosen = std::collections::BTreeSet::new();
+        while chosen.len() < count {
+            chosen.insert(self.below(n));
+        }
+        chosen.into_iter().collect()
+    }
+
+    /// Fisher-Yates shuffle.
+    pub fn shuffle<T>(&mut self, items: &mut [T]) {
+        for i in (1..items.len()).rev() {
+            let j = self.below(i + 1);
+            items.swap(i, j);
+        }
+    }
+}
+
+/// The calibration query built from one database sequence under `null`.
+pub fn make_decoy(raw: &str, null: DecoyNull, rng: &mut SplitMix64) -> String {
+    match null {
+        DecoyNull::Database => raw.to_string(),
+        DecoyNull::Reversed => raw.chars().rev().collect(),
+        DecoyNull::Shuffled => {
+            let mut residues: Vec<char> = raw.chars().collect();
+            rng.shuffle(&mut residues);
+            residues.into_iter().collect()
+        }
+        DecoyNull::ShuffledDipeptide => dipeptide_shuffle(raw, rng),
+    }
+}
+
+/// A uniformly random rearrangement of `raw` with the same dipeptide counts, the same first
+/// residue and the same last residue (Kandel, Matias, Unger & Winkler 1996).
+///
+/// The residues are the vertices of a graph and each neighbouring pair an edge, so a
+/// rearrangement with the same dipeptide counts is a path that uses every edge once. Such a
+/// path exists when the edges that leave each vertex for the last time form a tree pointing
+/// at the final residue. That tree is drawn with Wilson's loop-erased random walk, weighted
+/// by edge multiplicity, which is the distribution the theorem needs; the other edges out
+/// of each vertex are then shuffled and the path is walked from the first residue.
+pub fn dipeptide_shuffle(raw: &str, rng: &mut SplitMix64) -> String {
+    let bytes = raw.as_bytes();
+    // Residues are bytes here. A multi-byte character would be split into edges that the
+    // path could reassemble into invalid UTF-8, so anything but ASCII is left as it is.
+    if bytes.len() < 3 || !raw.is_ascii() {
+        return raw.to_string();
+    }
+    let last = bytes[bytes.len() - 1];
+    // Outgoing edges per residue, as the residue they lead to, in sequence order.
+    let mut out: [Vec<u8>; 256] = std::array::from_fn(|_| Vec::new());
+    for pair in bytes.windows(2) {
+        out[pair[0] as usize].push(pair[1]);
+    }
+    let next = last_edges(&out, last, rng);
+    for (v, edges) in out.iter_mut().enumerate() {
+        if edges.is_empty() {
+            continue;
+        }
+        if v as u8 != last {
+            let target = next[v];
+            let pos = edges.iter().position(|&t| t == target).expect("last edge is an edge");
+            edges.swap_remove(pos);
+            rng.shuffle(edges);
+            edges.push(target);
+        } else {
+            rng.shuffle(edges);
+        }
+    }
+    let mut cursor = [0usize; 256];
+    let mut path = Vec::with_capacity(bytes.len());
+    let mut v = bytes[0];
+    path.push(v);
+    for _ in 1..bytes.len() {
+        let t = out[v as usize][cursor[v as usize]];
+        cursor[v as usize] += 1;
+        path.push(t);
+        v = t;
+    }
+    String::from_utf8(path).expect("a rearrangement of ASCII residues")
+}
+
+/// Wilson's algorithm: for every residue with outgoing edges (other than `root`), the edge
+/// it leaves by for the last time, drawn as a random spanning tree pointing at `root`.
+fn last_edges(out: &[Vec<u8>; 256], root: u8, rng: &mut SplitMix64) -> [u8; 256] {
+    let mut next = [0u8; 256];
+    let mut in_tree = [false; 256];
+    in_tree[root as usize] = true;
+    for start in 0..256usize {
+        if out[start].is_empty() || in_tree[start] {
+            continue;
+        }
+        let mut u = start;
+        while !in_tree[u] {
+            let edges = &out[u];
+            next[u] = edges[rng.below(edges.len())];
+            u = next[u] as usize;
+        }
+        let mut u = start;
+        while !in_tree[u] {
+            in_tree[u] = true;
+            u = next[u] as usize;
+        }
+    }
+    next
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::test_fixtures::TEST_BLC2_FASTA;
 
     #[test]
     fn test_survival_counts() {
@@ -421,5 +597,79 @@ mod tests {
             falling.extend(std::iter::repeat_n(score, n));
         }
         assert!((fit_scores(&falling).unwrap().lambda - 10f64.ln() / 10.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn test_decoy_null_names_match_the_flag_values() {
+        assert_eq!(DecoyNull::Database.to_string(), "database");
+        assert_eq!(DecoyNull::Shuffled.to_string(), "shuffled");
+        assert_eq!(DecoyNull::ShuffledDipeptide.to_string(), "shuffled-dipeptide");
+        assert_eq!(DecoyNull::Reversed.to_string(), "reversed");
+    }
+
+    #[test]
+    fn test_sampler_is_deterministic_and_distinct() {
+        let a = SplitMix64::new(7).sample_indices(1000, 25);
+        let b = SplitMix64::new(7).sample_indices(1000, 25);
+        assert_eq!(a, b);
+        assert_eq!(a.len(), 25);
+        assert!(a.windows(2).all(|w| w[0] < w[1]));
+        assert_eq!(SplitMix64::new(7).sample_indices(10, 25), (0..10).collect::<Vec<_>>());
+    }
+
+    fn dipeptide_counts(s: &str) -> std::collections::BTreeMap<(u8, u8), usize> {
+        let mut counts = std::collections::BTreeMap::new();
+        for w in s.as_bytes().windows(2) {
+            *counts.entry((w[0], w[1])).or_insert(0) += 1;
+        }
+        counts
+    }
+
+    /// The one sequence in a FASTA file, header dropped and lines joined.
+    fn read_single_fasta(path: &str) -> String {
+        std::fs::read_to_string(path)
+            .unwrap()
+            .lines()
+            .filter(|l| !l.starts_with('>'))
+            .collect::<Vec<_>>()
+            .concat()
+    }
+
+    /// Human BCL2 (P10415, `TEST_BLC2_FASTA`). Same length, same first and last residue,
+    /// every dipeptide as often as before, a different order, and the same order again from
+    /// the same seed.
+    #[test]
+    fn test_dipeptide_shuffle_keeps_every_dipeptide_count() {
+        let bcl2 = read_single_fasta(TEST_BLC2_FASTA);
+        let bcl2 = bcl2.as_str();
+        assert_eq!(bcl2.len(), 239, "BCL2_HUMAN is 239 residues");
+        let shuffled = dipeptide_shuffle(bcl2, &mut SplitMix64::new(3));
+        assert_eq!(shuffled.len(), bcl2.len());
+        assert_eq!(dipeptide_counts(&shuffled), dipeptide_counts(bcl2));
+        assert_eq!(shuffled.as_bytes()[0], b'M');
+        assert_eq!(shuffled.as_bytes()[shuffled.len() - 1], b'K');
+        assert_ne!(shuffled, bcl2);
+        assert_eq!(shuffled, dipeptide_shuffle(bcl2, &mut SplitMix64::new(3)));
+        assert_ne!(shuffled, dipeptide_shuffle(bcl2, &mut SplitMix64::new(4)));
+        // A plain shuffle of the same sequence does not keep the dipeptides.
+        assert_ne!(
+            dipeptide_counts(&make_decoy(bcl2, DecoyNull::Shuffled, &mut SplitMix64::new(3))),
+            dipeptide_counts(bcl2)
+        );
+        // Too short to rearrange, all one residue, or not ASCII: returned as is.
+        assert_eq!(dipeptide_shuffle("MK", &mut SplitMix64::new(1)), "MK");
+        assert_eq!(dipeptide_shuffle("AAAAAA", &mut SplitMix64::new(1)), "AAAAAA");
+        assert_eq!(dipeptide_shuffle("MKTÅYIAK", &mut SplitMix64::new(1)), "MKTÅYIAK");
+    }
+
+    #[test]
+    fn test_make_decoy() {
+        let mut rng = SplitMix64::new(1);
+        assert_eq!(make_decoy("MKTAYIAK", DecoyNull::Database, &mut rng), "MKTAYIAK");
+        assert_eq!(make_decoy("MKTAYIAK", DecoyNull::Reversed, &mut rng), "KAIYATKM");
+        assert_eq!(
+            make_decoy("MKTAYIAK", DecoyNull::Shuffled, &mut SplitMix64::new(1)),
+            "YATKIAMK"
+        );
     }
 }
