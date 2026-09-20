@@ -700,7 +700,7 @@ mod tests {
         };
         // The slope of ln(count) against lambda_pair S is the lambda scale itself; the
         // window is bins 15..=22 of width 0.5, so x from 7.5 up to but not including 11.5.
-        assert_eq!(fit.lambda_scale(), 0.806);
+        assert_eq!(fit.r_database(), 0.806);
         assert_eq!(fit.n_fit_points(), 8);
         assert_eq!(fit.x_range(), (7.5, 11.5));
     }
