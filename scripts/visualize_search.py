@@ -9,11 +9,10 @@ loop is covered by a third of unrelated proteins, so a run there is discounted a
 glance and a run in BH1 is not.
 
 Below it, one row per protein with the numbers in the row (length, runs, longest run,
-identical residues in it after a gapped alignment of the run and its flanks, shared
-k-mers, the ranking statistic, and with --structures the TM-score) and every run drawn as
-a bar at its query coordinates, solid when it has --solid-identical or more identical
-residues and hollow otherwise; overlapping bars get a count. The histogram at the top
-counts identities on the exact run, since it is computed from the CSV alone. Database entries of one
+identical residues in it, shared k-mers, the ranking statistic, and with --structures
+the TM-score) and every run drawn as a bar at its query coordinates, solid when it has
+--solid-identical or more identical residues and hollow otherwise; overlapping bars get a
+count. Database entries of one
 gene (UniProt GN= and OS=) fold into one row, so a family search is not a list of
 TrEMBL copies of the query. Clicking a row opens the pair view underneath it: the dot
 plot with protein tracks and one alignment block per run, the same panel
@@ -208,9 +207,7 @@ def coverage(rows, query_length, ksize, solid_identical):
 
 
 def run_identical(block):
-    """Identical residues counted after the gapped alignment when the model has one, else
-    on the exact run."""
-    return block["gapped"]["identical"] if block.get("gapped") else block["identical"]
+    return block["identical"]
 
 
 def run_bar(block):
@@ -279,7 +276,6 @@ class SearchReport:
                 pair,
                 self.domain_rows,
                 flank=self.args.flank,
-                gap_flank=None if self.args.no_gapped else self.args.gap_flank,
                 structure=self.structure(query_name, target_name),
             )
             out.append(protein_row(rank, target_name, others, stat, best[target_name], model))
@@ -310,7 +306,6 @@ class SearchReport:
             "n_entries": len(_target_best_rows(rows)),
             "n_proteins": len(fold_entries(rows)),
             "solid_identical": self.args.solid_identical,
-            "gapped": not self.args.no_gapped,
             "structures": bool(self.args.structures and self.aligner),
             "max_runs_shown": self.args.max_runs_shown,
             "coverage": coverage(rows, query["length"], ksize, self.args.solid_identical),
@@ -456,8 +451,7 @@ function headerRows(table) {
   const ql = cell(null, `${Q.label}, the query`); ql.appendChild(cell("small", `${QL} aa`));
   q.appendChild(ql); for (let i = 0; i < blanks; i++) q.appendChild(cell()); q.appendChild(queryLine()); table.appendChild(q);
   const head = el("div", "g head");
-  const identical = R.gapped ? "identical in it, after gapped alignment" : "identical in it";
-  const columns = [[null, "target, one row per protein"], ["num", "aa"], ["num", "runs"], ["num", "longest run, aa"], ["num", identical], ["num", `shared ${K}-mers`], ["num", R.stat_name]];
+  const columns = [[null, "target, one row per protein"], ["num", "aa"], ["num", "runs"], ["num", "longest run, aa"], ["num", "identical in it"], ["num", `shared ${K}-mers`], ["num", R.stat_name]];
   if (R.structures) columns.push(["num", "TM-score"]);
   columns.push([null, `runs drawn on the query (residue 1 to ${QL})`]);
   for (const [cls, text] of columns) head.appendChild(cell(cls, text));
@@ -561,8 +555,6 @@ def _build_arg_parser():
     p.add_argument("--max-runs-shown", type=int, default=10, help="alignments per opened row, longest first (default 10)")
     p.add_argument("--solid-identical", type=int, default=5, help="identical residues from which a run's bar is drawn solid (default 5)")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run in the alignments")
-    p.add_argument("--gap-flank", type=int, default=10, help="residues either side of each run given to the gapped alignment its identities are counted on (default 10)")
-    p.add_argument("--no-gapped", action="store_true", help="count identities on the exact run only")
     p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, each row gets a TM-score and its dot plot the structural path")
     p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--kmerseek", help="path to the kmerseek binary (default: PATH, then target/release, target/debug)")

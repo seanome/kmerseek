@@ -73,20 +73,17 @@ function classStyles(m) {
 
 function runHeader(b) {
   const parts = [`Run ${b.number}`, `${b.query_region} × ${b.target_region}`, `${b.length} aa`, `${b.identical} identical`];
-  if (b.gapped) parts[3] = `${b.identical} identical on the run's diagonal, ${b.gapped.identical} of its ${b.gapped.aligned} aligned columns after gapped alignment`;
   if (b.polar !== null && b.polar !== undefined) parts.push(`${b.polar} of ${b.length} polar`);
   if ("structure_offset" in b) parts.push(structurePhrase(b.structure_offset));
   return parts.join(" · ");
 }
 
 function blockRows(b) {
-  // The gapped alignment when the model has one, else the exact run with any flank.
-  if (b.gapped) return b.gapped;
+  // The exact run with any flank, and which of its columns are the run.
   const left = b.query_start - b.window.query_start;
   return { query_row: b.query_row, target_row: b.target_row, query_enc: b.query_enc, target_enc: b.target_enc, middle: b.middle,
            query_start: b.window.query_start, target_start: b.window.target_start, run_columns: [left, left + b.length] };
 }
-const residuesBefore = (row, n) => [...row.slice(0, n)].filter(c => c !== "-").length;
 
 function titleLines(m) {
   const q = m.query.label, t = m.target.label, k = m.ksize;
@@ -242,8 +239,8 @@ function renderChunk(m, rows, styles, start) {
   const n = qRow.length;
   const x0 = Math.max(m.query.label.length, m.target.label.length) * 7 + 52;
   const svg = svgEl("svg", { width: x0 + n * CELL + 50, height: 3 * ROW + 12 });
-  const row = (y, text, enc, label, full, origin) => {
-    const first = origin + residuesBefore(full, start), last = origin + residuesBefore(full, start + n);
+  const row = (y, text, enc, label, origin) => {
+    const first = origin + start, last = origin + start + n;
     svg.appendChild(svgEl("text", { x: x0 - 8, y: y + BOX / 2 + 4, "text-anchor": "end" }, `${label} ${first + 1}`));
     for (let i = 0; i < n; i++) {
       const st = styles[enc[i]] || ["var(--box)", "var(--edge)"];
@@ -252,10 +249,10 @@ function renderChunk(m, rows, styles, start) {
     }
     svg.appendChild(svgEl("text", { x: x0 + n * CELL + 4, y: y + BOX / 2 + 4 }, last));
   };
-  row(2, qRow, qEnc, m.query.label, rows.query_row, rows.query_start);
+  row(2, qRow, qEnc, m.query.label, rows.query_start);
   for (let i = 0; i < n; i++) if (mid[i] !== " ")
     svg.appendChild(svgEl("text", { x: x0 + i * CELL + BOX / 2, y: ROW + BOX / 2 + 5, "text-anchor": "middle", class: "mono" }, mid[i]));
-  row(2 * ROW + 2, tRow, tEnc, m.target.label, rows.target_row, rows.target_start);
+  row(2 * ROW + 2, tRow, tEnc, m.target.label, rows.target_start);
   // The run's columns, underlined with the dot plot's run bar.
   const first = Math.max(rows.run_columns[0], start) - start, last = Math.min(rows.run_columns[1], start + n) - start;
   if (last > first) svg.appendChild(svgEl("line", { x1: x0 + first * CELL, x2: x0 + (last - 1) * CELL + BOX, y1: 3 * ROW + 7, y2: 3 * ROW + 7, stroke: "var(--run)", "stroke-width": 3 }));

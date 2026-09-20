@@ -81,22 +81,14 @@ def path_segments(pairs):
 
 
 def block_rows(block):
-    """The rows an alignment block shows: the gapped alignment when the model has
-    one, else the exact run (with any flank)."""
-    g = block.get("gapped")
-    if g:
-        return g
+    """The rows an alignment block shows: the exact run with any flank, and which of its
+    columns are the run."""
     left = block["query_start"] - block["window"]["query_start"]
     return {k: block[k] for k in ("query_row", "target_row", "query_enc", "target_enc", "middle")} | {
         "query_start": block["window"]["query_start"],
         "target_start": block["window"]["target_start"],
         "run_columns": [left, left + block["length"]],
     }
-
-
-def residues_before(row, n):
-    """Non-gap characters in the first n columns of an aligned row."""
-    return sum(1 for ch in row[:n] if ch != "-")
 
 
 def axis_ticks(length):
@@ -321,13 +313,12 @@ class PairFigure:
             ax.plot([first - 0.4, last - 0.6], [-0.7, -0.7], color=RUN_COLOR, linewidth=2.2, solid_capstyle="butt")
 
     def _draw_coordinates(self, ax, rows, start, n):
-        """1-based first and last residue of each row in this chunk, gaps not counted."""
-        for y, label, row, origin in (
-            (2, self.m["query"]["label"], rows["query_row"], rows["query_start"]),
-            (0, self.m["target"]["label"], rows["target_row"], rows["target_start"]),
+        """1-based first and last residue of each row in this chunk."""
+        for y, label, origin in (
+            (2, self.m["query"]["label"], rows["query_start"]),
+            (0, self.m["target"]["label"], rows["target_start"]),
         ):
-            first = origin + residues_before(row, start)
-            last = origin + residues_before(row, start + n)
+            first, last = origin + start, origin + start + n
             ax.text(-0.9, y, f"{label} {first + 1}", ha="right", va="center", fontsize=FONT, color=SECONDARY_INK)
             ax.text(n - 0.1, y, str(last), ha="left", va="center", fontsize=FONT, color=SECONDARY_INK)
 
@@ -375,8 +366,6 @@ def _build_arg_parser():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="domain tables (TSV, CSV or parquet) for either protein; see the module docstring for columns")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run (default 0); with a flank the middle line uses `:` for same class")
-    p.add_argument("--gap-flank", type=int, default=10, help="residues either side of each run given to the gapped alignment its identities are counted on (default 10)")
-    p.add_argument("--no-gapped", action="store_true", help="show and count the exact run only, without a gapped alignment")
     p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, the structural alignment is drawn across the dot plot")
     p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--dpi", type=int, default=200)
@@ -391,7 +380,6 @@ def main():
         pair,
         load_domains(args.domains),
         flank=args.flank,
-        gap_flank=None if args.no_gapped else args.gap_flank,
         structure=structure_for(args, pair),
     )
     os.makedirs(args.output_dir, exist_ok=True)

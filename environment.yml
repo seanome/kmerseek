@@ -6,7 +6,6 @@ channels:
 dependencies:
   - _libgcc_mutex=0.1=conda_forge
   - _openmp_mutex=4.5=2_gnu
-  - biopython=1.85
   - bitarray=3.0.0=py312h66e93f0_0
   - bitstring=4.3.0=pyhd8ed1ab_0
   - brotli=1.1.0=hb9d3cd8_2

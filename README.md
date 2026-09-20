@@ -231,14 +231,10 @@ k-mer, click a run's number to jump to its alignment
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
 long; the figure draws those as singles and gives alignments only to runs.
 
-Identities are counted twice for each run: on the run's own diagonal, and after a gapped
-end-to-end alignment (Biopython's `PairwiseAligner` with BLAST's protein defaults:
-BLOSUM62, gap open 11, extend 1) of the run and `--gap-flank` residues either side
-(default 10), counted over the run's columns. The
-second number is the one to trust: an exact run in the reduced alphabet can sit a few
-residues off the true alignment, and MCL-1's BH1 run reads 1 identical residue on its
-diagonal but 12 once one gap lines NWGR up. The alignment block shows the gapped
-alignment with the run underlined; `--no-gapped` shows the exact run instead.
+Identities are counted on the run's own diagonal, with no gaps. An exact run in the
+reduced alphabet can sit a few residues off the true alignment (MCL-1's BH1 run reads 1
+identical residue with BCL-2 on its diagonal, though NWGR is in both), so a low count
+on a run says the run is not the alignment, not that the proteins are unrelated.
 
 `--structures DIR` draws the structural alignment across the dot plot: with USalign or
 TM-align on `PATH` (or `--aligner`), the two proteins' AlphaFold or PDB files in that
@@ -272,10 +268,8 @@ python scripts/visualize_search.py --csv results.csv --query-fasta bcl2.fasta \
     --target-fasta bcl2_family.fasta.gz --output-dir report/ --domains pfam_domains.tsv
 ```
 
-The identical-residue column and the solid/hollow bars use the gapped-alignment count
-described above (`--gap-flank`, `--no-gapped`); the histogram counts identities on the
-exact run, since it is computed from the CSV alone. `--structures DIR` adds a TM-score
-column and the structural path to each row's dot plot.
+`--structures DIR` adds a TM-score column and the structural path to each row's dot
+plot.
 
 Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
 Benjamini-Hochberg corrected region tail probability; the sort control also offers

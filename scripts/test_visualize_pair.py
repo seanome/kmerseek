@@ -229,7 +229,7 @@ def test_embed_json_never_lets_a_name_close_the_script():
     assert page.count("</script>") == 1
 
 
-# -- gapped identities and the structural path --
+# -- the structural path --
 
 USALIGN_REPORT = os.path.join(TESTDATA, "bcl2_vs_ced9.usalign.txt")
 
@@ -241,25 +241,6 @@ def structure():
     with open(USALIGN_REPORT) as fh:
         report = sa.parse_report(fh.read())
     return report | {"aligner": "USalign", "query_file": "AF-P10415-F1-model_v6.cif", "target_file": "AF-P41958-F1-model_v6.cif"}
-
-
-def test_gapped_block_counts_identities_over_the_run_columns(pair, domains):
-    model = pm.build_model(pair, domains, gap_flank=10)
-    bh1 = model["runs"][0]["gapped"]
-    # Run 1 with ten residues either side aligns without a gap; the run's 19 columns hold
-    # the same 5 identities as its diagonal.
-    assert (bh1["query_start"], bh1["query_end"], bh1["target_start"], bh1["target_end"]) == (128, 167, 152, 191)
-    assert bh1["run_columns"] == [10, 29]
-    assert bh1["query_row"][10:29] == "RDGVNWGRIVAFFEFGGVM"
-    assert (bh1["identical"], bh1["aligned"]) == (5, 19)
-    assert bh1["middle"][10:29] == "::::::GR::::::FGG::"
-    assert pm.run_header(model["runs"][0]).startswith(
-        "Run 1 · Bcl-2 × Bcl-2 · 19 aa · 5 identical on the run's diagonal, 5 of its 19 aligned columns after gapped alignment"
-    )
-    # Run 5 sits at CED-9's C terminus, so the window is short there and the alignment gaps.
-    run5 = model["runs"][4]["gapped"]
-    assert "-" in run5["query_row"] + run5["target_row"]
-    assert run5["target_enc"].count("-") == run5["target_row"].count("-")
 
 
 def test_structure_offset_puts_run_1_on_the_path_and_run_3_off_it(pair, domains, structure):
@@ -280,7 +261,7 @@ def test_structure_offset_puts_run_1_on_the_path_and_run_3_off_it(pair, domains,
 
 
 def test_figure_and_html_draw_the_structural_path(pair, domains, structure, tmp_path):
-    model = pm.build_model(pair, domains, gap_flank=10, structure=structure)
+    model = pm.build_model(pair, domains, structure=structure)
     svg = tmp_path / "pair.svg"
     vp.plot_pair(model, [str(svg)])
     text = svg.read_text()
