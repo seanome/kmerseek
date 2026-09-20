@@ -214,8 +214,8 @@ impl Display for KaSource {
 ///
 /// P(T_r >= t) ~ e^-t t^(r-1) / (r! (r-1)!), with r the number of regions and t the sum.
 ///
-/// Each region's normalised score is lambda S_i - ln(K m n): its raw score in nats, less the
-/// size of the search. The approximation needs each of them positive and the sum well above
+/// Each region's normalised score is lambda S_i - ln(K m n): its raw score in nats (the
+/// natural-log unit of chance), less the size of the search. The approximation needs each of them positive and the sum well above
 /// 0; a non-positive sum returns 1.
 pub fn karlin_altschul_sum_p(sum_normalised_score: f64, n_segments: u32) -> f64 {
     let (t, r) = (sum_normalised_score, n_segments);

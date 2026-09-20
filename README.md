@@ -101,7 +101,7 @@ Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 
 A matched region is a maximal run of shared k-mers: one position where the encoded
 query and target disagree ends it. Between remote homologs the HP pattern is conserved
-per position (chance-corrected agreement about 0.45 at 20-30% identity) far better than
+per position (the copy rate, Cohen's κ, is about 0.45 at 20-30% identity) far better than
 any 23-residue stretch of it is conserved exactly (most such pairs share no exact
 23-mer at all), so an exact run is better read as a seed than as the match.
 
@@ -138,9 +138,10 @@ On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
 different-fold hit at E <= 0.01.
 
-`--chain-max-gap G --chain-max-shift D` chains colinear extended regions that are at most
-G residues apart on the query and at most D diagonals apart (a net indel of up to D)
-into one region, scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993);
+`--chain-max-gap G --chain-max-shift D` chains extended regions that follow each other on
+both sequences, at most G residues apart on the query and at most D diagonals apart (a
+net indel of up to D), into one region scored with Karlin & Altschul's (1993) statistic
+for a sum of region scores;
 `region_n_chained` says how many regions a row is made of. A domain that no single
 gapless run covers becomes one call. On SCOPe40 domains it changes ranking little
 (chains form in 2% of regions at 30/10); its purpose is region-level transfer, where a

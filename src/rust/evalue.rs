@@ -8,7 +8,7 @@
 //! hydrophobic sequences, whose agreement is what their compositions do by chance, gets
 //! lambda 0 and no significance. K, and whether that per-pair lambda has the right scale,
 //! are read off the search itself: a few hundred database sequences are searched against
-//! the index and every region's normalised score x = lambda_pair S is binned. Under the
+//! the index and every region's score in nats, x = lambda_pair S, is binned. Under the
 //! model the count at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the
 //! database residues and w the bin width, so ln(count) against x is a line of slope -1
 //! and intercept ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). Minus the
@@ -217,14 +217,15 @@ pub const BIN_WIDTH: f64 = 0.5;
 pub const MIN_BIN_COUNT: u64 = 30;
 
 /// The fit uses at most this many score bins, the highest ones below the related pairs,
-/// so the slope is read as close to the decision tail as those pairs allow.
+/// so the slope is read as close to the scores that decide a hit as those pairs allow.
 pub const FIT_WINDOW: i64 = 8;
 
 /// Fewest bins a fit is accepted on.
 pub const MIN_FIT_POINTS: i64 = 4;
 
-/// A bin whose ln count sits more than this many Poisson standard deviations above the
-/// line fitted to the bins below it is where related pairs begin.
+/// A bin whose ln count sits more than this many units of counting noise (one unit is
+/// 1 / sqrt(count)) above the line fitted to the bins below it is where related pairs
+/// begin.
 const BEND_SIGMAS: f64 = 2.0;
 
 /// Slack added to the bend test, in ln count, so a bin one region above the line at large
@@ -393,9 +394,10 @@ const REFERENCE_BASE: usize = 8;
 /// score 32 while the step test fires at 40. Here the ratio ln(count) - ln(reference count)
 /// is taken per bin; a line through its lowest `REFERENCE_BASE` usable bins is the
 /// baseline (a constant ratio is a K difference, a gentle slope is sequence structure),
-/// and a bin joins while its ratio is within `BEND_SIGMAS` Poisson standard deviations
-/// plus `BEND_SLACK` of that baseline. Because the reference has the same finite-length
-/// concavity as the real curve, the ratio also cancels that, which the step test could not.
+/// and a bin joins while its ratio is within `BEND_SIGMAS` units of counting noise
+/// plus `BEND_SLACK` of that baseline. The seed requirement bends the reference curve at
+/// low scores the same way it bends the real one, so the ratio cancels that bend too,
+/// which the step test could not.
 /// The line is then read off the highest `FIT_WINDOW` accepted bins, as in `fit_scores`.
 pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<ScoreFit> {
     let reference_bins: std::collections::HashMap<i64, u64> =

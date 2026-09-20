@@ -17,8 +17,8 @@ bits = (λ_pair × r_database × S - ln K) / ln 2
 
 An exact run in the encoded alphabet is a seed, not the match. Between remote homologs
 the hydrophobic/polar class of aligned residues agrees far above chance per position
-(Cohen's κ 0.46 at 20-30% identity, twice what the 20-letter alphabet gives), but the
-longest exact HP run between such pairs averages 12 residues, so almost none of them
+(the copy rate, Cohen's κ, is 0.46 at 20-30% identity, twice the 20-letter alphabet's),
+but the longest exact HP run between such pairs averages 12 residues, so almost none of them
 share an exact 23-mer, the seed length of the exact arm (2024-kmerseek-analysis notebook
 230). Every benchmark and every fitted constant below is at k = 12: the longest seed that
 about half of the true pairs at 20-30% identity still share.
@@ -47,7 +47,9 @@ C = 2, X = 8 it grows 7 residues to the right across two class flips.
 
 Between two sequences that match by chance at half their positions a point is hard to
 earn; between two membrane proteins that match at two thirds of their positions by luck
-it is cheap. λ_pair converts a raw score into nats for the pair at hand.
+it is cheap. λ_pair converts a raw score into nats for the pair at hand. A nat is the
+natural-log unit of chance: a region worth x nats is as rare as e^(−x) between
+unrelated sequences.
 
 - `a`: the chance that two positions drawn at random, one from the query and one from
   the target, land in the same class. It is the sum over classes of
@@ -58,8 +60,8 @@ it is cheap. λ_pair converts a raw score into nats for the pair at hand.
   solved by bisection once per pair. A positive root exists only when a random aligned
   position has a negative expected score, that is when `a < C/(1+C)` (2/3 at C = 2).
   Above that line, agreeing is what the two compositions do by chance: λ_pair is 0 and no
-  run of agreement is significant at any length. That is the transmembrane failure mode
-  of the Poisson count, gone by construction.
+  run of agreement is significant at any length. The Poisson count saw a membrane helix
+  against any other membrane helix as a long exact run; this score does not.
 
 ![λ_pair against a at C = 2: the root falls to 0 at a = 2/3](images/karlin_altschul_lambda_vs_a.png)
 
@@ -82,7 +84,7 @@ would, and the E-value needs two corrections that the closed form cannot give:
   0.481 × 0.947 × 40 = 18.2 nats and its E-value is e^(19.2 − 18.2) = 2.7× larger than
   under independence. 0.85 (Swiss-Prot) makes it 16.4 nats and the E-value 7.5× larger.
 - `K`: the fraction of the m × n cells of the comparison that can start a region. Cells
-  next to each other on one diagonal belong to the same excursion, and a region only
+  next to each other on one diagonal belong to the same run of agreement, and a region only
   exists where an exact seed matched, so K is well under 1: 0.023 on SCOPe40, 0.016 to
   0.018 on Swiss-Prot, 0.014 on UniRef50, all at `hp_thomas_dill2` k = 12, C = 2.
 
@@ -96,7 +98,7 @@ How the fit works:
    each against the whole index exactly as a user's query would be searched (C = 2, X = 8,
    every filter off). Hits of a sequence on its own database entry are dropped.
 2. For every region of every pair, compute x = λ_pair × S: the region's raw score in the
-   pair's own units, in nats. A region at x = 15 is as rare as e^(−15) under the
+   pair's own units, in nats, so a region at x = 15 is as rare as e^(−15) under the
    independent-positions model.
 3. Count the regions in bins of x half a nat wide and plot ln(count) against x. If the
    model were right the points would fall on a straight line of slope −1, and the line's
@@ -113,9 +115,9 @@ How the fit works:
    `--ka-reference shuffled-dipeptide`), searched the same way, and counted in the same
    bins. Shuffled sequences have no relatives. Bin by bin, ln(real count) − ln(shuffled
    count) is taken; where the real sequences have only the structure the shuffle keeps,
-   that difference is flat. The first bin where it rises more than two Poisson standard
-   deviations above a line through its eight lowest bins is where relatives begin, and
-   the fit stops there. The line is read off the eight highest bins below that point.
+   that difference is flat. Counts have noise of about the square root of the count. The
+   first bin where the difference rises more than twice that noise above a line through
+   its eight lowest bins is where relatives begin, and the fit stops there. The line is read off the eight highest bins below that point.
 
 The fit goes to the count in each bin, not the count at or above it, because a plateau
 of related pairs far up the axis would add a constant to every summed count below it and
@@ -190,10 +192,11 @@ two-class alphabet, so reversed proteins still match their forward paralogs. Tha
 
 Two extended regions on one diagonal separated by a stretch the give-up margin would not
 cross are one alignment with a bad patch in it. `--chain-max-gap G --chain-max-shift D`
-joins colinear regions at most G residues apart on the query and within D diagonals of
-each other into one region scored with Karlin-Altschul sum statistics (1993): each
-member's normalised score is λ S_i − ln(K m n_t), and the chance that r such scores add
-up to at least t is about e^(−t) t^(r−1) / (r! (r−1)!), times the number of targets.
+joins regions that follow each other on both sequences, at most G residues apart on the
+query and within D diagonals of each other, into one region scored with the Karlin and
+Altschul (1993) statistic for a sum of scores: each member's score in nats, less the
+size of the search, is λ S_i − ln(K m n_t), and the chance that r such scores add up to
+at least t is about e^(−t) t^(r−1) / (r! (r−1)!), times the number of targets.
 `region_n_chained` counts the members. On SCOPe40 domains chaining barely moves ranking;
 its purpose is region transfer in the QfO benchmark, where a call has to cover half a
 domain to carry its label and one gapless run rarely does.
@@ -203,8 +206,8 @@ domain to carry its label and one gapless run rarely does.
 One r_database and K per index describe a typical query. A query rich in membrane
 segments has a positive expected score against every other membrane protein; its λ_pair
 is 0 (no significance) and the fit puts it at x = 0, but nothing rescues it. Masking long
-hydrophobic runs (the HP analogue of SEG) or a per-query fit at search time is a separate
-change.
+hydrophobic runs (what BLAST's SEG filter does for low-complexity stretches) or a
+per-query fit at search time is a separate change.
 
 ## References
 
@@ -212,7 +215,8 @@ change.
   molecular sequence features by using general scoring schemes. PNAS 87:2264-2268.
   λ and K for ungapped local alignment; the E-value formula.
 - Karlin S, Altschul SF (1993). Applications and statistics for multiple high-scoring
-  segments in molecular sequences. PNAS 90:5873-5877. The sum statistic for chaining.
+  segments in molecular sequences. PNAS 90:5873-5877. The statistic for a sum of region
+  scores, used by chaining.
 - Altschul SF, Gish W, Miller W, Myers EW, Lipman DJ (1990). Basic local alignment search
   tool. J Mol Biol 215:403-410. Seed, ungapped extension, E-value.
 - Altschul SF, Madden TL, Schäffer AA, Zhang J, Zhang Z, Miller W, Lipman DJ (1997).
