@@ -22,6 +22,10 @@ pub const DEFAULT_PROGRESS_INTERVAL: u32 = 1000;
 /// Default batch size for FASTA processing (process N sequences per batch)
 pub const DEFAULT_BATCH_SIZE: usize = 1000;
 
+/// Exponent of the target-length penalty in `SearchResult::coverage_score`: the score is
+/// divided by `target_length^COVERAGE_LENGTH_EXPONENT`. Folddisco's default, 0.5.
+pub const COVERAGE_LENGTH_EXPONENT: f64 = 0.5;
+
 /// Result-level filters applied while a search is running, so that results failing the
 /// filters are never allocated into the results `Vec` in the first place (as opposed to
 /// building the full unfiltered `Vec` and then filtering it down afterward).
@@ -105,6 +109,7 @@ pub struct SearchResultCsv {
     pub containment_target_in_query: f64,
     pub f_weighted_target_in_query: f64,
     pub query_tfidf: f64,
+    pub coverage_score: f64,
     pub mean_matched_kmer_freq: f64,
     pub sum_matched_kmer_freq: f64,
     pub query_expected_shared_kmers: f64,
@@ -186,6 +191,7 @@ impl SearchResultCsv {
             containment_target_in_query: result.containment_target_in_query,
             f_weighted_target_in_query: result.f_weighted_target_in_query,
             query_tfidf: result.query_tfidf,
+            coverage_score: result.coverage_score,
             mean_matched_kmer_freq: result.mean_matched_kmer_freq,
             sum_matched_kmer_freq: result.sum_matched_kmer_freq,
             query_expected_shared_kmers: result.query_expected_shared_kmers,
@@ -268,6 +274,14 @@ pub struct SearchResult {
 
     /// TF-IDF score for the query signature against the target database
     pub query_tfidf: f64,
+
+    /// Folddisco's coverage score for this hit (Kim, Mirdita and Steinegger, 2025):
+    /// the sum of `ln(N / freq_target(h))` over the k-mers shared with the target, times
+    /// `L^-0.5`, where L is the target length in residues. The sum rewards rare shared
+    /// k-mers; the length term stops long targets that share many k-mers by chance from
+    /// ranking high. Unlike `query_tfidf`, this changes from target to target. 0.0 without
+    /// database context or when the target stores no sequence.
+    pub coverage_score: f64,
 
     /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
     /// Higher = matched k-mers are common in the target DB (less discriminative).
@@ -1067,6 +1081,7 @@ impl ProteinSearcher {
         };
 
         result.query_tfidf = query.tfidf;
+        result.coverage_score = self.calculate_coverage_score(&intersection, target);
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.query_expected_shared_kmers = query_expected_shared_kmers;
@@ -1138,6 +1153,21 @@ impl ProteinSearcher {
     /// Sum of target-DB frequencies for matched k-mers: Σ freq_target[h]/N over intersection.
     /// Takes the pre-computed intersection set directly.
     /// Higher = matched k-mers are collectively more common in the target DB.
+    /// Folddisco's coverage score: `sum of IDF over the shared k-mers * L^-alpha`, with
+    /// `alpha = COVERAGE_LENGTH_EXPONENT` and L the target length in residues. See
+    /// `SearchResult::coverage_score`. A hash the database has never seen contributes 0,
+    /// matching `calculate_tfidf`.
+    fn calculate_coverage_score(&self, intersection: &HashSet<u64>, target: &ProteinSketch) -> f64 {
+        let Some(target_length) = target.get_raw_sequence().map(str::len) else {
+            return 0.0;
+        };
+        let idf_sum: f64 = intersection
+            .iter()
+            .map(|hashval| self.stats.idf.get(hashval).copied().unwrap_or(0.0))
+            .sum();
+        idf_sum * (target_length as f64).powf(-COVERAGE_LENGTH_EXPONENT)
+    }
+
     fn calculate_sum_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
         intersection
@@ -1292,6 +1322,7 @@ fn calculate_similarity_from_precomputed(
         containment_target_in_query,
         f_weighted_target_in_query,
         query_tfidf: 0.0,                 // requires database context
+        coverage_score: 0.0,              // requires database context
         mean_matched_kmer_freq: 0.0,      // requires database context
         sum_matched_kmer_freq: 0.0,       // requires database context
         query_expected_shared_kmers: 0.0, // requires database context
@@ -1780,6 +1811,7 @@ mod tests {
             containment_target_in_query: 0.4,
             f_weighted_target_in_query: 0.3,
             query_tfidf: 1.5,
+            coverage_score: 2.5,
             mean_matched_kmer_freq: 0.1,
             sum_matched_kmer_freq: 0.7,
             query_expected_shared_kmers: 3.0,
@@ -1801,6 +1833,8 @@ mod tests {
         assert_eq!(row.n_intersecting_hashes, 7);
         assert_eq!(row.ksize, 5);
         assert_eq!(row.containment, 0.5);
+        assert_eq!(row.query_tfidf, 1.5);
+        assert_eq!(row.coverage_score, 2.5);
         assert_eq!(row.query_poisson_pvalue, 0.01);
         // Fields carried from the MatchedRegion.
         assert_eq!(row.region_start, 3);
@@ -2874,6 +2908,10 @@ mod tests {
         // hash, so the summation order (and therefore the last bits) depends on the hash
         // values themselves.
         approx::assert_relative_eq!(bcl2_result.query_tfidf, 565.119680433367, epsilon = 1e-9);
+        // Coverage score: the 24 shared k-mers' IDF sums to 36.51 (mean 1.52, so a typical
+        // shared k-mer sits in about 5 of the 25 targets), times 239^-0.5 for BCL2_HUMAN's
+        // 239 residues. Same HashMap-order caveat as query_tfidf above.
+        approx::assert_relative_eq!(bcl2_result.coverage_score, 2.361544022707993, epsilon = 1e-9);
 
         assert!(
             bcl2_result.mean_matched_kmer_freq > 0.0,
@@ -3517,7 +3555,7 @@ mod tests {
         let index_path = temp_dir.path().join("index");
         let index = ProteomeIndex::new(&index_path, ksize, 1, "protein20", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(index);
+        let searcher = ProteinSearcher::new(index)?;
 
         // BCL2_HUMAN (P10415) residues 1-32 with the Asp at index 9 written as B (Asp or Asn).
         let with_b = "MAHAGRTGYBNREIVMKYIHYKLSQRGYEWDA";
