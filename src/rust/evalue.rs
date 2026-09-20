@@ -18,10 +18,163 @@
 //! flatten the slope.
 //!
 //! This module holds the fit itself, on scores already scaled so that one bin is one
-//! integer step. The searcher that produces the scores and the record that stores the
-//! result are the next PRs of the stack that splits PR #54.
+//! integer step, the record of a fit (`KaCalibration`), and the decoys a fit is read
+//! against. `ProteinSearcher::calibrate_ka` produces the scores and the record.
 
 use serde::{Deserialize, Serialize};
+
+use crate::search::{ExtensionScoring, KaParams};
+
+/// One fitted (r_database, K) for one index, keyed by its `scoring`. The seed length and
+/// alphabet are the index's.
+///
+/// The fit is a straight line through ln(regions in each bin of x = lambda_pair S).
+/// Minus its slope is `r_database`; its height gives `k` (see `line_through`). Bins are
+/// `bin_width` nats wide, so every field named "score" below is a bin index: bin b covers
+/// x in [b w, (b + 1) w).
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct KaCalibration {
+    /// Mismatch penalty and give-up margin the fit is for. A search with a different pair
+    /// cannot use this fit.
+    pub scoring: ExtensionScoring,
+    /// What the calibration queries were.
+    pub null: DecoyNull,
+    /// Seed of the query sampler, so the fit can be reproduced.
+    pub seed: u64,
+    /// Calibration queries searched.
+    pub n_queries: usize,
+    /// Residues in the calibration queries added up: L in ln(K L N).
+    pub query_residues: u64,
+    /// The database size the E-value uses for n: the index's k-mer count stands in for its
+    /// residue count.
+    pub database_kmers: u64,
+    /// Regions the calibration queries produced, at any score.
+    pub n_regions: usize,
+    /// Chance that two positions drawn from the sampled database sequences share a class
+    /// (a of the database against itself). For reporting only: the search solves lambda
+    /// per pair.
+    pub match_probability: f64,
+    /// The closed-form lambda at `match_probability`, for reporting next to `r_database`.
+    pub lambda_analytic: f64,
+    /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
+    /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
+    /// lambda by this.
+    pub r_database: f64,
+    /// Karlin-Altschul K: the line's height with the query residues, database size and bin
+    /// width divided out.
+    pub k: f64,
+    /// Width of one x bin in nats (`BIN_WIDTH`).
+    pub bin_width: f64,
+    /// First bin the line was fitted on.
+    pub score_lo: i64,
+    /// Last bin the line was fitted on, inclusive.
+    pub score_hi: i64,
+    /// First bin above the fit that sat above the line: where related pairs begin. None
+    /// when the fit ran out of counts first.
+    pub bend_score: Option<i64>,
+    /// Root mean square of the fit residuals in ln count.
+    pub rms_residual: f64,
+    /// Regions with score >= s, for every bin s from the smallest score seen up to the
+    /// largest, for plotting the curve the fit was read from.
+    pub survival: Vec<(i64, u64)>,
+    /// For the `Database` null: the same queries shuffled, searched the same way. The ratio
+    /// of the two curves is what decides where the fit stops
+    /// (`fit_scores_with_reference`). Empty for other nulls.
+    pub reference_survival: Vec<(i64, u64)>,
+    /// Minus the slope of the reference curve over the fit window, per bin. None for nulls
+    /// other than `Database`.
+    pub reference_lambda: Option<f64>,
+    /// How the reference queries were made (`Shuffled` or `ShuffledDipeptide`). None for
+    /// nulls other than `Database`.
+    pub reference: Option<DecoyNull>,
+}
+
+impl KaCalibration {
+    /// The two numbers a search takes from the fit.
+    pub fn ka_params(&self) -> KaParams {
+        KaParams { k: self.k, r_database: self.r_database }
+    }
+
+    /// The fit window in nats of x = lambda_pair S.
+    pub fn x_range(&self) -> (f64, f64) {
+        (self.score_lo as f64 * self.bin_width, (self.score_hi + 1) as f64 * self.bin_width)
+    }
+
+    /// Number of score bins the line was fitted on.
+    pub fn n_fit_points(&self) -> i64 {
+        self.score_hi - self.score_lo + 1
+    }
+
+    /// A record with nothing in it but its key and K, for tests of how fits are keyed
+    /// and read. No number in it comes from a fit; a real one is in
+    /// `search::ka_calibration_tests::test_calibrate_ka_on_first25`.
+    #[cfg(test)]
+    pub(crate) fn placeholder(scoring: ExtensionScoring, k: f64) -> Self {
+        Self {
+            scoring,
+            null: DecoyNull::Shuffled,
+            seed: 0,
+            n_queries: 0,
+            query_residues: 0,
+            database_kmers: 0,
+            n_regions: 0,
+            match_probability: 0.0,
+            lambda_analytic: 0.0,
+            r_database: 0.0,
+            k,
+            bin_width: BIN_WIDTH,
+            score_lo: 0,
+            score_hi: 0,
+            bend_score: None,
+            rms_residual: 0.0,
+            survival: Vec::new(),
+            reference_survival: Vec::new(),
+            reference_lambda: None,
+            reference: None,
+        }
+    }
+}
+
+/// One line: what was searched, what was fitted, and where the line was read.
+impl std::fmt::Display for KaCalibration {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} {} queries, {} regions; r_database {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
+            self.n_queries,
+            self.null,
+            self.n_regions,
+            self.r_database,
+            self.lambda_analytic,
+            self.match_probability,
+            self.k,
+            self.x_range().0,
+            self.x_range().1,
+        )?;
+        if let Some(bend) = self.bend_score {
+            let what = if self.null == DecoyNull::Database {
+                "relatives from"
+            } else {
+                "counts rise above the line from"
+            };
+            write!(f, ", {what} x {:.1}", bend as f64 * self.bin_width)?;
+        }
+        write!(f, ", rms {:.3}", self.rms_residual)?;
+        if let Some(reference_lambda) = self.reference_lambda {
+            write!(
+                f,
+                "; {} reference slope {:.3} over the same bins",
+                self.reference.map_or("shuffled".to_string(), |r| r.to_string()),
+                reference_lambda / self.bin_width
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
+/// one raw score unit at lambda 0.45.
+pub const BIN_WIDTH: f64 = 0.5;
 
 /// Fewest regions a score bin needs to enter the fit; below this the Poisson noise in
 /// ln count (about 1 / sqrt(count)) is larger than the effects being fitted.
@@ -451,6 +604,24 @@ fn last_edges(out: &[Vec<u8>; 256], root: u8, rng: &mut SplitMix64) -> [u8; 256]
     next
 }
 
+/// The warning a caller should print when the related pairs left the fit fewer bins than
+/// `FIT_WINDOW`: the slope is then read from the seed end of the curve, where the seed
+/// requirement still shapes it. None for a fit with the full window.
+pub fn short_fit_warning(fit: &KaCalibration) -> Option<String> {
+    (fit.n_fit_points() < FIT_WINDOW).then(|| {
+        format!(
+            "WARNING: the fit has only {} bins (x {:.1}..{:.1}) below the relatives at x {}. \
+             Related sequences are dense in this database; the slope is read close to the \
+             seed. More --ka-queries gives a second opinion.",
+            fit.n_fit_points(),
+            fit.x_range().0,
+            fit.x_range().1,
+            fit.bend_score
+                .map_or("none".to_string(), |b| format!("{:.1}", b as f64 * fit.bin_width))
+        )
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -597,6 +768,22 @@ mod tests {
             falling.extend(std::iter::repeat_n(score, n));
         }
         assert!((fit_scores(&falling).unwrap().lambda - 10f64.ln() / 10.0).abs() < 1e-12);
+    }
+
+    /// The window is stored in bins; `x_range` gives it back in nats. Bins 15..=22 of width
+    /// 0.5 cover x from 7.5 up to but not including 11.5.
+    #[test]
+    fn test_calibration_reads_its_fit_window_in_x() {
+        let fit = KaCalibration {
+            score_lo: 15,
+            score_hi: 22,
+            bin_width: 0.5,
+            r_database: 0.806,
+            ..KaCalibration::placeholder(ExtensionScoring::default(), 0.0115)
+        };
+        assert_eq!(fit.n_fit_points(), 8);
+        assert_eq!(fit.x_range(), (7.5, 11.5));
+        assert_eq!(fit.ka_params(), KaParams { k: 0.0115, r_database: 0.806 });
     }
 
     #[test]

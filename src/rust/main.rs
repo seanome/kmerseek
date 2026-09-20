@@ -1,6 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::search::{ExtensionParams, ExtensionScoring, KaParams, DEFAULT_XDROP};
+use kmerseek::evalue::{short_fit_warning, DecoyNull};
+use kmerseek::search::{
+    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_XDROP,
+};
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
 use std::path::{Path, PathBuf};
@@ -145,12 +148,39 @@ enum Commands {
         extend_xdrop: f64,
 
         /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions,
-        /// with the closed-form lambda solved per pair from the two sequences' class
-        /// compositions. K depends on the alphabet, seed length, penalty, give-up margin and
-        /// database, so it has to be measured on decoys for the index in use. Required with
-        /// --extend-mismatch-penalty, and unused without it.
+        /// with the closed-form lambda per pair (r_database 1). Normally left unset: a fit
+        /// on --ka-queries database sequences runs before the search. Used only with
+        /// --extend-mismatch-penalty.
         #[arg(long)]
         ka_k: Option<f64>,
+
+        /// Calibration queries to fit r_database and K on before the search, when --ka-k is
+        /// unset. They are sequences of the target index, searched against it; ln(regions
+        /// at score S) is a straight line in S, minus its slope is r_database and its
+        /// height gives K. Related pairs bend it upward, and the fit stops below them. 0
+        /// refuses to search without a fit.
+        #[arg(long, default_value = "200")]
+        ka_queries: usize,
+
+        /// Seed for picking the calibration sequences, so the fit is reproducible.
+        #[arg(long, default_value = "1")]
+        ka_seed: u64,
+
+        /// What the calibration queries are. `database`: the sequences as they are, with
+        /// the homolog bend cut off. `shuffled`: residues shuffled, the independent-letter
+        /// model, which loses the hydrophobic runs and periodicity real proteins have.
+        /// `shuffled-dipeptide`: shuffled keeping every pair of neighbouring residues as
+        /// often as in the original. `reversed`: read back to front, which in a
+        /// hydrophobic/polar alphabet still matches the forward helices and strands.
+        #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
+        ka_null: DecoyNull,
+
+        /// For `--ka-null database`: how the reference queries that decide where the fit
+        /// stops are made. `shuffled-dipeptide` keeps each pair of neighbouring residues as
+        /// often as in the original, so hydrophobic runs survive and only relatives and
+        /// periodicity lift the real curve above it; `shuffled` keeps composition only.
+        #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
+        ka_reference: DecoyNull,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
@@ -427,6 +457,10 @@ fn main() -> IndexResult<()> {
             extend_mismatch_penalty,
             extend_xdrop,
             ka_k,
+            ka_queries,
+            ka_seed,
+            ka_null,
+            ka_reference,
             verbose,
             query_is_index,
             batch_size,
@@ -527,28 +561,37 @@ fn main() -> IndexResult<()> {
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
             if extend_mismatch_penalty > 0.0 {
-                let Some(k) = ka_k else {
-                    return Err(anyhow::anyhow!(
-                        "--extend-mismatch-penalty needs --ka-k, the Karlin-Altschul K \
-                         measured for this index, to give the extended regions an E-value"
-                    )
-                    .into());
+                let scoring = ExtensionScoring {
+                    mismatch_penalty: extend_mismatch_penalty,
+                    xdrop: extend_xdrop,
                 };
-                if k <= 0.0 || k.is_nan() {
-                    return Err(anyhow::anyhow!(
-                        "--ka-k must be positive (got {k}); K is the fraction of the m x n \
-                         cells that can start a region"
-                    )
-                    .into());
+                if let Some(k) = ka_k {
+                    if k <= 0.0 || k.is_nan() {
+                        return Err(anyhow::anyhow!(
+                            "--ka-k must be positive (got {k}); K is the fraction of the m x n \
+                             cells that can start a region"
+                        )
+                        .into());
+                    }
                 }
-                eprintln!("  Karlin-Altschul: K {k:.4}, closed-form lambda per pair");
-                searcher.set_extension(Some(ExtensionParams {
-                    scoring: ExtensionScoring {
-                        mismatch_penalty: extend_mismatch_penalty,
-                        xdrop: extend_xdrop,
-                    },
-                    ka: KaParams { k },
-                }));
+                let settings = KaCalibrationSettings {
+                    scoring,
+                    null: ka_null,
+                    reference: ka_reference,
+                    n_queries: ka_queries,
+                    seed: ka_seed,
+                };
+                let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
+                eprintln!(
+                    "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
+                    ka.k, ka.r_database
+                );
+                if let KaSource::Fitted(fit) = &source {
+                    if let Some(warning) = short_fit_warning(fit) {
+                        eprintln!("  {warning}");
+                    }
+                }
+                searcher.set_extension(Some(ExtensionParams { scoring, ka }));
             }
 
             // Build query sketches the same way the target index was built.
