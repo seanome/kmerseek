@@ -5,7 +5,7 @@
 //! only the matched regions; this keeps the individual shared k-mers too, so a plot can show
 //! the ones that fall on a region's diagonal next to the ones scattered elsewhere.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::Path;
 
 use needletail::parse_fastx_file;
@@ -13,6 +13,7 @@ use serde::Serialize;
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
+use crate::hash_functions::encode_by_alphabet;
 use crate::search::{find_matched_regions, MatchedRegion};
 use crate::sketch::ProteinSketch;
 
@@ -66,6 +67,10 @@ impl From<&MatchedRegion> for PairRegion {
 pub struct PairReport {
     pub ksize: u32,
     pub moltype: String,
+    /// The alphabet's whole table, class symbol to the residues it collapses, so a figure
+    /// can name every residue in each class and not only the ones these two sequences
+    /// happen to contain. `protein20` maps each residue to itself.
+    pub classes: BTreeMap<char, String>,
     pub query: PairSequence,
     pub target: PairSequence,
     /// Sorted by query position, then target position.
@@ -130,14 +135,22 @@ pub fn compare_pair(
     let query = pair_sequence(&query_sketch);
     let target = pair_sequence(&target_sketch);
     let shared_kmers = shared_kmers(&query_sketch, &target_sketch, &query, &target, &intersection);
-    Ok(PairReport {
-        ksize,
-        moltype: query_sketch.moltype().to_string(),
-        query,
-        target,
-        shared_kmers,
-        regions,
-    })
+    let moltype = query_sketch.moltype().to_string();
+    let classes = alphabet_classes(&moltype)?;
+    Ok(PairReport { ksize, moltype, classes, query, target, shared_kmers, regions })
+}
+
+/// The 20 standard residues grouped by the class the alphabet sends each one to, found by
+/// encoding them through the same path as the sequences.
+fn alphabet_classes(moltype: &str) -> IndexResult<BTreeMap<char, String>> {
+    const RESIDUES: &str = "ACDEFGHIKLMNPQRSTVWY";
+    let encoded =
+        encode_by_alphabet(RESIDUES, moltype).map_err(|e| IndexError::ParseError(e.to_string()))?;
+    let mut classes: BTreeMap<char, String> = BTreeMap::new();
+    for (residue, class) in RESIDUES.chars().zip(encoded.chars()) {
+        classes.entry(class).or_default().push(residue);
+    }
+    Ok(classes)
 }
 
 fn sketch(record: &FastaRecord, ksize: u32, moltype: &str) -> IndexResult<ProteinSketch> {
@@ -242,6 +255,19 @@ mod tests {
         assert_eq!(&report.target.sequence[162..181], "QCPMSYGRLIGLISFGGFV");
         assert_eq!(&report.query.encoded[138..157], "pphhphhphhhhhphhhhh");
         assert_eq!(&report.target.encoded[162..181], "pphhphhphhhhhphhhhh");
+    }
+
+    #[test]
+    fn classes_list_every_residue_of_the_alphabet() {
+        let hp = bcl2_vs_ced9(12, "hp").classes;
+        assert_eq!(hp.len(), 2);
+        // Lehninger puts cysteine with the polar residues; the 3-class variant gives it its
+        // own class.
+        assert_eq!(hp[&'h'], "AFGILMPVWY");
+        assert_eq!(hp[&'p'], "CDEHKNQRST");
+        let hpc = bcl2_vs_ced9(12, "hp_lehninger_hpc3").classes;
+        assert_eq!(hpc[&'c'], "C");
+        assert_eq!(bcl2_vs_ced9(3, "protein").classes.len(), 20);
     }
 
     #[test]

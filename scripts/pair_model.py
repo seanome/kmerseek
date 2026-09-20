@@ -26,8 +26,14 @@ def is_reduced(pair):
 
 
 def class_residues(pair):
-    """{class symbol: sorted residues that map to it}, read off the two sequences rather
-    than from an alphabet table, so it is right for whichever alphabet was used."""
+    """{class symbol: sorted residues that map to it}, empty when the alphabet does not
+    reduce. The alphabet's whole table when the JSON carries one (`classes`), so every
+    residue is named even if these two sequences lack some; otherwise read off the two
+    sequences."""
+    if not is_reduced(pair):
+        return {}
+    if "classes" in pair:
+        return {cls: "".join(sorted(res)) for cls, res in sorted(pair["classes"].items())}
     seen = defaultdict(set)
     for side in ("query", "target"):
         for residue, cls in zip(pair[side]["sequence"], pair[side]["encoded"]):
@@ -283,10 +289,10 @@ def _side(pair, side, domains):
 
 
 def build_model(pair, domain_rows=(), flank=0, gap_flank=None, structure=None):
-    """The one description both renderers draw from. `gap_flank` adds a gapped local
+    """The one description both renderers draw from. `gap_flank` adds an end-to-end gapped
     alignment of each run and that many residues either side; `structure` is the dict
     `structure_alignment.align_pair` returns, or None."""
-    classes = class_residues(pair) if is_reduced(pair) else {}
+    classes = class_residues(pair)
     domains = {side: domains_for(domain_rows, pair[side]["name"]) for side in ("query", "target")}
     pairs = structure["pairs"] if structure else None
     return {

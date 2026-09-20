@@ -53,8 +53,16 @@ def test_fixture_is_bcl2_vs_ced9_at_hp_k12(pair):
     assert len(pair["regions"]) == 14
 
 
-def test_class_residues_reads_the_lehninger_partition_off_the_sequences(pair):
+def test_class_residues_is_the_whole_alphabet_table(pair):
     assert pm.class_residues(pair) == {"h": "AFGILMPVWY", "p": "CDEHKNQRST"}
+    # The table comes from the JSON, so a pair that lacks residues still names them all.
+    short = {"classes": pair["classes"], "query": {"sequence": "NWGR", "encoded": "phhp"}}
+    assert pm.class_residues(short) == {"h": "AFGILMPVWY", "p": "CDEHKNQRST"}
+
+
+def test_class_residues_falls_back_to_the_sequences_for_json_without_a_table():
+    old = {"query": {"sequence": "NWGR", "encoded": "phhp"}, "target": {"sequence": "SYGL", "encoded": "pphh"}}
+    assert pm.class_residues(old) == {"h": "GLW", "p": "NRSY"}
 
 
 def test_runs_drop_single_kmer_regions(pair):
@@ -155,6 +163,7 @@ def test_flank_adds_class_marks_to_the_middle_line(pair, domains):
 def test_protein20_model_has_no_classes(pair):
     plain = copy.deepcopy(pair)
     plain["moltype"] = "protein20"
+    plain["classes"] = {aa: aa for aa in "ACDEFGHIKLMNPQRSTVWY"}
     for side in ("query", "target"):
         plain[side]["encoded"] = plain[side]["sequence"]
     model = pm.build_model(plain)
