@@ -219,6 +219,18 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
         ka_reference: DecoyNull,
 
+        /// Chain extended regions on one diagonal at most this many residues apart into one
+        /// region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
+        /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
+        /// every region separate. Used only with --extend-mismatch-penalty.
+        #[arg(long, default_value = "0")]
+        chain_max_gap: u32,
+
+        /// Largest diagonal shift (net indel) between chained regions. 0 chains only along
+        /// one diagonal. Used with --chain-max-gap.
+        #[arg(long, default_value = "0")]
+        chain_max_shift: u32,
+
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
         verbose: bool,
@@ -524,6 +536,8 @@ fn main() -> IndexResult<()> {
             ka_seed,
             ka_null,
             ka_reference,
+            chain_max_gap,
+            chain_max_shift,
             verbose,
             query_is_index,
             batch_size,
@@ -594,8 +608,8 @@ fn main() -> IndexResult<()> {
                     .into());
                 }
                 eprintln!(
-                    "  Seed extension: mismatch penalty {}, give-up margin {}",
-                    extend_mismatch_penalty, extend_xdrop
+                    "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
+                    extend_mismatch_penalty, extend_xdrop, chain_max_gap, chain_max_shift
                 );
             } else {
                 eprintln!("  Seed extension: off (regions are exact runs)");
@@ -654,7 +668,12 @@ fn main() -> IndexResult<()> {
                         eprintln!("  {warning}");
                     }
                 }
-                searcher.set_extension(Some(ExtensionParams { scoring, ka }));
+                searcher.set_extension(Some(ExtensionParams {
+                    scoring,
+                    ka,
+                    chain_max_gap,
+                    chain_max_shift,
+                }));
             }
 
             // Build query sketches the same way the target index was built.
