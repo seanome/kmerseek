@@ -17,6 +17,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
+use crate::evalue::KaCalibration;
+use crate::search::ExtensionScoring;
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::KmerSize;
 use crate::types::MolType;
@@ -39,6 +41,15 @@ pub const SCHEMA_VERSION: u32 = 4;
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
+
+/// RocksDB key holding the fitted r_database and K values, one per (mismatch penalty,
+/// give-up margin) pair the index was calibrated for: a bincode `Vec<KaCalibration>`. Its
+/// own key, not a metadata field, so an index without it still reads and the metadata
+/// layout is untouched. Its layout is still part of the on-disk schema: bincode is not
+/// self-describing, so a field added to, removed from or reordered in `KaCalibration` or
+/// `ExtensionScoring` reads an older index's fit as wrong numbers rather than failing.
+/// `SCHEMA_VERSION` must move with any such change.
+const KA_CALIBRATION_KEY: &[u8] = b"ka_calibration";
 
 /// Number of hash-range shards the inverted index is split into on disk.
 ///
@@ -1322,6 +1333,29 @@ impl ProteomeIndex {
     /// Get the raw sequence storage configuration
     pub fn store_raw_sequences(&self) -> bool {
         self.store_raw_sequences
+    }
+
+    /// Every Karlin-Altschul K fitted for this index, in the order they were stored.
+    /// Empty for an index that was never calibrated.
+    pub fn ka_calibrations(&self) -> IndexResult<Vec<KaCalibration>> {
+        match self.db.get(KA_CALIBRATION_KEY)? {
+            Some(bytes) => Ok(bincode::deserialize(&bytes)?),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    /// The fit for this mismatch penalty and give-up margin, if the index has one.
+    pub fn ka_calibration(&self, scoring: ExtensionScoring) -> IndexResult<Option<KaCalibration>> {
+        Ok(self.ka_calibrations()?.into_iter().find(|c| c.scoring == scoring))
+    }
+
+    /// Store a fit, replacing any earlier fit for the same penalty and give-up margin.
+    pub fn put_ka_calibration(&self, calibration: &KaCalibration) -> IndexResult<()> {
+        let mut all = self.ka_calibrations()?;
+        all.retain(|c| c.scoring != calibration.scoring);
+        all.push(calibration.clone());
+        self.db.put(KA_CALIBRATION_KEY, bincode::serialize(&all)?)?;
+        Ok(())
     }
 
     /// Generate a filename based on the index parameters
@@ -4228,6 +4262,33 @@ mod tests {
         let sig = fresh.create_protein_signature(TEST_PROTEIN, "p")?;
         fresh.store_signatures(vec![sig])?;
         assert!(fresh.is_equivalent_to(&loaded)?);
+        Ok(())
+    }
+
+    /// Fits are stored under their mismatch penalty and give-up margin: a second fit for
+    /// the same pair replaces the first, a fit for another pair sits beside it, and a pair
+    /// never fitted has none. Only the key and K are read back; `KaCalibration::placeholder`
+    /// carries no fit numbers, and the round trip of a real fit is tested in
+    /// `search::tests::test_calibrate_ka_on_first25_is_stored_and_reused`.
+    #[test]
+    fn test_ka_calibration_is_keyed_by_penalty_and_give_up_margin() -> Result<()> {
+        use crate::evalue::KaCalibration;
+        use crate::search::ExtensionScoring;
+        use tempfile::tempdir;
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("ka.db"), 10, 1, "protein20", false)?;
+        let scoring =
+            |mismatch_penalty: f64, xdrop: f64| ExtensionScoring { mismatch_penalty, xdrop };
+        assert_eq!(index.ka_calibrations()?, Vec::new());
+        index.put_ka_calibration(&KaCalibration::placeholder(scoring(2.0, 8.0), 0.01))?;
+        index.put_ka_calibration(&KaCalibration::placeholder(scoring(3.0, 8.0), 0.02))?;
+        assert_eq!(index.ka_calibrations()?.len(), 2);
+
+        index.put_ka_calibration(&KaCalibration::placeholder(scoring(2.0, 8.0), 0.03))?;
+        assert_eq!(index.ka_calibrations()?.len(), 2);
+        assert_eq!(index.ka_calibration(scoring(2.0, 8.0))?.map(|c| c.k), Some(0.03));
+        assert_eq!(index.ka_calibration(scoring(3.0, 8.0))?.map(|c| c.k), Some(0.02));
+        assert_eq!(index.ka_calibration(scoring(2.0, 6.0))?, None);
         Ok(())
     }
 }
