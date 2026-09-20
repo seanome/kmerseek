@@ -864,6 +864,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     const KSIZE: u32 = 12;
     let temp_dir = tempdir()?;
     let target_index_path = temp_dir.path().join("target_index.db");
+    // Every search below passes --ka-k, so the index's own fit would never be read.
     Command::cargo_bin("kmerseek")?
         .args([
             "index",
@@ -875,6 +876,8 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
             "12",
             "--alphabet",
             "hp",
+            "--ka-queries",
+            "0",
         ])
         .assert()
         .success();
@@ -979,10 +982,11 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
-/// Without `--ka-k`, `kmerseek search` fits r_database and K on the target index's own
-/// sequences before searching: the 25 BCL2-family proteins of the fixture at hp k=12,
-/// against a shuffled-dipeptide reference. `--ka-k` overrides the fit, and `--ka-queries
-/// 0` refuses to search without one rather than guess.
+/// Without `--ka-k` and with no fit stored in the index (`kmerseek index --ka-queries 0`),
+/// `kmerseek search` fits r_database and K on the target index's own sequences before
+/// searching: the 25 BCL2-family proteins of the fixture at hp k=12, against a
+/// shuffled-dipeptide reference. `--ka-k` overrides the fit, and `--ka-queries 0` refuses
+/// to search without one rather than guess.
 #[test]
 fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
@@ -998,9 +1002,12 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
             "12",
             "--alphabet",
             "hp",
+            "--ka-queries",
+            "0",
         ])
         .assert()
-        .success();
+        .success()
+        .stderr(predicate::str::contains("Skipping the Karlin-Altschul fit (--ka-queries 0)"));
 
     let search =
         |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
@@ -1045,6 +1052,83 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
              9570 regions; r_database 0.913 per nat of lambda_pair S (1 = closed form holds; \
              closed form 0.609 at the database's match probability 0.500), K 0.0768, fit on \
              x 8.5..12.5, rms 0.156)\n",
+        ),
+    );
+    Ok(())
+}
+
+/// `kmerseek index` fits r_database and K for its penalty and give-up margin and stores
+/// them; `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty
+/// that was never fitted when `--ka-queries 0` forbids fitting one now, and fits one
+/// otherwise.
+#[test]
+fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting r_database and K on 25 database sequences (mismatch penalty 2, give-up \
+             margin 8); the fit stops where their counts rise above the same sequences \
+             shuffled-dipeptide",
+        ))
+        .stderr(predicate::str::contains(
+            "Closed form at the database's own match probability 0.500: K 0.1631",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 25 database queries, 9838 regions; r_database 0.806 per nat of lambda_pair S \
+             (1 = closed form holds; closed form 0.481 at the database's match probability \
+             0.500), K 0.0115, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
+             slope 0.760 over the same bins",
+        ))
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
+        ));
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            let mut cmd = Command::cargo_bin("kmerseek")?;
+            cmd.args([
+                "search",
+                "--query",
+                TEST_CED9_FASTA,
+                "--target",
+                index_path.to_str().unwrap(),
+                "--output",
+                temp_dir.path().join("out.csv").to_str().unwrap(),
+            ]);
+            cmd.args(extra);
+            Ok(cmd.assert())
+        };
+
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: K 0.0115, r_database 0.806 (stored in the index: 25 database queries, 9838 regions",
+    ));
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0300, r_database 1.000 (--ka-k, closed-form lambda)",
+        ),
+    );
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.failure().stderr(
+        predicate::str::contains("no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8"),
+    );
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.1264, r_database 0.962 (fitted now: 25 database queries, 9854 regions; r_database 0.962",
         ),
     );
     Ok(())

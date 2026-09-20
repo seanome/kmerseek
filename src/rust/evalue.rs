@@ -23,10 +23,15 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::search::{ExtensionScoring, KaParams};
+use crate::errors::IndexResult;
+use crate::index::ProteomeIndex;
+use crate::search::{
+    karlin_altschul_lambda, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource,
+    ProteinSearcher,
+};
 
-/// One fitted (r_database, K) for one index, keyed by its `scoring`. The seed length and
-/// alphabet are the index's.
+/// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
+/// at search time by its `scoring`. The seed length and alphabet are the index's.
 ///
 /// The fit is a straight line through ln(regions in each bin of x = lambda_pair S).
 /// Minus its slope is `r_database`; its height gives `k` (see `line_through`). Bins are
@@ -105,9 +110,9 @@ impl KaCalibration {
         self.score_hi - self.score_lo + 1
     }
 
-    /// A record with nothing in it but its key and K, for tests of how fits are keyed
-    /// and read. No number in it comes from a fit; a real one is in
-    /// `search::ka_calibration_tests::test_calibrate_ka_on_first25`.
+    /// A record with nothing in it but its key and K, for tests of how fits are stored
+    /// and looked up. No number in it comes from a fit; a real one is in
+    /// `search::ka_calibration_tests::test_calibrate_ka_on_first25_is_stored_and_reused`.
     #[cfg(test)]
     pub(crate) fn placeholder(scoring: ExtensionScoring, k: f64) -> Self {
         Self {
@@ -431,6 +436,28 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
     (slope, my - slope * mx)
 }
 
+/// Karlin-Altschul K for +1 / -penalty scoring with match probability `a`, counting every
+/// high-scoring segment of an ungapped comparison (no seed requirement, no give-up margin).
+///
+/// When the only positive score is +1 every ascending ladder step of the random walk is
+/// exactly 1, and K has the closed form E[X e^(lambda X)] (1 - e^-lambda), with
+/// E[X e^(lambda X)] = H / lambda (Karlin & Altschul 1990, PNAS 87:2264; this is the
+/// `high == 1` branch of BLAST's BlastKarlinLHtoK). For a = 0.3, penalty 1 it reduces to
+/// the textbook (q - p)^2 / q = 0.2286. The lattice argument needs a whole-number penalty;
+/// any other penalty returns None. None also when no positive lambda exists.
+pub fn karlin_altschul_k_theory(a: f64, penalty: f64) -> Option<f64> {
+    if penalty <= 0.0 || penalty.fract() != 0.0 {
+        return None;
+    }
+    let lambda = karlin_altschul_lambda(a, penalty);
+    if lambda <= 0.0 {
+        return None;
+    }
+    let b = 1.0 - a;
+    let mean_score_tilted = a * lambda.exp() - penalty * b * (-penalty * lambda).exp();
+    Some(mean_score_tilted * (1.0 - (-lambda).exp()))
+}
+
 /// Which sequences are searched to fit r_database and K.
 ///
 /// What each choice keeps and loses: on SCOPe40 domains the three scrambled nulls agree
@@ -622,10 +649,91 @@ pub fn short_fit_warning(fit: &KaCalibration) -> Option<String> {
     })
 }
 
+/// Fit r_database and K on `settings.n_queries` calibration queries of the index just
+/// built and store the fit in the index. Also prints the closed-form lambda and K for the
+/// database's own composition, so the effect of the seed requirement and of real sequence
+/// structure on each is visible.
+pub fn calibrate_index(index: ProteomeIndex, settings: KaCalibrationSettings) -> IndexResult<()> {
+    let KaCalibrationSettings { scoring, null, reference, n_queries, .. } = settings;
+    let ExtensionScoring { mismatch_penalty, xdrop } = scoring;
+    eprintln!(
+        "Fitting r_database and K on {n_queries} {null} sequences (mismatch penalty {mismatch_penalty}, give-up margin {xdrop}){}...",
+        if null == DecoyNull::Database {
+            format!("; the fit stops where their counts rise above the same sequences {reference}")
+        } else {
+            String::new()
+        }
+    );
+    let mut searcher = ProteinSearcher::new(index)?;
+    let report = searcher.calibrate_ka(settings)?;
+    let theory_k = karlin_altschul_k_theory(report.match_probability, mismatch_penalty)
+        .map_or("none".to_string(), |k| format!("{k:.4}"));
+    eprintln!(
+        "  Closed form at the database's own match probability {:.3}: K {theory_k} (independent positions, no seed, one lambda for every pair)",
+        report.match_probability
+    );
+    match report.fitted {
+        Some(fit) => {
+            eprintln!("  {}", KaSource::Fitted(Box::new(fit.clone())));
+            if let Some(warning) = short_fit_warning(&fit) {
+                eprintln!("  {warning}");
+            }
+            searcher.index().put_ka_calibration(&fit)?;
+            eprintln!(
+                "  Stored in the index for --extend-mismatch-penalty {mismatch_penalty} --extend-xdrop {xdrop}"
+            );
+        }
+        None => eprintln!(
+            "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
+             A search will have to fit its own r_database and K (--ka-queries) or be given --ka-k.",
+            report.n_queries, report.n_regions
+        ),
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_BLC2_FASTA;
+
+    /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
+    /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,
+    /// so e^lambda = q / p, and K = E[X e^(lambda X)] (1 - e^-lambda) when the only positive
+    /// step is +1. Written out: E[X e^(lambda X)] = p (q/p) - q (p/q) = q - p and
+    /// 1 - e^-lambda = 1 - p/q, so K = (q - p)(q - p) / q. Ewens & Grant, Statistical
+    /// Methods in Bioinformatics (2nd ed., 2005), reach the same (q - p)^2 / q for this walk
+    /// in their BLAST chapter.
+    #[test]
+    fn test_k_theory_matches_the_plus_minus_one_random_walk() {
+        let (p, q) = (0.3, 0.7);
+        let k = karlin_altschul_k_theory(p, 1.0).unwrap();
+        assert!((k - (q - p) * (q - p) / q).abs() < 1e-12, "{k}");
+    }
+
+    /// Balanced two-class composition (a = 0.5) with penalty 2: the lambda equation
+    /// 0.5 e^lambda + 0.5 e^-2lambda = 1 becomes y^3 - 2 y^2 + 1 = 0 in y = e^lambda, whose
+    /// root above 1 is the golden ratio phi. Then E[X e^(lambda X)] = a phi - 2 (1 - a) / phi^2
+    /// = phi / 2 - 1 / phi^2 and 1 - e^-lambda = 1 - 1 / phi; K is their product, 0.1631.
+    /// A simulated 4-million-step walk with these steps gave 458 high-scoring segments where
+    /// this K predicts 478.
+    #[test]
+    fn test_k_theory_balanced_hp_at_penalty_two() {
+        let (a, penalty) = (0.5, 2.0);
+        let phi = (1.0 + 5f64.sqrt()) / 2.0;
+        let expected = (a * phi - penalty * (1.0 - a) / (phi * phi)) * (1.0 - 1.0 / phi);
+        let k = karlin_altschul_k_theory(a, penalty).unwrap();
+        assert!((k - expected).abs() < 1e-12, "{k} vs {expected}");
+        assert!((k - 0.1631).abs() < 5e-4, "{k}");
+    }
+
+    #[test]
+    fn test_k_theory_none_without_positive_lambda_or_whole_penalty() {
+        assert_eq!(karlin_altschul_k_theory(2.0 / 3.0, 2.0), None);
+        assert_eq!(karlin_altschul_k_theory(0.9, 2.0), None);
+        assert_eq!(karlin_altschul_k_theory(0.5, 1.5), None);
+        assert_eq!(karlin_altschul_k_theory(0.5, 0.0), None);
+    }
 
     #[test]
     fn test_survival_counts() {
