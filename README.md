@@ -107,8 +107,9 @@ any 23-residue stretch of it is conserved exactly (most such pairs share no exac
 
 `--extend-mismatch-penalty C` grows each region outward along the encoded sequences,
 scoring +1 per agreeing position and -C per disagreeing one, and stops when the running
-score has fallen `--extend-xdrop X` (default 8) below its best, the same X-drop rule
-BLAST uses. Two seeds on one diagonal whose extensions meet become one region.
+score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up margin
+(BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
+become one region.
 
 ```bash
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --encoding hp \
@@ -125,12 +126,14 @@ conservative. Without the flag every region is exact and `region_n_mismatches` i
 
 Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
 extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
-statistics: S = matches - C x mismatches, lambda solved per pair from the two sequences'
-class compositions (so two hydrophobic runs, whose expected score is positive, get no
-lambda and no significance), E = K m n e^(-lambda S) with n the database's residue count.
-`--ka-k` sets K; the default 0.03 was fitted on reversed-sequence decoys for
-`hp-thomas-dill` at k=12 with penalty 2, and needs refitting for other settings. On 200
-SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+statistics, E = K m n e^(-lambda_pair r_database S): S = matches - C x mismatches,
+lambda_pair solved from the two sequences' class compositions (so two hydrophobic runs,
+whose expected score is positive, get no lambda and no significance), and K and
+r_database fitted on the index itself when `kmerseek index` runs (`--ka-queries`, 200
+by default). A search with the penalty and give-up margin the index was fitted for reads
+the fit back; with another pair it fits its own before searching, or takes `--ka-k`.
+[docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
+On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
 different-fold hit at E <= 0.01.
@@ -142,6 +145,7 @@ into one region, scored with Karlin-Altschul sum statistics (Karlin & Altschul 1
 gapless run covers becomes one call. On SCOPe40 domains it changes ranking little
 (chains form in 2% of regions at 30/10); its purpose is region-level transfer, where a
 call has to cover a domain to carry its label.
+
 ### Indexing a large proteome: `--scaled`
 
 Nearly all of an index's cost is per k-mer: at k=10 each residue adds about 660
