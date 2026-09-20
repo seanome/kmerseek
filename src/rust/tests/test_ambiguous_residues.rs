@@ -18,16 +18,33 @@
 #[cfg(test)]
 mod tests {
     use anyhow::Result;
+    use approx::assert_relative_eq;
     use tempfile::TempDir;
 
     use crate::alphabets::Alphabet;
     use crate::index::ProteomeIndex;
-    use crate::search::{ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE};
+    use crate::search::{
+        calculate_similarity, ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE,
+    };
     use crate::sketch::ProteinSketch;
 
     const RIBONUCLEASES_FASTA_GZ: &str =
         "tests/testdata/fasta/ribonuclease_125_entries_uniprotkb_2026_09_17.fasta.gz";
     const RNAS1_DAMKO_FASTA: &str = "tests/testdata/fasta/rnas1_damko_P00659.fasta";
+
+    /// P00659 (RNAS1_DAMKO), 124 residues, 12 B and 10 Z.
+    const TOPI_RNASE: &str = "KESAAAKFZRZHMBSSTSSASSSBYCBZMMKSRNLTQDRCKPVBTFVHZSLABVZAVCSZ\
+                              KBVACKBGZTBCYZSYSTMSITBCRZTGSSKYPBCAYKTTQAKKHIIVACZGBPYVPVHF\
+                              BASV";
+    /// P67926 (RNAS1_CAPHI), 124 residues: topi with every B and Z resolved, and E for K at
+    /// residue 103.
+    const GOAT_RNASE: &str = "KESAAAKFERQHMDSSTSSASSSNYCNQMMKSRNLTQDRCKPVNTFVHESLADVQAVCSQ\
+                              KNVACKNGQTNCYQSYSTMSITDCRETGSSKYPNCAYKTTQAEKHIIVACEGNPYVPVHF\
+                              DASV";
+    /// P61823 (RNAS1_BOVIN), 150 residues: a 26-residue signal peptide, then the mature chain.
+    const BOVINE_RNASE: &str = "MALKSLVLLSLLVLVLLLVRVQPSLGKETAAAKFERQHMDSSTSAASSSNYCNQMMKSRN\
+                                LTKDRCKPVNTFVHESLADVQAVCSQKNVACKNGQTNCYQSYSTMSITDCRETGSSKYPN\
+                                CAYKTTQANKHIIVACEGNPYVPVHFDASV";
 
     /// The k-mer size at which `alphabet` carries as many bits per k-mer as protein20 at
     /// k=10. A k-mer over N classes carries k·log2(N) bits, and 10·log2(20) is 43.2, so a
@@ -263,7 +280,65 @@ mod tests {
                 bovine.n_intersecting_hashes, expected.shared_with_bovine,
                 "{moltype}: k-mers shared with bovine RNase A"
             );
+            // Containment counts the query's 124 - k + 1 windows, not its readings, so it is
+            // the same whether or not the alphabet keeps B and Z ambiguous.
+            let windows = (124 - expected.ksize + 1) as f64;
+            assert_relative_eq!(
+                bovine.containment,
+                expected.shared_with_bovine as f64 / windows,
+                epsilon = 1e-12
+            );
         }
+        Ok(())
+    }
+
+    /// Goat RNase is topi with every B and Z resolved, and both differ from bovine RNase A
+    /// at the same four residues, so the two hits share 82 k-mers and must score the same.
+    /// Topi's 115 windows are sketched under 541 hashes; counting hashes would have given it
+    /// 82/541 = 0.152 where goat gets 82/115. Bovine has 150 residues, 141 windows.
+    #[test]
+    fn test_containment_counts_windows_not_readings() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let (query, results) = search_topi(&temp_dir, "protein20", 10)?;
+        assert_eq!(query.mins_as_set().len(), 541);
+
+        let topi_to_bovine = shared_with(&results, "RNAS1_BOVIN");
+        assert_eq!(topi_to_bovine.n_intersecting_hashes, 82);
+        assert_relative_eq!(topi_to_bovine.containment, 82.0 / 115.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            topi_to_bovine.containment_target_in_query,
+            82.0 / 141.0,
+            epsilon = 1e-12
+        );
+        assert_relative_eq!(topi_to_bovine.max_containment, 82.0 / 115.0, epsilon = 1e-12);
+        assert_relative_eq!(topi_to_bovine.jaccard, 82.0 / (115.0 + 141.0 - 82.0), epsilon = 1e-12);
+
+        let goat = ProteinSketch::from_protein_sequence("goat", GOAT_RNASE, 10, 1, "protein20")?;
+        let bovine =
+            ProteinSketch::from_protein_sequence("bovine", BOVINE_RNASE, 10, 1, "protein20")?;
+        let goat_to_bovine = calculate_similarity(&goat, &bovine).unwrap();
+        assert_eq!(goat_to_bovine.n_intersecting_hashes, 82);
+        assert_relative_eq!(
+            goat_to_bovine.containment,
+            topi_to_bovine.containment,
+            epsilon = 1e-12
+        );
+        assert_relative_eq!(goat_to_bovine.jaccard, topi_to_bovine.jaccard, epsilon = 1e-12);
+        Ok(())
+    }
+
+    /// Topi against a copy of itself shares all 541 hashes, several per window. Counting
+    /// hashes on the matched side would give 541/115; a window matched under any of its
+    /// readings counts once, so containment and jaccard are 1.
+    #[test]
+    fn test_a_window_matched_under_several_readings_counts_once() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 10, 1, "protein20")?;
+        let copy = ProteinSketch::from_protein_sequence("copy", TOPI_RNASE, 10, 1, "protein20")?;
+        let hit = calculate_similarity(&topi, &copy).unwrap();
+        assert_eq!(hit.n_intersecting_hashes, 541);
+        assert_relative_eq!(hit.containment, 1.0, epsilon = 1e-12);
+        assert_relative_eq!(hit.containment_target_in_query, 1.0, epsilon = 1e-12);
+        assert_relative_eq!(hit.jaccard, 1.0, epsilon = 1e-12);
         Ok(())
     }
 
