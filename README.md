@@ -45,10 +45,11 @@ drop them:
 kmerseek index -i proteome.fasta --ksize 10 --alphabet hp_lehninger2 --remove-low-complexity
 ```
 
-Two independent checks run per k-mer: the **raw amino-acid** window (any encoding),
-and for the HP-family alphabets the **HP-encoded** window as well. The second catches
-windows that aren't raw homopolymers but still collapse to one symbol -- `LIVMA` is
-five different residues that all encode to `h`.
+A k-mer is dropped when its **encoded** window is a run of one symbol. Under
+`protein20` that is a raw homopolymer. Under a reduced alphabet it also catches windows
+that aren't raw homopolymers but collapse to one class -- `LIVMA` is five different
+residues that all encode to `h` under the Lehninger split, and `EEEDD` encodes to
+`ccccc` under `dayhoff6`.
 
 Indexing reports what was removed, so you can tell whether the flag mattered:
 

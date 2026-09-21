@@ -2204,9 +2204,8 @@ mod tests {
     /// encode to `adaaa`, so the Z sequence loses one more.
     ///
     /// Removal drops a reading whose encoding is a run of one class, such as `IMALG`
-    /// under the Lehninger split (`hhhhh`) or `ANTAN` under gbmr4 (`aaaaa`). Every raw
-    /// window here has at least two residues, so nothing is dropped under protein20, and
-    /// dayhoff6 is sourmash-encoded without the encoded check.
+    /// under the Lehninger split (`hhhhh`) or `ANTAN` under gbmr4 (`aaaaa`). No window
+    /// here is a run under protein20 or dayhoff6.
     const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 19] = [
         // moltype, then the counts for the B sequence and for the Z sequence
         ("protein20", [counts(21, 21, 0), counts(21, 21, 0)]),
