@@ -58,9 +58,10 @@ enum Commands {
         #[arg(long, requires = "kmer_stats_out")]
         stats_only: bool,
 
-        /// Remove low-complexity (homopolymer) k-mers from the index: raw
-        /// amino-acid runs (e.g. "AAAAA") for any encoding, plus all-h or all-p
-        /// runs for HP-family encodings (hp, hp_lehninger, hp_thomas_dill, etc.).
+        /// Remove low-complexity (homopolymer) k-mers from the index: any window
+        /// that encodes to a run of one symbol, so raw runs like "AAAAA" under every
+        /// alphabet, plus windows a reduced alphabet collapses to one class, like
+        /// "LIVMA" (all h under hp_lehninger2) or "EEEDD" (all c under dayhoff6).
         /// The setting is stored in the index and reused automatically at search
         /// time, so you do not repeat it when searching.
         #[arg(long, default_value = "false")]
