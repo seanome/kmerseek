@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use statrs::distribution::{DiscreteCDF, Poisson};
 
+use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
+use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -1420,21 +1422,39 @@ fn shared_position_pairs(
     query_target_pairs
 }
 
+/// Whether two stored encoded residues agree under `moltype`: the same class, or an
+/// ambiguous letter on either side that can encode to the other side's class. A protein20
+/// sketch stores no encoded sequence, so its raw residues are compared, and there an
+/// ambiguous letter agrees with either residue it stands for.
+fn residues_agree(moltype: &str) -> impl Fn(u8, u8) -> bool {
+    let encode = residue_encoder(moltype);
+    move |query, target| encoded_residues_agree(query, target, &encode)
+}
+
+/// Whether two stored encoded regions of equal length agree residue by residue.
+fn encoded_regions_agree(query: &str, target: &str, agree: &impl Fn(u8, u8) -> bool) -> bool {
+    query.len() == target.len() && query.bytes().zip(target.bytes()).all(|(q, t)| agree(q, t))
+}
+
 /// The maximal stretch of agreeing encoded residues on one diagonal through the seed k-mer
 /// at (`qpos`, `tpos`), as `[start, end)` in query coordinates. `None` when the seed window
-/// itself disagrees, which happens when two k-mers share a hash only through an ambiguous
-/// residue's expansion; the dense path drops those regions the same way.
+/// itself disagrees, which can only be a hash collision now that an ambiguous residue
+/// agrees with either class it stands for.
 fn exact_run_around(
     query: &[u8],
     target: &[u8],
     qpos: usize,
     tpos: usize,
     ksize: usize,
+    residues_agree: &impl Fn(u8, u8) -> bool,
 ) -> Option<(usize, usize)> {
     let offset = tpos as isize - qpos as isize;
     let agree = |i: usize| {
         let j = i as isize + offset;
-        i < query.len() && j >= 0 && (j as usize) < target.len() && query[i] == target[j as usize]
+        i < query.len()
+            && j >= 0
+            && (j as usize) < target.len()
+            && residues_agree(query[i], target[j as usize])
     };
     if !(qpos..qpos + ksize).all(agree) {
         return None;
@@ -1494,6 +1514,7 @@ fn find_sampled_regions(
     let query_name = query_sketch.signature().name.clone();
     let target_name = target_sketch.signature().name.clone();
     let moltype = query_sketch.moltype().clone();
+    let agree = residues_agree(&moltype.to_string());
 
     // Seeds grouped by diagonal (target start minus query start), sorted within each.
     let mut seeds_by_diagonal: BTreeMap<isize, Vec<usize>> = BTreeMap::new();
@@ -1518,6 +1539,7 @@ fn find_sampled_regions(
                 qpos,
                 tpos,
                 ksize,
+                &agree,
             ) else {
                 continue;
             };
@@ -1582,6 +1604,7 @@ pub fn find_matched_regions(
     // Ensure that both query and target have the same moltypes
     assert_eq!(query_sketch.moltype(), target_sketch.moltype());
     let moltype = query_sketch.moltype().clone();
+    let agree = residues_agree(&moltype.to_string());
 
     // A sampled sketch has too few adjacent shared k-mers for the consecutive-position rule
     // below; see find_sampled_regions.
@@ -1708,8 +1731,10 @@ pub fn find_matched_regions(
         let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
         let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
 
-        // Validate that moltype sequences match (they should since they share the same k-mers).
-        if query_moltype_seq != target_moltype_seq {
+        // The two encoded regions must agree residue by residue, with an ambiguous letter
+        // agreeing with either class it stands for. They share the same k-mers, so a
+        // disagreement can only be a hash collision.
+        if !encoded_regions_agree(query_moltype_seq, target_moltype_seq, &agree) {
             i = j;
             continue;
         }
@@ -3141,11 +3166,45 @@ mod tests {
         // BCL2 positions 138..157 and the same stretch with one residue changed in the middle.
         let q = b"RDGVNWGRIVAFFEFGGVM";
         let t = b"RDGVNWGRIVKFFEFGGVM"; // A -> K at index 10
-        assert_eq!(exact_run_around(q, t, 0, 0, 5), Some((0, 10)));
-        assert_eq!(exact_run_around(q, t, 12, 12, 5), Some((11, 19)));
-        assert_eq!(exact_run_around(q, t, 8, 8, 5), None, "window 8..13 crosses the mismatch");
+        let agree = residues_agree("protein20");
+        assert_eq!(exact_run_around(q, t, 0, 0, 5, &agree), Some((0, 10)));
+        assert_eq!(exact_run_around(q, t, 12, 12, 5, &agree), Some((11, 19)));
+        assert_eq!(
+            exact_run_around(q, t, 8, 8, 5, &agree),
+            None,
+            "window 8..13 crosses the mismatch"
+        );
         // A seed near the end grows left to the mismatch and right to the sequence end.
-        assert_eq!(exact_run_around(q, t, 14, 14, 5), Some((11, 19)));
+        assert_eq!(exact_run_around(q, t, 14, 14, 5, &agree), Some((11, 19)));
+    }
+
+    /// An ambiguous residue agrees with either residue it stands for, so a run grows through
+    /// it. Under protein20 the raw sequences are compared: BCL2 residues 1-19 with Asp10
+    /// written as B run against the real fragment end to end, and a query Z against a target
+    /// Asp is a mismatch, since Z stands for Glu or Gln. Under an HP alphabet the stored
+    /// sequence already holds the class, so the same run is exact.
+    #[test]
+    fn test_exact_run_grows_through_an_ambiguous_residue() {
+        let q = b"MAHAGRTGYBNREIVMKYI";
+        let t = b"MAHAGRTGYDNREIVMKYI";
+        let agree = residues_agree("protein20");
+        assert_eq!(exact_run_around(q, t, 0, 0, 5, &agree), Some((0, 19)));
+        assert_eq!(exact_run_around(q, t, 7, 7, 5, &agree), Some((0, 19)));
+
+        let z = b"MAHAGRTGYZNREIVMKYI";
+        assert_eq!(exact_run_around(z, t, 0, 0, 5, &agree), Some((0, 9)));
+        assert_eq!(exact_run_around(z, t, 7, 7, 5, &agree), None);
+
+        let hp = residues_agree("hp_lehninger2");
+        let q_hp = b"hhphhpphpppphhhhpph";
+        assert_eq!(exact_run_around(q_hp, q_hp, 0, 0, 5, &hp), Some((0, 19)));
+        // sdm12 keeps Asp and Asn apart, so the stored query keeps its B, and B agrees with
+        // the class of D and of N but not with the class of A.
+        let sdm12 = residues_agree("sdm12");
+        let encode = residue_encoder("sdm12");
+        assert!(sdm12(b'B', encode(b'D')));
+        assert!(sdm12(b'B', encode(b'N')));
+        assert!(!sdm12(b'B', encode(b'A')));
     }
 
     /// `protein20` sketches store no encoded copy of the sequence (the full alphabet encodes to

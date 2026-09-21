@@ -152,79 +152,68 @@ impl<'de> Deserialize<'de> for ProteinSketch {
     }
 }
 
-/// Encodes k-mers the way sourmash would, given how this alphabet is encoded, and hashes
-/// the result. One per `add_protein` call, so the encode buffer is allocated once per
-/// sequence rather than once per window (and once per reading).
+/// Encodes residues the way sourmash would hash them under this alphabet, and says which
+/// k-mers count as low complexity.
 ///
 /// WHY the two cases differ in capitalization: for a table-backed alphabet the sequence
 /// is pre-encoded and handed to sourmash as protein, and sourmash uppercases protein
 /// input before hashing, so the symbols must be uppercased here to match. For
 /// sourmash-encoded alphabets (protein20, dayhoff6, hp_lehninger2) sourmash applies the
 /// encoder itself and hashes its lowercase output, so these must NOT be uppercased.
-struct KmerEncoder {
-    residue_classes: Option<&'static HashMap<u8, u8>>,
-    encoding_fn: fn(u8) -> u8,
-    // Whether a reading whose encoding is a run of one class also counts as low
+struct KmerEncoder<F> {
+    /// One residue to its class symbol.
+    residue: F,
+    // Whether a k-mer whose encoding is a run of one class also counts as low
     // complexity: every reduced alphabet except dayhoff6, which sourmash encodes without
-    // the check. hp_lehninger2 is also sourmash-encoded, so it has no residue_classes
-    // entry, but its h/p k-mers get the check.
+    // the check. hp_lehninger2 is also sourmash-encoded, so it has no table of ours, but
+    // its h/p k-mers get the check.
     drops_encoded_runs: bool,
-    encoded: Vec<u8>,
 }
 
-impl KmerEncoder {
-    fn new(moltype: &str, ksize: usize) -> anyhow::Result<Self> {
-        use crate::alphabets::alphabet_table;
-        use crate::hash_functions::get_encoding_fn_from_moltype;
+fn kmer_encoder(moltype: &str) -> anyhow::Result<KmerEncoder<impl Fn(u8) -> u8>> {
+    use crate::alphabets::alphabet_table;
+    use crate::hash_functions::get_encoding_fn_from_moltype;
 
-        let residue_classes = alphabet_table(moltype);
-        Ok(Self {
-            residue_classes,
-            encoding_fn: get_encoding_fn_from_moltype(moltype)?,
-            drops_encoded_runs: residue_classes.is_some() || moltype == "hp_lehninger2",
-            encoded: Vec::with_capacity(ksize),
-        })
+    let residue_classes = alphabet_table(moltype);
+    let encoding_fn = get_encoding_fn_from_moltype(moltype)?;
+    let residue = move |residue: u8| match residue_classes {
+        Some(table) => table
+            .get(&residue.to_ascii_uppercase())
+            .copied()
+            .unwrap_or(residue)
+            .to_ascii_uppercase(),
+        None => encoding_fn(residue),
+    };
+    Ok(KmerEncoder {
+        residue,
+        drops_encoded_runs: residue_classes.is_some() || moltype == "hp_lehninger2",
+    })
+}
+
+impl<F: Fn(u8) -> u8> KmerEncoder<F> {
+    /// Encode a k-mer into `buffer`, which is cleared first, and return the encoding.
+    fn encode<'b>(&self, kmer: &[u8], buffer: &'b mut Vec<u8>) -> &'b [u8] {
+        buffer.clear();
+        buffer.extend(kmer.iter().map(|&residue| (self.residue)(residue)));
+        buffer
     }
 
-    fn encode(&mut self, kmer: &[u8]) -> &[u8] {
-        self.encoded.clear();
-        match self.residue_classes {
-            Some(table) => self.encoded.extend(kmer.iter().map(|b| {
-                table.get(&b.to_ascii_uppercase()).copied().unwrap_or(*b).to_ascii_uppercase()
-            })),
-            None => self.encoded.extend(kmer.iter().map(|b| (self.encoding_fn)(*b))),
-        }
-        &self.encoded
-    }
-
-    fn hash(&mut self, kmer: &[u8]) -> u64 {
-        sourmash::_hash_murmur(self.encode(kmer), SEED)
-    }
-
-    /// Hash of the k-mer most recently passed to `encode` or `is_low_complexity`.
-    fn hash_encoded(&self) -> u64 {
-        sourmash::_hash_murmur(&self.encoded, SEED)
-    }
-
-    /// Whether a k-mer is a homopolymer as raw amino acids (e.g. "EEEEE", any moltype)
-    /// or, when `drops_encoded_runs`, after encoding (e.g. "hhhhh" under an HP alphabet,
-    /// which a run of *different* hydrophobic residues like "LIVMA" also gives). A k-mer
-    /// that passes is left encoded so `hash_encoded` can use it without a second pass.
-    fn is_low_complexity(&mut self, kmer: &[u8]) -> bool {
+    /// Whether a reading is low complexity: its window is a homopolymer as raw amino acids
+    /// (e.g. "EEEEE", any moltype) or, when `drops_encoded_runs`, the reading is one after
+    /// encoding (e.g. "hhhhh" under an HP alphabet, which a run of *different* hydrophobic
+    /// residues like "LIVMA" also gives). The raw check is on the window as written, so a
+    /// run of one ambiguous residue drops every reading of it.
+    fn is_low_complexity(&self, window: &[u8], reading: &[u8]) -> bool {
         use crate::kmer::is_homopolymer_kmer;
 
-        if is_homopolymer_kmer(kmer) {
-            return true;
-        }
-        let encoded_is_run = is_homopolymer_kmer(self.encode(kmer));
-        self.drops_encoded_runs && encoded_is_run
+        is_homopolymer_kmer(window) || (self.drops_encoded_runs && is_homopolymer_kmer(reading))
     }
 }
 
-/// The k-mer windows of one sequence, each expanded into its readings: the window itself
-/// when it carries no ambiguous residue, otherwise each way of resolving it (see
-/// `disambiguate_kmer`, which also drops a window carrying more than
-/// `MAX_AMBIGUOUS_RESIDUES_PER_KMER`).
+/// The k-mer windows of one sequence, each expanded into its encoded readings: one for a
+/// window with no ambiguous residue, otherwise one per way of resolving it that the
+/// alphabet tells apart (see `disambiguate_kmer`, which also drops a window carrying more
+/// than `MAX_AMBIGUOUS_RESIDUES_PER_KMER`).
 struct Readings<'a> {
     residues: &'a [u8],
     ksize: usize,
@@ -246,19 +235,25 @@ impl<'a> Readings<'a> {
         self.residues.len().saturating_sub(self.ksize - 1)
     }
 
-    /// Call `f` with each window's start position and reading. A callback rather than an
-    /// iterator so the unambiguous case, nearly every window, borrows instead of copying.
-    fn for_each(&self, mut f: impl FnMut(usize, &[u8])) {
+    /// Call `f` with each window's start position, the window as written, and one encoded
+    /// reading of it. A callback rather than an iterator so the unambiguous case, nearly
+    /// every window, is encoded into one buffer allocated per sequence instead of copied.
+    fn for_each(
+        &self,
+        encoder: &KmerEncoder<impl Fn(u8) -> u8>,
+        mut f: impl FnMut(usize, &[u8], &[u8]),
+    ) {
         use crate::aminoacid::{disambiguate_kmer, has_ambiguous_residues};
 
+        let mut buffer = Vec::with_capacity(self.ksize);
         for i in 0..self.window_count() {
-            let kmer = &self.residues[i..i + self.ksize];
-            if !self.has_ambiguous || !has_ambiguous_residues(kmer) {
-                f(i, kmer);
+            let window = &self.residues[i..i + self.ksize];
+            if !self.has_ambiguous || !has_ambiguous_residues(window) {
+                f(i, window, encoder.encode(window, &mut buffer));
                 continue;
             }
-            for reading in disambiguate_kmer(kmer).unwrap_or_default() {
-                f(i, &reading);
+            for reading in disambiguate_kmer(window, &encoder.residue).unwrap_or_default() {
+                f(i, window, &reading);
             }
         }
     }
@@ -486,12 +481,12 @@ impl ProteinSketch {
     /// search speed (O(1) lookup in find_matched_regions).
     pub fn add_protein(&mut self, sequence: &str, store_sequences: bool) -> anyhow::Result<()> {
         use crate::alphabets::alphabet_table;
-        use crate::aminoacid::has_ambiguous_residues;
-        use crate::hash_functions::encode_by_alphabet;
+        use crate::aminoacid::{encode_sequence, has_ambiguous_residues};
+        use crate::hash_functions::residue_encoder;
 
         let moltype_str = self.moltype.to_string();
         let residue_classes = alphabet_table(&moltype_str);
-        let mut encoder = KmerEncoder::new(&moltype_str, self.protein_ksize as usize)?;
+        let encoder = kmer_encoder(&moltype_str)?;
 
         // WHY: low-complexity k-mers carry little discriminative signal, so when opted
         // in, each reading is checked before insertion. This means hashing one k-mer at
@@ -499,16 +494,16 @@ impl ProteinSketch {
         // windows and inserts unconditionally. `remove_low_complexity` defaults to
         // false, and the branches below keep every k-mer.
         if self.remove_low_complexity {
-            self.add_windows_without_low_complexity(sequence, &mut encoder);
+            self.add_windows_without_low_complexity(sequence, &encoder);
         } else if has_ambiguous_residues(sequence.as_bytes()) {
             // B, J and Z each stand for two residues (B is Asp or Asn, J is Ile or Leu, Z
-            // is Glu or Gln). Rather than committing to one, index every window under both
-            // readings, so a query carrying either residue matches.
+            // is Glu or Gln). Rather than committing to one, index every window under every
+            // reading the alphabet tells apart, so a query carrying either residue matches.
             // sourmash's add_protein windows and hashes internally and cannot do this, so
             // hash window by window here. This branch has to come before the table-backed
             // one, which would otherwise pre-encode the whole sequence in one go and never
             // disambiguate.
-            self.add_windows(sequence, &mut encoder);
+            self.add_windows(sequence, &encoder);
         } else if let Some(table) = residue_classes {
             // Pre-encode with our custom table so sourmash hashes the reduced symbols via
             // Murmur64Protein (identity). Unknown bytes pass through unchanged.
@@ -525,7 +520,7 @@ impl ProteinSketch {
             self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
         self.signature.md5sum = format!("{:x}", md5sum);
 
-        self.record_positions(sequence, &mut encoder);
+        self.record_positions(sequence, &encoder);
 
         if store_sequences {
             let efficient_data = self.to_efficient_data_with_capacity(sequence.len());
@@ -537,23 +532,16 @@ impl ProteinSketch {
             // duplicate the raw sequence. MolType normalizes `protein`/`raw` to `protein20`,
             // so this one name covers all three spellings.
             if moltype_str != "protein20" {
-                let encoded_sequence = if let Some(table) = residue_classes {
-                    // Custom alphabets: apply the table directly, keeping its lowercase
-                    // symbols so output matches built-in hp/dayhoff (which sourmash encodes
-                    // lowercase). Unmapped residues (X/U/O) stay uppercase, also matching
-                    // sourmash. This string is display-only (matched regions and k-mer
-                    // stats), so its case is independent of hashing, which must uppercase
-                    // because sourmash uppercases protein input before hashing.
-                    sequence
-                        .bytes()
-                        .map(|b| {
-                            let upper = b.to_ascii_uppercase();
-                            table.get(&upper).copied().unwrap_or(upper) as char
-                        })
-                        .collect::<String>()
-                } else {
-                    encode_by_alphabet(sequence, &moltype_str)?
-                };
+                // Display-only, so the table's lowercase symbols are kept as they are, matching
+                // built-in hp/dayhoff (which sourmash encodes lowercase); hashing uppercases
+                // separately because sourmash uppercases protein input before hashing. An
+                // ambiguous residue the alphabet merges is written as its class, one it keeps
+                // apart stays as its letter (see encode_sequence).
+                let encoded_sequence = String::from_utf8(encode_sequence(
+                    sequence.as_bytes(),
+                    residue_encoder(&moltype_str),
+                ))
+                .expect("class symbols and residues are ASCII");
                 efficient_data_with_sequence.set_encoded_sequence(encoded_sequence);
             }
 
@@ -568,9 +556,11 @@ impl ProteinSketch {
 
     /// Hash every window of the sequence into the minhash, a window carrying an ambiguous
     /// residue under each of its readings.
-    fn add_windows(&mut self, sequence: &str, encoder: &mut KmerEncoder) {
-        Readings::new(sequence, self.protein_ksize as usize).for_each(|_, reading| {
-            self.signature.minhash.add_hash(encoder.hash(reading));
+    fn add_windows(&mut self, sequence: &str, encoder: &KmerEncoder<impl Fn(u8) -> u8>) {
+        use sourmash::_hash_murmur;
+
+        Readings::new(sequence, self.protein_ksize as usize).for_each(encoder, |_, _, reading| {
+            self.signature.minhash.add_hash(_hash_murmur(reading, SEED));
         });
     }
 
@@ -581,25 +571,33 @@ impl ProteinSketch {
     /// Hashing a window with the literal byte B, J or Z instead would put a hash in the
     /// sketch that no canonical query k-mer matches and that the position map, which
     /// looks up each reading's hash, never records.
-    fn add_windows_without_low_complexity(&mut self, sequence: &str, encoder: &mut KmerEncoder) {
+    fn add_windows_without_low_complexity(
+        &mut self,
+        sequence: &str,
+        encoder: &KmerEncoder<impl Fn(u8) -> u8>,
+    ) {
+        use sourmash::_hash_murmur;
+
         let readings = Readings::new(sequence, self.protein_ksize as usize);
         self.kmer_windows_examined = readings.window_count();
         self.low_complexity_kmers_removed = 0;
-        readings.for_each(|_, reading| {
-            if encoder.is_low_complexity(reading) {
+        readings.for_each(encoder, |_, window, reading| {
+            if encoder.is_low_complexity(window, reading) {
                 self.low_complexity_kmers_removed += 1;
             } else {
-                self.signature.minhash.add_hash(encoder.hash_encoded());
+                self.signature.minhash.add_hash(_hash_murmur(reading, SEED));
             }
         });
     }
 
     /// Record where each minhash min occurs in the sequence, walking the same readings as
     /// the branches that built the minhash so every window hashes to a value they inserted.
-    fn record_positions(&mut self, sequence: &str, encoder: &mut KmerEncoder) {
+    fn record_positions(&mut self, sequence: &str, encoder: &KmerEncoder<impl Fn(u8) -> u8>) {
+        use sourmash::_hash_murmur;
+
         let hashvals: HashSet<u64> = self.signature.minhash.mins().iter().copied().collect();
-        Readings::new(sequence, self.protein_ksize as usize).for_each(|i, reading| {
-            let hashval = encoder.hash(reading);
+        Readings::new(sequence, self.protein_ksize as usize).for_each(encoder, |i, _, reading| {
+            let hashval = _hash_murmur(reading, SEED);
             if hashvals.contains(&hashval) {
                 self.kmer_positions.entry(hashval).or_default().push(i);
             }

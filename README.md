@@ -347,18 +347,24 @@ Where each k-mer count comes from:
   `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
   at 14.
 
-Every ambiguous residue in a k-mer expands, so a k-mer carrying *n* of them becomes 2^*n*
-k-mers. Indexing every reading rather than a chosen subset keeps matching from depending on
-which reading was kept.
+A k-mer is encoded first and disambiguated second, so only the residues the alphabet still
+cannot tell apart expand: a k-mer carrying *n* of them becomes 2^*n* k-mers. Under every HP
+alphabet, `dayhoff6`, `gbmr4`, `gbmr7` and `mmseqs12`, `B` and `Z` are not ambiguous at all
+and cost nothing. Indexing every reading rather than a chosen subset keeps matching from
+depending on which reading was kept. A matched region runs through an ambiguous residue in
+the same way: the stored encoded sequence writes the residue as its class where the alphabet
+merges the two readings and as the letter itself where it does not, and the letter agrees
+with either class it stands for.
 
 The expansion is affordable because ambiguous residues are rare and stay sparse within any one
 window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
 across 146 of its 575_748 sequences. The densest window at any k up to 30, in Swiss-Prot and
 among UniRef50 representatives alike, holds 9, so the worst single k-mer expands to 512
 readings, and expansion grows the index by 0.0012% at k=4 and 0.034% at k=30. A k-mer
-carrying more than 10 is dropped, which bounds memory on a pathological input such as a long
-run of `B`. At the default `--ksize 10` that can never happen, and no window in either
-database reaches it at any k up to 30.
+carrying more than 20 residues that are still ambiguous after encoding is dropped, which
+bounds memory on a pathological input such as a long run of `B`. No real window comes near
+it: the densest in Swiss-Prot, topi pancreatic ribonuclease (P00659, 22 ambiguous residues
+in 124), holds 12 at k=43.
 
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,
