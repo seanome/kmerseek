@@ -55,7 +55,7 @@ DOMAIN_FILL, DOMAIN_EDGE = "#e8e7e2", "#8d8c86"
 SPAN_SHADE = "#e8e7e2"
 RUN_COLOR = INK
 SINGLE_COLOR = "#6e6d68"
-# The structural alignment's residue pairs, drawn as a thin path under the runs.
+# USalign's residue pairs, drawn as a thin line under the runs.
 STRUCTURE_COLOR = "#c0392b"
 
 WRAP = 60  # residues per alignment line before wrapping
@@ -67,8 +67,8 @@ FONT = 8
 
 
 def path_segments(pairs):
-    """The structural alignment as runs of consecutive residue pairs, each a list of query
-    positions and the matching target positions, so gaps break the drawn line."""
+    """USalign's residue pairs as runs of consecutive pairs, each a list of query positions
+    and the matching target positions, so gaps break the drawn line."""
     segments, current = [], []
     for q, t, _ in pairs:
         if current and (q, t) != (current[-1][0] + 1, current[-1][1] + 1):
@@ -183,7 +183,7 @@ class PairFigure:
             handles.append(Patch(facecolor=DOMAIN_FILL, edgecolor=DOMAIN_EDGE, label="protein, with its domains as boxes; each domain's span shaded across the plot"))
         if self.m.get("structure"):
             st = self.m["structure"]
-            handles.append(Line2D([], [], color=STRUCTURE_COLOR, linewidth=1.2, label=f"structural alignment ({st['aligner']}, TM-score {st['tm_score_query']:.2f}): every aligned residue pair"))
+            handles.append(Line2D([], [], color=STRUCTURE_COLOR, linewidth=1.2, label=f"residue pairs from superposing the two AlphaFold models with {st['aligner']} (TM-score {st['tm_score_query']:.2f})"))
         handles.append(Line2D([], [], color=INK, marker="$\\mathtt{G}$", linestyle="none", markersize=6, label="identical residue, written between the rows"))
         return handles
 
@@ -344,17 +344,17 @@ def write_html(model, path):
 
 
 def structure_for(args, pair):
-    """The structural alignment for the pair when --structures is given, else None. Missing
+    """The USalign superposition for the pair when --structures is given, else None. Missing
     files or aligner are reported, not fatal."""
     if not args.structures:
         return None
     aligner = find_aligner(args.aligner)
     if aligner is None:
-        print("no USalign or TMalign found; skipping the structural alignment", file=sys.stderr)
+        print("no USalign or TMalign found; skipping the superposition", file=sys.stderr)
         return None
     structure = align_pair(aligner, args.structures, pair["query"]["name"], pair["target"]["name"])
     if structure is None:
-        print(f"no structure file for both proteins in {args.structures}; skipping the structural alignment", file=sys.stderr)
+        print(f"no structure file for both proteins in {args.structures}; skipping the superposition", file=sys.stderr)
     return structure
 
 
@@ -368,7 +368,7 @@ def _build_arg_parser():
     p.add_argument("--output-dir", required=True)
     p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="domain tables (TSV, CSV or parquet) for either protein; see the module docstring for columns")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run (default 0); with a flank the middle line uses `:` for same class")
-    p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, the structural alignment is drawn across the dot plot")
+    p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with USalign or TM-align, their residue pairs are drawn across the dot plot")
     p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--dpi", type=int, default=200)
     p.add_argument("--html", action="store_true", help="also write a self-contained interactive HTML page")

@@ -230,7 +230,7 @@ def test_embed_json_never_lets_a_name_close_the_script():
     assert page.count("</script>") == 2 and "&lt;/script&gt;</title>" in page
 
 
-# -- the structural path --
+# -- the USalign residue pairs --
 
 USALIGN_REPORT = os.path.join(TESTDATA, "bcl2_vs_ced9.usalign.txt")
 
@@ -249,14 +249,14 @@ def test_structure_offset_puts_run_1_on_the_path_and_run_3_off_it(pair, domains,
     offsets = [b["structure_offset"] for b in model["runs"]]
     assert offsets == [0, -157, 4, -166, -40]
     assert [pm.structure_phrase(o) for o in offsets[:3]] == [
-        "on the structural path",
-        "157 residues off the structural path",
-        "4 residues off the structural path",
+        "on the USalign residue pairs",
+        "157 residues off the USalign residue pairs",
+        "4 residues off the USalign residue pairs",
     ]
-    assert pm.structure_phrase(None) == "not structurally aligned"
+    assert pm.structure_phrase(None) == "not among the USalign residue pairs"
     assert pm.title_lines(model)[2] == (
-        "USalign of AF-P10415-F1-model_v6.cif against AF-P41958-F1-model_v6.cif: TM-score 0.55 (by BCL2_HUMAN length), "
-        "RMSD 2.8 Å over 154 aligned residues"
+        "USalign superposition of AF-P10415-F1-model_v6.cif and AF-P41958-F1-model_v6.cif: TM-score 0.55 (by BCL2_HUMAN length), "
+        "RMSD 2.8 Å over 154 residue pairs"
     )
     assert "structure_offset" not in pm.build_model(pair, domains)["runs"][0]
 
@@ -266,8 +266,8 @@ def test_figure_and_html_draw_the_structural_path(pair, domains, structure, tmp_
     svg = tmp_path / "pair.svg"
     vp.plot_pair(model, [str(svg)])
     text = svg.read_text()
-    assert "structural alignment (USalign, TM-score 0.55): every aligned residue pair" in text
-    assert "on the structural path" in text and "4 residues off the structural path" in text
+    assert "residue pairs from superposing the two AlphaFold models with USalign (TM-score 0.55)" in text
+    assert "on the USalign residue pairs" in text and "4 residues off the USalign residue pairs" in text
     assert vp.path_segments([(0, 0, True), (1, 1, True), (5, 9, False)]) == [([0, 1], [0, 1]), ([5], [9])]
     page = render_page("pair", {"pair": model})
     assert '"tm_score_query": 0.55352' in page and '"structure_offset": 4' in page

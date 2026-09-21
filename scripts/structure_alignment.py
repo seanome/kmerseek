@@ -1,12 +1,12 @@
-"""Structural alignment of a pair with USalign or TM-align, as residue pairs for the dot plot.
+"""Superposition of a pair's structures with USalign or TM-align, as residue pairs for the dot plot.
 
 Given a directory of structures (AlphaFold `AF-{accession}-F1-model_v*.cif` or `.pdb`, or
 `{accession}.pdb`, or `{first token}.pdb`) and an aligner binary, `align_pair` runs the
 aligner on the two proteins' files and parses its report: TM-scores normalised by each
 length, RMSD, the aligned length, and the three alignment lines, from which every aligned
 residue pair is read (0-based positions in each sequence, and whether the pair is within
-5 A). Drawn across the dot plot, that path is the structural truth the runs get judged
-against: a run on the path is a real correspondence, a run off it is not.
+5 A, which USalign marks with `:`). Drawn across the dot plot, those pairs are what the
+runs get judged against: a run on them is a real correspondence, a run off them is not.
 """
 
 import glob
@@ -77,7 +77,7 @@ def run_aligner(aligner, query_file, target_file):
 
 
 def align_pair(aligner, directory, query_header, target_header):
-    """The structural alignment for the pair, or None when either structure is missing."""
+    """The superposition for the pair, or None when either structure is missing."""
     query_file, target_file = find_structure(directory, query_header), find_structure(directory, target_header)
     if not (aligner and query_file and target_file):
         return None

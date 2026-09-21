@@ -257,7 +257,7 @@ class SearchReport:
         self.targets = read_fasta(args.target_fasta)
         self.aligner = find_aligner(args.aligner) if args.structures else None
         if args.structures and self.aligner is None:
-            print("no USalign or TMalign found; skipping structural alignments", file=sys.stderr)
+            print("no USalign or TMalign found; skipping the superpositions", file=sys.stderr)
 
     def structure(self, query_name, target_name):
         if not (self.args.structures and self.aligner):
@@ -341,7 +341,7 @@ def _build_arg_parser():
     p.add_argument("--max-runs-shown", type=int, default=10, help="alignments per opened row, longest first (default 10)")
     p.add_argument("--solid-identical", type=int, default=5, help="identical residues a run needs to count in the histogram's dark area (default 5)")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run in the alignments")
-    p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with an aligner, each row gets a TM-score and its dot plot the structural path")
+    p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with USalign or TM-align, each row gets a TM-score and its dot plot their residue pairs")
     p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--kmerseek", help="path to the kmerseek binary (default: PATH, then target/release, target/debug)")
     return p

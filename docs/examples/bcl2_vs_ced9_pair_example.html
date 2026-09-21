@@ -167,6 +167,11 @@
   .plot svg text { font-family: var(--sans); font-size: 11px; fill: var(--secondary); }
   .plot svg text.num { font-size: 12px; font-weight: 700; fill: var(--ink); font-family: var(--sans); }
   .plot .run-seg, .plot .run-num { cursor: pointer; }
+  .plot svg .area { cursor: crosshair; }
+  .plot svg line.cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+  .plot svg .run-seg.hot { stroke-width: 6; }
+  .plot svg circle.hot { r: 4.5; }
+  .block.hot { background: var(--wash); }
   .plot .sub { color: var(--secondary); font-size: 12px; margin: 0 0 6px; }
   .block { margin: 0 0 10px; padding: 6px 8px; border-radius: 6px; transition: background .6s; }
   .block.flash { background: var(--flash); transition: none; }
@@ -362,7 +367,7 @@ const SORTS = {
   longest:   { label: "longest",  key: r => -r.best.length,    title: "Longest run, residues" },
   identical: { label: "% identity", key: r => -r.bestPct,      title: `Identical amino acids in the longest run, ${IDENT_HOW}, as a percentage of its columns` },
   shared:    { label: "shared k-mers", key: r => -r.n_shared,   title: `Shared ${K}-mers with the query, in runs or not` },
-  tm:        { label: "TM",       key: r => r.tm_score === null ? 2 : -r.tm_score, title: "TM-score of the structural alignment (by query length); – when no structure was aligned" },
+  tm:        { label: "TM",       key: r => r.tm_score === null ? 2 : -r.tm_score, title: "TM-score from superposing the two AlphaFold models with USalign, by query length; – when the models were not superposed" },
 };
 for (const sc of SCORES) SORTS["score:" + sc.key] = { label: sc.label, title: sc.note || sc.label, key: r => { const v = scoreOf(r, sc); return v === null ? Infinity : sc.better === "high" ? -v : v; } };
 
@@ -413,9 +418,10 @@ function visibleRows() {
 function titles() {
   const h1 = $("title"); h1.textContent = "";
   h1.appendChild(document.createTextNode(Q.label));
-  h1.appendChild(el("span", "dim", `${QL} aa, ${acc(Q.name.split(" ")[0])}`));
+  h1.appendChild(el("span", "dim", `${QL} aa, ${acc(Q.name.split(" ")[0])}; ${K}-mers in the ${R.moltype || "reduced"} alphabet`));
   h1.title = Q.name;
-  $("stats").textContent = (R.pair ? `${Q.label} against ${R.rows[0].label}: ${R.rows[0].n_shared} shared ${K}-mers in the ${R.alphabet}. ` : `${R.n_proteins} proteins (${R.n_entries} database entries) share ${K}-mers with the query in the ${R.alphabet}. `) +
+  const ALPHABET = R.moltype ? `${R.moltype} alphabet (${R.alphabet.replace(/ alphabet/i, "")})` : R.alphabet;
+  $("stats").textContent = (R.pair ? `${Q.label} against ${R.rows[0].label}: ${R.rows[0].n_shared} shared ${K}-mers in the ${ALPHABET}. ` : `${R.n_proteins} proteins (${R.n_entries} database entries) share ${K}-mers with the query in the ${ALPHABET}. `) +
     `A shared ${K}-mer is ${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in both proteins; a run is 2 or more shared ${K}-mers in a row on one diagonal. ` +
     (R.pair ? "" : `Entries of one gene fold into one row; the ${R.rows.length} rows are the best by ${PRIMARY ? PRIMARY.label : "rank"}. Click a row for its dot plot and alignments.`);
   $("ident-filter").title = `Identical amino acids in the longest run, ${IDENT_HOW}, as a percentage`;
@@ -439,10 +445,11 @@ function legend() {
   add(ramp, `run, shaded by its identical residues ${IDENT_HOW}: under 20%, 20–40, 40–60, 60–80, 80% and over`);
   add(el("i", "cov-sw"), R.pair ? `query residues under a run (light) and under a run with ${SOLID} or more identical residues (dark)` : `database entries with any run over the residue (light) and with a run of ${SOLID} or more identical residues (dark)`);
   add(el("i", "trk"), "query, with its domains as boxes; click a domain to keep only rows with a run in it");
-  for (const c of R.classes) add(el("i", "sw " + CLASS_KEY[c.symbol]), c.label);
+  for (const c of R.classes) add(el("i", "sw " + CLASS_KEY[c.symbol]), `${c.symbol} = ${c.label}`);
+  if (R.moltype) add(el("span", null, ""), `alphabet ${R.moltype}: ${R.alphabet}; hover a letter in an alignment for its class`);
   add(el("b", "mid", "G"), `identical residue in an alignment (bold); | between the two ${ENC_LABEL} rows: same class; faded columns are the flanks outside the run; an outlined stretch is a sequence-box match`);
   if (!GAPPED) add(el("span", null, ""), `alignments are ungapped: a run is read straight off both sequences${R.extended ? ", extended past its exact seeds" : ""}`);
-  add(el("i", "path"), "structural alignment, one point per aligned residue pair (dot plot)");
+  add(el("i", "path"), "residue pairs from superposing the two AlphaFold models with USalign, solid where USalign marks the pair close (:), dotted otherwise (dot plot)");
   add(el("i", "dotm"), `single shared ${K}-mer, not in any run (dot plot)`);
 }
 
@@ -578,7 +585,7 @@ function rowEl(row) {
   for (const sc of SCORES) { const v = scoreOf(row, sc); cells.push([fmtScore(v), v === null ? `${sc.label}: not computed for this row` : `${sc.label} ${v}`, v === null]); }
   for (const [v, title, dim] of cells) { const c = el("div", "num" + (dim ? " dim" : ""), v); if (title) c.title = title; g.appendChild(c); }
   const tm = el("div", "num" + (row.tm_score === null ? " dim" : ""), row.tm_score === null ? "–" : row.tm_score.toFixed(2));
-  tm.title = row.tm_score === null ? "No structure was aligned for this target" : `TM-score ${row.tm_score} by query length`;
+  tm.title = row.tm_score === null ? "The models of this pair were not superposed" : `TM-score ${row.tm_score} by query length, USalign superposition of the AlphaFold models`;
   g.appendChild(tm);
   const t = el("div", "track"); t.appendChild(track(row)); g.appendChild(t);
   g.onclick = () => toggle(row);
@@ -619,7 +626,7 @@ function panel(row) {
   tool.appendChild(title);
   if (m.structure) {
     const st = m.structure;
-    tool.appendChild(el("span", null, `${st.aligner}: TM-score ${st.tm_score_query.toFixed(2)} by query length, RMSD ${st.rmsd.toFixed(1)} Å over ${st.aligned} residue pairs`));
+    tool.appendChild(el("span", null, `${st.aligner} superposition of the AlphaFold models: TM-score ${st.tm_score_query.toFixed(2)} by query length, RMSD ${st.rmsd.toFixed(1)} Å over ${st.aligned} residue pairs`));
   }
   tool.appendChild(el("span", "sp"));
   const bFasta = el("button", "btn"); bFasta.appendChild(icon("i-copy", true)); bFasta.appendChild(document.createTextNode("Copy FASTA")); bFasta.title = "Copy the gapped alignments of every run to the clipboard";
@@ -630,7 +637,7 @@ function panel(row) {
   bClose.onclick = () => { state.open.delete(row.rank); render(); };
   tool.appendChild(bFasta); tool.appendChild(bSvg); tool.appendChild(bClose); p.appendChild(tool);
   const split = el("div", "split");
-  const plot = el("div", "plot"); plot.appendChild(dotPlot(m, p)); split.appendChild(plot);
+  const plot = el("div", "plot"); split.appendChild(plot);
   const vh = el("div", "vh"); vh.appendChild(icon("i-drag", true)); vh.title = "Drag to resize the dot plot";
   vh.onpointerdown = e => {
     e.preventDefault(); vh.classList.add("on"); vh.setPointerCapture(e.pointerId); state.dragging = true; document.body.style.userSelect = "none"; document.body.style.userSelect = "none";
@@ -644,7 +651,12 @@ function panel(row) {
   if (!m.runs.length) alns.appendChild(el("p", "none", `No run to show: no two shared ${K}-mers are consecutive in both proteins.`));
   for (const b of m.runs.slice(0, shown)) alns.appendChild(block(m, b));
   if (shown < m.runs.length) alns.appendChild(el("p", "shown", `Showing the ${shown} longest of ${m.runs.length} runs; the FASTA and TSV downloads carry all of them.`));
+  // Hovering a letter names its class and the residues in that class.
+  alns.addEventListener("pointerover", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.sym) tipCell(e, c); });
+  alns.addEventListener("pointermove", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.sym) tipCell(e, c); });
+  alns.addEventListener("pointerout", e => { if (e.target.closest(".cells i")) hideTip(); });
   split.appendChild(alns); p.appendChild(split);
+  plot.appendChild(dotPlot(m, p));
   return p;
 }
 
@@ -661,13 +673,13 @@ function dotPlot(m, container) {
   for (const d of m.target.domains) svg.appendChild(svgEl("rect", { fill: "var(--domain)", opacity: 0.7, x: x0, y: sy(d.end + 1), width: pw, height: (d.end - d.start + 1) * scale }));
   svg.appendChild(svgEl("line", { class: "pl", x1: sx(1), x2: sx(qL + 1), y1: mt + tw * 0.6, y2: mt + tw * 0.6 }));
   m.query.domains.forEach(d => {
-    svg.appendChild(svgEl("rect", { class: "dom", x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 }));
+    svg.appendChild(svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.query.label} ${d.start}–${d.end}`, x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 }));
     svg.appendChild(svgEl("text", { class: "dom", x: sx((d.start + d.end) / 2), y: mt + tw * 0.28, "text-anchor": "middle" }, d.name));
   });
   const tx = x0 + pw + 6;
   svg.appendChild(svgEl("line", { class: "pl", x1: tx + tw * 0.4, x2: tx + tw * 0.4, y1: sy(1), y2: sy(tL + 1) }));
   for (const d of m.target.domains) {
-    svg.appendChild(svgEl("rect", { class: "dom", x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 }));
+    svg.appendChild(svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.target.label} ${d.start}–${d.end}`, x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 }));
     svg.appendChild(svgEl("text", { class: "dom", x: tx + tw * 0.75, y: sy((d.start + d.end) / 2) + 4 }, d.name));
   }
   svg.appendChild(svgEl("rect", { x: x0, y: y0, width: pw, height: ph, fill: "none", stroke: "var(--axis)" }));
@@ -678,38 +690,98 @@ function dotPlot(m, container) {
   svg.appendChild(svgEl("text", { x: 11, y: y0 + ph / 2, "text-anchor": "middle", transform: `rotate(-90 11 ${y0 + ph / 2})` }, `${m.target.label} position (aa)`));
   if (m.structure) for (const seg of pathSegments(m.structure.pairs)) {
     const d = seg.map(([q, t], i) => `${i ? "L" : "M"}${sx(q + 1).toFixed(1)} ${sy(t + 1).toFixed(1)}`).join("");
-    svg.appendChild(svgEl("path", { d: seg.length > 1 ? d : d + "h0.1", fill: "none", stroke: "var(--structure)", "stroke-width": 2, "stroke-linecap": "round" }));
+    const attrs = { d: seg.length > 1 ? d : d + "h0.1", fill: "none", stroke: "var(--structure)", "stroke-width": 2, "stroke-linecap": "round" };
+    if (!seg[0][2]) attrs["stroke-dasharray"] = "2 3";
+    svg.appendChild(svgEl("path", attrs));
   }
-  for (const s of m.singles) {
-    const c = svgEl("circle", { cx: sx(s.query_pos + (K + 1) / 2), cy: sy(s.target_pos + (K + 1) / 2), r: 2.5, fill: "var(--id1)" });
-    c.addEventListener("pointermove", e => showTip(e, [[`${s.kmer}`, "m"], [`${m.query.label} ${s.query_pos + 1}–${s.query_pos + K}: ${s.query_kmer}`, "m"], [`${m.target.label} ${s.target_pos + 1}–${s.target_pos + K}: ${s.target_kmer}`, "m"]]));
-    c.addEventListener("pointerleave", hideTip);
-    svg.appendChild(c);
-  }
-  m.runs.forEach((b, i) => {
+  const singles = m.singles.map(sg => {
+    const c = svgEl("circle", { cx: sx(sg.query_pos + (K + 1) / 2), cy: sy(sg.target_pos + (K + 1) / 2), r: 2.5, fill: "var(--id1)" });
+    svg.appendChild(c); return c;
+  });
+  const segs = m.runs.map(b => {
     const id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
     const col = `var(--id${bin(id.identical / id.of)})`;
-    const seg = svgEl("line", { class: "run-seg", x1: sx(b.query_start + 1), y1: sy(b.target_start + 1), x2: sx(b.query_end + 1), y2: sy(b.target_end + 1), stroke: col, "stroke-width": 3.5, "stroke-linecap": "round" });
+    const seg = svgEl("line", { class: "run-seg", "data-run": b.number, x1: sx(b.query_start + 1), y1: sy(b.target_start + 1), x2: sx(b.query_end + 1), y2: sy(b.target_end + 1), stroke: col, "stroke-width": 3.5, "stroke-linecap": "round" });
     const num = svgEl("text", { class: "num run-num", x: sx(b.query_end + 1) + 4, y: sy(b.target_end + 1) - 2 }, b.number);
-    const jump = () => flashBlock(container, b.number);
-    seg.addEventListener("click", jump); num.addEventListener("click", jump);
-    seg.addEventListener("pointermove", e => showTip(e, [[`Run ${b.number}: ${b.length} aa, ${id.identical} of ${id.of} identical ${IDENT_HOW}`, "b"], [`${m.query.label} ${b.query_start + 1}–${b.query_end} × ${m.target.label} ${b.target_start + 1}–${b.target_end}`, "t"], ["click to jump to its alignment", "t"]]));
-    seg.addEventListener("pointerleave", hideTip);
     svg.appendChild(seg); svg.appendChild(num);
+    return { b, id, seg };
   });
+  // The plot answers the pointer anywhere inside it: a crosshair with the two positions, and whatever is nearest
+  // (a run, a single k-mer, a USalign residue pair) named in the tooltip; a click on a run jumps to its alignment.
+  const area = svgEl("rect", { class: "area", x: x0, y: y0, width: pw, height: ph, fill: "transparent" });
+  const crossX = svgEl("line", { class: "cross", y1: y0, y2: y0 + ph, visibility: "hidden" });
+  const crossY = svgEl("line", { class: "cross", x1: x0, x2: x0 + pw, visibility: "hidden" });
+  svg.appendChild(area); svg.appendChild(crossX); svg.appendChild(crossY);
+  const distToSeg = (px, py, ax, ay, bx, by) => {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    const u = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+    return Math.hypot(px - (ax + u * dx), py - (ay + u * dy));
+  };
+  let hot = null;
+  const setHot = seg => {
+    if (hot === seg) return;
+    if (hot) { hot.classList.remove("hot"); const blk = container.querySelector(`[data-run="${hot.dataset.run}"].block`); if (blk) blk.classList.remove("hot"); }
+    hot = seg;
+    if (hot) { hot.classList.add("hot"); const blk = container.querySelector(`[data-run="${hot.dataset.run}"].block`); if (blk) blk.classList.add("hot"); }
+  };
+  const nearest = (px, py) => {
+    let best = null;
+    for (const r of segs) { const d = distToSeg(px, py, +r.seg.getAttribute("x1"), +r.seg.getAttribute("y1"), +r.seg.getAttribute("x2"), +r.seg.getAttribute("y2")); if (d <= 7 && (!best || d < best.d)) best = { kind: "run", d, r }; }
+    if (best) return best;
+    m.singles.forEach((sg, i) => { const d = Math.hypot(px - +singles[i].getAttribute("cx"), py - +singles[i].getAttribute("cy")); if (d <= 8 && (!best || d < best.d)) best = { kind: "single", d, sg, c: singles[i] }; });
+    if (best) return best;
+    if (m.structure) for (const [q, t, close] of m.structure.pairs) { const d = Math.hypot(px - sx(q + 1), py - sy(t + 1)); if (d <= 6 && (!best || d < best.d)) best = { kind: "pair", d, q, t, close }; }
+    return best;
+  };
+  const readout = e => {
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+    const px = Math.min(Math.max(pt.x, x0), x0 + pw), py = Math.min(Math.max(pt.y, y0), y0 + ph);
+    const f = nearest(px, py);
+    let cx = px, cy = py;
+    if (f && f.kind === "single") { cx = +f.c.getAttribute("cx"); cy = +f.c.getAttribute("cy"); }
+    if (f && f.kind === "pair") { cx = sx(f.q + 1); cy = sy(f.t + 1); }
+    const q = Math.max(1, Math.min(qL, Math.round((cx - x0) / scale + 1))), t = Math.max(1, Math.min(tL, Math.round(tL - (cy - y0) / scale)));
+    crossX.setAttribute("x1", cx); crossX.setAttribute("x2", cx); crossY.setAttribute("y1", cy); crossY.setAttribute("y2", cy);
+    crossX.setAttribute("visibility", "visible"); crossY.setAttribute("visibility", "visible");
+    for (const c of singles) c.classList.remove("hot");
+    const lines = [[`${m.query.label} ${q}  ×  ${m.target.label} ${t}`, "b"]];
+    if (f && f.kind === "run") {
+      const b = f.r.b; setHot(f.r.seg);
+      lines.push([`Run ${b.number}: ${b.length} aa, ${f.r.id.identical} of ${f.r.id.of} identical ${IDENT_HOW}`, "t"], [`${m.query.label} ${b.query_start + 1}–${b.query_end} × ${m.target.label} ${b.target_start + 1}–${b.target_end}`, "t"], [b.query_row, "m"], [b.target_row, "m"], ["click to go to its alignment", "t"]);
+    } else {
+      setHot(null);
+      if (f && f.kind === "single") { f.c.classList.add("hot"); lines.push([`single shared ${K}-mer, in no run`, "t"], [`${m.query.label} ${f.sg.query_pos + 1}–${f.sg.query_pos + K}: ${f.sg.query_kmer}`, "m"], [`${m.target.label} ${f.sg.target_pos + 1}–${f.sg.target_pos + K}: ${f.sg.target_kmer}`, "m"], [f.sg.kmer, "m"]); }
+      else if (f && f.kind === "pair") lines.push([`USalign residue pair ${m.query.label} ${f.q + 1} with ${m.target.label} ${f.t + 1}${f.close ? ", marked close" : ", not marked close"}`, "t"]);
+      else if (m.structure) lines.push(["no run, k-mer or USalign pair here", "t"]);
+      else lines.push(["no run or k-mer here", "t"]);
+    }
+    showTip(e, lines);
+    return f;
+  };
+  svg.addEventListener("pointermove", readout);
+  svg.addEventListener("pointerleave", () => { crossX.setAttribute("visibility", "hidden"); crossY.setAttribute("visibility", "hidden"); setHot(null); for (const c of singles) c.classList.remove("hot"); hideTip(); });
+  svg.addEventListener("click", e => { const f = readout(e); if (f && f.kind === "run") flashBlock(container, f.r.b.number); });
+  // The other way round: hovering an alignment block lights its run in the plot.
+  container.querySelectorAll(".block").forEach(blk => {
+    blk.addEventListener("pointerenter", () => { const r = segs.find(x => String(x.b.number) === blk.dataset.run); if (r) r.seg.classList.add("hot"); });
+    blk.addEventListener("pointerleave", () => { const r = segs.find(x => String(x.b.number) === blk.dataset.run); if (r) r.seg.classList.remove("hot"); });
+  });
+  // Domain boxes name themselves.
+  svg.querySelectorAll("rect.dom").forEach(r => r.addEventListener("pointermove", e => { e.stopPropagation(); showTip(e, [[r.dataset.name, "b"], [r.dataset.range, "t"]]); }));
   return svg;
 }
 function pathSegments(pairs) {
   const segs = []; let cur = [];
-  for (const [q, t] of pairs) {
-    if (cur.length && (q !== cur[cur.length - 1][0] + 1 || t !== cur[cur.length - 1][1] + 1)) { segs.push(cur); cur = []; }
-    cur.push([q, t]);
+  for (const [q, t, close] of pairs) {
+    const last = cur[cur.length - 1];
+    if (cur.length && (q !== last[0] + 1 || t !== last[1] + 1 || !!close !== !!last[2])) { segs.push(cur); cur = []; }
+    cur.push([q, t, !!close]);
   }
   if (cur.length) segs.push(cur);
   return segs;
 }
 function flashBlock(container, number) {
-  const b = container.querySelector(`[data-run="${number}"]`); if (!b) return;
+  const b = container.querySelector(`.block[data-run="${number}"]`); if (!b) return;
   b.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
   b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 900);
 }
@@ -721,7 +793,7 @@ function regionPhrase(m, b) {
   if (t) return `outside annotated domains in ${m.query.label}, in ${t} of ${m.target.label}`;
   return "outside annotated domains in both";
 }
-function structurePhrase(off) { return off === null || off === undefined ? "not on the structural alignment" : Math.abs(off) <= 1 ? "on the structural alignment" : `${Math.abs(off)} residues off the structural alignment`; }
+function structurePhrase(off) { return off === null || off === undefined ? "not among the USalign residue pairs" : Math.abs(off) <= 1 ? "on the USalign residue pairs" : `${Math.abs(off)} residues off the USalign residue pairs`; }
 
 const WRAP = 60, CELL = 15, BOX = 13, ROW = 17;
 const ENC_LABEL = R.classes.map(c => c.symbol).join("") || "enc";
@@ -750,23 +822,25 @@ function chunk(m, rows, start, hits) {
   const inRun = i => start + i >= rows.run_columns[0] && start + i < rows.run_columns[1];
   const isHit = (side, i) => hits && hits[side] && hits[side].some(([a, b]) => start + i >= a && start + i < b);
   const line = (label, cells, right) => { g.appendChild(el("div", "lab", label)); g.appendChild(cells); g.appendChild(el("div", "lab r", right === undefined ? "" : right)); };
-  const residues = (text, enc, other, side, under) => {
-    const c = el("span", "cells" + (under ? " under" : ""));
+  const residues = (text, enc, other, side, under, label, first) => {
+    const c = el("span", "cells" + (under ? " under" : "")); let pos = first;
     for (let i = 0; i < n; i++) {
       const k = text[i] === "-" ? "x" : (CLASS_KEY[enc[i]] || "x"), same = text[i] !== "-" && text[i] === other[i];
-      c.appendChild(el("i", k + (same ? " same" : "") + (inRun(i) ? " run" : " flank") + (isHit(side, i) ? " hit" : ""), text[i]));
+      const cell = el("i", k + (same ? " same" : "") + (inRun(i) ? " run" : " flank") + (isHit(side, i) ? " hit" : ""), text[i]);
+      if (text[i] !== "-") { pos++; cell.dataset.pos = pos; cell.dataset.prot = label; cell.dataset.sym = enc[i]; }
+      c.appendChild(cell);
     }
     return c;
   };
-  const encoding = enc => { const c = el("span", "cells enc"); for (let i = 0; i < n; i++) c.appendChild(el("i", (CLASS_KEY[enc[i]] || "x") + (inRun(i) ? "" : " flank"), enc[i])); return c; };
+  const encoding = enc => { const c = el("span", "cells enc"); for (let i = 0; i < n; i++) { const cell = el("i", (CLASS_KEY[enc[i]] || "x") + (inRun(i) ? "" : " flank"), enc[i]); cell.dataset.sym = enc[i]; c.appendChild(cell); } return c; };
   const marks = () => { const c = el("span", "cells marks"); for (let i = 0; i < n; i++) c.appendChild(el("i", inRun(i) ? "" : "flank", qEnc[i] !== "-" && qEnc[i] === tEnc[i] ? "|" : " ")); return c; };
   const qFirst = rows.query_start + residuesBefore(rows.query_row, start), qLast = rows.query_start + residuesBefore(rows.query_row, start + n);
   const tFirst = rows.target_start + residuesBefore(rows.target_row, start), tLast = rows.target_start + residuesBefore(rows.target_row, start + n);
-  line(`${m.query.label} aa ${qFirst + 1}`, residues(qRow, qEnc, tRow, "query", false), qLast);
+  line(`${m.query.label} aa ${qFirst + 1}`, residues(qRow, qEnc, tRow, "query", false, m.query.label, qFirst), qLast);
   line(`${m.query.label} ${ENC_LABEL}`, encoding(qEnc));
   line("", marks());
   line(`${m.target.label} ${ENC_LABEL}`, encoding(tEnc));
-  line(`${m.target.label} aa ${tFirst + 1}`, residues(tRow, tEnc, qRow, "target", true), tLast);
+  line(`${m.target.label} aa ${tFirst + 1}`, residues(tRow, tEnc, qRow, "target", true, m.target.label, tFirst), tLast);
   return g;
 }
 
@@ -781,6 +855,14 @@ function showTip(e, lines) {
   tip.style.top = (e.clientY + 16 + h > innerHeight ? e.clientY - h - 10 : e.clientY + 16) + "px";
 }
 function hideTip() { tip.style.display = "none"; }
+function tipCell(e, c) {
+  const cls = R.classes.find(x => x.symbol === c.dataset.sym);
+  const name = cls ? cls.label.split(" (")[0] : "unclassified", members = cls ? [...cls.residues].join(" ") : "";
+  const lines = c.dataset.pos
+    ? [[`${c.textContent} ${c.dataset.pos} of ${c.dataset.prot}`, "b"], [`${name} (${c.dataset.sym}) in the ${R.moltype || ""} alphabet`, "t"], [members, "m"]]
+    : [[`${c.dataset.sym} = ${name}`, "b"], [members, "m"], [`${R.moltype || ""} alphabet`, "t"]];
+  showTip(e, lines);
+}
 function tipRun(e, row, i) {
   const r = row.runs[i], id = identity(row, i), m = row.model.runs[i];
   const lines = [[`${r.length} aa, ${id.identical} of ${id.of} identical${id.gapped ? " after gapped alignment" : ""} (${pct(id.identical, id.of)}%)`, "b"],
@@ -889,12 +971,13 @@ function help() {
   h.appendChild(el("h2", null, "Reading this page"));
   const dl = el("dl");
   const add = (t, d) => { dl.appendChild(el("dt", null, t)); dl.appendChild(el("dd", null, d)); };
-  add(`shared ${K}-mer`, `${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in query and target; ${R.classes.map(c => `${c.label.split(" (")[0]} = ${[...c.residues].join(" ")}`).join("; ")}.`);
+  add("alphabet", `${R.moltype ? R.moltype + ", " : ""}${R.alphabet}: ${R.classes.map(c => `${c.symbol} = ${c.label.split(" (")[0]} (${[...c.residues].join(" ")})`).join("; ")}.`);
+  add(`shared ${K}-mer`, `${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in query and target.`);
   add("run", `2 or more shared ${K}-mers in a row on one diagonal, so ${K + 1} or more residues with the same pattern.`);
   add("% identity", GAPPED ? "Identical residues in the longest run after gapped alignment of the run and its flanks; the tooltip on a bar gives the count on the run itself too." : "Identical residues in the longest run, counted straight down the run: the alignment is ungapped.");
   add("shared k-mers", `All shared ${K}-mers between the two proteins, in runs or not.`);
   for (const sc of SCORES) add(sc.label, (sc.note || sc.label) + (sc === PRIMARY ? ". Ranks the rows." : "") + (sc.better === "high" ? " Higher is better." : " Lower is better."));
-  add("TM-score", "From the structural alignment of AlphaFold models, by query length; 0.5 and above usually means the same fold.");
+  add("TM-score", "From superposing the two AlphaFold models with USalign, by query length; 0.5 and above usually means the same fold. The dot plot draws USalign's residue pairs as a line.");
   add("shading", "Darker bar = larger identical fraction; the same five steps colour the run segments in the dot plot.");
   add("entries", "Database entries of one gene are folded into one row; the tag +n counts the others, hover it to list them.");
   add("sequence box", `Keeps the rows with a run containing the letters, in either protein, and marks them in the alignments; letters from the alphabet only (${ENC_LABEL}) search the encoding instead. The browser's own find works on the alignments too.`);

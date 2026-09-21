@@ -237,13 +237,13 @@ reduced alphabet can sit a few residues off the true alignment (MCL-1's BH1 run 
 identical residue with BCL-2 on its diagonal, though NWGR is in both), so a low count
 on a run says the run is not the alignment, not that the proteins are unrelated.
 
-`--structures DIR` draws the structural alignment across the dot plot: with USalign or
+`--structures DIR` draws USalign's residue pairs across the dot plot: with USalign or
 TM-align on `PATH` (or `--aligner`), the two proteins' AlphaFold or PDB files in that
-directory (`AF-{accession}-F1-model_v*.cif`, `{accession}.pdb`) are aligned, every
-aligned residue pair is drawn as a thin red path, and each run's header says whether it
-lies on that path. For BCL-2 against CED-9, run 1 (BH1) is on the path and run 3, 9
-residues off run 1's diagonal, is 4 residues off it; only one of the two can be real,
-and the structure says which.
+directory (`AF-{accession}-F1-model_v*.cif`, `{accession}.pdb`) are superposed, every
+residue pair USalign reports is drawn as a thin line (solid where USalign marks the pair
+close, dotted otherwise), and each run's header says whether it lies on those pairs. For
+BCL-2 against CED-9, run 1 (BH1) is on them and run 3, 9 residues off run 1's diagonal,
+is 4 residues off; only one of the two can be real, and the structures say which.
 
 ## Visualizing a whole search
 
@@ -269,7 +269,7 @@ Example, CED-9 searched against the 25 BCL-2-like proteins in `tests/testdata/fa
 at `hp_lehninger2`, k=15, with Pfam domains:
 [docs/examples/ced9_kmerseek_hits_example.html](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html).
 15 of the 25 share a 15-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
-residues with 5 identical, on the structural alignment; the q-value ranks it 8th,
+residues with 5 identical, on the USalign residue pairs; the q-value ranks it 8th,
 behind runs that are longer but polar-rich and off the structure (RTN3: 23 residues,
 2 identical, 14 polar). The q-value scores a run by its length alone. The commands, on files in this repository:
 
@@ -286,7 +286,7 @@ python scripts/visualize_search.py --csv results.csv \
     --domains scripts/testdata/bcl2_25_pfam_domains.tsv scripts/testdata/bcl2_ced9_pfam_domains.tsv
 ```
 
-`--structures DIR` adds a TM-score column and the structural path to each row's dot
+`--structures DIR` adds a TM-score column and USalign's residue pairs to each row's dot
 plot.
 
 Rows are ordered by `region_evalue` when the CSV has it and otherwise by the

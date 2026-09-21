@@ -174,9 +174,9 @@ def middle_line(query_row, target_row, query_enc, target_enc, show_class):
 
 
 def structural_offset(run, pairs):
-    """How far the run's diagonal sits from the structural alignment over the run's query
-    residues: the median of (structural target partner - run's target partner), or None when
-    the structure aligns none of those residues."""
+    """How far the run's diagonal sits from the USalign residue pairs over the run's query
+    residues: the median of (USalign target partner - run's target partner), or None when
+    USalign pairs none of those residues."""
     partner = {q: t for q, t, _ in pairs}
     diagonal = run["target_start"] - run["query_start"]
     offsets = [partner[i] - (i + diagonal) for i in range(run["query_start"], run["query_end"]) if i in partner]
@@ -185,7 +185,7 @@ def structural_offset(run, pairs):
 
 def run_block(pair, index, run, domains, flank, pairs=None):
     """Everything one alignment block needs. `structure_offset` is present only when a
-    structural alignment was given."""
+    USalign superposition was given."""
     q, t, ksize = pair["query"], pair["target"], pair["ksize"]
     qs, qe, ts, te = run["query_start"], run["query_end"], run["target_start"], run["target_end"]
     left = min(flank, qs, ts)
@@ -265,17 +265,17 @@ def title_lines(model):
 def structure_line(model):
     st = model["structure"]
     return (
-        f"{st['aligner']} of {st['query_file']} against {st['target_file']}: TM-score {st['tm_score_query']:.2f} "
-        f"(by {model['query']['label']} length), RMSD {st['rmsd']:.1f} \u00c5 over {st['aligned']} aligned residues"
+        f"{st['aligner']} superposition of {st['query_file']} and {st['target_file']}: TM-score {st['tm_score_query']:.2f} "
+        f"(by {model['query']['label']} length), RMSD {st['rmsd']:.1f} \u00c5 over {st['aligned']} residue pairs"
     )
 
 
 def structure_phrase(offset):
     if offset is None:
-        return "not structurally aligned"
+        return "not among the USalign residue pairs"
     if abs(offset) <= 1:
-        return "on the structural path"
-    return f"{abs(offset)} residues off the structural path"
+        return "on the USalign residue pairs"
+    return f"{abs(offset)} residues off the USalign residue pairs"
 
 
 def run_header(block):
