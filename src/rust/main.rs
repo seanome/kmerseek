@@ -535,7 +535,6 @@ fn main() -> IndexResult<()> {
             } else {
                 // Stream queries from FASTA, writing CSV results as we go
                 eprintln!("Streaming query sequences from FASTA...");
-                use kmerseek::search::SearchResultCsv;
                 use kmerseek::sketch::ProteinSketch;
                 use needletail::parse_fastx_file;
 
@@ -629,12 +628,9 @@ fn main() -> IndexResult<()> {
                     for results in &batch_results {
                         for result in results {
                             *match_count += 1;
-                            for region in &result.matched_regions {
-                                let csv_row = SearchResultCsv::from_result_and_region(
-                                    result,
-                                    region,
-                                    remove_low_complexity,
-                                );
+                            for csv_row in
+                                searcher.csv_rows(result, remove_low_complexity, false)?
+                            {
                                 writer.serialize(&csv_row)?;
                                 *row_count += 1;
                             }
@@ -712,18 +708,14 @@ fn main() -> IndexResult<()> {
                 min_region_score
             );
 
-            use kmerseek::search::SearchResultCsv;
             if let Some(output_path) = output {
                 eprintln!("Writing results to: {}", output_path.display());
                 let mut writer = csv::Writer::from_path(output_path)?;
 
                 for result in &filtered_results {
-                    for region in &result.matched_regions {
-                        let csv_row = SearchResultCsv::from_result_and_region(
-                            result,
-                            region,
-                            remove_low_complexity,
-                        );
+                    for csv_row in
+                        searcher.csv_rows(result, remove_low_complexity, is_all_vs_all)?
+                    {
                         writer.serialize(&csv_row)?;
                     }
                 }
@@ -733,12 +725,9 @@ fn main() -> IndexResult<()> {
                 let mut writer = csv::Writer::from_writer(std::io::stdout());
 
                 for result in &filtered_results {
-                    for region in &result.matched_regions {
-                        let csv_row = SearchResultCsv::from_result_and_region(
-                            result,
-                            region,
-                            remove_low_complexity,
-                        );
+                    for csv_row in
+                        searcher.csv_rows(result, remove_low_complexity, is_all_vs_all)?
+                    {
                         writer.serialize(&csv_row)?;
                     }
                 }
