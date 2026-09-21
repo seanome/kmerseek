@@ -250,9 +250,9 @@ and the structure says which.
 query. The query is the shared axis: it is drawn once at the top as a line with its
 domains, under a histogram of how many database entries have a run over each residue
 (light for any run, dark for a run with 5 or more identical residues). That histogram
-is the noise map: the BCL-2 loop is covered by a third of unrelated proteins because
-Ala/Pro/Gly stretches match it letter for letter, so a run there is discounted at a
-glance and a run in BH1 is not.
+is the noise map: a low-complexity stretch is covered by unrelated proteins whose
+Ala/Pro/Gly runs match it letter for letter, so a run there is discounted at a glance
+and a run in BH1 is not.
 
 Below it, one row per protein with the numbers in the row (length, runs, longest run,
 identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
@@ -262,14 +262,25 @@ is not a list of TrEMBL copies of the query. Click a row and the pair view above
 underneath it. The page filters rows by name, identical residues, the statistic,
 Swiss-Prot status, fragments and the query domain a run falls in; the Download menu
 gives the rows and runs as TSV, the runs as FASTA, the overview as SVG or PNG and the
-data as JSON
-([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html)).
+data as JSON.
+
+Example, CED-9 searched against the 25 BCL-2-like proteins in `tests/testdata/fasta`
+at `hp_lehninger2`, k=12, with Pfam domains:
+[docs/examples/ced9_kmerseek_hits_example.html](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html).
+24 of the 25 share a 12-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
+residues with 5 identical, on the structural alignment. The commands, on files in this repository:
 
 ```bash
-kmerseek search -q bcl2.fasta -t bcl2_family.rocksdb -o results.csv --alphabet hp --ksize 12
+kmerseek index -i tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+    --alphabet hp --ksize 12 -o bcl2_25.rocksdb
+kmerseek search -q tests/testdata/fasta/ced9.fasta -t bcl2_25.rocksdb -o results.csv \
+    --alphabet hp --ksize 12
 
-python scripts/visualize_search.py --csv results.csv --query-fasta bcl2.fasta \
-    --target-fasta bcl2_family.fasta.gz --output-dir report/ --domains pfam_domains.tsv
+python scripts/visualize_search.py --csv results.csv \
+    --query-fasta tests/testdata/fasta/ced9.fasta \
+    --target-fasta tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+    --output-dir report/ \
+    --domains scripts/testdata/bcl2_25_pfam_domains.tsv scripts/testdata/bcl2_ced9_pfam_domains.tsv
 ```
 
 `--structures DIR` adds a TM-score column and the structural path to each row's dot
