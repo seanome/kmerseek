@@ -44,7 +44,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from pair_model import build_model, load_domains, run_header, title_lines
 from structure_alignment import align_pair, find_aligner
 from visualize_hits import INK, SECONDARY_INK, SURFACE, safe_filename
-from visualize_pair_html import render_html
+from hits_page import render_page
 
 # Residue box fill and edge per alphabet class, in class-symbol order. Only alphabets with
 # this few classes get colour; larger alphabets keep the letters and plain boxes.
@@ -337,8 +337,10 @@ def plot_pair(model, output_paths, dpi=200):
 
 
 def write_html(model, path):
+    """The pair as a one-row page of the search report template, the row open."""
+    title = f"{model['query']['label']} vs {model['target']['label']} kmerseek pair"
     with open(path, "w") as fh:
-        fh.write(render_html(model))
+        fh.write(render_page(title, {"pair": model}))
 
 
 def structure_for(args, pair):

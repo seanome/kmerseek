@@ -1,4 +1,4 @@
-"""Tests for pair_model.py, visualize_pair.py and visualize_pair_html.py.
+"""Tests for pair_model.py, visualize_pair.py and hits_page.py.
 
 Run with: /Users/olga/anaconda3/envs/kmerseek-dev/bin/python3 -m pytest scripts/test_visualize_pair.py -v
 
@@ -19,7 +19,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(__file__))
 import pair_model as pm
 import visualize_pair as vp
-from visualize_pair_html import embed_json, render_html
+from hits_page import embed_json, render_page
 
 TESTDATA = os.path.join(os.path.dirname(__file__), "testdata")
 PAIR_JSON = os.path.join(TESTDATA, "bcl2_vs_ced9.hp.k12.pair.json")
@@ -216,17 +216,18 @@ def test_html_embeds_the_model_once(model, tmp_path):
     path = tmp_path / "pair.html"
     vp.write_html(model, str(path))
     text = path.read_text()
-    assert "<title>BCL2_HUMAN vs CED9_CAEEL shared k-mers</title>" in text
+    assert "<title>BCL2_HUMAN vs CED9_CAEEL kmerseek pair</title>" in text
+    assert 'R = {"pair": {"ksize": 12' in text
     assert '"query_row": "RDGVNWGRIVAFFEFGGVM"' in text
-    assert text.count("<script>") == 1 and text.count("</script>") == 1
+    assert text.count("<script>") == 2 and text.count("</script>") == 2
 
 
 def test_embed_json_never_lets_a_name_close_the_script():
     out = embed_json({"name": "x</script><b>"})
     assert "</script>" not in out
     assert "x<\\/script>" in out
-    page = render_html({"query": {"label": "x</script>"}, "target": {"label": "y"}})
-    assert page.count("</script>") == 1
+    page = render_page("x</script>", {"query": {"label": "x</script>"}})
+    assert page.count("</script>") == 2 and "&lt;/script&gt;</title>" in page
 
 
 # -- the structural path --
@@ -268,5 +269,5 @@ def test_figure_and_html_draw_the_structural_path(pair, domains, structure, tmp_
     assert "structural alignment (USalign, TM-score 0.55): every aligned residue pair" in text
     assert "on the structural path" in text and "4 residues off the structural path" in text
     assert vp.path_segments([(0, 0, True), (1, 1, True), (5, 9, False)]) == [([0, 1], [0, 1]), ([5], [9])]
-    page = render_html(model)
+    page = render_page("pair", {"pair": model})
     assert '"tm_score_query": 0.55352' in page and '"structure_offset": 4' in page

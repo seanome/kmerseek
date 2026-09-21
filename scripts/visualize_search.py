@@ -24,8 +24,8 @@ name, identical residues, the statistic, Swiss-Prot status, fragments and which 
 domain a run falls in, and downloads the rows and runs as TSV, the runs as FASTA, the
 overview as SVG or PNG, and its data as JSON.
 
-The page itself is `kmerseek_hits_template.html` next to this script; the script fills
-its title and data tokens and the template's own script draws everything from the data.
+The page itself is `kmerseek_hits_template.html` next to this script (see hits_page.py);
+the template's own script draws everything from the data.
 
 The pair view needs every shared k-mer, which the CSV does not carry, so this script runs
 `kmerseek pair` once per row on sequences taken from the two FASTA files.
@@ -38,7 +38,6 @@ Usage:
 
 import argparse
 import gzip
-import html
 import json
 import os
 import re
@@ -63,7 +62,7 @@ from visualize_hits import (
     scan_csv,
     short_label,
 )
-from visualize_pair_html import embed_json
+from hits_page import render_page
 
 # -- sequences --------------------------------------------------------------------------
 
@@ -322,18 +321,9 @@ class SearchReport:
 
 # -- HTML ----------------------------------------------------------------------------------
 
-TEMPLATE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kmerseek_hits_template.html")
-
 
 def render_report(report):
-    """The page: `kmerseek_hits_template.html` with its two tokens filled, the title and
-    the report as JSON. Everything drawn on the page is derived from that JSON in the
-    template's own script."""
-    title = f"{report['query']['label']} kmerseek hits"
-    with open(TEMPLATE) as fh:
-        page = fh.read()
-    assert page.count("__TITLE__") == 1 and page.count("__DATA__") == 1
-    return page.replace("__TITLE__", html.escape(title)).replace("__DATA__", embed_json(report))
+    return render_page(f"{report['query']['label']} kmerseek hits", report)
 
 
 # -- CLI -----------------------------------------------------------------------------------

@@ -224,8 +224,9 @@ and a `name`, `pfam_name` or `pfam_id` column; proteins match by full header, fi
 token or UniProt accession, so the `*_pfam_domains.parquet` tables built from
 Pfam-A.regions work as they are. `--flank N` shows N residues either side of each run
 and switches the middle line to BLAST's: the letter where identical, `:` where only the
-class agrees. `--html` also writes one self-contained page: hover a single for its
-k-mer, click a run's number to jump to its alignment
+class agrees. `--html` also writes the pair as a one-row page of the search report
+(same template, the row open): hover a single for its k-mer, click a run's number to
+jump to its alignment, copy the runs as FASTA or the dot plot as SVG
 ([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/bcl2_vs_ced9_pair_example.html)).
 
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
