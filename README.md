@@ -266,16 +266,18 @@ gives the rows and runs as TSV, the runs as FASTA, the overview as SVG or PNG an
 data as JSON.
 
 Example, CED-9 searched against the 25 BCL-2-like proteins in `tests/testdata/fasta`
-at `hp_lehninger2`, k=12, with Pfam domains:
+at `hp_lehninger2`, k=15, with Pfam domains:
 [docs/examples/ced9_kmerseek_hits_example.html](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html).
-24 of the 25 share a 12-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
-residues with 5 identical, on the structural alignment. The commands, on files in this repository:
+15 of the 25 share a 15-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
+residues with 5 identical, on the structural alignment; the q-value ranks it 8th,
+behind runs that are longer but polar-rich and off the structure (RTN3: 23 residues,
+2 identical, 14 polar), which is why the ranking statistic is being worked on. The commands, on files in this repository:
 
 ```bash
 kmerseek index -i tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
-    --alphabet hp --ksize 12 -o bcl2_25.rocksdb
+    --alphabet hp --ksize 15 -o bcl2_25.rocksdb
 kmerseek search -q tests/testdata/fasta/ced9.fasta -t bcl2_25.rocksdb -o results.csv \
-    --alphabet hp --ksize 12
+    --alphabet hp --ksize 15
 
 python scripts/visualize_search.py --csv results.csv \
     --query-fasta tests/testdata/fasta/ced9.fasta \
