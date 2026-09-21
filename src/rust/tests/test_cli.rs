@@ -8,7 +8,7 @@ use rstest::rstest;
 
 use crate::alphabets::Alphabet;
 use crate::search::SearchResultCsv;
-use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
+use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
@@ -761,5 +761,63 @@ fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>>
             .stderr(predicate::str::contains(message));
         assert!(!db.exists(), "--scaled {value} must not leave a database behind");
     }
+    Ok(())
+}
+
+#[test]
+fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let output = temp_dir.path().join("pair.json");
+    let mut cmd = Command::cargo_bin("kmerseek")?;
+    cmd.args([
+        "pair",
+        "--query",
+        TEST_BLC2_FASTA,
+        "--target",
+        TEST_CED9_FASTA,
+        "--ksize",
+        "12",
+        "--alphabet",
+        "hp",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    cmd.assert().success().stderr(predicate::str::contains(
+        "27 shared 12-mers in 14 matched regions (hp_lehninger2)",
+    ));
+
+    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&output)?)?;
+    assert_eq!(report["ksize"], 12);
+    assert_eq!(report["moltype"], "hp_lehninger2");
+    assert_eq!(
+        report["query"]["name"].as_str().unwrap().split(' ').next(),
+        Some("sp|P10415|BCL2_HUMAN")
+    );
+    assert_eq!(report["shared_kmers"].as_array().unwrap().len(), 27);
+    // The longest region comes first: BH1, 19 residues.
+    assert_eq!(report["regions"][0]["query_start"], 138);
+    assert_eq!(report["regions"][0]["target_start"], 162);
+    assert_eq!(report["regions"][0]["length"], 19);
+    Ok(())
+}
+
+#[test]
+fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("kmerseek")?;
+    cmd.args([
+        "pair",
+        "--query",
+        TEST_CED9_FASTA,
+        "--query-name",
+        "sp|P41958|CED9_CAEEL",
+        "--target",
+        TEST_BLC2_FASTA,
+        "--ksize",
+        "3",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"moltype\": \"protein20\""))
+        .stdout(predicate::str::contains("\"kmer\": \"APG\""));
     Ok(())
 }

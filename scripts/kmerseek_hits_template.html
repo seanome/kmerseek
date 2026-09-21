@@ -1,0 +1,1101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    color-scheme: light;
+    --surface: #fcfcfb; --plane: #f9f9f7; --wash: #f1f0eb; --wash2: #e9e8e2;
+    --ink: #0b0b0b; --secondary: #52514e; --muted: #898781; --grid: #e1e0d9; --axis: #c3c2b7; --ring: rgba(11,11,11,.10);
+    --h-fill: #f9dfd0; --h-edge: #eb6834; --h-ink: #6b2a10;
+    --p-fill: #d9e7f8; --p-edge: #2a78d6; --p-ink: #123b6b;
+    --id0: #b3b2a7; --id1: #8b8980; --id2: #65635d; --id3: #3d3c39; --id4: #0b0b0b;
+    --cov: #c3c2b7; --cov5: #52514e;
+    --domain: #efeee9; --domain-edge: #898781;
+    --structure: #1baf7a; --flash: #fff3c4; --focus: #2a78d6;
+    --sans: system-ui, -apple-system, "Segoe UI", Helvetica, Arial, sans-serif;
+    --mono: ui-monospace, Menlo, Consolas, "Liberation Mono", monospace;
+    --namew: 270px; --plotw: 420px;
+    --cols: 30px var(--namew) 46px 42px 56px 64px 54px 72px 46px minmax(220px, 1fr);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:where(:not([data-theme="light"])) {
+      color-scheme: dark;
+      --surface: #1a1a19; --plane: #0d0d0d; --wash: #242422; --wash2: #2c2c2a;
+      --ink: #ffffff; --secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10);
+      --h-fill: #4a2411; --h-edge: #d95926; --h-ink: #f7c2a8;
+      --p-fill: #12345e; --p-edge: #3987e5; --p-ink: #bcd5f5;
+      --id0: #4f4e4a; --id1: #75746d; --id2: #9b9990; --id3: #c3c2b7; --id4: #f4f3ee;
+      --cov: #383835; --cov5: #9b9990;
+      --domain: #2c2c2a; --domain-edge: #898781;
+      --structure: #199e70; --flash: #4a3f12; --focus: #3987e5;
+    }
+  }
+  :root[data-theme="dark"] {
+    color-scheme: dark;
+    --surface: #1a1a19; --plane: #0d0d0d; --wash: #242422; --wash2: #2c2c2a;
+    --ink: #ffffff; --secondary: #c3c2b7; --muted: #898781; --grid: #2c2c2a; --axis: #383835; --ring: rgba(255,255,255,.10);
+    --h-fill: #4a2411; --h-edge: #d95926; --h-ink: #f7c2a8;
+    --p-fill: #12345e; --p-edge: #3987e5; --p-ink: #bcd5f5;
+    --id0: #4f4e4a; --id1: #75746d; --id2: #9b9990; --id3: #c3c2b7; --id4: #f4f3ee;
+    --cov: #383835; --cov5: #9b9990;
+    --domain: #2c2c2a; --domain-edge: #898781;
+    --structure: #199e70; --flash: #4a3f12; --focus: #3987e5;
+  }
+  * { box-sizing: border-box; }
+  html { background: var(--plane); }
+  body { margin: 0; background: var(--plane); color: var(--ink); font: 13px/1.4 var(--sans); }
+  button, input, select { font: inherit; color: inherit; }
+  button { background: none; border: 0; padding: 0; cursor: pointer; }
+  a { color: inherit; }
+  .icon { width: 18px; height: 18px; fill: currentColor; vertical-align: -4px; flex: none; }
+  .icon.s { width: 16px; height: 16px; }
+  :focus-visible { outline: 2px solid var(--focus); outline-offset: 1px; }
+
+  /* Sticky header: title, filters, ruler and column names stay while the rows scroll. */
+  header.top { position: sticky; top: 0; z-index: 20; background: color-mix(in srgb, var(--surface) 88%, transparent);
+               -webkit-backdrop-filter: blur(10px) saturate(160%); backdrop-filter: blur(10px) saturate(160%);
+               border-bottom: 1px solid var(--grid); box-shadow: 0 1px 0 var(--ring); }
+  .titlebar { display: flex; align-items: center; gap: 14px; padding: 8px 14px 6px; flex-wrap: wrap; }
+  .titlebar h1 { font-size: 15px; font-weight: 600; margin: 0; white-space: nowrap; }
+  .titlebar h1 .dim { color: var(--secondary); font-weight: 400; margin-left: 6px; }
+  .titlebar .stats { color: var(--secondary); font-size: 12px; flex: 1 1 auto; min-width: 200px; }
+  .titlebar .actions { display: flex; align-items: center; gap: 4px; }
+  .btn { display: inline-flex; align-items: center; gap: 5px; padding: 4px 8px; border-radius: 6px; color: var(--secondary); font-size: 12px; }
+  .btn:hover { background: var(--wash); color: var(--ink); }
+  .btn[aria-pressed="true"] { background: var(--wash2); color: var(--ink); }
+  .menu { position: relative; }
+  .menu ul { position: absolute; right: 0; top: 100%; margin: 4px 0 0; padding: 4px; list-style: none; background: var(--surface);
+             border: 1px solid var(--grid); border-radius: 8px; box-shadow: 0 6px 20px rgba(0,0,0,.14); min-width: 260px; display: none; z-index: 30; }
+  .menu.open ul { display: block; }
+  .menu li button { display: flex; align-items: center; gap: 8px; width: 100%; text-align: left; padding: 6px 8px; border-radius: 5px; font-size: 12.5px; }
+  .menu li button:hover { background: var(--wash); }
+  .menu li button .k { margin-left: auto; color: var(--muted); font-size: 11px; }
+  .menu li.sep { border-top: 1px solid var(--grid); margin: 4px 0; }
+
+  .filters { display: flex; align-items: center; gap: 8px 14px; flex-wrap: wrap; padding: 2px 14px 8px; font-size: 12px; color: var(--secondary); }
+  .filters label { display: inline-flex; align-items: center; gap: 5px; white-space: nowrap; }
+  .search { display: inline-flex; align-items: center; gap: 4px; border: 1px solid var(--axis); border-radius: 6px; padding: 2px 6px; background: var(--surface); }
+  .search input { border: 0; background: none; outline: none; width: 190px; font-size: 12.5px; }
+  .search input::placeholder { color: var(--muted); }
+  .filters input[type=number] { width: 4.2em; border: 1px solid var(--axis); border-radius: 5px; padding: 2px 4px; background: var(--surface); }
+  .filters select { border: 1px solid var(--axis); border-radius: 5px; padding: 2px 4px; background: var(--surface); }
+  .chip { border: 1px solid var(--axis); border-radius: 999px; padding: 1px 9px; font-size: 12px; color: var(--secondary); background: var(--surface); }
+  .chip[aria-pressed="true"] { background: var(--ink); color: var(--surface); border-color: var(--ink); }
+  .chip:hover { border-color: var(--secondary); }
+  .count { color: var(--secondary); margin-left: auto; white-space: nowrap; }
+  .count b { color: var(--ink); font-weight: 600; }
+
+  /* One grid template for the ruler, the column names and every row, so the tracks share an x axis. */
+  .g { display: grid; grid-template-columns: var(--cols); column-gap: 8px; align-items: center; padding: 0 14px; }
+  .ruler { border-top: 1px solid var(--grid); padding-top: 6px; padding-bottom: 2px; align-items: end; }
+  .ruler .lbl { color: var(--secondary); font-size: 12px; line-height: 1.3; grid-column: 2 / 10; align-self: end; padding-bottom: 6px; }
+  .ruler .lbl b { color: var(--ink); font-weight: 600; }
+  .ruler .lbl .n { display: block; color: var(--muted); }
+  .colhead { padding-top: 4px; padding-bottom: 4px; border-bottom: 1px solid var(--axis); font-size: 12px; color: var(--secondary); position: relative; }
+  .colhead .num { text-align: right; }
+  .colhead button.sort { display: inline-flex; align-items: center; gap: 1px; color: inherit; border-radius: 4px; padding: 1px 2px; white-space: nowrap; }
+  .colhead button.sort:hover { color: var(--ink); background: var(--wash); }
+  .colhead button.sort[aria-sort] { color: var(--ink); font-weight: 600; }
+  .colhead button.sort .icon { width: 14px; height: 14px; visibility: hidden; }
+  .colhead button.sort[aria-sort] .icon { visibility: visible; }
+  .colhead .num button.sort { justify-content: flex-end; width: 100%; }
+  .colhead .handle { user-select: none; position: absolute; left: calc(14px + 30px + 8px + var(--namew) + 1px); top: 0; bottom: 0; width: 10px; cursor: col-resize; display: flex; align-items: center; justify-content: center; color: var(--muted); }
+  .colhead .handle:hover, .colhead .handle.on { color: var(--ink); }
+  .colhead .handle .icon { transform: rotate(90deg); width: 14px; height: 14px; }
+
+  main { background: var(--surface); }
+  .row { border-bottom: 1px solid var(--grid); cursor: pointer; min-height: 30px; position: relative; }
+  .row:hover { background: var(--wash); }
+  .row.open { background: var(--wash2); }
+  .row.open::before, .row.cursor::before { content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 3px; background: var(--ink); }
+  .row.cursor::before { background: var(--focus); }
+  .row .rank { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .row .name { min-width: 0; padding: 4px 0; }
+  .row .name .d { color: var(--ink); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .row .name .s { color: var(--secondary); font-size: 11.5px; display: flex; flex-wrap: wrap; align-items: center; gap: 2px 6px; }
+  .row .name .s a { color: var(--secondary); text-decoration: none; display: inline-flex; align-items: center; }
+  .row .name .s a:hover { color: var(--ink); }
+  .tag { display: inline-block; border: 1px solid var(--axis); border-radius: 4px; padding: 0 4px; font-size: 10.5px; line-height: 15px; color: var(--secondary); }
+  .num { text-align: right; font-variant-numeric: tabular-nums; }
+  .num.dim { color: var(--muted); }
+  .track svg { display: block; overflow: visible; }
+  rect.bar { stroke: var(--surface); stroke-width: 1; }
+  rect.bar.id0 { fill: var(--id0); } rect.bar.id1 { fill: var(--id1); } rect.bar.id2 { fill: var(--id2); } rect.bar.id3 { fill: var(--id3); } rect.bar.id4 { fill: var(--id4); }
+  rect.bar:hover { stroke: var(--focus); stroke-width: 1.5; }
+  text.more { font-size: 10px; font-weight: 600; fill: var(--secondary); font-family: var(--sans); }
+  line.tick { stroke: var(--grid); stroke-width: 1; }
+  text.ax { font-size: 10.5px; fill: var(--muted); font-family: var(--sans); }
+  line.axis { stroke: var(--axis); }
+  path.cov { fill: var(--cov); } path.cov5 { fill: var(--cov5); }
+  rect.dom { fill: var(--domain); stroke: var(--domain-edge); stroke-width: 0.8; }
+  rect.dom.on { stroke: var(--ink); stroke-width: 1.5; }
+  rect.dom:hover { stroke: var(--ink); }
+  text.dom { font-size: 11px; fill: var(--secondary); font-family: var(--sans); pointer-events: none; }
+  line.pl { stroke: var(--domain-edge); stroke-width: 1.2; }
+  text.qmark { font-size: 10.5px; fill: var(--muted); font-family: var(--sans); }
+
+  .legend { display: flex; flex-wrap: wrap; gap: 4px 16px; color: var(--secondary); font-size: 12px; padding: 6px 14px; border-bottom: 1px solid var(--grid); background: var(--surface); }
+  .legend span { display: inline-flex; align-items: center; gap: 5px; }
+  .legend .ramp { display: inline-flex; gap: 1px; }
+  .legend .ramp i { width: 14px; height: 9px; display: inline-block; }
+  .legend .ramp i.id0 { background: var(--id0); } .legend .ramp i.id1 { background: var(--id1); } .legend .ramp i.id2 { background: var(--id2); } .legend .ramp i.id3 { background: var(--id3); } .legend .ramp i.id4 { background: var(--id4); }
+  .legend .sw { width: 14px; height: 12px; display: inline-block; border: 1px solid; border-radius: 2px; }
+  .legend .sw.h { background: var(--h-fill); border-color: var(--h-edge); } .legend .sw.p { background: var(--p-fill); border-color: var(--p-edge); }
+  .legend .cov-sw { display: inline-block; width: 14px; height: 12px; position: relative; }
+  .legend .cov-sw::before { content: ""; position: absolute; left: 0; width: 6px; top: 0; bottom: 0; background: var(--cov); }
+  .legend .cov-sw::after { content: ""; position: absolute; left: 8px; width: 6px; top: 6px; bottom: 0; background: var(--cov5); }
+  .legend .trk { width: 26px; height: 12px; display: inline-block; position: relative; }
+  .legend .trk::before { content: ""; position: absolute; left: 0; right: 0; top: 5px; border-top: 1px solid var(--domain-edge); }
+  .legend .trk::after { content: ""; position: absolute; left: 8px; width: 10px; top: 1px; height: 9px; background: var(--domain); border: 1px solid var(--domain-edge); }
+  .legend .path { width: 22px; height: 0; border-top: 2px solid var(--structure); display: inline-block; }
+  .legend .dotm { width: 8px; height: 8px; border-radius: 50%; background: var(--id1); display: inline-block; }
+  .legend b.mid { font-family: var(--mono); font-weight: 700; color: var(--ink); }
+
+  /* Expanded row: dot plot on the left, alignments on the right, a drag handle between. */
+  .panel { border-bottom: 1px solid var(--grid); background: var(--surface); }
+  .panel .ptool { display: flex; align-items: center; gap: 8px; padding: 6px 14px 4px 24px; font-size: 12.5px; color: var(--secondary); border-bottom: 1px solid var(--grid); }
+  .panel .ptool b { color: var(--ink); font-weight: 600; }
+  .panel .ptool .sp { flex: 1; }
+  .split { display: grid; grid-template-columns: var(--plotw) 10px minmax(0, 1fr); align-items: start; }
+  .split .plot { padding: 8px 0 8px 14px; overflow: auto; }
+  .split .vh { user-select: none; cursor: col-resize; align-self: stretch; display: flex; align-items: center; justify-content: center; color: var(--muted); border-left: 1px solid var(--grid); }
+  .split .vh:hover, .split .vh.on { color: var(--ink); background: var(--wash); }
+  .split .alns { padding: 8px 14px 12px 10px; overflow-x: auto; min-width: 0; }
+  .plot svg text { font-family: var(--sans); font-size: 11px; fill: var(--secondary); }
+  .plot svg text.num { font-size: 12px; font-weight: 700; fill: var(--ink); font-family: var(--sans); }
+  .plot .run-seg, .plot .run-num { cursor: pointer; }
+  .plot svg .area { cursor: crosshair; }
+  .plot svg line.cross { stroke: var(--muted); stroke-width: 1; stroke-dasharray: 3 3; pointer-events: none; }
+  .plot svg .run-seg.hot { stroke-width: 6; }
+  .plot svg circle.hot { r: 4.5; }
+  .block.hot { background: var(--wash); }
+  .plot .sub { color: var(--secondary); font-size: 12px; margin: 0 0 6px; }
+  .block { margin: 0 0 10px; padding: 6px 8px; border-radius: 6px; transition: background .6s; }
+  .block.flash { background: var(--flash); transition: none; }
+  .block h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 2px; color: var(--ink); }
+  .block h3 .w { font-weight: 400; color: var(--secondary); }
+  .block .wrap { overflow-x: auto; }
+  .chunk { display: grid; grid-template-columns: max-content max-content max-content; column-gap: 6px; row-gap: 2px; align-items: center; margin: 0 0 8px; white-space: nowrap; }
+  .chunk .lab { font-size: 11px; color: var(--secondary); text-align: right; }
+  .chunk .lab.r { text-align: left; }
+  .cells { font: 12px/15px var(--mono); color: var(--ink); letter-spacing: 0; }
+  .cells i { display: inline; font-style: normal; padding: 1px 3px; border: 0.5px solid transparent; border-radius: 2px; }
+  .cells i.h { background: var(--h-fill); border-color: var(--h-edge); color: var(--h-ink); }
+  .cells i.p { background: var(--p-fill); border-color: var(--p-edge); color: var(--p-ink); }
+  .cells i.x { border-color: var(--axis); }
+  .cells i.same { font-weight: 700; }
+  .cells.enc i { font-size: 11.5px; background: none; border-color: transparent; }
+  .cells.marks i { color: var(--secondary); background: none; border-color: transparent; }
+  .cells i.flank { opacity: .55; }
+  .cells.under i.run { box-shadow: 0 3px 0 0 var(--ink); }
+  .cells i.hit { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
+  /* Full sequences under an open row: runs underlined in the bar's shade, the rest faded. */
+  .seqs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 8px; row-gap: 6px; align-items: start; padding: 6px 14px 12px; border-top: 1px solid var(--grid); }
+  .seqs .lab { font-size: 11px; color: var(--secondary); text-align: right; white-space: nowrap; padding-top: 2px; }
+  .seqs .lab small { display: block; color: var(--muted); }
+  .seqs .cells { line-height: 19px; word-break: break-all; }
+  .seqs .cells i.run { cursor: pointer; }
+  .cells i.hot { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
+  .none { color: var(--secondary); padding: 8px 14px; }
+  .shown { color: var(--secondary); font-size: 12px; margin: 4px 0 0; }
+
+  #tip { position: fixed; pointer-events: none; background: var(--surface); color: var(--ink); border: 1px solid var(--grid); border-radius: 6px; padding: 6px 9px;
+         font-size: 12px; line-height: 1.35; box-shadow: 0 4px 14px rgba(0,0,0,.16); display: none; white-space: nowrap; z-index: 40; max-width: 420px; }
+  #tip b { font-weight: 600; }
+  #tip .m { font-family: var(--mono); }
+  #tip .t { color: var(--secondary); }
+  .help { position: fixed; right: 14px; top: 46px; width: 440px; max-width: calc(100vw - 28px); background: var(--surface); border: 1px solid var(--grid); border-radius: 10px;
+          box-shadow: 0 10px 30px rgba(0,0,0,.18); padding: 12px 14px; z-index: 35; display: none; font-size: 12.5px; color: var(--secondary); }
+  .help.open { display: block; }
+  .help h2 { font-size: 13px; margin: 0 0 6px; color: var(--ink); }
+  .help dl { margin: 0; display: grid; grid-template-columns: max-content 1fr; gap: 4px 10px; }
+  .help dt { color: var(--ink); font-weight: 600; }
+  .help dd { margin: 0; }
+  .help kbd { font: 11px var(--mono); border: 1px solid var(--axis); border-radius: 3px; padding: 0 4px; color: var(--ink); }
+  .empty { padding: 30px 14px; color: var(--secondary); }
+  .empty button { color: var(--ink); text-decoration: underline; }
+  @media (prefers-reduced-motion: reduce) { .block { transition: none; } }
+  @media print { header.top { position: static; -webkit-backdrop-filter: none; backdrop-filter: none; } .actions, .filters, .colhead .handle, .split .vh { display: none !important; } }
+</style>
+</head>
+<body>
+<!-- Icons: Material Design icons by Google, Apache License 2.0, inlined so the file works offline. -->
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <symbol id="i-search" viewBox="0 0 24 24"><path d="M15.5 14h-.79l-.28-.27A6.471 6.471 0 0 0 16 9.5 6.5 6.5 0 1 0 9.5 16c1.61 0 3.09-.59 4.23-1.57l.27.28v.79l5 4.99L20.49 19l-4.99-5zm-6 0C7.01 14 5 11.99 5 9.5S7.01 5 9.5 5 14 7.01 14 9.5 11.99 14 9.5 14z"/></symbol>
+  <symbol id="i-download" viewBox="0 0 24 24"><path d="M19 9h-4V3H9v6H5l7 7 7-7zM5 18v2h14v-2H5z"/></symbol>
+  <symbol id="i-expand-more" viewBox="0 0 24 24"><path d="M16.59 8.59 12 13.17 7.41 8.59 6 10l6 6 6-6z"/></symbol>
+  <symbol id="i-unfold-more" viewBox="0 0 24 24"><path d="M12 5.83 15.17 9l1.41-1.41L12 3 7.41 7.59 8.83 9 12 5.83zm0 12.34L8.83 15l-1.41 1.41L12 21l4.59-4.59L15.17 15 12 18.17z"/></symbol>
+  <symbol id="i-unfold-less" viewBox="0 0 24 24"><path d="M7.41 18.59 8.83 20 12 16.83 15.17 20l1.41-1.41L12 14l-4.59 4.59zm9.18-13.18L15.17 4 12 7.17 8.83 4 7.41 5.41 12 10l4.59-4.59z"/></symbol>
+  <symbol id="i-close" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></symbol>
+  <symbol id="i-copy" viewBox="0 0 24 24"><path d="M16 1H4c-1.1 0-2 .9-2 2v14h2V3h12V1zm3 4H8c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h11c1.1 0 2-.9 2-2V7c0-1.1-.9-2-2-2zm0 16H8V7h11v14z"/></symbol>
+  <symbol id="i-drag" viewBox="0 0 24 24"><path d="M20 9H4v2h16V9zM4 15h16v-2H4v2z"/></symbol>
+  <symbol id="i-help" viewBox="0 0 24 24"><path d="M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z"/></symbol>
+  <symbol id="i-open" viewBox="0 0 24 24"><path d="M19 19H5V5h7V3H5c-1.11 0-2 .9-2 2v14c0 1.1.89 2 2 2h14c1.1 0 2-.9 2-2v-7h-2v7zM14 3v2h3.59l-9.83 9.83 1.41 1.41L19 6.41V10h2V3h-7z"/></symbol>
+  <symbol id="i-arrow-down" viewBox="0 0 24 24"><path d="M20 12l-1.41-1.41L13 16.17V4h-2v12.17l-5.58-5.59L4 12l8 8 8-8z"/></symbol>
+  <symbol id="i-arrow-up" viewBox="0 0 24 24"><path d="M4 12l1.41 1.41L11 7.83V20h2V7.83l5.58 5.59L20 12l-8-8-8 8z"/></symbol>
+  <symbol id="i-image" viewBox="0 0 24 24"><path d="M21 19V5c0-1.1-.9-2-2-2H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2zM8.5 13.5l2.5 3.01L14.5 12l4.5 6H5l3.5-4.5z"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v16c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zM8 20H4v-4h4v4zm0-6H4v-4h4v4zm0-6H4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4zm6 12h-4v-4h4v4zm0-6h-4v-4h4v4zm0-6h-4V4h4v4z"/></symbol>
+  <symbol id="i-json" viewBox="0 0 24 24"><path d="M4 7v2c0 .55-.45 1-1 1H2v4h1c.55 0 1 .45 1 1v2c0 1.65 1.35 3 3 3h3v-2H7c-.55 0-1-.45-1-1v-2c0-1.3-.84-2.42-2-2.83v-.34C5.16 11.42 6 10.3 6 9V7c0-.55.45-1 1-1h3V4H7C5.35 4 4 5.35 4 7zm17 3c-.55 0-1-.45-1-1V7c0-1.65-1.35-3-3-3h-3v2h3c.55 0 1 .45 1 1v2c0 1.3.84 2.42 2 2.83v.34c-1.16.41-2 1.52-2 2.83v2c0 .55-.45 1-1 1h-3v2h3c1.65 0 3-1.35 3-3v-2c0-.55.45-1 1-1h1v-4h-1z"/></symbol>
+  <symbol id="i-dark" viewBox="0 0 24 24"><path d="M12 3c-4.97 0-9 4.03-9 9s4.03 9 9 9 9-4.03 9-9c0-.46-.04-.92-.1-1.36-.98 1.37-2.58 2.26-4.4 2.26-2.98 0-5.4-2.42-5.4-5.4 0-1.81.89-3.42 2.26-4.4-.44-.06-.9-.1-1.36-.1z"/></symbol>
+  <symbol id="i-light" viewBox="0 0 24 24"><path d="M12 7c-2.76 0-5 2.24-5 5s2.24 5 5 5 5-2.24 5-5-2.24-5-5-5zM2 13h2c.55 0 1-.45 1-1s-.45-1-1-1H2c-.55 0-1 .45-1 1s.45 1 1 1zm18 0h2c.55 0 1-.45 1-1s-.45-1-1-1h-2c-.55 0-1 .45-1 1s.45 1 1 1zM11 2v2c0 .55.45 1 1 1s1-.45 1-1V2c0-.55-.45-1-1-1s-1 .45-1 1zm0 18v2c0 .55.45 1 1 1s1-.45 1-1v-2c0-.55-.45-1-1-1s-1 .45-1 1zM5.99 4.58c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0s.39-1.03 0-1.41L5.99 4.58zm12.37 12.37c-.39-.39-1.03-.39-1.41 0-.39.39-.39 1.03 0 1.41l1.06 1.06c.39.39 1.03.39 1.41 0 .39-.39.39-1.03 0-1.41l-1.06-1.06zm1.06-10.96c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06zM7.05 18.36c.39-.39.39-1.03 0-1.41-.39-.39-1.03-.39-1.41 0l-1.06 1.06c-.39.39-.39 1.03 0 1.41s1.03.39 1.41 0l1.06-1.06z"/></symbol>
+  <symbol id="i-filter" viewBox="0 0 24 24"><path d="M10 18h4v-2h-4v2zM3 6v2h18V6H3zm3 7h12v-2H6v2z"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M9 16.17 4.83 12l-1.42 1.41L9 19 21 7l-1.41-1.41z"/></symbol>
+</svg>
+
+<header class="top">
+  <div class="titlebar">
+    <h1 id="title"></h1>
+    <div class="stats" id="stats"></div>
+    <div class="actions">
+      <button class="btn" id="expand-all" title="Expand every row shown"><svg class="icon"><use href="#i-unfold-more"/></svg>Expand all</button>
+      <button class="btn" id="collapse-all" title="Collapse every row"><svg class="icon"><use href="#i-unfold-less"/></svg>Collapse</button>
+      <div class="menu" id="dl">
+        <button class="btn" id="dl-btn" aria-haspopup="true" aria-expanded="false"><svg class="icon"><use href="#i-download"/></svg>Download<svg class="icon s"><use href="#i-expand-more"/></svg></button>
+        <ul>
+          <li><button data-dl="rows"><svg class="icon s"><use href="#i-table"/></svg>Table as TSV<span class="k">rows shown, in this order</span></button></li>
+          <li><button data-dl="runs"><svg class="icon s"><use href="#i-table"/></svg>Runs as TSV<span class="k">one line per run</span></button></li>
+          <li><button data-dl="fasta"><svg class="icon s"><use href="#i-copy"/></svg>Alignments as FASTA<span class="k">every run, gapped</span></button></li>
+          <li class="sep"></li>
+          <li><button data-dl="svg"><svg class="icon s"><use href="#i-image"/></svg>Overview as SVG<span class="k">rows shown</span></button></li>
+          <li><button data-dl="png"><svg class="icon s"><use href="#i-image"/></svg>Overview as PNG<span class="k">2× pixels</span></button></li>
+          <li class="sep"></li>
+          <li><button data-dl="json"><svg class="icon s"><use href="#i-json"/></svg>Everything as JSON<span class="k">the data behind this page</span></button></li>
+        </ul>
+      </div>
+      <button class="btn" id="theme" title="Theme: follows the system"><svg class="icon"><use href="#i-dark"/></svg></button>
+      <button class="btn" id="help-btn" title="What the columns mean, keyboard keys" aria-expanded="false"><svg class="icon"><use href="#i-help"/></svg></button>
+    </div>
+  </div>
+  <div class="filters">
+    <span class="search"><svg class="icon s" style="color:var(--muted)"><use href="#i-search"/></svg><input id="q" type="search" placeholder="protein, gene or entry   ( / )" autocomplete="off" spellcheck="false"></span>
+    <span class="search" id="seq-box" title="Rows whose runs contain this sequence, in either protein; a string of the class letters searches the encoding"><input id="seq" type="search" placeholder="sequence, e.g. RDG" autocomplete="off" spellcheck="false" style="width:130px;font-family:var(--mono)"></span><span class="small" id="seq-count"></span>
+    <label id="ident-filter">% identity ≥ <input id="min-ident" type="number" min="0" max="100" step="1" value="0"></label>
+    <label id="stat-filter"><span id="stat-label">score</span> <span id="stat-sign">≤</span> <input id="max-stat" type="number" step="any" placeholder="any" style="width:6em"></label>
+    <label><input id="reviewed" type="checkbox"> reviewed (Swiss-Prot) only</label>
+    <label><input id="no-frag" type="checkbox"> hide fragments</label>
+    <span id="regions" style="display:inline-flex;gap:4px;align-items:center" title="Keep rows with a run in this part of the query; click a domain on the ruler does the same"></span>
+    <span class="count" id="count"></span>
+    <button class="btn" id="reset" title="Clear every filter"><svg class="icon s"><use href="#i-close"/></svg>clear</button>
+  </div>
+  <div class="g ruler" id="ruler"></div>
+  <div class="g colhead" id="colhead"></div>
+</header>
+<div class="legend" id="legend"></div>
+<main id="rows"></main>
+<div id="tip"></div>
+<div class="help" id="help"></div>
+
+<script>
+// Data. Positions are 1-based and inclusive. Everything on the page is derived from R.
+// This file is a template: the report writer replaces the placeholder on the next line (two underscores, DATA, two underscores)
+// with the JSON of the result, and the title placeholder in <title> with the page title; each token occurs once in the file.
+let R = null; try { R = __DATA__; } catch (e) { R = null; }
+</script>
+<script>
+"use strict";
+if (!R) {
+  document.body.replaceChildren(Object.assign(document.createElement("p"), { style: "padding:24px;font:14px system-ui", textContent:
+    "This file is the empty template. Replace the data placeholder in its first script with the JSON of a kmerseek result (the object called R), then open it again." }));
+  throw new Error("kmerseek hits template: the data placeholder has not been replaced with the result JSON");
+}
+// A single pair (R.pair = the pair model, or R itself being a pair model with query, target and runs) renders as a one-row page.
+if (!R.rows) {
+  const m = R.pair || R;
+  const row = { rank: 1, label: m.target.label, target_name: m.target.name || m.target.label, entry: (m.target.name || m.target.label).split(" ")[0],
+    gene: (m.target.name || "").includes("GN=") ? m.target.name.split("GN=")[1].split(" ")[0] : "", organism: (m.target.name || "").includes("OS=") ? m.target.name.split("OS=")[1].split(" OX=")[0] : "",
+    description: (m.target.name || "").includes(" ") ? m.target.name.split(" ").slice(1).join(" ").split(" OS=")[0] : m.target.label,
+    n_entries: 1, other_entries: [], length: m.target.length, n_runs: m.runs.length, best_length: m.runs[0] ? m.runs[0].length : 0, best_identical: m.runs[0] ? m.runs[0].identical : 0,
+    tm_score: m.structure ? m.structure.tm_score_query : null, n_shared: m.n_shared, runs: m.runs, model: m };
+  const any = new Array(m.query.length).fill(0), solid = new Array(m.query.length).fill(0);
+  for (const r of m.runs) for (let i = r.query_start; i < r.query_end; i++) { any[i] = 1; if (r.identical >= (R.solid_identical || 5)) solid[i] = 1; }
+  R = { ksize: m.ksize, moltype: m.moltype, alphabet: m.alphabet, classes: m.classes, query: m.query, n_entries: 1, n_proteins: 1, solid_identical: R.solid_identical || 5,
+        structures: !!m.structure, max_runs_shown: R.max_runs_shown || 50, coverage: { any, solid }, rows: [row], score_columns: [], gapped: R.gapped === true, extended: R.extended === true, pair: true };
+}
+const K = R.ksize, Q = R.query, QL = Q.length, SOLID = R.solid_identical;
+// Score columns. New scores land here: R.score_columns = [{key, label, note, better: "low" | "high"}] and row.scores = {key: value}.
+// The first one ranks the rows. Without R.score_columns the page uses the single stat/stat_name/stat_note of older results.
+const SCORES = (R.score_columns && R.score_columns.length) ? R.score_columns : R.stat_name ? [{ key: "stat", label: R.stat_name, note: R.stat_note, better: "low" }] : [];
+const PRIMARY = SCORES[0] || null;
+// Alignments are ungapped unless the result carries gapped ones and says so (R.gapped). Identity is then counted on the run itself.
+const GAPPED = R.gapped === true;
+const IDENT_HOW = GAPPED ? "after gapped alignment" : "on the run";
+const scoreOf = (row, sc) => { const v = row.scores && sc.key in row.scores ? row.scores[sc.key] : row[sc.key]; return v === undefined || v === null || Number.isNaN(v) ? null : v; };
+const fmtScore = v => v === null ? "\u2013" : v === 0 ? "0" : Math.abs(v) < 1e-3 ? v.toExponential(1) : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
+// The grid: rank, name, aa, runs, longest, identical, shared, one column per score, TM, track.
+document.documentElement.style.setProperty("--cols", `30px var(--namew) 46px 42px 56px 78px 90px ${SCORES.map(() => "76px").join(" ")} 46px minmax(220px, 1fr)`);
+const CLASS_KEY = {}; for (const c of R.classes) CLASS_KEY[c.symbol] = c.symbol === R.classes[0].symbol ? "h" : "p";
+const el = (tag, cls, text) => { const e = document.createElement(tag); if (cls) e.className = cls; if (text !== undefined) e.textContent = text; return e; };
+const svgEl = (tag, attrs = {}, text) => { const e = document.createElementNS("http://www.w3.org/2000/svg", tag); for (const [k, v] of Object.entries(attrs)) e.setAttribute(k, v); if (text !== undefined) e.textContent = text; return e; };
+const icon = (id, small) => { const s = svgEl("svg", { class: "icon" + (small ? " s" : "") }); s.appendChild(svgEl("use", { href: "#" + id })); return s; };
+const pct = (a, b) => b ? Math.round(100 * a / b) : 0;
+const acc = entry => (entry.split("|")[1] || entry);
+const isReviewed = row => row.entry.startsWith("sp|");
+const isFragment = row => /\(Fragment\)/.test(row.target_name);
+const $ = id => document.getElementById(id);
+
+// Per-run identity (on the run, or after gapped alignment when the result carries one) and the shading bin it falls in.
+function gappedOf(row, i) { const m = row.model.runs[i]; return GAPPED && m && m.gapped ? m.gapped : null; }
+function identityOf(row, i) { return identity(row, i); }
+function identity(row, i) {
+  // The count on the run itself comes from the pair model when there is one; row.runs may carry the gapped count instead.
+  const r = row.runs[i], m = row.model && row.model.runs ? row.model.runs[i] : null, g = gappedOf(row, i);
+  const exact = m && m.identical !== undefined ? m.identical : r.identical;
+  return g ? { identical: g.identical, of: g.aligned, exact, gapped: true } : { identical: exact, of: r.length, exact, gapped: false };
+}
+const bin = frac => frac < 0.2 ? 0 : frac < 0.4 ? 1 : frac < 0.6 ? 2 : frac < 0.8 ? 3 : 4;
+
+// Rows carry a stable rank (their order by the score). Everything else is computed here.
+const ROWS = R.rows.map(row => {
+  const best = row.runs[0] || { length: 0, identical: 0, query_start: 0, query_end: 0 };
+  const id0 = row.runs.length ? identityOf(row, 0) : { identical: 0, of: 0 };
+  return { ...row, best, bestIdent: id0.identical, bestOf: id0.of, bestPct: id0.of ? 100 * id0.identical / id0.of : 0, regions: regionsHit(row), primary: PRIMARY ? scoreOf(row, PRIMARY) : null };
+});
+function regionsHit(row) {
+  const hit = new Set();
+  for (const r of row.runs) {
+    let inside = false;
+    for (const d of Q.domains) if (r.query_end >= d.start && r.query_start + 1 <= d.end) { hit.add(d.name); inside = true; }
+    if (!inside) hit.add("outside");
+  }
+  return hit;
+}
+
+const MANY_ORGANISMS = new Set(R.rows.map(r => r.organism)).size > 1;
+const primaryKey = r => r.primary === null ? Infinity : PRIMARY && PRIMARY.better === "high" ? -r.primary : r.primary;
+const state = { dragging: false, sort: PRIMARY ? "score:" + PRIMARY.key : "rank", dir: 1, open: new Set(), cursor: null, tw: 600, text: "", seq: "", minIdent: 0, maxStat: "", reviewed: false, noFrag: false, regions: new Set() };
+const SORTS = {
+  rank:      { label: "#",        key: r => r.rank,            title: PRIMARY ? `Rank by ${PRIMARY.label}` : "Rank" },
+  name:      { label: "protein",  key: r => (r.description || r.label).toLowerCase(), title: "Protein name", str: true },
+  length:    { label: "aa",       key: r => r.length,          title: "Target length, residues" },
+  runs:      { label: "runs",     key: r => -r.runs.length,    title: `Runs of consecutive shared ${K}-mers` },
+  longest:   { label: "longest",  key: r => -r.best.length,    title: "Longest run, residues" },
+  identical: { label: "% identity", key: r => -r.bestPct,      title: `Identical amino acids in the longest run, ${IDENT_HOW}, as a percentage of its columns` },
+  shared:    { label: "shared k-mers", key: r => -r.n_shared,   title: `Shared ${K}-mers with the query, in runs or not` },
+  tm:        { label: "TM",       key: r => r.tm_score === null ? 2 : -r.tm_score, title: "TM-score from superposing the two AlphaFold models with USalign, by query length; – when the models were not superposed" },
+};
+for (const sc of SCORES) SORTS["score:" + sc.key] = { label: sc.label, title: sc.note || sc.label, key: r => { const v = scoreOf(r, sc); return v === null ? Infinity : sc.better === "high" ? -v : v; } };
+
+// Sequence search. Residue letters match the residue rows; a string made only of the class symbols matches the encoding rows.
+function seqQuery() {
+  const q = state.seq.replace(/[^A-Za-z]/g, "");
+  if (q.length < 2) return null;
+  const symbols = R.classes.map(c => c.symbol).join("");
+  const enc = symbols && new RegExp(`^[${symbols}]+$`).test(q);
+  return { text: enc ? q : q.toUpperCase(), enc };
+}
+function findAll(hay, needle) { const out = []; let i = hay.indexOf(needle); while (i >= 0) { out.push([i, i + needle.length]); i = hay.indexOf(needle, i + 1); } return out; }
+function seqHits(rows) {
+  const q = seqQuery(); if (!q) return null;
+  return q.enc ? { query: findAll(rows.query_enc, q.text), target: findAll(rows.target_enc, q.text) }
+               : { query: findAll(rows.query_row, q.text), target: findAll(rows.target_row, q.text) };
+}
+function runRows(m, b) {
+  return (GAPPED && b.gapped) || { query_row: b.query_row, target_row: b.target_row, query_enc: b.query_enc, target_enc: b.target_enc,
+    query_start: b.window.query_start, target_start: b.window.target_start, run_columns: [b.query_start - b.window.query_start, b.query_start - b.window.query_start + b.length] };
+}
+function seqRuns(row) {
+  // Numbers of the runs of this row that contain the searched sequence.
+  const q = seqQuery(); if (!q) return [];
+  return row.model.runs.filter(b => { const h = seqHits(runRows(row.model, b)); return h.query.length || h.target.length; }).map(b => b.number);
+}
+function visibleRows() {
+  const t = state.text.trim().toLowerCase();
+  const cut = state.maxStat === "" ? null : Number(state.maxStat);
+  let rows = ROWS.filter(r =>
+    (!t || [r.description, r.label, r.gene, r.entry, ...(r.other_entries || [])].some(s => s && s.toLowerCase().includes(t))) &&
+    (!seqQuery() || seqRuns(r).length) &&
+    r.bestPct >= state.minIdent &&
+    (cut === null || !PRIMARY || (r.primary !== null && (PRIMARY.better === "high" ? r.primary >= cut : r.primary <= cut))) &&
+    (!state.reviewed || isReviewed(r)) &&
+    (!state.noFrag || !isFragment(r)) &&
+    (!state.regions.size || [...state.regions].some(g => r.regions.has(g))));
+  const s = SORTS[state.sort];
+  rows.sort((a, b) => {
+    const ka = s.key(a), kb = s.key(b);
+    const c = s.str ? ka.localeCompare(kb) : ka - kb;
+    return (c || primaryKey(a) - primaryKey(b) || a.rank - b.rank) * (c ? state.dir : 1);
+  });
+  return rows;
+}
+
+// ---------- header: title, stats, filters ----------
+function titles() {
+  const h1 = $("title"); h1.textContent = "";
+  h1.appendChild(document.createTextNode(Q.label));
+  h1.appendChild(el("span", "dim", `${QL} aa, ${acc(Q.name.split(" ")[0])}; ${K}-mers in the ${R.moltype || "reduced"} alphabet`));
+  h1.title = Q.name;
+  const ALPHABET = R.moltype ? `${R.moltype} alphabet (${R.alphabet.replace(/ alphabet/i, "")})` : R.alphabet;
+  $("stats").textContent = (R.pair ? `${Q.label} against ${R.rows[0].label}: ${R.rows[0].n_shared} shared ${K}-mers in the ${ALPHABET}. ` : `${R.n_proteins} proteins (${R.n_entries} database entries) share ${K}-mers with the query in the ${ALPHABET}. `) +
+    `A shared ${K}-mer is ${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in both proteins; a run is 2 or more shared ${K}-mers in a row on one diagonal. ` +
+    (R.pair ? "" : `Entries of one gene fold into one row; the ${R.rows.length} rows are the best by ${PRIMARY ? PRIMARY.label : "rank"}. Click a row for its dot plot and alignments.`);
+  $("ident-filter").title = `Identical amino acids in the longest run, ${IDENT_HOW}, as a percentage`;
+  if (PRIMARY) {
+    $("stat-label").textContent = PRIMARY.label; $("stat-sign").textContent = PRIMARY.better === "high" ? "\u2265" : "\u2264";
+    $("stat-filter").title = (PRIMARY.note || PRIMARY.label) + (PRIMARY.better === "high" ? ": keep rows at or above this value" : ": keep rows at or below this value");
+  } else $("stat-filter").style.display = "none";
+  if (R.pair) { for (const id of ["reviewed", "no-frag"]) $(id).parentElement.style.display = "none"; $("q").parentElement.style.display = "none"; $("expand-all").style.display = $("collapse-all").style.display = "none"; }
+  document.title = R.pair ? `${Q.label} vs ${R.rows[0].label} kmerseek pair` : `${Q.label} kmerseek hits`;
+  const box = $("regions");
+  const chip = (name, title) => { const b = el("button", "chip", name); b.title = title; b.setAttribute("aria-pressed", "false"); b.dataset.region = name; b.onclick = () => toggleRegion(name); box.appendChild(b); };
+  for (const d of Q.domains) chip(d.name, `rows with a run overlapping ${d.name} (${d.start}–${d.end})`);
+  if (Q.domains.length) chip("outside", "rows with a run outside every domain");
+}
+function toggleRegion(name) { state.regions.has(name) ? state.regions.delete(name) : state.regions.add(name); render(); }
+
+function legend() {
+  const box = $("legend"); box.textContent = "";
+  const add = (mark, text) => { const s = el("span"); s.appendChild(mark); s.appendChild(document.createTextNode(text)); box.appendChild(s); };
+  const ramp = el("span", "ramp"); for (let i = 0; i < 5; i++) ramp.appendChild(el("i", "id" + i));
+  add(ramp, `run, shaded by its identical residues ${IDENT_HOW}: under 20%, 20–40, 40–60, 60–80, 80% and over`);
+  add(el("i", "cov-sw"), R.pair ? `query residues under a run (light) and under a run with ${SOLID} or more identical residues (dark)` : `database entries with any run over the residue (light) and with a run of ${SOLID} or more identical residues (dark)`);
+  add(el("i", "trk"), "query, with its domains as boxes; click a domain to keep only rows with a run in it");
+  for (const c of R.classes) add(el("i", "sw " + CLASS_KEY[c.symbol]), `${c.symbol} = ${c.label}`);
+  if (R.moltype) add(el("span", null, ""), `alphabet ${R.moltype}: ${R.alphabet}; hover a letter in an alignment for its class`);
+  add(el("b", "mid", "G"), `identical residue in an alignment (bold); | between the two ${ENC_LABEL} rows: same class; faded columns are the flanks outside the run; an outlined stretch is a sequence-box match`);
+  if (!GAPPED) add(el("span", null, ""), `alignments are ungapped: a run is read straight off both sequences${R.extended ? ", extended past its exact seeds" : ""}`);
+  add(el("i", "path"), "residue pairs from superposing the two AlphaFold models with USalign, solid where USalign marks the pair close (:), dotted otherwise (dot plot)");
+  add(el("i", "dotm"), `single shared ${K}-mer, not in any run (dot plot)`);
+  add(el("span", null, ""), "under an open row, both full sequences with each run underlined in its bar's shade; a run lights up together in the plot, its alignment and the sequences");
+}
+
+// ---------- ruler: coverage, query domains, axis ----------
+const X = p => (p - 1) * (state.tw / QL);         // p is 1-based
+function areaPath(vals, mx, H) {
+  let d = `M0 ${H}`;
+  vals.forEach((v, i) => { const y = (H - v / mx * H).toFixed(1); d += `L${X(i + 1).toFixed(1)} ${y}L${X(i + 2).toFixed(1)} ${y}`; });
+  return d + `L${state.tw} ${H}Z`;
+}
+function tickStep(L, px) { for (const s of [10, 20, 25, 50, 100, 200, 250, 500, 1000]) if (s * px / L >= 48) return s; return 1000; }
+function rulerSvg() {
+  const { any, solid } = R.coverage, mx = Math.max(1, ...any), H = 36, DH = 28, AH = 16;
+  const svg = svgEl("svg", { width: state.tw, height: H + DH + AH + 6 });
+  svg.appendChild(svgEl("path", { class: "cov", d: areaPath(any, mx, H) }));
+  svg.appendChild(svgEl("path", { class: "cov5", d: areaPath(solid, mx, H) }));
+  svg.appendChild(svgEl("line", { class: "axis", x1: 0, x2: state.tw, y1: H, y2: H }));
+  const y0 = H + 4;
+  svg.appendChild(svgEl("line", { class: "pl", x1: X(1), x2: X(QL + 1), y1: y0 + 11, y2: y0 + 11 }));
+  for (const d of Q.domains) {
+    const r = svgEl("rect", { class: "dom" + (state.regions.has(d.name) ? " on" : ""), x: X(d.start), y: y0 + 4, width: X(d.end + 1) - X(d.start), height: 14, rx: 2 });
+    r.appendChild(svgEl("title", {}, `${d.name}: ${d.start}\u2013${d.end}. Click to keep only rows with a run here.`));
+    r.style.cursor = "pointer"; r.onclick = () => toggleRegion(d.name);
+    svg.appendChild(r);
+    const w = X(d.end + 1) - X(d.start), inside = w > d.name.length * 6.5 + 6;
+    svg.appendChild(svgEl("text", { class: "dom", x: (X(d.start) + X(d.end + 1)) / 2, y: inside ? y0 + 15 : y0 + 28, "text-anchor": "middle" }, d.name));
+  }
+  const ya = y0 + DH;
+  svg.appendChild(svgEl("line", { class: "axis", x1: 0, x2: state.tw, y1: ya, y2: ya }));
+  const step = tickStep(QL, state.tw), px = state.tw / QL;
+  const ticks = [1, ...Array.from({ length: Math.floor(QL / step) }, (_, i) => (i + 1) * step).filter(t => t < QL - step * 0.35), QL];
+  for (const t of ticks) {
+    const x = t === QL ? X(t) + px : X(t);
+    svg.appendChild(svgEl("line", { class: "axis", x1: x, x2: x, y1: ya, y2: ya + 4 }));
+    svg.appendChild(svgEl("text", { class: "ax", x, y: ya + 14, "text-anchor": t === 1 ? "start" : t === QL ? "end" : "middle" }, t));
+  }
+  return svg;
+}
+function ruler() {
+  const g = $("ruler"); g.textContent = "";
+  const { any, solid } = R.coverage, mx = Math.max(1, ...any);
+  const lbl = el("div", "lbl");
+  lbl.appendChild(el("b", null, R.pair ? "Where the runs land" : "Where the hits land"));
+  lbl.appendChild(document.createTextNode(R.pair ? ` \u2014 the query residues covered by a run (light) and by a run with ${SOLID} or more identical residues (dark).` :
+    ` \u2014 up to ${mx} of ${R.n_entries} entries have a run over one residue (at ${any.indexOf(mx) + 1}), ${Math.max(0, ...solid)} of them with ${SOLID} or more identical residues.`));
+  lbl.appendChild(el("span", "n", `${Q.label}, ${QL} aa, drawn as a line with its domains; the same axis runs through every row.`));
+  g.appendChild(lbl);
+  const cell = el("div", "track"); cell.appendChild(rulerSvg()); g.appendChild(cell);
+}
+
+function colhead() {
+  const g = $("colhead"); g.textContent = "";
+  const order = ["rank", "name", "length", "runs", "longest", "identical", "shared", ...SCORES.map(sc => "score:" + sc.key), "tm"];
+  for (const k of order) {
+    const s = SORTS[k];
+    const c = el("div", k === "rank" || k === "name" ? null : "num");
+    const b = el("button", "sort"); b.title = s.title + " (click to sort)";
+    if (k !== "rank") b.appendChild(icon(state.dir === 1 ? "i-arrow-down" : "i-arrow-up", true));
+    b.appendChild(document.createTextNode(s.label));
+    if (state.sort === k) b.setAttribute("aria-sort", state.dir === 1 ? "ascending" : "descending");
+    b.onclick = () => { if (state.sort === k) state.dir = -state.dir; else { state.sort = k; state.dir = 1; } render(); };
+    c.appendChild(b); g.appendChild(c);
+  }
+  const t = el("div", "track");
+  t.style.color = "var(--muted)"; t.style.fontSize = "11.5px";
+  t.textContent = `runs on the query axis above; hover a bar for its coordinates, click one for its alignment`;
+  g.appendChild(t);
+  const h = el("div", "handle"); h.title = "Drag to resize the name column"; h.appendChild(icon("i-drag", true));
+  h.onpointerdown = e => {
+    e.preventDefault(); h.classList.add("on"); h.setPointerCapture(e.pointerId); state.dragging = true; document.body.style.userSelect = "none";
+    const x0 = e.clientX, w0 = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--namew"));
+    h.onpointermove = ev => document.documentElement.style.setProperty("--namew", Math.max(120, Math.min(600, w0 + ev.clientX - x0)) + "px");
+    h.onpointerup = () => { h.classList.remove("on"); h.onpointermove = h.onpointerup = null; state.dragging = false; document.body.style.userSelect = ""; measure(); };
+  };
+  g.appendChild(h);
+}
+
+// ---------- rows ----------
+function lanes(runs) {
+  // Pack overlapping runs into lanes, like a genome browser; runs past the third lane are counted, not drawn.
+  const order = runs.map((r, i) => i).sort((a, b) => runs[a].query_start - runs[b].query_start);
+  const ends = [], lane = new Array(runs.length).fill(-1), extra = [];
+  for (const i of order) {
+    const r = runs[i]; let L = ends.findIndex(e => e < r.query_start);
+    if (L === -1) L = ends.length;
+    if (L >= 3) { extra.push(i); continue; }
+    ends[L] = r.query_end; lane[i] = L;
+  }
+  return { lane, n: Math.max(1, ends.length), extra };
+}
+function track(row) {
+  const { lane, n, extra } = lanes(row.runs);
+  const H = 12 + n * 7 + (extra.length ? 4 : 0), svg = svgEl("svg", { width: state.tw, height: H });
+  const top = extra.length ? 10 : (H - (n * 7 - 1)) / 2;
+  for (const d of Q.domains) svg.appendChild(svgEl("rect", { x: X(d.start), y: 0, width: X(d.end + 1) - X(d.start), height: H, fill: "var(--domain)", opacity: 0.35 }));
+  row.runs.forEach((r, i) => {
+    if (lane[i] < 0) return;
+    const id = identity(row, i);
+    const rect = svgEl("rect", { class: "bar id" + bin(id.identical / id.of), x: X(r.query_start + 1), y: top + lane[i] * 7, width: Math.max(r.length * state.tw / QL, 2), height: 6, rx: 1 });
+    rect.dataset.i = i;
+    rect.addEventListener("pointermove", e => tipRun(e, row, i));
+    rect.addEventListener("pointerleave", hideTip);
+    rect.addEventListener("click", e => { e.stopPropagation(); hideTip(); openRun(row, r.number); });
+    svg.appendChild(rect);
+  });
+  if (extra.length) {
+    const xs = extra.map(i => (X(row.runs[i].query_start + 1) + X(row.runs[i].query_end + 1)) / 2);
+    const t = svgEl("text", { class: "more", x: xs.reduce((a, b) => a + b, 0) / xs.length, y: 8, "text-anchor": "middle" }, `+${extra.length}`);
+    t.appendChild(svgEl("title", {}, `${extra.length} more runs overlap here; open the row to see them all`));
+    svg.appendChild(t);
+  }
+  return svg;
+}
+
+function rowEl(row) {
+  const g = el("div", "g row" + (state.open.has(row.rank) ? " open" : "") + (state.cursor === row.rank ? " cursor" : ""));
+  g.dataset.rank = row.rank; g.tabIndex = 0; g.setAttribute("role", "button"); g.setAttribute("aria-expanded", state.open.has(row.rank));
+  g.appendChild(el("div", "rank", row.rank));
+  const name = el("div", "name");
+  const d = el("div", "d", row.description || row.label); d.title = row.target_name; name.appendChild(d);
+  const s = el("div", "s");
+  const a = el("a"); a.href = `https://www.uniprot.org/uniprotkb/${encodeURIComponent(acc(row.entry))}/entry`; a.target = "_blank"; a.rel = "noopener";
+  a.title = "Open in UniProt"; a.appendChild(document.createTextNode(row.label)); a.appendChild(icon("i-open", true)); a.onclick = e => e.stopPropagation();
+  s.appendChild(a);
+  if (row.gene) s.appendChild(el("span", null, row.gene));
+  if (MANY_ORGANISMS && row.organism) s.appendChild(el("span", null, row.organism));
+  if (!isReviewed(row)) { const t = el("span", "tag", "TrEMBL"); t.title = "Unreviewed entry"; s.appendChild(t); }
+  if (isFragment(row)) { const t = el("span", "tag", "fragment"); s.appendChild(t); }
+  if (row.n_entries > 1) { const t = el("span", "tag", `+${row.n_entries - 1}`); t.title = `${row.n_entries - 1} more ${row.n_entries > 2 ? "entries" : "entry"} of this gene: ${row.other_entries.join(", ")}`; s.appendChild(t); }
+  name.appendChild(s); g.appendChild(name);
+  const id = identity(row, 0);
+  const cells = [[row.length], [row.runs.length], [row.best.length], [row.runs.length ? `${Math.round(row.bestPct)}%` : "\u2013", row.runs.length ? (GAPPED ? `${row.bestIdent} of ${id.of} aligned columns; ${id.exact} on the run itself` : `${row.bestIdent} of the run's ${id.of} residues`) : ""], [row.n_shared]];
+  for (const sc of SCORES) { const v = scoreOf(row, sc); cells.push([fmtScore(v), v === null ? `${sc.label}: not computed for this row` : `${sc.label} ${v}`, v === null]); }
+  for (const [v, title, dim] of cells) { const c = el("div", "num" + (dim ? " dim" : ""), v); if (title) c.title = title; g.appendChild(c); }
+  const tm = el("div", "num" + (row.tm_score === null ? " dim" : ""), row.tm_score === null ? "–" : row.tm_score.toFixed(2));
+  tm.title = row.tm_score === null ? "The models of this pair were not superposed" : `TM-score ${row.tm_score} by query length, USalign superposition of the AlphaFold models`;
+  g.appendChild(tm);
+  const t = el("div", "track"); t.appendChild(track(row)); g.appendChild(t);
+  g.onclick = () => toggle(row);
+  g.onkeydown = e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggle(row); } };
+  return g;
+}
+function toggle(row) { state.open.has(row.rank) ? state.open.delete(row.rank) : state.open.add(row.rank); state.cursor = row.rank; render(); }
+function openRun(row, number) {
+  state.open.add(row.rank); state.cursor = row.rank; render();
+  requestAnimationFrame(() => { const p = document.querySelector(`.panel[data-rank="${row.rank}"]`); if (p) flashBlock(p, number); });
+}
+
+function render() {
+  const rows = visibleRows();
+  ruler(); colhead();
+  const main = $("rows"); main.textContent = "";
+  $("count").innerHTML = ""; $("count").appendChild(el("b", null, rows.length)); $("count").appendChild(document.createTextNode(` of ${ROWS.length} rows`));
+  if (seqQuery()) { const nRuns = rows.reduce((a, r) => a + seqRuns(r).length, 0); $("seq-count").textContent = `${nRuns} run${nRuns === 1 ? "" : "s"} in ${rows.length} row${rows.length === 1 ? "" : "s"}`; }
+  else $("seq-count").textContent = "";
+  for (const b of document.querySelectorAll("#regions .chip")) b.setAttribute("aria-pressed", state.regions.has(b.dataset.region));
+  if (!rows.length) {
+    const e = el("div", "empty", "No row passes these filters. ");
+    const b = el("button", null, "Clear the filters"); b.onclick = resetFilters; e.appendChild(b); main.appendChild(e); return;
+  }
+  for (const row of rows) {
+    main.appendChild(rowEl(row));
+    if (state.open.has(row.rank)) main.appendChild(panel(row));
+  }
+}
+
+// ---------- expanded panel: dot plot and alignments ----------
+function panel(row) {
+  const m = row.model;
+  const p = el("section", "panel"); p.dataset.rank = row.rank;
+  const tool = el("div", "ptool");
+  const title = el("span"); title.appendChild(el("b", null, `${Q.label} × ${row.label}`));
+  title.appendChild(document.createTextNode(`, ${m.n_shared} shared ${K}-mers, ${m.runs.length} runs` + (m.singles.length ? `, ${m.singles.length} single` : "")));
+  tool.appendChild(title);
+  if (m.structure) {
+    const st = m.structure;
+    tool.appendChild(el("span", null, `${st.aligner} superposition of the AlphaFold models: TM-score ${st.tm_score_query.toFixed(2)} by query length, RMSD ${st.rmsd.toFixed(1)} Å over ${st.aligned} residue pairs`));
+  }
+  tool.appendChild(el("span", "sp"));
+  const bFasta = el("button", "btn"); bFasta.appendChild(icon("i-copy", true)); bFasta.appendChild(document.createTextNode("Copy FASTA")); bFasta.title = "Copy the gapped alignments of every run to the clipboard";
+  bFasta.onclick = e => { e.stopPropagation(); copyText(fastaOf([row]), bFasta); };
+  const bSvg = el("button", "btn"); bSvg.appendChild(icon("i-download", true)); bSvg.appendChild(document.createTextNode("Dot plot SVG"));
+  bSvg.onclick = e => { e.stopPropagation(); const svg = p.querySelector(".plot svg"); if (svg) download(`${Q.label}_vs_${row.label}.dotplot.svg`, svgString(svg), "image/svg+xml"); };
+  const bClose = el("button", "btn"); bClose.appendChild(icon("i-close", true)); bClose.title = "Close";
+  bClose.onclick = () => { state.open.delete(row.rank); render(); };
+  tool.appendChild(bFasta); tool.appendChild(bSvg); tool.appendChild(bClose); p.appendChild(tool);
+  const split = el("div", "split");
+  const plot = el("div", "plot"); split.appendChild(plot);
+  const vh = el("div", "vh"); vh.appendChild(icon("i-drag", true)); vh.title = "Drag to resize the dot plot";
+  vh.onpointerdown = e => {
+    e.preventDefault(); vh.classList.add("on"); vh.setPointerCapture(e.pointerId); state.dragging = true; document.body.style.userSelect = "none"; document.body.style.userSelect = "none";
+    const x0 = e.clientX, w0 = parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--plotw"));
+    vh.onpointermove = ev => { document.documentElement.style.setProperty("--plotw", Math.max(300, Math.min(900, w0 + ev.clientX - x0)) + "px"); plot.replaceChildren(dotPlot(m, p)); };
+    vh.onpointerup = () => { vh.classList.remove("on"); vh.onpointermove = vh.onpointerup = null; state.dragging = false; document.body.style.userSelect = ""; measure(); };
+  };
+  split.appendChild(vh);
+  const alns = el("div", "alns");
+  const shown = Math.min(m.runs.length, R.max_runs_shown);
+  if (!m.runs.length) alns.appendChild(el("p", "none", `No run to show: no two shared ${K}-mers are consecutive in both proteins.`));
+  for (const b of m.runs.slice(0, shown)) alns.appendChild(block(m, b));
+  if (shown < m.runs.length) alns.appendChild(el("p", "shown", `Showing the ${shown} longest of ${m.runs.length} runs; the FASTA and TSV downloads carry all of them.`));
+  // Hovering a letter names its class and the residues in that class.
+  alns.addEventListener("pointerover", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.sym) tipCell(e, c); });
+  alns.addEventListener("pointermove", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.sym) tipCell(e, c); });
+  alns.addEventListener("pointerout", e => { if (e.target.closest(".cells i")) hideTip(); });
+  split.appendChild(alns); p.appendChild(split);
+  const seqs = seqLines(m, p); if (seqs) p.appendChild(seqs);
+  plot.appendChild(dotPlot(m, p));
+  return p;
+}
+
+// One run lit everywhere it is drawn: its segment in the dot plot, its alignment block, its stretch in the sequences.
+function markRun(container, number, on) {
+  for (const n of container.querySelectorAll(`.run-seg[data-run~="${number}"], .block[data-run~="${number}"], .seqs i[data-run~="${number}"]`)) n.classList.toggle("hot", on);
+}
+
+// The two full sequences, one letter per cell as in the alignments, runs underlined in the shade of their bar.
+// Hovering a run's stretch lights the run in the plot and its alignment block; a click goes to the block.
+function seqLines(m, container) {
+  if (!m.query.sequence || !m.target.sequence) return null;
+  const g = el("div", "seqs");
+  const side = (s, startKey, endKey) => {
+    const runsAt = new Array(s.sequence.length).fill(null);
+    for (const b of m.runs) for (let i = b[startKey]; i < b[endKey]; i++) (runsAt[i] ||= []).push(b);
+    const cells = el("span", "cells");
+    for (let i = 0; i < s.sequence.length; i++) {
+      const rs = runsAt[i], c = el("i", (CLASS_KEY[s.encoded[i]] || "x") + (rs ? " run" : " flank"), s.sequence[i]);
+      c.dataset.pos = i + 1; c.dataset.prot = s.label; c.dataset.sym = s.encoded[i];
+      if (rs) {
+        c.dataset.run = rs.map(b => b.number).join(" ");
+        const b = rs[0], id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+        c.style.boxShadow = `0 3px 0 0 var(--id${bin(id.identical / id.of)})`;
+      }
+      cells.appendChild(c);
+    }
+    const lab = el("div", "lab", `${s.label} aa`); lab.appendChild(el("small", null, `${s.sequence.length} aa`));
+    g.appendChild(lab); g.appendChild(cells);
+  };
+  side(m.query, "query_start", "query_end");
+  side(m.target, "target_start", "target_end");
+  let hotRun = null;
+  const setHotRun = n => { if (n === hotRun) return; if (hotRun) markRun(container, hotRun, false); hotRun = n; if (hotRun) markRun(container, hotRun, true); };
+  const over = e => {
+    const c = e.target.closest(".cells i"); if (!c) return;
+    setHotRun(c.dataset.run ? c.dataset.run.split(" ")[0] : null);
+    const lines = cellLines(c);
+    for (const n of (c.dataset.run || "").split(" ").filter(Boolean)) {
+      const b = m.runs.find(x => String(x.number) === n), id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+      lines.push([`Run ${b.number}: ${b.length} aa, ${id.identical} of ${id.of} identical ${IDENT_HOW}; click to go to its alignment`, "t"]);
+    }
+    showTip(e, lines);
+  };
+  g.addEventListener("pointerover", over); g.addEventListener("pointermove", over);
+  g.addEventListener("pointerleave", () => { setHotRun(null); hideTip(); });
+  g.addEventListener("click", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.run) flashBlock(container, c.dataset.run.split(" ")[0]); });
+  return g;
+}
+
+function dotPlot(m, container) {
+  const side = Math.max(160, parseFloat(getComputedStyle(document.documentElement).getPropertyValue("--plotw")) - 150);
+  const tw = 30, ml = 52, mb = 34, mt = 4, mr = 6;
+  const qL = m.query.length, tL = m.target.length, scale = side / Math.max(qL, tL);
+  const pw = qL * scale, ph = tL * scale;
+  const W = ml + pw + 6 + tw + 60 + mr, H = mt + tw + 6 + ph + mb;
+  const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+  const x0 = ml, y0 = mt + tw + 6;
+  const sx = p => x0 + (p - 1) * scale, sy = p => y0 + (tL - p) * scale;
+  for (const d of m.query.domains) svg.appendChild(svgEl("rect", { fill: "var(--domain)", opacity: 0.7, x: sx(d.start), y: y0, width: (d.end - d.start + 1) * scale, height: ph }));
+  for (const d of m.target.domains) svg.appendChild(svgEl("rect", { fill: "var(--domain)", opacity: 0.7, x: x0, y: sy(d.end + 1), width: pw, height: (d.end - d.start + 1) * scale }));
+  svg.appendChild(svgEl("line", { class: "pl", x1: sx(1), x2: sx(qL + 1), y1: mt + tw * 0.6, y2: mt + tw * 0.6 }));
+  m.query.domains.forEach(d => {
+    svg.appendChild(svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.query.label} ${d.start}–${d.end}`, x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 }));
+    svg.appendChild(svgEl("text", { class: "dom", x: sx((d.start + d.end) / 2), y: mt + tw * 0.28, "text-anchor": "middle" }, d.name));
+  });
+  const tx = x0 + pw + 6;
+  svg.appendChild(svgEl("line", { class: "pl", x1: tx + tw * 0.4, x2: tx + tw * 0.4, y1: sy(1), y2: sy(tL + 1) }));
+  for (const d of m.target.domains) {
+    svg.appendChild(svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.target.label} ${d.start}–${d.end}`, x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 }));
+    svg.appendChild(svgEl("text", { class: "dom", x: tx + tw * 0.75, y: sy((d.start + d.end) / 2) + 4 }, d.name));
+  }
+  svg.appendChild(svgEl("rect", { x: x0, y: y0, width: pw, height: ph, fill: "none", stroke: "var(--axis)" }));
+  const ticks = L => { const step = L <= 600 ? 100 : L <= 1500 ? 200 : 500; return [1, ...Array.from({ length: Math.floor((L - 1) / step) }, (_, i) => (i + 1) * step).filter(t => L - t > L * 0.06), L]; };
+  for (const p of ticks(qL)) svg.appendChild(svgEl("text", { class: "ax", x: sx(p), y: y0 + ph + 12, "text-anchor": "middle" }, p));
+  for (const p of ticks(tL)) svg.appendChild(svgEl("text", { class: "ax", x: x0 - 5, y: sy(p) + 4, "text-anchor": "end" }, p));
+  svg.appendChild(svgEl("text", { x: x0 + pw / 2, y: H - 3, "text-anchor": "middle" }, `${m.query.label} position (aa)`));
+  svg.appendChild(svgEl("text", { x: 11, y: y0 + ph / 2, "text-anchor": "middle", transform: `rotate(-90 11 ${y0 + ph / 2})` }, `${m.target.label} position (aa)`));
+  if (m.structure) for (const seg of pathSegments(m.structure.pairs)) {
+    const d = seg.map(([q, t], i) => `${i ? "L" : "M"}${sx(q + 1).toFixed(1)} ${sy(t + 1).toFixed(1)}`).join("");
+    const attrs = { d: seg.length > 1 ? d : d + "h0.1", fill: "none", stroke: "var(--structure)", "stroke-width": 2, "stroke-linecap": "round" };
+    if (!seg[0][2]) attrs["stroke-dasharray"] = "2 3";
+    svg.appendChild(svgEl("path", attrs));
+  }
+  const singles = m.singles.map(sg => {
+    const c = svgEl("circle", { cx: sx(sg.query_pos + (K + 1) / 2), cy: sy(sg.target_pos + (K + 1) / 2), r: 2.5, fill: "var(--id1)" });
+    svg.appendChild(c); return c;
+  });
+  const segs = m.runs.map(b => {
+    const id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+    const col = `var(--id${bin(id.identical / id.of)})`;
+    const seg = svgEl("line", { class: "run-seg", "data-run": b.number, x1: sx(b.query_start + 1), y1: sy(b.target_start + 1), x2: sx(b.query_end + 1), y2: sy(b.target_end + 1), stroke: col, "stroke-width": 3.5, "stroke-linecap": "round" });
+    const num = svgEl("text", { class: "num run-num", x: sx(b.query_end + 1) + 4, y: sy(b.target_end + 1) - 2 }, b.number);
+    svg.appendChild(seg); svg.appendChild(num);
+    return { b, id, seg };
+  });
+  // The plot answers the pointer anywhere inside it: a crosshair with the two positions, and whatever is nearest
+  // (a run, a single k-mer, a USalign residue pair) named in the tooltip; a click on a run jumps to its alignment.
+  const area = svgEl("rect", { class: "area", x: x0, y: y0, width: pw, height: ph, fill: "transparent" });
+  const crossX = svgEl("line", { class: "cross", y1: y0, y2: y0 + ph, visibility: "hidden" });
+  const crossY = svgEl("line", { class: "cross", x1: x0, x2: x0 + pw, visibility: "hidden" });
+  svg.appendChild(area); svg.appendChild(crossX); svg.appendChild(crossY);
+  const distToSeg = (px, py, ax, ay, bx, by) => {
+    const dx = bx - ax, dy = by - ay, l2 = dx * dx + dy * dy || 1;
+    const u = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / l2));
+    return Math.hypot(px - (ax + u * dx), py - (ay + u * dy));
+  };
+  let hot = null;
+  const setHot = seg => {
+    if (hot === seg) return;
+    if (hot) markRun(container, hot.dataset.run, false);
+    hot = seg;
+    if (hot) markRun(container, hot.dataset.run, true);
+  };
+  const nearest = (px, py) => {
+    let best = null;
+    for (const r of segs) { const d = distToSeg(px, py, +r.seg.getAttribute("x1"), +r.seg.getAttribute("y1"), +r.seg.getAttribute("x2"), +r.seg.getAttribute("y2")); if (d <= 7 && (!best || d < best.d)) best = { kind: "run", d, r }; }
+    if (best) return best;
+    m.singles.forEach((sg, i) => { const d = Math.hypot(px - +singles[i].getAttribute("cx"), py - +singles[i].getAttribute("cy")); if (d <= 8 && (!best || d < best.d)) best = { kind: "single", d, sg, c: singles[i] }; });
+    if (best) return best;
+    if (m.structure) for (const [q, t, close] of m.structure.pairs) { const d = Math.hypot(px - sx(q + 1), py - sy(t + 1)); if (d <= 6 && (!best || d < best.d)) best = { kind: "pair", d, q, t, close }; }
+    return best;
+  };
+  const readout = e => {
+    const pt = new DOMPoint(e.clientX, e.clientY).matrixTransform(svg.getScreenCTM().inverse());
+    const px = Math.min(Math.max(pt.x, x0), x0 + pw), py = Math.min(Math.max(pt.y, y0), y0 + ph);
+    const f = nearest(px, py);
+    let cx = px, cy = py;
+    if (f && f.kind === "single") { cx = +f.c.getAttribute("cx"); cy = +f.c.getAttribute("cy"); }
+    if (f && f.kind === "pair") { cx = sx(f.q + 1); cy = sy(f.t + 1); }
+    const q = Math.max(1, Math.min(qL, Math.round((cx - x0) / scale + 1))), t = Math.max(1, Math.min(tL, Math.round(tL - (cy - y0) / scale)));
+    crossX.setAttribute("x1", cx); crossX.setAttribute("x2", cx); crossY.setAttribute("y1", cy); crossY.setAttribute("y2", cy);
+    crossX.setAttribute("visibility", "visible"); crossY.setAttribute("visibility", "visible");
+    for (const c of singles) c.classList.remove("hot");
+    const lines = [[`${m.query.label} ${q}  ×  ${m.target.label} ${t}`, "b"]];
+    if (f && f.kind === "run") {
+      const b = f.r.b; setHot(f.r.seg);
+      lines.push([`Run ${b.number}: ${b.length} aa, ${f.r.id.identical} of ${f.r.id.of} identical ${IDENT_HOW}`, "t"], [`${m.query.label} ${b.query_start + 1}–${b.query_end} × ${m.target.label} ${b.target_start + 1}–${b.target_end}`, "t"], [b.query_row, "m"], [b.target_row, "m"], ["click to go to its alignment", "t"]);
+    } else {
+      setHot(null);
+      if (f && f.kind === "single") { f.c.classList.add("hot"); lines.push([`single shared ${K}-mer, in no run`, "t"], [`${m.query.label} ${f.sg.query_pos + 1}–${f.sg.query_pos + K}: ${f.sg.query_kmer}`, "m"], [`${m.target.label} ${f.sg.target_pos + 1}–${f.sg.target_pos + K}: ${f.sg.target_kmer}`, "m"], [f.sg.kmer, "m"]); }
+      else if (f && f.kind === "pair") lines.push([`USalign residue pair ${m.query.label} ${f.q + 1} with ${m.target.label} ${f.t + 1}${f.close ? ", marked close" : ", not marked close"}`, "t"]);
+      else if (m.structure) lines.push(["no run, k-mer or USalign pair here", "t"]);
+      else lines.push(["no run or k-mer here", "t"]);
+    }
+    showTip(e, lines);
+    return f;
+  };
+  svg.addEventListener("pointermove", readout);
+  svg.addEventListener("pointerleave", () => { crossX.setAttribute("visibility", "hidden"); crossY.setAttribute("visibility", "hidden"); setHot(null); for (const c of singles) c.classList.remove("hot"); hideTip(); });
+  svg.addEventListener("click", e => { const f = readout(e); if (f && f.kind === "run") flashBlock(container, f.r.b.number); });
+  // The other way round: hovering an alignment block lights its run in the plot and in the sequences.
+  container.querySelectorAll(".block").forEach(blk => {
+    blk.addEventListener("pointerenter", () => markRun(container, blk.dataset.run, true));
+    blk.addEventListener("pointerleave", () => markRun(container, blk.dataset.run, false));
+  });
+  // Domain boxes name themselves.
+  svg.querySelectorAll("rect.dom").forEach(r => r.addEventListener("pointermove", e => { e.stopPropagation(); showTip(e, [[r.dataset.name, "b"], [r.dataset.range, "t"]]); }));
+  return svg;
+}
+function pathSegments(pairs) {
+  const segs = []; let cur = [];
+  for (const [q, t, close] of pairs) {
+    const last = cur[cur.length - 1];
+    if (cur.length && (q !== last[0] + 1 || t !== last[1] + 1 || !!close !== !!last[2])) { segs.push(cur); cur = []; }
+    cur.push([q, t, !!close]);
+  }
+  if (cur.length) segs.push(cur);
+  return segs;
+}
+function flashBlock(container, number) {
+  const b = container.querySelector(`.block[data-run="${number}"]`); if (!b) return;
+  b.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
+  b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 900);
+}
+const NO_REGION = v => !v || v === "no region" || v === "none";
+function regionPhrase(m, b) {
+  const q = NO_REGION(b.query_region) ? null : b.query_region, t = NO_REGION(b.target_region) ? null : b.target_region;
+  if (q && t) return `in ${q} of ${m.query.label} and ${t} of ${m.target.label}`;
+  if (q) return `in ${q} of ${m.query.label}, outside annotated domains in ${m.target.label}`;
+  if (t) return `outside annotated domains in ${m.query.label}, in ${t} of ${m.target.label}`;
+  return "outside annotated domains in both";
+}
+function structurePhrase(off) { return off === null || off === undefined ? "not among the USalign residue pairs" : Math.abs(off) <= 1 ? "on the USalign residue pairs" : `${Math.abs(off)} residues off the USalign residue pairs`; }
+
+const WRAP = 60, CELL = 15, BOX = 13, ROW = 17;
+const ENC_LABEL = R.classes.map(c => c.symbol).join("") || "enc";
+const residuesBefore = (row, n) => [...row.slice(0, n)].filter(c => c !== "-").length;
+function block(m, b) {
+  const div = el("div", "block"); div.dataset.run = b.number;
+  const h = el("h3"); h.appendChild(document.createTextNode(`Run ${b.number}`));
+  const bits = [`${b.length} aa`, regionPhrase(m, b)];
+  bits.push(GAPPED && b.gapped ? `${b.identical} identical on the run, ${b.gapped.identical} of ${b.gapped.aligned} aligned columns after gapped alignment` : `${b.identical} of ${b.length} identical (${pct(b.identical, b.length)}%)`);
+  if (b.n_mismatches !== undefined && b.n_mismatches !== null) bits.push(`${b.n_mismatches} mismatches in the extension`);
+  if (b.polar !== null && b.polar !== undefined) bits.push(`${b.polar} of ${b.length} polar`);
+  if (m.structure) bits.push(structurePhrase(b.structure_offset));
+  h.appendChild(el("span", "w", "   " + bits.join(", "))); div.appendChild(h);
+  const rows = runRows(m, b);
+  const wrap = el("div", "wrap"); div.appendChild(wrap);
+  const hits = state.seq ? seqHits(rows) : null;
+  for (let st = 0; st < rows.query_row.length; st += WRAP) wrap.appendChild(chunk(m, rows, st, hits));
+  return div;
+}
+// One line of an alignment block, five rows: query residues, query encoding, a mark where the classes agree, target encoding, target residues.
+// Plain inline text, so the browser's find and copy work on the sequences. Identical residues are bold; flanks outside the run are faded; the run is underlined.
+function chunk(m, rows, start, hits) {
+  const sl = str => str.slice(start, start + WRAP);
+  const qRow = sl(rows.query_row), tRow = sl(rows.target_row), qEnc = sl(rows.query_enc), tEnc = sl(rows.target_enc);
+  const n = qRow.length, g = el("div", "chunk");
+  const inRun = i => start + i >= rows.run_columns[0] && start + i < rows.run_columns[1];
+  const isHit = (side, i) => hits && hits[side] && hits[side].some(([a, b]) => start + i >= a && start + i < b);
+  const line = (label, cells, right) => { g.appendChild(el("div", "lab", label)); g.appendChild(cells); g.appendChild(el("div", "lab r", right === undefined ? "" : right)); };
+  const residues = (text, enc, other, side, under, label, first) => {
+    const c = el("span", "cells" + (under ? " under" : "")); let pos = first;
+    for (let i = 0; i < n; i++) {
+      const k = text[i] === "-" ? "x" : (CLASS_KEY[enc[i]] || "x"), same = text[i] !== "-" && text[i] === other[i];
+      const cell = el("i", k + (same ? " same" : "") + (inRun(i) ? " run" : " flank") + (isHit(side, i) ? " hit" : ""), text[i]);
+      if (text[i] !== "-") { pos++; cell.dataset.pos = pos; cell.dataset.prot = label; cell.dataset.sym = enc[i]; }
+      c.appendChild(cell);
+    }
+    return c;
+  };
+  const encoding = enc => { const c = el("span", "cells enc"); for (let i = 0; i < n; i++) { const cell = el("i", (CLASS_KEY[enc[i]] || "x") + (inRun(i) ? "" : " flank"), enc[i]); cell.dataset.sym = enc[i]; c.appendChild(cell); } return c; };
+  const marks = () => { const c = el("span", "cells marks"); for (let i = 0; i < n; i++) c.appendChild(el("i", inRun(i) ? "" : "flank", qEnc[i] !== "-" && qEnc[i] === tEnc[i] ? "|" : " ")); return c; };
+  const qFirst = rows.query_start + residuesBefore(rows.query_row, start), qLast = rows.query_start + residuesBefore(rows.query_row, start + n);
+  const tFirst = rows.target_start + residuesBefore(rows.target_row, start), tLast = rows.target_start + residuesBefore(rows.target_row, start + n);
+  line(`${m.query.label} aa ${qFirst + 1}`, residues(qRow, qEnc, tRow, "query", false, m.query.label, qFirst), qLast);
+  line(`${m.query.label} ${ENC_LABEL}`, encoding(qEnc));
+  line("", marks());
+  line(`${m.target.label} ${ENC_LABEL}`, encoding(tEnc));
+  line(`${m.target.label} aa ${tFirst + 1}`, residues(tRow, tEnc, qRow, "target", true, m.target.label, tFirst), tLast);
+  return g;
+}
+
+// ---------- tooltip ----------
+const tip = $("tip");
+function showTip(e, lines) {
+  tip.textContent = "";
+  for (const [text, kind] of lines) { const d = el("div", kind === "b" ? null : kind); if (kind === "b") { const b = el("b", null, text); d.appendChild(b); } else d.textContent = text; tip.appendChild(d); }
+  tip.style.display = "block";
+  const w = tip.offsetWidth, h = tip.offsetHeight;
+  tip.style.left = Math.min(e.clientX + 14, innerWidth - w - 8) + "px";
+  tip.style.top = (e.clientY + 16 + h > innerHeight ? e.clientY - h - 10 : e.clientY + 16) + "px";
+}
+function hideTip() { tip.style.display = "none"; }
+function cellLines(c) {
+  const cls = R.classes.find(x => x.symbol === c.dataset.sym);
+  const name = cls ? cls.label.split(" (")[0] : "unclassified", members = cls ? [...cls.residues].join(" ") : "";
+  return c.dataset.pos
+    ? [[`${c.textContent} ${c.dataset.pos} of ${c.dataset.prot}`, "b"], [`${name} (${c.dataset.sym}) in the ${R.moltype || ""} alphabet`, "t"], [members, "m"]]
+    : [[`${c.dataset.sym} = ${name}`, "b"], [members, "m"], [`${R.moltype || ""} alphabet`, "t"]];
+}
+function tipCell(e, c) { showTip(e, cellLines(c)); }
+function tipRun(e, row, i) {
+  const r = row.runs[i], id = identity(row, i), m = row.model.runs[i];
+  const lines = [[`${r.length} aa, ${id.identical} of ${id.of} identical${id.gapped ? " after gapped alignment" : ""} (${pct(id.identical, id.of)}%)`, "b"],
+                 [`${Q.label} ${r.query_start + 1}–${r.query_end}  ×  ${row.label} ${r.target_start + 1}–${r.target_end}`, "t"]];
+  if (m) lines.push([regionPhrase(row.model, m) + (r.polar !== null ? `, ${r.polar} polar` : "") + (row.model.structure ? `, ${structurePhrase(r.structure_offset)}` : ""), "t"]);
+  if (m) lines.push([`${m.query_row}  ${Q.label} aa`, "m"], [`${m.query_enc}  ${ENC_LABEL}`, "m"], [`${m.target_enc}  ${ENC_LABEL}`, "m"], [`${m.target_row}  ${row.label} aa`, "m"]);
+  showTip(e, lines);
+}
+
+// ---------- downloads ----------
+function download(name, text, type) {
+  const blob = text instanceof Blob ? text : new Blob([text], { type });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob); a.download = name; document.body.appendChild(a); a.click();
+  setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+function copyText(text, btn) {
+  navigator.clipboard.writeText(text).then(() => { const t = btn.lastChild.textContent; btn.lastChild.textContent = "Copied"; setTimeout(() => btn.lastChild.textContent = t, 1200); },
+    () => download(`${Q.label}.alignments.fasta`, text, "text/plain"));
+}
+const tsv = rows => rows.map(r => r.map(v => String(v ?? "").replace(/[\t\n]/g, " ")).join("\t")).join("\n") + "\n";
+function rowsTsv(rows) {
+  const head = ["rank", "protein", "entry", "gene", "organism", "reviewed", "fragment", "entries_of_gene", "length_aa", "runs", `shared_${K}mers`, "longest_run_aa", GAPPED ? "longest_run_identical_gapped" : "longest_run_identical", "longest_run_pct_identity", ...SCORES.map(sc => sc.label.replace(/\W+/g, "_")), "tm_score", "runs_on_query"];
+  return tsv([head, ...rows.map(r => [r.rank, r.description || r.label, r.entry, r.gene || "", r.organism, isReviewed(r) ? "yes" : "no", isFragment(r) ? "yes" : "no", r.n_entries, r.length, r.runs.length, r.n_shared, r.best.length, r.bestIdent, Math.round(r.bestPct * 10) / 10, ...SCORES.map(sc => scoreOf(r, sc) ?? ""), r.tm_score ?? "", r.runs.map(x => `${x.query_start + 1}-${x.query_end}`).join(";")])]);
+}
+function runsTsv(rows) {
+  const head = ["rank", "protein", "entry", "run", "query_start", "query_end", "target_start", "target_end", "length_aa", "identical_on_run", ...(GAPPED ? ["identical_gapped", "aligned_columns_gapped"] : []), "polar", "query_region", "target_region", "structure_offset", "query_row", "target_row"];
+  const out = [head];
+  for (const r of rows) r.runs.forEach((x, i) => { const m = r.model.runs[i] || {}, g = (GAPPED && m.gapped) || null; out.push([r.rank, r.description || r.label, r.entry, x.number, x.query_start + 1, x.query_end, x.target_start + 1, x.target_end, x.length, x.identical, ...(GAPPED ? [g ? g.identical : "", g ? g.aligned : ""] : []), x.polar ?? "", NO_REGION(m.query_region) ? "" : m.query_region, NO_REGION(m.target_region) ? "" : m.target_region, x.structure_offset ?? "", g ? g.query_row : (m.query_row ?? ""), g ? g.target_row : (m.target_row ?? "")]); });
+  return tsv(out);
+}
+function fastaOf(rows) {
+  let out = "";
+  for (const r of rows) for (const b of r.model.runs) {
+    const g = (GAPPED && b.gapped) || b;
+    const qs = g.query_start ?? b.window.query_start, ts = g.target_start ?? b.window.target_start;
+    const qe = qs + residuesBefore(g.query_row, g.query_row.length), te = ts + residuesBefore(g.target_row, g.target_row.length);
+    out += `>${Q.label}/${qs + 1}-${qe} run${b.number} vs ${r.label} ${b.length}aa identical=${GAPPED && b.gapped ? b.gapped.identical + "/" + b.gapped.aligned : b.identical + "/" + b.length}\n${g.query_row}\n>${r.label}/${ts + 1}-${te} run${b.number} vs ${Q.label}\n${g.target_row}\n`;
+  }
+  return out;
+}
+function svgString(svg) {
+  const c = svg.cloneNode(true), cs = getComputedStyle(document.documentElement);
+  // Resolve the CSS variables so the file stands alone.
+  const vars = {}; for (const v of ["ink", "secondary", "muted", "grid", "axis", "surface", "domain", "domain-edge", "structure", "id0", "id1", "id2", "id3", "id4", "cov", "cov5", "h-fill", "h-edge", "h-ink", "p-fill", "p-edge", "p-ink"]) vars[v] = cs.getPropertyValue("--" + v).trim();
+  const fix = s => s.replace(/var\(--([\w-]+)\)/g, (_, v) => vars[v] || "#000");
+  for (const n of c.querySelectorAll("*")) for (const a of ["fill", "stroke"]) if (n.hasAttribute(a)) n.setAttribute(a, fix(n.getAttribute(a)));
+  const style = svgEl("style", {}, `text{font-family:${cs.getPropertyValue("--sans")};font-size:11px;fill:${vars.secondary}} text.num{font-size:12px;font-weight:700;fill:${vars.ink}} text.ax{font-size:10.5px;fill:${vars.muted}} text.dom{font-size:11px;fill:${vars.secondary}} rect.dom{fill:${vars.domain};stroke:${vars["domain-edge"]};stroke-width:.8} line.pl{stroke:${vars["domain-edge"]};stroke-width:1.2} .cov{fill:${vars.cov}} .cov5{fill:${vars.cov5}} line.axis{stroke:${vars.axis}} rect.bar{stroke:${vars.surface}} rect.bar.id0{fill:${vars.id0}} rect.bar.id1{fill:${vars.id1}} rect.bar.id2{fill:${vars.id2}} rect.bar.id3{fill:${vars.id3}} rect.bar.id4{fill:${vars.id4}} text.more{font-size:10px;font-weight:600;fill:${vars.secondary}} text.lab{font-size:12px;fill:${vars.ink}} text.sub{font-size:10.5px;fill:${vars.secondary}} text.hd{font-size:11px;fill:${vars.secondary}} text.ttl{font-size:14px;font-weight:600;fill:${vars.ink}}`);
+  c.insertBefore(style, c.firstChild);
+  c.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+  c.style.background = vars.surface;
+  return new XMLSerializer().serializeToString(c);
+}
+function overviewSvg(rows) {
+  // The rows shown, as one figure: ruler on top, one line per protein.
+  const saved = state.tw; state.tw = 900;
+  const LW = 330, NUMW = 270, W = 20 + LW + NUMW + state.tw + 20, top = 150;
+  const tracks = rows.map(row => track(row)), heights = tracks.map(t => Math.max(22, Number(t.getAttribute("height")) + 4));
+  const H = top + heights.reduce((a, b) => a + b, 0) + 30;
+  const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
+  svg.appendChild(svgEl("text", { class: "ttl", x: 20, y: 24 }, `${Q.label}: runs of shared ${K}-mers (${R.alphabet}) in ${rows.length} proteins`));
+  svg.appendChild(svgEl("text", { class: "sub", x: 20, y: 42 }, `bars shaded by identical residues ${IDENT_HOW} (light: under 20%, dark: 80% and over); grey area: database entries with a run over each residue (${R.n_entries} entries), dark area: with ${SOLID} or more identical`));
+  const g = svgEl("g", { transform: `translate(${20 + LW + NUMW}, 52)` });
+  for (const n of [...rulerSvg().childNodes]) g.appendChild(n);
+  svg.appendChild(g);
+  const heads = [["#", 20], ["protein", 44], ["aa", 20 + LW + 40], ["runs", 20 + LW + 85], ["longest", 20 + LW + 140], ["% identity", 20 + LW + 210], [PRIMARY ? PRIMARY.label : "", 20 + LW + 260]];
+  for (const [t, x] of heads) svg.appendChild(svgEl("text", { class: "hd", x, y: top - 8, "text-anchor": t === "#" || t === "protein" ? "start" : "end" }, t));
+  let y = top;
+  rows.forEach((row, i) => {
+    const RH = heights[i], ty = y + RH / 2 + 4, name = row.description || row.label;
+    svg.appendChild(svgEl("text", { class: "sub", x: 20, y: ty }, row.rank));
+    svg.appendChild(svgEl("text", { class: "lab", x: 44, y: ty }, name.slice(0, 34) + (name.length > 34 ? "\u2026" : "")));
+    const vals = [[row.length, 40], [row.runs.length, 85], [row.best.length, 140], [row.runs.length ? Math.round(row.bestPct) + "%" : "\u2013", 210], [PRIMARY ? fmtScore(row.primary) : "", 260]];
+    for (const [v, dx] of vals) svg.appendChild(svgEl("text", { class: "sub", x: 20 + LW + dx, y: ty, "text-anchor": "end" }, v));
+    const t = tracks[i], gg = svgEl("g", { transform: `translate(${20 + LW + NUMW}, ${y + (RH - Number(t.getAttribute("height"))) / 2})` });
+    for (const n of [...t.childNodes]) gg.appendChild(n);
+    svg.appendChild(gg);
+    y += RH;
+    svg.appendChild(svgEl("line", { x1: 20, x2: W - 20, y1: y, y2: y, stroke: "var(--grid)" }));
+  });
+  state.tw = saved;
+  return svg;
+}
+function pngOf(svgText, name) {
+  const img = new Image(), url = URL.createObjectURL(new Blob([svgText], { type: "image/svg+xml" }));
+  img.onload = () => {
+    const c = document.createElement("canvas"); c.width = img.width * 2; c.height = img.height * 2;
+    const ctx = c.getContext("2d"); ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue("--surface").trim(); ctx.fillRect(0, 0, c.width, c.height);
+    ctx.scale(2, 2); ctx.drawImage(img, 0, 0); URL.revokeObjectURL(url);
+    c.toBlob(b => download(name, b, "image/png"), "image/png");
+  };
+  img.src = url;
+}
+function doDownload(kind) {
+  const rows = visibleRows(), base = `${Q.label}.kmerseek`;
+  if (kind === "rows") download(`${base}.hits.tsv`, rowsTsv(rows), "text/tab-separated-values");
+  if (kind === "runs") download(`${base}.runs.tsv`, runsTsv(rows), "text/tab-separated-values");
+  if (kind === "fasta") download(`${base}.alignments.fasta`, fastaOf(rows), "text/plain");
+  if (kind === "json") download(`${base}.json`, JSON.stringify(R), "application/json");
+  if (kind === "svg") download(`${base}.overview.svg`, svgString(overviewSvg(rows)), "image/svg+xml");
+  if (kind === "png") pngOf(svgString(overviewSvg(rows)), `${base}.overview.png`);
+}
+
+// ---------- help ----------
+function help() {
+  const h = $("help");
+  h.appendChild(el("h2", null, "Reading this page"));
+  const dl = el("dl");
+  const add = (t, d) => { dl.appendChild(el("dt", null, t)); dl.appendChild(el("dd", null, d)); };
+  add("alphabet", `${R.moltype ? R.moltype + ", " : ""}${R.alphabet}: ${R.classes.map(c => `${c.symbol} = ${c.label.split(" (")[0]} (${[...c.residues].join(" ")})`).join("; ")}.`);
+  add(`shared ${K}-mer`, `${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in query and target.`);
+  add("run", `2 or more shared ${K}-mers in a row on one diagonal, so ${K + 1} or more residues with the same pattern.`);
+  add("% identity", GAPPED ? "Identical residues in the longest run after gapped alignment of the run and its flanks; the tooltip on a bar gives the count on the run itself too." : "Identical residues in the longest run, counted straight down the run: the alignment is ungapped.");
+  add("shared k-mers", `All shared ${K}-mers between the two proteins, in runs or not.`);
+  for (const sc of SCORES) add(sc.label, (sc.note || sc.label) + (sc === PRIMARY ? ". Ranks the rows." : "") + (sc.better === "high" ? " Higher is better." : " Lower is better."));
+  add("TM-score", "From superposing the two AlphaFold models with USalign, by query length; 0.5 and above usually means the same fold. The dot plot draws USalign's residue pairs as a line.");
+  add("shading", "Darker bar = larger identical fraction; the same five steps colour the run segments in the dot plot.");
+  add("sequences", "Under an open row, the two full sequences, coloured by class, with each run underlined in the shade of its bar; hover a letter for its position and class, hover or click a run's stretch as in the plot.");
+  add("entries", "Database entries of one gene are folded into one row; the tag +n counts the others, hover it to list them.");
+  add("sequence box", `Keeps the rows with a run containing the letters, in either protein, and marks them in the alignments; letters from the alphabet only (${ENC_LABEL}) search the encoding instead. The browser's own find works on the alignments too.`);
+  h.appendChild(dl);
+  h.appendChild(el("h2", null, "Keys")).style.marginTop = "10px";
+  const keys = el("div"); keys.innerHTML = "<kbd>j</kbd> <kbd>k</kbd> move between rows, <kbd>Enter</kbd> open or close, <kbd>/</kbd> search, <kbd>Esc</kbd> close what is open";
+  h.appendChild(keys);
+}
+
+// ---------- wiring ----------
+function resetFilters() {
+  state.text = ""; state.seq = ""; state.minIdent = 0; state.maxStat = ""; state.reviewed = false; state.noFrag = false; state.regions.clear();
+  $("q").value = ""; $("seq").value = ""; $("min-ident").value = 0; $("max-stat").value = ""; $("reviewed").checked = false; $("no-frag").checked = false; render();
+}
+function measure() {
+  if (state.dragging) return;
+  const cell = document.querySelector("#colhead .track"); if (!cell) return;
+  const w = Math.max(160, Math.floor(cell.getBoundingClientRect().width));
+  if (w !== state.tw) { state.tw = w; render(); }
+}
+function setTheme(mode) {
+  if (mode === "auto") document.documentElement.removeAttribute("data-theme"); else document.documentElement.setAttribute("data-theme", mode);
+  try { localStorage.setItem("kmerseek-theme", mode); } catch (e) {}
+  const b = $("theme"); b.title = `Theme: ${mode === "auto" ? "follows the system" : mode} (click to change)`;
+  b.replaceChildren(icon(mode === "dark" ? "i-light" : "i-dark"));
+}
+titles(); legend(); help();
+$("q").addEventListener("input", e => { state.text = e.target.value; render(); });
+$("seq").addEventListener("input", e => {
+  state.seq = e.target.value;
+  if (seqQuery()) { const hit = ROWS.filter(r => seqRuns(r).length); if (hit.length && hit.length <= 8) for (const r of hit) state.open.add(r.rank); }
+  render();
+});
+$("min-ident").addEventListener("input", e => { state.minIdent = Number(e.target.value) || 0; render(); });
+$("max-stat").addEventListener("input", e => { state.maxStat = e.target.value; render(); });
+$("reviewed").addEventListener("change", e => { state.reviewed = e.target.checked; render(); });
+$("no-frag").addEventListener("change", e => { state.noFrag = e.target.checked; render(); });
+$("reset").onclick = resetFilters;
+$("expand-all").onclick = () => { for (const r of visibleRows()) state.open.add(r.rank); render(); };
+$("collapse-all").onclick = () => { state.open.clear(); render(); };
+$("dl-btn").onclick = e => { e.stopPropagation(); const m = $("dl"); m.classList.toggle("open"); $("dl-btn").setAttribute("aria-expanded", m.classList.contains("open")); };
+for (const b of document.querySelectorAll("#dl [data-dl]")) b.onclick = () => { $("dl").classList.remove("open"); doDownload(b.dataset.dl); };
+document.addEventListener("click", e => { if (!e.target.closest("#dl")) $("dl").classList.remove("open"); if (!e.target.closest("#help, #help-btn")) $("help").classList.remove("open"); });
+$("help-btn").onclick = e => { e.stopPropagation(); $("help").classList.toggle("open"); };
+let themeMode = "auto"; try { themeMode = localStorage.getItem("kmerseek-theme") || "auto"; } catch (e) {}
+setTheme(themeMode);
+$("theme").onclick = () => setTheme(themeMode = { auto: "dark", dark: "light", light: "auto" }[themeMode]);
+document.addEventListener("keydown", e => {
+  if (e.target.matches("input, select, textarea")) { if (e.key === "Escape") e.target.blur(); return; }
+  const rows = visibleRows(); if (!rows.length) return;
+  const i = rows.findIndex(r => r.rank === state.cursor);
+  if (e.key === "j" || e.key === "ArrowDown") { state.cursor = rows[Math.min(rows.length - 1, i + 1)].rank; render(); document.querySelector(".row.cursor")?.scrollIntoView({ block: "nearest" }); e.preventDefault(); }
+  else if (e.key === "k" || e.key === "ArrowUp") { state.cursor = rows[Math.max(0, i - 1)].rank; render(); document.querySelector(".row.cursor")?.scrollIntoView({ block: "nearest" }); e.preventDefault(); }
+  else if (e.key === "Enter" && i >= 0) { toggle(rows[i]); e.preventDefault(); }
+  else if (e.key === "/") { $("q").focus(); e.preventDefault(); }
+  else if (e.key === "Escape") { $("dl").classList.remove("open"); $("help").classList.remove("open"); if (state.open.size) { state.open.clear(); render(); } }
+});
+if (R.pair) state.open.add(1);
+render();
+measure();
+new ResizeObserver(() => measure()).observe(document.body);
+</script>
+</body>
+</html>

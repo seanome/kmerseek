@@ -182,6 +182,128 @@ the others) -- use it to tame proteome-scale searches where a gene can have doze
 distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
 
+## Visualizing one pair of sequences
+
+`kmerseek pair` compares one query sequence with one target sequence at a chosen
+alphabet and k-mer size and writes JSON listing every shared k-mer with its position in
+both sequences, plus the matched regions those k-mers chain into (the same regions
+`search` reports). `scripts/visualize_pair.py` draws that JSON as a dot plot and one
+alignment block per run of two or more consecutive shared k-mers:
+
+- In the dot plot each protein is a line with boxes for its domains along its axis, and
+  each domain's span is shaded across the plot, so a run sits in a named cell such as
+  "Bcl-2 x Bcl-2" without reading coordinates. Runs are numbered diagonal segments;
+  lone shared k-mers are dots.
+- Each alignment block, longest run first and numbered to match, is the BLAST layout:
+  query row, identical residues written between the rows, target row, 1-based
+  coordinates at both ends, residue boxes coloured hydrophobic or polar. The header
+  gives the two regions, the length, the identical residues and how many residues are
+  polar (a low-complexity flag; 1 of 14 is an all-hydrophobic run).
+
+Example, human BCL-2 against C. elegans CED-9 at `hp_lehninger2`, k=12, with both
+proteins' Pfam domains. Run 1 is the BH1 motif inside the Bcl-2 domain of both: 5/19
+residues identical, 19/19 the same hydrophobic/polar class.
+
+![Shared k-mers between BCL2_HUMAN and CED9_CAEEL](docs/images/bcl2_vs_ced9_pair_example.png)
+
+([SVG version](docs/images/bcl2_vs_ced9_pair_example.svg))
+
+```bash
+kmerseek pair -q tests/testdata/fasta/bcl2.fasta -t tests/testdata/fasta/ced9.fasta \
+    --alphabet hp --ksize 12 -o bcl2_vs_ced9.json
+
+python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ \
+    --domains scripts/testdata/bcl2_ced9_pfam_domains.tsv --html
+```
+
+The first record of each FASTA is used unless `--query-name` / `--target-name` names
+another by its header or its first token (`sp|P10415|BCL2_HUMAN`). `--domains` takes
+one or more Pfam-style tables (TSV, CSV or parquet) with a protein column (`accession`,
+`protein` or `name`), `domain_start`/`domain_end` or `start`/`end` (1-based inclusive)
+and a `name`, `pfam_name` or `pfam_id` column; proteins match by full header, first
+token or UniProt accession, so the `*_pfam_domains.parquet` tables built from
+Pfam-A.regions work as they are. `--flank N` shows N residues either side of each run
+and switches the middle line to BLAST's: the letter where identical, `:` where only the
+class agrees. `--html` also writes the pair as a one-row page of the search report
+(same template, the row open): hover a single for its k-mer, click a run's number to
+jump to its alignment, copy the runs as FASTA or the dot plot as SVG. Under the row sit
+both full sequences, coloured by class, each run underlined in the shade of its bar; a
+run hovered in the plot, in its alignment or in the sequences lights up in all three
+([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/bcl2_vs_ced9_pair_example.html)).
+
+Every lone shared k-mer is also written to the JSON as a region exactly k residues
+long; the figure draws those as singles and gives alignments only to runs.
+
+Identities are counted on the run's own diagonal, with no gaps. An exact run in the
+reduced alphabet can sit a few residues off the true alignment (MCL-1's BH1 run reads 1
+identical residue with BCL-2 on its diagonal, though NWGR is in both), so a low count
+on a run says the run is not the alignment, not that the proteins are unrelated.
+
+`--structures DIR` draws USalign's residue pairs across the dot plot: with USalign or
+TM-align on `PATH` (or `--aligner`), the two proteins' AlphaFold or PDB files in that
+directory (`AF-{accession}-F1-model_v*.cif`, `{accession}.pdb`) are superposed, every
+residue pair USalign reports is drawn as a thin line (solid where USalign marks the pair
+close, dotted otherwise), and each run's header says whether it lies on those pairs. For
+BCL-2 against CED-9, run 1 (BH1) is on them and run 3, 9 residues off run 1's diagonal,
+is 4 residues off; only one of the two can be real, and the structures say which.
+
+## Visualizing a whole search
+
+`scripts/visualize_search.py` turns `kmerseek search` output into one HTML report per
+query. The query is the shared axis: it is drawn once at the top as a line with its
+domains, under a histogram of how many database entries have a run over each residue
+(light for any run, dark for a run with 5 or more identical residues). That histogram
+is the noise map: a low-complexity stretch is covered by unrelated proteins whose
+Ala/Pro/Gly runs match it letter for letter, so a run there is discounted at a glance
+and a run in BH1 is not.
+
+Below it, one row per protein with the numbers in the row (length, runs, longest run,
+identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
+a bar at its query coordinates, shaded by its share of identical residues; overlapping
+runs stack in lanes. Database entries of one gene fold into one row, so a family search
+is not a list of TrEMBL copies of the query. Click a row and the pair view above opens
+underneath it. The page filters rows by name, identical residues, the statistic,
+Swiss-Prot status, fragments and the query domain a run falls in; the Download menu
+gives the rows and runs as TSV, the runs as FASTA, the overview as SVG or PNG and the
+data as JSON.
+
+Example, CED-9 searched against the 25 BCL-2-like proteins in `tests/testdata/fasta`
+at `hp_lehninger2`, k=15, with Pfam domains:
+[docs/examples/ced9_kmerseek_hits_example.html](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html).
+15 of the 25 share a 15-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
+residues with 5 identical, on the USalign residue pairs; the q-value ranks it 8th,
+behind runs that are longer but polar-rich and off the structure (RTN3: 23 residues,
+2 identical, 14 polar). The q-value scores a run by its length alone. The commands, on files in this repository:
+
+```bash
+kmerseek index -i tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+    --alphabet hp --ksize 15 -o bcl2_25.rocksdb
+kmerseek search -q tests/testdata/fasta/ced9.fasta -t bcl2_25.rocksdb -o results.csv \
+    --alphabet hp --ksize 15
+
+python scripts/visualize_search.py --csv results.csv \
+    --query-fasta tests/testdata/fasta/ced9.fasta \
+    --target-fasta tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+    --output-dir report/ \
+    --domains scripts/testdata/bcl2_25_pfam_domains.tsv scripts/testdata/bcl2_ced9_pfam_domains.tsv
+```
+
+`--structures DIR` adds a TM-score column and USalign's residue pairs to each row's dot
+plot.
+
+Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
+Benjamini-Hochberg corrected region tail probability; the column headers also sort by
+identical residues, run length, run count and shared k-mers, which put
+composition-driven hits (p53, POU4F1) among the family members and show why the
+ranking statistic is the default. The pair view needs every shared k-mer, which the
+CSV does not carry, so the script runs `kmerseek pair` once per row (1.3 s for 40
+rows) on sequences from the two FASTA files; `--target-fasta` is the FASTA the index
+was built from. `--max-rows` caps each query (default 100), `--max-runs-shown` caps the
+alignments per opened row (default 10, longest first), `--solid-identical` sets how
+many identical residues a run needs to count in the histogram's dark area (default 5).
+The page is `scripts/kmerseek_hits_template.html` with its title and data tokens
+filled; everything on it is drawn by the template's own script from that data.
+
 ## Alphabets
 
 Pick one with `--alphabet` (`-a`). An alphabet is a partition of the 20 amino acids into
