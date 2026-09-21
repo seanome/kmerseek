@@ -138,6 +138,26 @@ expectation summed over the same survivors, so the two stay comparable.
 
 Choose N from the shortest match you need to see reliably, not from k. The cap is 10.
 
+## Region E-value
+
+Every CSV row is one matched region, and `region_evalue` is how many regions at least
+that surprising the whole search would turn up by chance: the region's Poisson tail
+probability (`region_tail_probability`) times the number of places a region could have
+come from, `region_search_space` (positions in the query) times `db_n_targets`. A tail
+probability of 1e-6 in a 300-residue query against 25 targets is an E-value of 0.007;
+against 500,000 targets it is 150. Unlike the tail probability, it can be compared
+across searches of different sizes.
+
+It is not yet calibrated. Searching the 25 BCL-2-like test proteins against 500 decoys
+(each protein shuffled 20 times with its dipeptide counts kept,
+`shuffle_fasta_2mer.py --seed 1`) at `hp_lehninger2`, k=15 returns 2953 query-target
+pairs with a best region at E <= 1, where a calibrated E-value gives about 25 (one per
+query), and 4131 at E <= 10 where it gives about 250. The two reasons are documented on
+`MatchedRegion::poisson_score`: the k-mers in a run overlap, and the run's length is
+both what defines the region and what the test measures. Rank by it; do not read it as
+an expected count. The test `region_evalue_on_2mer_shuffled_decoys_overstates_hits`
+pins these numbers so a change to the statistic shows up there.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
