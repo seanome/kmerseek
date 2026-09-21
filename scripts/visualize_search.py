@@ -110,9 +110,12 @@ def find_kmerseek(explicit):
     raise SystemExit("no kmerseek binary with the `pair` subcommand found; pass --kmerseek or build with `cargo build --release`")
 
 
-def run_pair(kmerseek, query_fasta, target_fasta, target_name, ksize, moltype):
-    """`kmerseek pair` for one hit, as the parsed JSON."""
+def run_pair(kmerseek, query_fasta, target_fasta, target_name, ksize, moltype, extension=None):
+    """`kmerseek pair` for one hit, as the parsed JSON. `extension` is (mismatch penalty,
+    give-up margin) to grow each run past its exact seed, or None to keep runs exact."""
     cmd = [kmerseek, "pair", "--query", query_fasta, "--target", target_fasta, "--target-name", target_name, "--ksize", str(ksize), "--alphabet", moltype]
+    if extension:
+        cmd += ["--extend-mismatch-penalty", str(extension[0]), "--extend-xdrop", str(extension[1])]
     out = subprocess.run(cmd, capture_output=True, text=True)
     if out.returncode != 0:
         raise SystemExit(f"kmerseek pair failed for {target_name}:\n{out.stderr.strip()}")
@@ -215,7 +218,7 @@ def run_identical(block):
 
 def run_bar(block):
     """What a row's bar and its tooltip need, 0-based half-open as in the model."""
-    bar = {k: block[k] for k in ("number", "query_start", "query_end", "target_start", "target_end", "length", "polar")}
+    bar = {k: block[k] for k in ("number", "query_start", "query_end", "target_start", "target_end", "length", "polar", "seeds", "n_mismatches")}
     bar["identical"] = run_identical(block)
     if "structure_offset" in block:
         bar["structure_offset"] = block["structure_offset"]
@@ -255,6 +258,7 @@ class SearchReport:
         self.domain_rows = domain_rows
         self.queries = read_fasta(args.query_fasta)
         self.targets = read_fasta(args.target_fasta)
+        self.extension = (args.extend_mismatch_penalty, args.extend_xdrop) if args.extend_mismatch_penalty > 0 else None
         self.aligner = find_aligner(args.aligner) if args.structures else None
         if args.structures and self.aligner is None:
             print("no USalign or TMalign found; skipping the superpositions", file=sys.stderr)
@@ -274,7 +278,7 @@ class SearchReport:
         write_fasta(target_fasta, {t: self.targets[t] for t, _, _ in ranked})
         out = []
         for rank, (target_name, others, stat) in enumerate(ranked, start=1):
-            pair = run_pair(self.kmerseek, query_fasta, target_fasta, target_name.split()[0], ksize, moltype)
+            pair = run_pair(self.kmerseek, query_fasta, target_fasta, target_name.split()[0], ksize, moltype, self.extension)
             model = build_model(
                 pair,
                 self.domain_rows,
@@ -310,6 +314,7 @@ class SearchReport:
             "n_proteins": len(fold_entries(rows)),
             "solid_identical": self.args.solid_identical,
             "structures": bool(self.args.structures and self.aligner),
+            "extension": {"mismatch_penalty": self.extension[0], "xdrop": self.extension[1]} if self.extension else None,
             "max_runs_shown": self.args.max_runs_shown,
             "coverage": coverage(rows, query["length"], ksize, self.args.solid_identical),
             "rows": protein_rows,
@@ -341,6 +346,8 @@ def _build_arg_parser():
     p.add_argument("--max-runs-shown", type=int, default=10, help="alignments per opened row, longest first (default 10)")
     p.add_argument("--solid-identical", type=int, default=5, help="identical residues a run needs to count in the histogram's dark area (default 5)")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run in the alignments")
+    p.add_argument("--extend-mismatch-penalty", type=float, default=0.0, help="grow each run past its exact seed as `kmerseek search --extend-mismatch-penalty` does, and draw the seed inside the grown run; 0 keeps runs exact (default)")
+    p.add_argument("--extend-xdrop", type=float, default=8.0, help="the give-up margin of that extension (default 8)")
     p.add_argument("--structures", metavar="DIR", help="directory of AlphaFold or PDB files; with USalign or TM-align, each row gets a TM-score and its dot plot their residue pairs")
     p.add_argument("--aligner", help="USalign or TMalign binary (default: found on PATH)")
     p.add_argument("--kmerseek", help="path to the kmerseek binary (default: PATH, then target/release, target/debug)")

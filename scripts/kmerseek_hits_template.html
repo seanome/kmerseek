@@ -125,6 +125,8 @@
   rect.bar { stroke: var(--surface); stroke-width: 1; }
   rect.bar.id0 { fill: var(--id0); } rect.bar.id1 { fill: var(--id1); } rect.bar.id2 { fill: var(--id2); } rect.bar.id3 { fill: var(--id3); } rect.bar.id4 { fill: var(--id4); }
   rect.bar:hover { stroke: var(--focus); stroke-width: 1.5; }
+  /* Extension: the residues a run gained past its seed are the same mark at a third of its strength. */
+  rect.bar.ext, .plot svg .run-seg.ext { opacity: .35; }
   text.more { font-size: 10px; font-weight: 600; fill: var(--secondary); font-family: var(--sans); }
   line.tick { stroke: var(--grid); stroke-width: 1; }
   text.ax { font-size: 10.5px; fill: var(--muted); font-family: var(--sans); }
@@ -143,6 +145,7 @@
   .legend .ramp i { width: 14px; height: 9px; display: inline-block; }
   .legend .ramp i.id0 { background: var(--id0); } .legend .ramp i.id1 { background: var(--id1); } .legend .ramp i.id2 { background: var(--id2); } .legend .ramp i.id3 { background: var(--id3); } .legend .ramp i.id4 { background: var(--id4); }
   .legend .sw { width: 14px; height: 12px; display: inline-block; border: 1px solid; border-radius: 2px; }
+  .legend .seed-sw { width: 30px; height: 9px; display: inline-block; background: linear-gradient(to right, color-mix(in srgb, var(--id4) 35%, transparent) 0 30%, var(--id4) 30% 70%, color-mix(in srgb, var(--id4) 35%, transparent) 70%); }
   .legend .sw.h { background: var(--h-fill); border-color: var(--h-edge); } .legend .sw.p { background: var(--p-fill); border-color: var(--p-edge); }
   .legend .cov-sw { display: inline-block; width: 14px; height: 12px; position: relative; }
   .legend .cov-sw::before { content: ""; position: absolute; left: 0; width: 6px; top: 0; bottom: 0; background: var(--cov); }
@@ -191,6 +194,7 @@
   .cells.marks i { color: var(--secondary); background: none; border-color: transparent; }
   .cells i.flank { opacity: .55; }
   .cells.under i.run { box-shadow: 0 3px 0 0 var(--ink); }
+  .cells.under i.ext { box-shadow: 0 3px 0 0 color-mix(in srgb, var(--ink) 35%, transparent); }
   .cells i.hit { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
   /* Full sequences under an open row: runs underlined in the bar's shade, the rest faded. */
   .seqs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 8px; row-gap: 6px; align-items: start; padding: 6px 14px 12px; border-top: 1px solid var(--grid); }
@@ -312,7 +316,7 @@ if (!R.rows) {
   const any = new Array(m.query.length).fill(0), solid = new Array(m.query.length).fill(0);
   for (const r of m.runs) for (let i = r.query_start; i < r.query_end; i++) { any[i] = 1; if (r.identical >= (R.solid_identical || 5)) solid[i] = 1; }
   R = { ksize: m.ksize, moltype: m.moltype, alphabet: m.alphabet, classes: m.classes, query: m.query, n_entries: 1, n_proteins: 1, solid_identical: R.solid_identical || 5,
-        structures: !!m.structure, max_runs_shown: R.max_runs_shown || 50, coverage: { any, solid }, rows: [row], score_columns: [], gapped: R.gapped === true, extended: R.extended === true, pair: true };
+        structures: !!m.structure, max_runs_shown: R.max_runs_shown || 50, coverage: { any, solid }, rows: [row], score_columns: [], gapped: R.gapped === true, extension: m.extension || null, pair: true };
 }
 const K = R.ksize, Q = R.query, QL = Q.length, SOLID = R.solid_identical;
 // Score columns. New scores land here: R.score_columns = [{key, label, note, better: "low" | "high"}] and row.scores = {key: value}.
@@ -322,6 +326,17 @@ const PRIMARY = SCORES[0] || null;
 // Alignments are ungapped unless the result carries gapped ones and says so (R.gapped). Identity is then counted on the run itself.
 const GAPPED = R.gapped === true;
 const IDENT_HOW = GAPPED ? "after gapped alignment" : "on the run";
+// Runs were grown past their exact seeds with `--extend-mismatch-penalty` when the result carries R.extension = {mismatch_penalty, xdrop}.
+// Each run then lists its seeds, the exact runs of shared k-mers it grew from; the residues past them are drawn at a third of the strength.
+const EXT = R.extension || null, EXTENDED = !!EXT;
+const seedsOf = b => (b.seeds && b.seeds.length) ? b.seeds : [{ query_start: b.query_start, query_end: b.query_end, target_start: b.target_start, target_end: b.target_end, length: b.length }];
+const inSeed = (b, pos, side) => seedsOf(b).some(sd => pos >= sd[side + "_start"] && pos < sd[side + "_end"]);   // pos is 0-based
+function seedPhrase(b) {
+  if (!EXTENDED) return null;
+  const ss = seedsOf(b), left = ss[0].query_start - b.query_start, right = b.query_end - ss[ss.length - 1].query_end, n = b.n_mismatches || 0;
+  const seed = ss.length === 1 ? `seed ${ss[0].length} aa at ${Q.label} ${ss[0].query_start + 1}–${ss[0].query_end}` : `${ss.length} seeds of ${ss.map(sd => sd.length).join(" + ")} aa`;
+  return `${seed}, grown ${left} left and ${right} right with ${n} mismatch${n === 1 ? "" : "es"}`;
+}
 const scoreOf = (row, sc) => { const v = row.scores && sc.key in row.scores ? row.scores[sc.key] : row[sc.key]; return v === undefined || v === null || Number.isNaN(v) ? null : v; };
 const fmtScore = v => v === null ? "\u2013" : v === 0 ? "0" : Math.abs(v) < 1e-3 ? v.toExponential(1) : Math.abs(v) >= 100 ? v.toFixed(0) : Math.abs(v) >= 1 ? v.toFixed(2) : v.toFixed(3);
 // The grid: rank, name, aa, runs, longest, identical, shared, one column per score, TM, track.
@@ -429,7 +444,7 @@ function titles() {
   h1.title = Q.name;
   const ALPHABET = R.moltype ? `${R.moltype} alphabet (${R.alphabet.replace(/ alphabet/i, "")})` : R.alphabet;
   $("stats").textContent = (R.pair ? `${Q.label} against ${R.rows[0].label}: ${R.rows[0].n_shared} shared ${K}-mers in the ${ALPHABET}. ` : `${R.n_proteins} proteins (${R.n_entries} database entries) share ${K}-mers with the query in the ${ALPHABET}. `) +
-    `A shared ${K}-mer is ${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in both proteins; a run is 2 or more shared ${K}-mers in a row on one diagonal. ` +
+    `A shared ${K}-mer is ${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in both proteins; a run is 2 or more shared ${K}-mers in a row on one diagonal${EXTENDED ? `, grown past its ends while the ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern mostly agrees (a mismatch costs ${EXT.mismatch_penalty}, and the run stops growing ${EXT.xdrop} below its best score)` : ""}. ` +
     (R.pair ? "" : `Entries of one gene fold into one row; the ${R.rows.length} rows are the best by ${PRIMARY ? PRIMARY.label : "rank"}. Click a row for its dot plot and alignments.`);
   $("ident-filter").title = `Identical amino acids in the longest run, ${IDENT_HOW}, as a percentage`;
   if (PRIMARY) {
@@ -455,7 +470,8 @@ function legend() {
   for (const c of R.classes) add(el("i", "sw " + CLASS_KEY[c.symbol]), `${c.symbol} = ${c.label}`);
   if (R.moltype) add(el("span", null, ""), `alphabet ${R.moltype}: ${R.alphabet}; hover a letter in an alignment for its class`);
   add(el("b", "mid", "G"), `identical residue in an alignment (bold); | between the two ${ENC_LABEL} rows: same class; faded columns are the flanks outside the run; an outlined stretch is a sequence-box match`);
-  if (!GAPPED) add(el("span", null, ""), `alignments are ungapped: a run is read straight off both sequences${R.extended ? ", extended past its exact seeds" : ""}`);
+  if (!GAPPED) add(el("span", null, ""), "alignments are ungapped: a run is read straight off both sequences");
+  if (EXTENDED) add(el("i", "seed-sw"), `seed (full strength): the exact run of shared ${K}-mers a run grew from; the residues the extension added either side are the same mark at a third of the strength, in the bars, the dot plot and the underlines`);
   add(el("i", "path"), "residue pairs from superposing the two AlphaFold models with USalign, solid where USalign marks the pair close (:), dotted otherwise (dot plot)");
   add(el("i", "dotm"), `single shared ${K}-mer, not in any run (dot plot)`);
   add(el("span", null, ""), "under an open row, both full sequences with each run underlined in its bar's shade; a run lights up together in the plot, its alignment and the sequences");
@@ -556,12 +572,16 @@ function track(row) {
   row.runs.forEach((r, i) => {
     if (lane[i] < 0) return;
     const id = identity(row, i);
-    const rect = svgEl("rect", { class: "bar id" + bin(id.identical / id.of), x: X(r.query_start + 1), y: top + lane[i] * 7, width: Math.max(r.length * state.tw / QL, 2), height: 6, rx: 1 });
-    rect.dataset.i = i;
-    rect.addEventListener("pointermove", e => tipRun(e, row, i));
-    rect.addEventListener("pointerleave", hideTip);
-    rect.addEventListener("click", e => { e.stopPropagation(); hideTip(); openRun(row, r.number); });
-    svg.appendChild(rect);
+    // The whole run faded under its seeds at full strength; without extension the run is its own seed.
+    const parts = EXTENDED ? [[r.query_start, r.query_end, " ext"], ...seedsOf(r).map(sd => [sd.query_start, sd.query_end, ""])] : [[r.query_start, r.query_end, ""]];
+    for (const [qs, qe, ext] of parts) {
+      const rect = svgEl("rect", { class: "bar id" + bin(id.identical / id.of) + ext, x: X(qs + 1), y: top + lane[i] * 7, width: Math.max((qe - qs) * state.tw / QL, 2), height: 6, rx: 1 });
+      rect.dataset.i = i;
+      rect.addEventListener("pointermove", e => tipRun(e, row, i));
+      rect.addEventListener("pointerleave", hideTip);
+      rect.addEventListener("click", e => { e.stopPropagation(); hideTip(); openRun(row, r.number); });
+      svg.appendChild(rect);
+    }
   });
   if (extra.length) {
     const xs = extra.map(i => (X(row.runs[i].query_start + 1) + X(row.runs[i].query_end + 1)) / 2);
@@ -689,7 +709,8 @@ function seqLines(m, container) {
       if (rs) {
         c.dataset.run = rs.map(b => b.number).join(" ");
         const b = rs[0], id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
-        c.style.boxShadow = `0 3px 0 0 var(--id${bin(id.identical / id.of)})`;
+        const col = `var(--id${bin(id.identical / id.of)})`;
+        c.style.boxShadow = `0 3px 0 0 ${!EXTENDED || rs.some(x => inSeed(x, i, startKey.replace("_start", ""))) ? col : `color-mix(in srgb, ${col} 35%, transparent)`}`;
       }
       cells.appendChild(c);
     }
@@ -757,9 +778,11 @@ function dotPlot(m, container) {
   const segs = m.runs.map(b => {
     const id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
     const col = `var(--id${bin(id.identical / id.of)})`;
-    const seg = svgEl("line", { class: "run-seg", "data-run": b.number, x1: sx(b.query_start + 1), y1: sy(b.target_start + 1), x2: sx(b.query_end + 1), y2: sy(b.target_end + 1), stroke: col, "stroke-width": 3.5, "stroke-linecap": "round" });
+    const seg = svgEl("line", { class: "run-seg" + (EXTENDED ? " ext" : ""), "data-run": b.number, x1: sx(b.query_start + 1), y1: sy(b.target_start + 1), x2: sx(b.query_end + 1), y2: sy(b.target_end + 1), stroke: col, "stroke-width": 3.5, "stroke-linecap": "round" });
     const num = svgEl("text", { class: "num run-num", x: sx(b.query_end + 1) + 4, y: sy(b.target_end + 1) - 2 }, b.number);
-    svg.appendChild(seg); svg.appendChild(num);
+    svg.appendChild(seg);
+    if (EXTENDED) for (const sd of seedsOf(b)) svg.appendChild(svgEl("line", { class: "run-seg", "data-run": b.number, x1: sx(sd.query_start + 1), y1: sy(sd.target_start + 1), x2: sx(sd.query_end + 1), y2: sy(sd.target_end + 1), stroke: col, "stroke-width": 3.5, "stroke-linecap": "round" }));
+    svg.appendChild(num);
     return { b, id, seg };
   });
   // The plot answers the pointer anywhere inside it: a crosshair with the two positions, and whatever is nearest
@@ -858,31 +881,33 @@ function block(m, b) {
   const div = el("div", "block"); div.dataset.run = b.number;
   const h = el("h3"); h.appendChild(document.createTextNode(`Run ${b.number}`));
   const bits = [`${b.length} aa`, regionPhrase(m, b)];
+  if (EXTENDED) bits.push(seedPhrase(b));
   bits.push(GAPPED && b.gapped ? `${b.identical} identical on the run, ${b.gapped.identical} of ${b.gapped.aligned} aligned columns after gapped alignment` : `${b.identical} of ${b.length} identical (${pct(b.identical, b.length)}%)`);
-  if (b.n_mismatches !== undefined && b.n_mismatches !== null) bits.push(`${b.n_mismatches} mismatches in the extension`);
   if (b.polar !== null && b.polar !== undefined) bits.push(`${b.polar} of ${b.length} polar`);
   if (m.structure) bits.push(structurePhrase(b.structure_offset));
   h.appendChild(el("span", "w", "   " + bits.join(", "))); div.appendChild(h);
   const rows = runRows(m, b);
   const wrap = el("div", "wrap"); div.appendChild(wrap);
   const hits = state.seq ? seqHits(rows) : null;
-  for (let st = 0; st < rows.query_row.length; st += WRAP) wrap.appendChild(chunk(m, rows, st, hits));
+  for (let st = 0; st < rows.query_row.length; st += WRAP) wrap.appendChild(chunk(m, b, rows, st, hits));
   return div;
 }
 // One line of an alignment block, five rows: query residues, query encoding, a mark where the classes agree, target encoding, target residues.
 // Plain inline text, so the browser's find and copy work on the sequences. Identical residues are bold; flanks outside the run are faded; the run is underlined.
-function chunk(m, rows, start, hits) {
+function chunk(m, b, rows, start, hits) {
   const sl = str => str.slice(start, start + WRAP);
   const qRow = sl(rows.query_row), tRow = sl(rows.target_row), qEnc = sl(rows.query_enc), tEnc = sl(rows.target_enc);
   const n = qRow.length, g = el("div", "chunk");
   const inRun = i => start + i >= rows.run_columns[0] && start + i < rows.run_columns[1];
+  // A column inside the run but outside every seed was added by the extension.
+  const inExt = i => EXTENDED && inRun(i) && !inSeed(b, rows.query_start + residuesBefore(rows.query_row, start + i), "query");
   const isHit = (side, i) => hits && hits[side] && hits[side].some(([a, b]) => start + i >= a && start + i < b);
   const line = (label, cells, right) => { g.appendChild(el("div", "lab", label)); g.appendChild(cells); g.appendChild(el("div", "lab r", right === undefined ? "" : right)); };
   const residues = (text, enc, other, side, under, label, first) => {
     const c = el("span", "cells" + (under ? " under" : "")); let pos = first;
     for (let i = 0; i < n; i++) {
       const k = text[i] === "-" ? "x" : (CLASS_KEY[enc[i]] || "x"), same = text[i] !== "-" && text[i] === other[i];
-      const cell = el("i", k + (same ? " same" : "") + (inRun(i) ? " run" : " flank") + (isHit(side, i) ? " hit" : ""), text[i]);
+      const cell = el("i", k + (same ? " same" : "") + (inRun(i) ? " run" : " flank") + (inExt(i) ? " ext" : "") + (isHit(side, i) ? " hit" : ""), text[i]);
       if (text[i] !== "-") { pos++; cell.dataset.pos = pos; cell.dataset.prot = label; cell.dataset.sym = enc[i]; }
       c.appendChild(cell);
     }
@@ -924,6 +949,7 @@ function tipRun(e, row, i) {
   const lines = [[`${r.length} aa, ${id.identical} of ${id.of} identical${id.gapped ? " after gapped alignment" : ""} (${pct(id.identical, id.of)}%)`, "b"],
                  [`${Q.label} ${r.query_start + 1}–${r.query_end}  ×  ${row.label} ${r.target_start + 1}–${r.target_end}`, "t"]];
   if (m) lines.push([regionPhrase(row.model, m) + (r.polar !== null ? `, ${r.polar} polar` : "") + (row.model.structure ? `, ${structurePhrase(r.structure_offset)}` : ""), "t"]);
+  if (EXTENDED) lines.push([seedPhrase(r), "t"]);
   if (m) lines.push([`${m.query_row}  ${Q.label} aa`, "m"], [`${m.query_enc}  ${ENC_LABEL}`, "m"], [`${m.target_enc}  ${ENC_LABEL}`, "m"], [`${m.target_row}  ${row.label} aa`, "m"]);
   showTip(e, lines);
 }
@@ -944,9 +970,9 @@ function rowsTsv(rows) {
   return tsv([head, ...rows.map(r => [r.rank, r.description || r.label, r.entry, r.gene || "", r.organism, isReviewed(r) ? "yes" : "no", isFragment(r) ? "yes" : "no", r.n_entries, r.length, r.runs.length, r.n_shared, r.best.length, r.bestIdent, Math.round(r.bestPct * 10) / 10, ...SCORES.map(sc => scoreOf(r, sc) ?? ""), r.tm_score ?? "", r.runs.map(x => `${x.query_start + 1}-${x.query_end}`).join(";")])]);
 }
 function runsTsv(rows) {
-  const head = ["rank", "protein", "entry", "run", "query_start", "query_end", "target_start", "target_end", "length_aa", "identical_on_run", ...(GAPPED ? ["identical_gapped", "aligned_columns_gapped"] : []), "polar", "query_region", "target_region", "structure_offset", "query_row", "target_row"];
+  const head = ["rank", "protein", "entry", "run", "query_start", "query_end", "target_start", "target_end", "length_aa", ...(EXTENDED ? ["seeds_on_query", "mismatches"] : []), "identical_on_run", ...(GAPPED ? ["identical_gapped", "aligned_columns_gapped"] : []), "polar", "query_region", "target_region", "structure_offset", "query_row", "target_row"];
   const out = [head];
-  for (const r of rows) r.runs.forEach((x, i) => { const m = r.model.runs[i] || {}, g = (GAPPED && m.gapped) || null; out.push([r.rank, r.description || r.label, r.entry, x.number, x.query_start + 1, x.query_end, x.target_start + 1, x.target_end, x.length, x.identical, ...(GAPPED ? [g ? g.identical : "", g ? g.aligned : ""] : []), x.polar ?? "", NO_REGION(m.query_region) ? "" : m.query_region, NO_REGION(m.target_region) ? "" : m.target_region, x.structure_offset ?? "", g ? g.query_row : (m.query_row ?? ""), g ? g.target_row : (m.target_row ?? "")]); });
+  for (const r of rows) r.runs.forEach((x, i) => { const m = r.model.runs[i] || {}, g = (GAPPED && m.gapped) || null; out.push([r.rank, r.description || r.label, r.entry, x.number, x.query_start + 1, x.query_end, x.target_start + 1, x.target_end, x.length, ...(EXTENDED ? [seedsOf(x).map(sd => `${sd.query_start + 1}-${sd.query_end}`).join(";"), x.n_mismatches || 0] : []), x.identical, ...(GAPPED ? [g ? g.identical : "", g ? g.aligned : ""] : []), x.polar ?? "", NO_REGION(m.query_region) ? "" : m.query_region, NO_REGION(m.target_region) ? "" : m.target_region, x.structure_offset ?? "", g ? g.query_row : (m.query_row ?? ""), g ? g.target_row : (m.target_row ?? "")]); });
   return tsv(out);
 }
 function fastaOf(rows) {
@@ -965,7 +991,7 @@ function svgString(svg) {
   const vars = {}; for (const v of ["ink", "secondary", "muted", "grid", "axis", "surface", "domain", "domain-edge", "structure", "id0", "id1", "id2", "id3", "id4", "cov", "cov5", "h-fill", "h-edge", "h-ink", "p-fill", "p-edge", "p-ink"]) vars[v] = cs.getPropertyValue("--" + v).trim();
   const fix = s => s.replace(/var\(--([\w-]+)\)/g, (_, v) => vars[v] || "#000");
   for (const n of c.querySelectorAll("*")) for (const a of ["fill", "stroke"]) if (n.hasAttribute(a)) n.setAttribute(a, fix(n.getAttribute(a)));
-  const style = svgEl("style", {}, `text{font-family:${cs.getPropertyValue("--sans")};font-size:11px;fill:${vars.secondary}} text.num{font-size:12px;font-weight:700;fill:${vars.ink}} text.ax{font-size:10.5px;fill:${vars.muted}} text.dom{font-size:11px;fill:${vars.secondary}} rect.dom{fill:${vars.domain};stroke:${vars["domain-edge"]};stroke-width:.8} line.pl{stroke:${vars["domain-edge"]};stroke-width:1.2} .cov{fill:${vars.cov}} .cov5{fill:${vars.cov5}} line.axis{stroke:${vars.axis}} rect.bar{stroke:${vars.surface}} rect.bar.id0{fill:${vars.id0}} rect.bar.id1{fill:${vars.id1}} rect.bar.id2{fill:${vars.id2}} rect.bar.id3{fill:${vars.id3}} rect.bar.id4{fill:${vars.id4}} text.more{font-size:10px;font-weight:600;fill:${vars.secondary}} text.lab{font-size:12px;fill:${vars.ink}} text.sub{font-size:10.5px;fill:${vars.secondary}} text.hd{font-size:11px;fill:${vars.secondary}} text.ttl{font-size:14px;font-weight:600;fill:${vars.ink}}`);
+  const style = svgEl("style", {}, `text{font-family:${cs.getPropertyValue("--sans")};font-size:11px;fill:${vars.secondary}} text.num{font-size:12px;font-weight:700;fill:${vars.ink}} text.ax{font-size:10.5px;fill:${vars.muted}} text.dom{font-size:11px;fill:${vars.secondary}} rect.dom{fill:${vars.domain};stroke:${vars["domain-edge"]};stroke-width:.8} line.pl{stroke:${vars["domain-edge"]};stroke-width:1.2} .cov{fill:${vars.cov}} .cov5{fill:${vars.cov5}} line.axis{stroke:${vars.axis}} rect.bar{stroke:${vars.surface}} rect.bar.id0{fill:${vars.id0}} rect.bar.id1{fill:${vars.id1}} rect.bar.id2{fill:${vars.id2}} rect.bar.id3{fill:${vars.id3}} rect.bar.id4{fill:${vars.id4}} rect.bar.ext{opacity:.35} text.more{font-size:10px;font-weight:600;fill:${vars.secondary}} text.lab{font-size:12px;fill:${vars.ink}} text.sub{font-size:10.5px;fill:${vars.secondary}} text.hd{font-size:11px;fill:${vars.secondary}} text.ttl{font-size:14px;font-weight:600;fill:${vars.ink}}`);
   c.insertBefore(style, c.firstChild);
   c.setAttribute("xmlns", "http://www.w3.org/2000/svg");
   c.style.background = vars.surface;
@@ -979,7 +1005,7 @@ function overviewSvg(rows) {
   const H = top + heights.reduce((a, b) => a + b, 0) + 30;
   const svg = svgEl("svg", { width: W, height: H, viewBox: `0 0 ${W} ${H}` });
   svg.appendChild(svgEl("text", { class: "ttl", x: 20, y: 24 }, `${Q.label}: runs of shared ${K}-mers (${R.alphabet}) in ${rows.length} proteins`));
-  svg.appendChild(svgEl("text", { class: "sub", x: 20, y: 42 }, `bars shaded by identical residues ${IDENT_HOW} (light: under 20%, dark: 80% and over); grey area: database entries with a run over each residue (${R.n_entries} entries), dark area: with ${SOLID} or more identical`));
+  svg.appendChild(svgEl("text", { class: "sub", x: 20, y: 42 }, `bars shaded by identical residues ${IDENT_HOW} (light: under 20%, dark: 80% and over)${EXTENDED ? "; each run's seed at full strength, the residues its extension added at a third" : ""}; grey area: database entries with a run over each residue (${R.n_entries} entries), dark area: with ${SOLID} or more identical`));
   const g = svgEl("g", { transform: `translate(${20 + LW + NUMW}, 52)` });
   for (const n of [...rulerSvg().childNodes]) g.appendChild(n);
   svg.appendChild(g);
@@ -1029,7 +1055,8 @@ function help() {
   const add = (t, d) => { dl.appendChild(el("dt", null, t)); dl.appendChild(el("dd", null, d)); };
   add("alphabet", `${R.moltype ? R.moltype + ", " : ""}${R.alphabet}: ${R.classes.map(c => `${c.symbol} = ${c.label.split(" (")[0]} (${[...c.residues].join(" ")})`).join("; ")}.`);
   add(`shared ${K}-mer`, `${K} consecutive residues with the same ${R.classes.map(c => c.label.split(" (")[0]).join("/")} pattern in query and target.`);
-  add("run", `2 or more shared ${K}-mers in a row on one diagonal, so ${K + 1} or more residues with the same pattern.`);
+  add("run", `2 or more shared ${K}-mers in a row on one diagonal, so ${K + 1} or more residues with the same pattern.` + (EXTENDED ? ` Here each run was grown past that exact stretch, its seed: +1 per position where the pattern agrees, -${EXT.mismatch_penalty} where it does not, stopping once the score has fallen ${EXT.xdrop} below its best (kmerseek search --extend-mismatch-penalty ${EXT.mismatch_penalty} --extend-xdrop ${EXT.xdrop}).` : ""));
+  if (EXTENDED) add("seed", `The exact run of shared ${K}-mers a grown run started from, drawn at full strength inside the run. Two seeds on one diagonal whose growth meets become one run with both seeds.`);
   add("% identity", GAPPED ? "Identical residues in the longest run after gapped alignment of the run and its flanks; the tooltip on a bar gives the count on the run itself too." : "Identical residues in the longest run, counted straight down the run: the alignment is ungapped.");
   add("shared k-mers", `All shared ${K}-mers between the two proteins, in runs or not.`);
   for (const sc of SCORES) add(sc.label, (sc.note || sc.label) + (sc === PRIMARY ? ". Ranks the rows." : "") + (sc.better === "high" ? " Higher is better." : " Lower is better."));

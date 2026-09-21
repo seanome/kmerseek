@@ -43,8 +43,16 @@ def class_residues(pair):
 def runs(pair):
     """Matched regions made of at least two consecutive shared k-mers. `kmerseek pair` also
     reports every lone shared k-mer as a region exactly k residues long; those are drawn as
-    singles, not as alignments."""
+    singles, not as alignments. A lone k-mer that extension grew past k residues is a run."""
     return [r for r in pair["regions"] if r["length"] > pair["ksize"]]
+
+
+def seeds(run):
+    """The exact runs of shared k-mers an extended region grew from, in query order; an
+    exact run is its own seed."""
+    keys = ("query_start", "query_end", "target_start", "target_end", "length")
+    found = run.get("seeds") or [run]
+    return sorted(({k: s[k] for k in keys} for s in found), key=lambda s: s["query_start"])
 
 
 def in_region(kmer, region, ksize):
@@ -199,7 +207,9 @@ def run_block(pair, index, run, domains, flank, pairs=None):
         "target_start": ts,
         "target_end": te,
         "length": run["length"],
-        "n_kmers": run["length"] - ksize + 1,
+        "n_kmers": sum(s["length"] - ksize + 1 for s in seeds(run)),
+        "n_mismatches": run.get("n_mismatches", 0),
+        "seeds": seeds(run),
         "query_region": region_name(domains["query"], qs + 1, qe),
         "target_region": region_name(domains["target"], ts + 1, te),
         "identical": count_agreement(q["sequence"][qs:qe], t["sequence"][ts:te]),
@@ -241,6 +251,7 @@ def build_model(pair, domain_rows=(), flank=0, structure=None):
         "query": _side(pair, "query", domains),
         "target": _side(pair, "target", domains),
         "n_shared": len(pair["shared_kmers"]),
+        "extension": pair.get("extension"),
         "runs": [run_block(pair, i, r, domains, flank, pairs) for i, r in enumerate(runs(pair))],
         "singles": [
             {k: s[k] for k in ("query_pos", "target_pos", "kmer", "query_kmer", "target_kmer")} for s in singles(pair)
@@ -280,13 +291,25 @@ def structure_phrase(offset):
     return f"{abs(offset)} residues off the USalign residue pairs"
 
 
+def seed_phrase(block):
+    """How the run relates to the exact run(s) of shared k-mers it grew from."""
+    seeds = block["seeds"]
+    left = seeds[0]["query_start"] - block["query_start"]
+    right = block["query_end"] - seeds[-1]["query_end"]
+    n = block["n_mismatches"]
+    seed = f"seed {seeds[0]['length']} aa" if len(seeds) == 1 else f"{len(seeds)} seeds of {' + '.join(str(s['length']) for s in seeds)} aa"
+    return f"{seed}, grown {left} left and {right} right with {n} mismatch{'' if n == 1 else 'es'}"
+
+
 def run_header(block):
     parts = [
         f"Run {block['number']}",
         f"{block['query_region']} × {block['target_region']}",
         f"{block['length']} aa",
-        f"{block['identical']} identical",
     ]
+    if block["seeds"] != [{k: block[k] for k in ("query_start", "query_end", "target_start", "target_end", "length")}]:
+        parts.append(seed_phrase(block))
+    parts.append(f"{block['identical']} identical")
     if block["polar"] is not None:
         parts.append(f"{block['polar']} of {block['length']} polar")
     if "structure_offset" in block:

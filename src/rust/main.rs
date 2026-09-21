@@ -7,7 +7,7 @@ use kmerseek::search::{
 };
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 #[derive(Parser)]
 #[command(name = "kmerseek")]
@@ -276,6 +276,18 @@ enum Commands {
         /// Reduced amino acid alphabet
         #[arg(short = 'a', long, default_value = "protein20")]
         alphabet: ProteinAlphabet,
+
+        /// Score subtracted per disagreeing encoded position when a matched region is
+        /// grown past its exact run of shared k-mers, as in `search`. 0 keeps regions
+        /// exact, the default. With it, each region in the JSON carries the exact runs it
+        /// grew from as `seeds` and its `n_mismatches`.
+        #[arg(long, default_value = "0.0")]
+        extend_mismatch_penalty: f64,
+
+        /// The give-up margin (BLAST's X-drop): stop extending once the running score has
+        /// fallen this far below its best.
+        #[arg(long, default_value_t = DEFAULT_XDROP)]
+        extend_xdrop: f64,
     },
 }
 
@@ -988,8 +1000,24 @@ fn main() -> IndexResult<()> {
                 eprintln!("Average database k-mer frequency: {:.6}", avg_database_kmer_freq);
             }
         }
-        Commands::Pair { query, target, query_name, target_name, output, ksize, alphabet } => {
-            run_pair(&query, &target, query_name, target_name, output, ksize, alphabet.into())?;
+        Commands::Pair {
+            query,
+            target,
+            query_name,
+            target_name,
+            output,
+            ksize,
+            alphabet,
+            extend_mismatch_penalty,
+            extend_xdrop,
+        } => {
+            let extension = (extend_mismatch_penalty > 0.0).then_some(ExtensionScoring {
+                mismatch_penalty: extend_mismatch_penalty,
+                xdrop: extend_xdrop,
+            });
+            let query = pair::read_record(&query, query_name.as_deref())?;
+            let target = pair::read_record(&target, target_name.as_deref())?;
+            run_pair(&query, &target, output, ksize, alphabet.into(), extension)?;
         }
     }
 
@@ -997,17 +1025,14 @@ fn main() -> IndexResult<()> {
 }
 
 fn run_pair(
-    query: &Path,
-    target: &Path,
-    query_name: Option<String>,
-    target_name: Option<String>,
+    query: &pair::FastaRecord,
+    target: &pair::FastaRecord,
     output: Option<PathBuf>,
     ksize: u32,
     moltype: &str,
+    extension: Option<ExtensionScoring>,
 ) -> IndexResult<()> {
-    let query = pair::read_record(query, query_name.as_deref())?;
-    let target = pair::read_record(target, target_name.as_deref())?;
-    let report = pair::compare_pair(&query, &target, ksize, moltype)?;
+    let report = pair::compare_pair(query, target, ksize, moltype, extension)?;
     eprintln!(
         "{} shared {}-mers in {} matched regions ({})",
         report.shared_kmers.len(),

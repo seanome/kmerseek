@@ -54,6 +54,8 @@ PLAIN_BOX = ("#ffffff", "#b8b7b0")
 DOMAIN_FILL, DOMAIN_EDGE = "#e8e7e2", "#8d8c86"
 SPAN_SHADE = "#e8e7e2"
 RUN_COLOR = INK
+# Residues a run gained past its seed: the run's mark at a third of its strength.
+EXTENSION_ALPHA = 0.35
 SINGLE_COLOR = "#6e6d68"
 # USalign's residue pairs, drawn as a thin line under the runs.
 STRUCTURE_COLOR = "#c0392b"
@@ -84,10 +86,12 @@ def block_rows(block):
     """The rows an alignment block shows: the exact run with any flank, and which of its
     columns are the run."""
     left = block["query_start"] - block["window"]["query_start"]
+    origin = block["window"]["query_start"]
     return {k: block[k] for k in ("query_row", "target_row", "query_enc", "target_enc", "middle")} | {
-        "query_start": block["window"]["query_start"],
+        "query_start": origin,
         "target_start": block["window"]["target_start"],
         "run_columns": [left, left + block["length"]],
+        "seed_columns": [[s["query_start"] - origin, s["query_end"] - origin] for s in block["seeds"]],
     }
 
 
@@ -178,6 +182,9 @@ class PairFigure:
         handles = [Patch(facecolor=self.style(c["symbol"])[0], edgecolor=self.style(c["symbol"])[1], label=c["label"]) for c in self.m["classes"]]
         handles = handles or [Patch(facecolor=PLAIN_BOX[0], edgecolor=PLAIN_BOX[1], label="residue")]
         handles.append(Line2D([], [], color=RUN_COLOR, linewidth=2.2, label=f"run of 2 or more consecutive shared {k}-mers ({len(self.m['runs'])}), numbered; underlined in its alignment"))
+        if self.m.get("extension"):
+            ext = self.m["extension"]
+            handles.append(Line2D([], [], color=RUN_COLOR, linewidth=2.2, alpha=EXTENSION_ALPHA, label=f"residues a run gained past that exact stretch, its seed, growing while the pattern mostly agrees (a mismatch costs {ext['mismatch_penalty']:g}, stop {ext['xdrop']:g} below the best score)"))
         handles.append(Line2D([], [], color=SINGLE_COLOR, marker="o", linestyle="none", markersize=4, label=f"single shared {k}-mer ({len(self.m['singles'])})"))
         if self.has_domains():
             handles.append(Patch(facecolor=DOMAIN_FILL, edgecolor=DOMAIN_EDGE, label="protein, with its domains as boxes; each domain's span shaded across the plot"))
@@ -277,7 +284,10 @@ class PairFigure:
         for b in self.m["runs"]:
             x = (b["query_start"] + 1, b["query_end"])
             yy = (b["target_start"] + 1, b["target_end"])
-            ax.plot(x, yy, color=RUN_COLOR, linewidth=2.2, solid_capstyle="round", zorder=4)
+            # The whole run faded under its seeds at full strength; an exact run is its own seed.
+            ax.plot(x, yy, color=RUN_COLOR, linewidth=2.2, alpha=EXTENSION_ALPHA, solid_capstyle="round", zorder=4)
+            for s in b["seeds"]:
+                ax.plot((s["query_start"] + 1, s["query_end"]), (s["target_start"] + 1, s["target_end"]), color=RUN_COLOR, linewidth=2.2, solid_capstyle="round", zorder=4)
             ax.annotate(str(b["number"]), (x[1], yy[1]), xytext=(4, 2), textcoords="offset points", fontsize=FONT + 2, fontweight="bold", color=RUN_COLOR)
 
     # -- alignment blocks --
@@ -297,7 +307,9 @@ class PairFigure:
         ax.set_axis_off()
         ax.set_xlim(-0.5, n - 0.5)
         ax.set_ylim(-0.9, 2.5)
-        self._draw_run_bar(ax, rows["run_columns"], start, n)
+        self._draw_run_bar(ax, rows["run_columns"], start, n, alpha=EXTENSION_ALPHA)
+        for columns in rows["seed_columns"]:
+            self._draw_run_bar(ax, columns, start, n)
         self._draw_row(ax, 2, rows["query_row"][sl], rows["query_enc"][sl])
         self._draw_row(ax, 0, rows["target_row"][sl], rows["target_enc"][sl])
         for i, ch in enumerate(rows["middle"][sl]):
@@ -306,11 +318,11 @@ class PairFigure:
         self._draw_coordinates(ax, rows, start, n)
         return y - 3.4 * ROW_IN - 0.12
 
-    def _draw_run_bar(self, ax, run_columns, start, n):
+    def _draw_run_bar(self, ax, run_columns, start, n, alpha=1.0):
         """The run's columns, marked under the target row with the dot plot's run bar."""
         first, last = max(run_columns[0], start) - start, min(run_columns[1], start + n) - start
         if last > first:
-            ax.plot([first - 0.4, last - 0.6], [-0.7, -0.7], color=RUN_COLOR, linewidth=2.2, solid_capstyle="butt")
+            ax.plot([first - 0.4, last - 0.6], [-0.7, -0.7], color=RUN_COLOR, linewidth=2.2, alpha=alpha, solid_capstyle="butt")
 
     def _draw_coordinates(self, ax, rows, start, n):
         """1-based first and last residue of each row in this chunk."""

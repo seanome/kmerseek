@@ -305,6 +305,16 @@ run hovered in the plot, in its alignment or in the sequences lights up in all t
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
 long; the figure draws those as singles and gives alignments only to runs.
 
+`kmerseek pair --extend-mismatch-penalty C [--extend-xdrop X]` grows every run past its
+exact stretch the way `search` does (see "Extending matched regions past the exact
+seed"). Each region in the JSON then carries `n_mismatches` and its `seeds`, the exact
+runs of shared k-mers it grew from. The figure draws both, in the dot plot and under
+each alignment: the seed at full strength, the residues the extension added at a third
+of it. The run's header says how far it grew each way and how many positions inside it
+disagree. For BCL-2 against CED-9 at k=12 with `--extend-mismatch-penalty 2`, the
+BH1 run grows from 19 to 26 residues with 2 mismatches, and five lone 12-mers become
+four runs, the longest 34 residues with 6 mismatches around a 12-residue seed.
+
 Identities are counted on the run's own diagonal, with no gaps. An exact run in the
 reduced alphabet can sit a few residues off the true alignment (MCL-1's BH1 run reads 1
 identical residue with BCL-2 on its diagonal, though NWGR is in both), so a low count
@@ -360,7 +370,12 @@ python scripts/visualize_search.py --csv results.csv \
 ```
 
 `--structures DIR` adds a TM-score column and USalign's residue pairs to each row's dot
-plot.
+plot. `--extend-mismatch-penalty C [--extend-xdrop X]` passes the extension settings to
+`kmerseek pair`, so every run on the page is the grown region. Its seed is drawn at full
+strength inside it and the added residues at a third, in the row's bar, the dot plot,
+the alignment's underline and the full sequences; the legend and the glossary say so.
+Use the same C and X the search ran with, so the runs on the page are the regions in
+the CSV.
 
 Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
 Benjamini-Hochberg corrected region tail probability; the column headers also sort by

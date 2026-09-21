@@ -120,9 +120,32 @@ def test_report_end_to_end(rows, tmp_path):
     assert (report["n_entries"], report["n_proteins"], len(report["rows"])) == (24, 24, 12)
     bcl2 = next(r for r in report["rows"] if r["label"] == "BCL2_HUMAN")
     assert (bcl2["length"], bcl2["n_runs"], bcl2["best_length"], bcl2["best_identical"], bcl2["n_shared"]) == (239, 6, 19, 5, 24)
-    assert bcl2["runs"][0] == {"number": 1, "query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19, "identical": 5, "polar": 5}
+    assert bcl2["runs"][0] == {
+        "number": 1, "query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19, "identical": 5, "polar": 5,
+        "seeds": [{"query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19}], "n_mismatches": 0,
+    }
+    assert report["extension"] is None
     html = vs.render_report(report)
     assert "<title>CED9_CAEEL kmerseek hits</title>" in html
     assert "__TITLE__" not in html and "__DATA__" not in html
     assert html.count("</script>") == 2
     assert 'R = {"query": {"label": "CED9_CAEEL"' in html
+
+
+@pytest.mark.skipif(_kmerseek() is None, reason="needs a kmerseek build with `pair --extend-mismatch-penalty`")
+def test_report_with_extension_draws_seeds_inside_grown_runs(rows, tmp_path):
+    query_name, rows = rows
+    args = vs._build_arg_parser().parse_args([
+        "--csv", SEARCH_CSV, "--query-fasta", CED9_FASTA, "--target-fasta", TARGETS_FASTA,
+        "--output-dir", str(tmp_path), "--domains", *DOMAIN_TABLES, "--max-rows", "12", "--extend-mismatch-penalty", "2",
+    ])
+    report = vs.SearchReport(args, _kmerseek(), vs.load_domains(args.domains)).report(query_name, rows)
+    assert report["extension"] == {"mismatch_penalty": 2.0, "xdrop": 8.0}
+    bcl2 = next(r for r in report["rows"] if r["label"] == "BCL2_HUMAN")
+    # CED9 is the query here, so BH1 grows 7 residues to the left of the CED9 seed at 162-181.
+    assert (bcl2["n_runs"], bcl2["best_length"], bcl2["n_shared"]) == (9, 34, 24)
+    bh1 = next(b for b in bcl2["runs"] if b["seeds"][0]["query_start"] == 162)
+    assert (bh1["query_start"], bh1["query_end"], bh1["length"], bh1["n_mismatches"]) == (162, 188, 26, 2)
+    assert bh1["seeds"] == [{"query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19}]
+    assert '"extension": {"mismatch_penalty": 2.0, "xdrop": 8.0}' in vs.render_report(report)
+

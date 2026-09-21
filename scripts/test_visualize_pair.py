@@ -8,6 +8,9 @@ domains from Pfam-A.regions. Regenerate the JSON with:
 
     kmerseek pair --query tests/testdata/fasta/bcl2.fasta --target tests/testdata/fasta/ced9.fasta \
         --ksize 12 --alphabet hp --output scripts/testdata/bcl2_vs_ced9.hp.k12.pair.json
+
+The second fixture is the same pair with every run grown past its seed
+(`--extend-mismatch-penalty 2`, written to bcl2_vs_ced9.hp.k12.extend2.pair.json).
 """
 
 import copy
@@ -23,6 +26,7 @@ from hits_page import embed_json, render_page
 
 TESTDATA = os.path.join(os.path.dirname(__file__), "testdata")
 PAIR_JSON = os.path.join(TESTDATA, "bcl2_vs_ced9.hp.k12.pair.json")
+EXTENDED_JSON = os.path.join(TESTDATA, "bcl2_vs_ced9.hp.k12.extend2.pair.json")
 DOMAINS_TSV = os.path.join(TESTDATA, "bcl2_ced9_pfam_domains.tsv")
 
 # BH1 in 0-based half-open coordinates: BCL-2 NWGR at 1-based 143, CED-9 SYGR at 167.
@@ -148,6 +152,44 @@ def test_run_blocks_are_numbered_longest_first_with_regions_and_counts(model):
     assert bh1["target_row"] == "QCPMSYGRLIGLISFGGFV"
     assert bh1["middle"] == "      GR      FGG  "
     assert bh1["n_kmers"] == 8
+    # An exact run is its own seed, so nothing about seeds reaches the header.
+    assert bh1["seeds"] == [BH1]
+    assert bh1["n_mismatches"] == 0
+
+
+def test_extended_runs_carry_their_seeds(domains):
+    pair = vp.load_pair(EXTENDED_JSON)
+    assert pair["extension"] == {"mismatch_penalty": 2.0, "xdrop": 8.0}
+    model = pm.build_model(pair, domains)
+    assert model["extension"] == pair["extension"]
+    # Five lone 12-mers became four runs (two of them, one residue apart, merged into one),
+    # so the pair has 9 runs and 4 singles instead of 5 and 9.
+    assert (len(model["runs"]), len(model["singles"])) == (9, 4)
+    headers = [pm.run_header(b) for b in model["runs"]]
+    assert headers[0] == "Run 1 · BH4 × BH4 · 34 aa · seed 12 aa, grown 22 left and 0 right with 6 mismatches · 2 identical · 13 of 34 polar"
+    assert headers[2] == "Run 3 · Bcl-2 × Bcl-2 · 26 aa · seed 19 aa, grown 0 left and 7 right with 2 mismatches · 5 identical · 10 of 26 polar"
+    assert headers[8] == "Run 9 · no region × no region · 13 aa · 2 seeds of 12 + 12 aa, grown 0 left and 0 right with 0 mismatches · 1 identical · 1 of 13 polar"
+    bh1 = model["runs"][2]
+    assert bh1["seeds"] == [BH1]
+    assert (bh1["query_start"], bh1["query_end"], bh1["target_start"], bh1["target_end"]) == (138, 164, 162, 188)
+    assert bh1["n_kmers"] == 8, "shared k-mers are counted on the seed, not the grown run"
+    assert bh1["query_row"] == "RDGVNWGRIVAFFEFGGVMCVESVNR"
+    assert bh1["target_row"] == "QCPMSYGRLIGLISFGGFVAAKMMES"
+    rows = vp.block_rows(bh1)
+    assert rows["run_columns"] == [0, 26]
+    assert rows["seed_columns"] == [[0, 19]]
+    two_seeds = model["runs"][8]
+    assert [(s["query_start"], s["target_start"]) for s in two_seeds["seeds"]] == [(80, 253), (81, 254)]
+
+
+def test_extended_figure_legend_names_the_seed(domains, tmp_path):
+    model = pm.build_model(vp.load_pair(EXTENDED_JSON), domains)
+    svg = tmp_path / "pair.svg"
+    vp.plot_pair(model, [str(svg)])
+    text = svg.read_text()
+    assert "run of 2 or more consecutive shared 12-mers (9), numbered" in text
+    assert "residues a run gained past that exact stretch, its seed, growing while the pattern mostly agrees (a mismatch costs 2, stop 8 below the best score)" in text
+    assert "seed 19 aa, grown 0 left and 7 right with 2 mismatches" in text
 
 
 def test_flank_adds_class_marks_to_the_middle_line(pair, domains):

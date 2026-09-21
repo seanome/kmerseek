@@ -14,7 +14,10 @@ use serde::Serialize;
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
 use crate::hash_functions::encode_by_alphabet;
-use crate::search::{find_matched_regions, MatchedRegion};
+use crate::search::{
+    extend_regions, find_matched_regions, ExtensionParams, ExtensionScoring, KaParams,
+    MatchedRegion,
+};
 use crate::sketch::ProteinSketch;
 
 /// One sequence of the pair, with its reduced-alphabet encoding.
@@ -40,9 +43,27 @@ pub struct SharedKmer {
     pub target_kmer: String,
 }
 
-/// A run of shared k-mers consecutive in both sequences. Half-open, 0-based, in residues.
+/// A run of shared k-mers consecutive in both sequences, or, with extension, the region
+/// that run grew into. Half-open, 0-based, in residues.
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 pub struct PairRegion {
+    pub query_start: u32,
+    pub query_end: u32,
+    pub target_start: u32,
+    pub target_end: u32,
+    pub length: u32,
+    /// Positions inside the region where the encoded sequences disagree. 0 for an exact
+    /// run.
+    pub n_mismatches: u32,
+    /// The exact runs of shared k-mers this region grew from, in query order. Empty (and
+    /// left out of the JSON) when the region is an exact run itself.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub seeds: Vec<PairSeed>,
+}
+
+/// One exact run of shared k-mers inside an extended region. Half-open, 0-based.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+pub struct PairSeed {
     pub query_start: u32,
     pub query_end: u32,
     pub target_start: u32,
@@ -58,8 +79,56 @@ impl From<&MatchedRegion> for PairRegion {
             target_start: region.target_start,
             target_end: region.target_end,
             length: region.length,
+            n_mismatches: region.n_mismatches,
+            seeds: Vec::new(),
         }
     }
+}
+
+impl From<&MatchedRegion> for PairSeed {
+    fn from(region: &MatchedRegion) -> Self {
+        Self {
+            query_start: region.start,
+            query_end: region.end,
+            target_start: region.target_start,
+            target_end: region.target_end,
+            length: region.length,
+        }
+    }
+}
+
+/// The extended regions, each carrying the exact runs it grew from: those on its diagonal
+/// whose span lies inside it. `extend_regions` walks outward from every exact run and
+/// merges the ones that meet, so every exact run lands in exactly one extended region.
+fn extended_regions(
+    exact: &[MatchedRegion],
+    query_sketch: &ProteinSketch,
+    target_sketch: &ProteinSketch,
+    scoring: ExtensionScoring,
+) -> Vec<PairRegion> {
+    let params = ExtensionParams {
+        scoring,
+        ka: KaParams { k: 0.0, r_database: 1.0 },
+        chain_max_gap: 0,
+        chain_max_shift: 0,
+    };
+    let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
+    extend_regions(exact.to_vec(), query_sketch, target_sketch, params)
+        .iter()
+        .map(|grown| {
+            let mut region = PairRegion::from(grown);
+            region.seeds = exact
+                .iter()
+                .filter(|seed| {
+                    diagonal(seed) == diagonal(grown)
+                        && seed.start >= grown.start
+                        && seed.end <= grown.end
+                })
+                .map(PairSeed::from)
+                .collect();
+            region
+        })
+        .collect()
 }
 
 /// Everything `kmerseek pair` writes.
@@ -73,6 +142,10 @@ pub struct PairReport {
     pub classes: BTreeMap<char, String>,
     pub query: PairSequence,
     pub target: PairSequence,
+    /// Mismatch penalty and give-up margin the regions were extended with; absent when
+    /// they are exact runs.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extension: Option<ExtensionScoring>,
     /// Sorted by query position, then target position.
     pub shared_kmers: Vec<SharedKmer>,
     /// Longest first.
@@ -117,27 +190,30 @@ fn header_matches(header: &str, wanted: &str) -> bool {
 }
 
 /// Compare two sequences at one k-mer size and alphabet. Every k-mer is kept (scaled 1).
+/// Compare the two sequences. With `extension`, every exact run is grown past its ends with
+/// `extend_regions` and reported with the runs it grew from as its `seeds`.
 pub fn compare_pair(
     query: &FastaRecord,
     target: &FastaRecord,
     ksize: u32,
     moltype: &str,
+    extension: Option<ExtensionScoring>,
 ) -> IndexResult<PairReport> {
     let query_sketch = sketch(query, ksize, moltype)?;
     let target_sketch = sketch(target, ksize, moltype)?;
     let intersection = query_sketch.intersect(&target_sketch);
-    let mut regions: Vec<PairRegion> =
-        find_matched_regions(&query_sketch, &target_sketch, &intersection)
-            .iter()
-            .map(PairRegion::from)
-            .collect();
+    let exact = find_matched_regions(&query_sketch, &target_sketch, &intersection);
+    let mut regions: Vec<PairRegion> = match extension {
+        Some(scoring) => extended_regions(&exact, &query_sketch, &target_sketch, scoring),
+        None => exact.iter().map(PairRegion::from).collect(),
+    };
     regions.sort_by_key(|r| (std::cmp::Reverse(r.length), r.query_start, r.target_start));
     let query = pair_sequence(&query_sketch);
     let target = pair_sequence(&target_sketch);
     let shared_kmers = shared_kmers(&query_sketch, &target_sketch, &query, &target, &intersection);
     let moltype = query_sketch.moltype().to_string();
     let classes = alphabet_classes(&moltype)?;
-    Ok(PairReport { ksize, moltype, classes, query, target, shared_kmers, regions })
+    Ok(PairReport { ksize, moltype, classes, query, target, extension, shared_kmers, regions })
 }
 
 /// The 20 standard residues grouped by the class the alphabet sends each one to, found by
@@ -208,7 +284,14 @@ mod tests {
     fn bcl2_vs_ced9(ksize: u32, moltype: &str) -> PairReport {
         let query = read_record(Path::new(TEST_BLC2_FASTA), None).unwrap();
         let target = read_record(Path::new(TEST_CED9_FASTA), None).unwrap();
-        compare_pair(&query, &target, ksize, moltype).unwrap()
+        compare_pair(&query, &target, ksize, moltype, None).unwrap()
+    }
+
+    fn bcl2_vs_ced9_extended(mismatch_penalty: f64, xdrop: f64) -> PairReport {
+        let query = read_record(Path::new(TEST_BLC2_FASTA), None).unwrap();
+        let target = read_record(Path::new(TEST_CED9_FASTA), None).unwrap();
+        let scoring = ExtensionScoring { mismatch_penalty, xdrop };
+        compare_pair(&query, &target, 12, "hp", Some(scoring)).unwrap()
     }
 
     #[test]
@@ -249,12 +332,64 @@ mod tests {
                 target_start: 162,
                 target_end: 181,
                 length: 19,
+                n_mismatches: 0,
+                seeds: vec![],
             }
         );
+        assert_eq!(report.extension, None);
         assert_eq!(&report.query.sequence[138..157], "RDGVNWGRIVAFFEFGGVM");
         assert_eq!(&report.target.sequence[162..181], "QCPMSYGRLIGLISFGGFV");
         assert_eq!(&report.query.encoded[138..157], "pphhphhphhhhhphhhhh");
         assert_eq!(&report.target.encoded[162..181], "pphhphhphhhhhphhhhh");
+    }
+
+    #[test]
+    fn extended_regions_keep_the_exact_runs_they_grew_from() {
+        let exact = bcl2_vs_ced9(12, "hp").regions;
+        let report = bcl2_vs_ced9_extended(2.0, 8.0);
+        assert_eq!(report.extension, Some(ExtensionScoring { mismatch_penalty: 2.0, xdrop: 8.0 }));
+        // The BH1 run grows 7 residues to the right through two class flips.
+        let bh1 = report.regions.iter().find(|r| r.query_start == 138).unwrap();
+        assert_eq!(
+            *bh1,
+            PairRegion {
+                query_start: 138,
+                query_end: 164,
+                target_start: 162,
+                target_end: 188,
+                length: 26,
+                n_mismatches: 2,
+                seeds: vec![PairSeed {
+                    query_start: 138,
+                    query_end: 157,
+                    target_start: 162,
+                    target_end: 181,
+                    length: 19,
+                }],
+            }
+        );
+        // Two exact runs on one diagonal whose extensions meet become one region with
+        // both as seeds; every exact run is the seed of exactly one region.
+        let merged = report.regions.iter().find(|r| r.query_start == 80).unwrap();
+        assert_eq!((merged.query_end, merged.target_start, merged.length), (93, 253, 13));
+        assert_eq!(
+            merged.seeds.iter().map(|s| (s.query_start, s.target_start)).collect::<Vec<_>>(),
+            vec![(80, 253), (81, 254)]
+        );
+        assert_eq!(exact.len(), 14);
+        assert_eq!(report.regions.len(), 13);
+        assert_eq!(report.regions.iter().map(|r| r.seeds.len()).sum::<usize>(), 14);
+        for region in &report.regions {
+            for seed in &region.seeds {
+                assert!(
+                    region.query_start <= seed.query_start && seed.query_end <= region.query_end
+                );
+                assert_eq!(
+                    seed.target_start as i64 - seed.query_start as i64,
+                    region.target_start as i64 - region.query_start as i64
+                );
+            }
+        }
     }
 
     #[test]
