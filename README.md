@@ -271,7 +271,7 @@ at `hp_lehninger2`, k=15, with Pfam domains:
 15 of the 25 share a 15-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
 residues with 5 identical, on the structural alignment; the q-value ranks it 8th,
 behind runs that are longer but polar-rich and off the structure (RTN3: 23 residues,
-2 identical, 14 polar), which is why the ranking statistic is being worked on. The commands, on files in this repository:
+2 identical, 14 polar). The q-value scores a run by its length alone. The commands, on files in this repository:
 
 ```bash
 kmerseek index -i tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
