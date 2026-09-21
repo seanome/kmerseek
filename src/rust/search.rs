@@ -532,6 +532,34 @@ fn region_expectation(prefix: &[f64], start: u32, end: u32, ksize: usize) -> f64
     prefix[window_end] - prefix[window_start]
 }
 
+impl MatchedRegion {
+    /// A region between `query_name` and `target_name` before it is compared against the
+    /// database: every score field at its "no evidence" value and every span field empty,
+    /// for the caller to fill with struct update syntax. The one place those defaults live.
+    fn unscored(query_name: &str, target_name: &str, moltype: &MolType) -> Self {
+        Self {
+            query_name: query_name.to_string(),
+            start: 0,
+            end: 0,
+            subseq: String::new(),
+            target_name: target_name.to_string(),
+            target_start: 0,
+            target_end: 0,
+            target_subseq: String::new(),
+            moltype: moltype.clone(),
+            moltype_seq: String::new(),
+            length: 0,
+            n_shared: 0,
+            expected_shared_kmers: 0.0,
+            poisson_score: 0.0,
+            tail_probability: 1.0,
+            enrichment: 0.0,
+            tfidf: 0.0,
+            mean_idf: 0.0,
+        }
+    }
+}
+
 impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Query Name: {}", self.query_name)?;
@@ -1550,15 +1578,12 @@ fn find_sampled_regions(
             let target_start = (start as isize + diagonal) as usize;
             let target_end = target_start + (end - start);
             regions.push(MatchedRegion {
-                query_name: query_name.clone(),
                 start: start as u32,
                 end: end as u32,
                 subseq: query_raw[start..end].to_string(),
-                target_name: target_name.clone(),
                 target_start: target_start as u32,
                 target_end: target_end as u32,
                 target_subseq: target_raw[target_start..target_end].to_string(),
-                moltype: moltype.clone(),
                 moltype_seq: if has_encoded {
                     target_encoded[target_start..target_end].to_string()
                 } else {
@@ -1566,12 +1591,7 @@ fn find_sampled_regions(
                 },
                 length: (end - start) as u32,
                 n_shared: n_shared as u32,
-                expected_shared_kmers: 0.0,
-                poisson_score: 0.0,
-                tail_probability: 1.0,
-                enrichment: 0.0,
-                tfidf: 0.0,
-                mean_idf: 0.0,
+                ..MatchedRegion::unscored(&query_name, &target_name, &moltype)
             });
         }
     }
@@ -1693,25 +1713,17 @@ pub fn find_matched_regions(
                     // We reuse the already-extracted subsequences to avoid duplicate bounds checking.
                     // Note: query_subseq and target_subseq are already defined above, so we use them directly.
 
+                    // No encoded sequence stored, so `moltype_seq` stays empty.
                     consecutive_regions.push(MatchedRegion {
-                        query_name: query_name.clone(),
                         start: query_start_pos as u32,
                         end: query_end_pos as u32,
                         subseq: query_subseq.to_string(),
-                        target_name: target_name.clone(),
                         target_start: target_start_pos as u32,
                         target_end: target_end_pos as u32,
                         target_subseq: target_subseq.to_string(),
-                        moltype: moltype.clone(),
-                        moltype_seq: String::new(), // Empty since we don't have encoded sequence
                         length: (query_end_pos - query_start_pos) as u32,
                         n_shared: consecutive_count as u32,
-                        expected_shared_kmers: 0.0,
-                        poisson_score: 0.0,
-                        tail_probability: 1.0,
-                        enrichment: 0.0,
-                        tfidf: 0.0,
-                        mean_idf: 0.0,
+                        ..MatchedRegion::unscored(&query_name, &target_name, &moltype)
                     });
 
                     i = j;
@@ -1740,24 +1752,16 @@ pub fn find_matched_regions(
         }
 
         consecutive_regions.push(MatchedRegion {
-            query_name: query_name.clone(),
             start: query_start_pos as u32,
             end: query_end_pos as u32,
             subseq: query_subseq.to_string(),
-            target_name: target_name.clone(),
             target_start: target_start_pos as u32,
             target_end: target_end_pos as u32,
             target_subseq: target_subseq.to_string(),
-            moltype: moltype.clone(),
             moltype_seq: target_moltype_seq.to_string(),
             length: (query_end_pos - query_start_pos) as u32,
             n_shared: consecutive_count as u32,
-            expected_shared_kmers: 0.0,
-            poisson_score: 0.0,
-            tail_probability: 1.0,
-            enrichment: 0.0,
-            tfidf: 0.0,
-            mean_idf: 0.0,
+            ..MatchedRegion::unscored(&query_name, &target_name, &moltype)
         });
 
         i = j;
@@ -1798,16 +1802,13 @@ mod tests {
         use crate::types::MolType;
 
         let region = MatchedRegion {
-            query_name: "q".to_string(),
             start: 3,
             end: 9,
             subseq: "QSUBSEQ".to_string(),
-            target_name: "t".to_string(),
             target_start: 11,
             target_end: 17,
             target_subseq: "TSUBSEQ".to_string(),
             moltype_seq: "hphph".to_string(),
-            moltype: MolType::new("hp_lehninger2").unwrap(),
             length: 6,
             n_shared: 2,
             expected_shared_kmers: 2.0,
@@ -1816,6 +1817,7 @@ mod tests {
             enrichment: 1.5,
             tfidf: 7.0,
             mean_idf: 3.5,
+            ..MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap())
         };
 
         let result = SearchResult {
