@@ -249,17 +249,21 @@ and the structure says which.
 `scripts/visualize_search.py` turns `kmerseek search` output into one HTML report per
 query. The query is the shared axis: it is drawn once at the top as a line with its
 domains, under a histogram of how many database entries have a run over each residue
-(grey for any run, black for a run with 5 or more identical residues). That histogram
+(light for any run, dark for a run with 5 or more identical residues). That histogram
 is the noise map: the BCL-2 loop is covered by a third of unrelated proteins because
 Ala/Pro/Gly stretches match it letter for letter, so a run there is discounted at a
 glance and a run in BH1 is not.
 
 Below it, one row per protein with the numbers in the row (length, runs, longest run,
 identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
-a bar at its query coordinates, solid when it has 5 or more identical residues and
-hollow otherwise; overlapping bars get a count. Database entries of one gene fold into
-one row, so a family search is not a list of TrEMBL copies of the query. Click a row
-and the pair view above opens underneath it.
+a bar at its query coordinates, shaded by its share of identical residues; overlapping
+runs stack in lanes. Database entries of one gene fold into one row, so a family search
+is not a list of TrEMBL copies of the query. Click a row and the pair view above opens
+underneath it. The page filters rows by name, identical residues, the statistic,
+Swiss-Prot status, fragments and the query domain a run falls in; the Download menu
+gives the rows and runs as TSV, the runs as FASTA, the overview as SVG or PNG and the
+data as JSON
+([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html)).
 
 ```bash
 kmerseek search -q bcl2.fasta -t bcl2_family.rocksdb -o results.csv --alphabet hp --ksize 12
@@ -272,15 +276,17 @@ python scripts/visualize_search.py --csv results.csv --query-fasta bcl2.fasta \
 plot.
 
 Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
-Benjamini-Hochberg corrected region tail probability; the sort control also offers
+Benjamini-Hochberg corrected region tail probability; the column headers also sort by
 identical residues, run length, run count and shared k-mers, which put
 composition-driven hits (p53, POU4F1) among the family members and show why the
 ranking statistic is the default. The pair view needs every shared k-mer, which the
 CSV does not carry, so the script runs `kmerseek pair` once per row (1.3 s for 40
 rows) on sequences from the two FASTA files; `--target-fasta` is the FASTA the index
 was built from. `--max-rows` caps each query (default 100), `--max-runs-shown` caps the
-alignments per opened row (default 10, longest first), `--solid-identical` sets the
-solid-bar threshold (default 5).
+alignments per opened row (default 10, longest first), `--solid-identical` sets how
+many identical residues a run needs to count in the histogram's dark area (default 5).
+The page is `scripts/kmerseek_hits_template.html` with its title and data tokens
+filled; everything on it is drawn by the template's own script from that data.
 
 ## Alphabets
 

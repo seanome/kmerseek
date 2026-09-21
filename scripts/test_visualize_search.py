@@ -123,4 +123,6 @@ def test_report_end_to_end(rows, tmp_path):
     assert bcl2["runs"][0] == {"number": 1, "query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19, "identical": 5, "polar": 5}
     html = vs.render_report(report)
     assert "<title>CED9_CAEEL kmerseek hits</title>" in html
-    assert html.count("</script>") == 1
+    assert "__TITLE__" not in html and "__DATA__" not in html
+    assert html.count("</script>") == 2
+    assert 'R = {"query": {"label": "CED9_CAEEL"' in html
