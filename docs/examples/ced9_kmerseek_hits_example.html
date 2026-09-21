@@ -173,15 +173,20 @@
   .block h3 { font-size: 12.5px; font-weight: 600; margin: 0 0 2px; color: var(--ink); }
   .block h3 .w { font-weight: 400; color: var(--secondary); }
   .block .wrap { overflow-x: auto; }
-  .block svg text { font-family: var(--sans); font-size: 11px; fill: var(--secondary); }
-  .block svg text.mono { font-family: var(--mono); font-size: 12px; fill: var(--ink); }
-  .block svg text.mono.h { fill: var(--h-ink); } .block svg text.mono.p { fill: var(--p-ink); }
-  .block svg text.mono.same { font-weight: 700; }
-  .block svg text.enc { font-size: 11.5px; }
-  .block svg text.mark { font-family: var(--mono); font-size: 12px; fill: var(--secondary); }
-  .block svg rect.h { fill: var(--h-fill); stroke: var(--h-edge); stroke-width: .6; } .block svg rect.p { fill: var(--p-fill); stroke: var(--p-edge); stroke-width: .6; }
-  .block svg rect.x { fill: none; stroke: var(--axis); stroke-width: .6; }
-  .block svg line.underline { stroke: var(--ink); stroke-width: 3; }
+  .chunk { display: grid; grid-template-columns: max-content max-content max-content; column-gap: 6px; row-gap: 2px; align-items: center; margin: 0 0 8px; white-space: nowrap; }
+  .chunk .lab { font-size: 11px; color: var(--secondary); text-align: right; }
+  .chunk .lab.r { text-align: left; }
+  .cells { font: 12px/15px var(--mono); color: var(--ink); letter-spacing: 0; }
+  .cells i { display: inline; font-style: normal; padding: 1px 3px; border: 0.5px solid transparent; border-radius: 2px; }
+  .cells i.h { background: var(--h-fill); border-color: var(--h-edge); color: var(--h-ink); }
+  .cells i.p { background: var(--p-fill); border-color: var(--p-edge); color: var(--p-ink); }
+  .cells i.x { border-color: var(--axis); }
+  .cells i.same { font-weight: 700; }
+  .cells.enc i { font-size: 11.5px; background: none; border-color: transparent; }
+  .cells.marks i { color: var(--secondary); background: none; border-color: transparent; }
+  .cells i.flank { opacity: .55; }
+  .cells.under i.run { box-shadow: 0 3px 0 0 var(--ink); }
+  .cells i.hit { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
   .none { color: var(--secondary); padding: 8px 14px; }
   .shown { color: var(--secondary); font-size: 12px; margin: 4px 0 0; }
 
@@ -254,6 +259,7 @@
   </div>
   <div class="filters">
     <span class="search"><svg class="icon s" style="color:var(--muted)"><use href="#i-search"/></svg><input id="q" type="search" placeholder="protein, gene or entry   ( / )" autocomplete="off" spellcheck="false"></span>
+    <span class="search" id="seq-box" title="Rows whose runs contain this sequence, in either protein; a string of the class letters searches the encoding"><input id="seq" type="search" placeholder="sequence, e.g. RDG" autocomplete="off" spellcheck="false" style="width:130px;font-family:var(--mono)"></span><span class="small" id="seq-count"></span>
     <label id="ident-filter">% identity ≥ <input id="min-ident" type="number" min="0" max="100" step="1" value="0"></label>
     <label id="stat-filter"><span id="stat-label">score</span> <span id="stat-sign">≤</span> <input id="max-stat" type="number" step="any" placeholder="any" style="width:6em"></label>
     <label><input id="reviewed" type="checkbox"> reviewed (Swiss-Prot) only</label>
@@ -347,7 +353,7 @@ function regionsHit(row) {
 
 const MANY_ORGANISMS = new Set(R.rows.map(r => r.organism)).size > 1;
 const primaryKey = r => r.primary === null ? Infinity : PRIMARY && PRIMARY.better === "high" ? -r.primary : r.primary;
-const state = { dragging: false, sort: PRIMARY ? "score:" + PRIMARY.key : "rank", dir: 1, open: new Set(), cursor: null, tw: 600, text: "", minIdent: 0, maxStat: "", reviewed: false, noFrag: false, regions: new Set() };
+const state = { dragging: false, sort: PRIMARY ? "score:" + PRIMARY.key : "rank", dir: 1, open: new Set(), cursor: null, tw: 600, text: "", seq: "", minIdent: 0, maxStat: "", reviewed: false, noFrag: false, regions: new Set() };
 const SORTS = {
   rank:      { label: "#",        key: r => r.rank,            title: PRIMARY ? `Rank by ${PRIMARY.label}` : "Rank" },
   name:      { label: "protein",  key: r => (r.description || r.label).toLowerCase(), title: "Protein name", str: true },
@@ -360,11 +366,35 @@ const SORTS = {
 };
 for (const sc of SCORES) SORTS["score:" + sc.key] = { label: sc.label, title: sc.note || sc.label, key: r => { const v = scoreOf(r, sc); return v === null ? Infinity : sc.better === "high" ? -v : v; } };
 
+// Sequence search. Residue letters match the residue rows; a string made only of the class symbols matches the encoding rows.
+function seqQuery() {
+  const q = state.seq.replace(/[^A-Za-z]/g, "");
+  if (q.length < 2) return null;
+  const symbols = R.classes.map(c => c.symbol).join("");
+  const enc = symbols && new RegExp(`^[${symbols}]+$`).test(q);
+  return { text: enc ? q : q.toUpperCase(), enc };
+}
+function findAll(hay, needle) { const out = []; let i = hay.indexOf(needle); while (i >= 0) { out.push([i, i + needle.length]); i = hay.indexOf(needle, i + 1); } return out; }
+function seqHits(rows) {
+  const q = seqQuery(); if (!q) return null;
+  return q.enc ? { query: findAll(rows.query_enc, q.text), target: findAll(rows.target_enc, q.text) }
+               : { query: findAll(rows.query_row, q.text), target: findAll(rows.target_row, q.text) };
+}
+function runRows(m, b) {
+  return (GAPPED && b.gapped) || { query_row: b.query_row, target_row: b.target_row, query_enc: b.query_enc, target_enc: b.target_enc,
+    query_start: b.window.query_start, target_start: b.window.target_start, run_columns: [b.query_start - b.window.query_start, b.query_start - b.window.query_start + b.length] };
+}
+function seqRuns(row) {
+  // Numbers of the runs of this row that contain the searched sequence.
+  const q = seqQuery(); if (!q) return [];
+  return row.model.runs.filter(b => { const h = seqHits(runRows(row.model, b)); return h.query.length || h.target.length; }).map(b => b.number);
+}
 function visibleRows() {
   const t = state.text.trim().toLowerCase();
   const cut = state.maxStat === "" ? null : Number(state.maxStat);
   let rows = ROWS.filter(r =>
     (!t || [r.description, r.label, r.gene, r.entry, ...(r.other_entries || [])].some(s => s && s.toLowerCase().includes(t))) &&
+    (!seqQuery() || seqRuns(r).length) &&
     r.bestPct >= state.minIdent &&
     (cut === null || !PRIMARY || (r.primary !== null && (PRIMARY.better === "high" ? r.primary >= cut : r.primary <= cut))) &&
     (!state.reviewed || isReviewed(r)) &&
@@ -410,7 +440,7 @@ function legend() {
   add(el("i", "cov-sw"), R.pair ? `query residues under a run (light) and under a run with ${SOLID} or more identical residues (dark)` : `database entries with any run over the residue (light) and with a run of ${SOLID} or more identical residues (dark)`);
   add(el("i", "trk"), "query, with its domains as boxes; click a domain to keep only rows with a run in it");
   for (const c of R.classes) add(el("i", "sw " + CLASS_KEY[c.symbol]), c.label);
-  add(el("b", "mid", "G"), `identical residue in an alignment (bold); | between the two ${ENC_LABEL} rows: same class; faded columns are the flanks outside the run`);
+  add(el("b", "mid", "G"), `identical residue in an alignment (bold); | between the two ${ENC_LABEL} rows: same class; faded columns are the flanks outside the run; an outlined stretch is a sequence-box match`);
   if (!GAPPED) add(el("span", null, ""), `alignments are ungapped: a run is read straight off both sequences${R.extended ? ", extended past its exact seeds" : ""}`);
   add(el("i", "path"), "structural alignment, one point per aligned residue pair (dot plot)");
   add(el("i", "dotm"), `single shared ${K}-mer, not in any run (dot plot)`);
@@ -566,6 +596,8 @@ function render() {
   ruler(); colhead();
   const main = $("rows"); main.textContent = "";
   $("count").innerHTML = ""; $("count").appendChild(el("b", null, rows.length)); $("count").appendChild(document.createTextNode(` of ${ROWS.length} rows`));
+  if (seqQuery()) { const nRuns = rows.reduce((a, r) => a + seqRuns(r).length, 0); $("seq-count").textContent = `${nRuns} run${nRuns === 1 ? "" : "s"} in ${rows.length} row${rows.length === 1 ? "" : "s"}`; }
+  else $("seq-count").textContent = "";
   for (const b of document.querySelectorAll("#regions .chip")) b.setAttribute("aria-pressed", state.regions.has(b.dataset.region));
   if (!rows.length) {
     const e = el("div", "empty", "No row passes these filters. ");
@@ -681,6 +713,14 @@ function flashBlock(container, number) {
   b.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "center" });
   b.classList.add("flash"); setTimeout(() => b.classList.remove("flash"), 900);
 }
+const NO_REGION = v => !v || v === "no region" || v === "none";
+function regionPhrase(m, b) {
+  const q = NO_REGION(b.query_region) ? null : b.query_region, t = NO_REGION(b.target_region) ? null : b.target_region;
+  if (q && t) return `in ${q} of ${m.query.label} and ${t} of ${m.target.label}`;
+  if (q) return `in ${q} of ${m.query.label}, outside annotated domains in ${m.target.label}`;
+  if (t) return `outside annotated domains in ${m.query.label}, in ${t} of ${m.target.label}`;
+  return "outside annotated domains in both";
+}
 function structurePhrase(off) { return off === null || off === undefined ? "not on the structural alignment" : Math.abs(off) <= 1 ? "on the structural alignment" : `${Math.abs(off)} residues off the structural alignment`; }
 
 const WRAP = 60, CELL = 15, BOX = 13, ROW = 17;
@@ -689,55 +729,45 @@ const residuesBefore = (row, n) => [...row.slice(0, n)].filter(c => c !== "-").l
 function block(m, b) {
   const div = el("div", "block"); div.dataset.run = b.number;
   const h = el("h3"); h.appendChild(document.createTextNode(`Run ${b.number}`));
-  const bits = [`${b.query_region} × ${b.target_region}`, `${b.length} aa`];
+  const bits = [`${b.length} aa`, regionPhrase(m, b)];
   bits.push(GAPPED && b.gapped ? `${b.identical} identical on the run, ${b.gapped.identical} of ${b.gapped.aligned} aligned columns after gapped alignment` : `${b.identical} of ${b.length} identical (${pct(b.identical, b.length)}%)`);
   if (b.n_mismatches !== undefined && b.n_mismatches !== null) bits.push(`${b.n_mismatches} mismatches in the extension`);
   if (b.polar !== null && b.polar !== undefined) bits.push(`${b.polar} of ${b.length} polar`);
   if (m.structure) bits.push(structurePhrase(b.structure_offset));
   h.appendChild(el("span", "w", "   " + bits.join(", "))); div.appendChild(h);
-  const rows = (GAPPED && b.gapped) || { query_row: b.query_row, target_row: b.target_row, query_enc: b.query_enc, target_enc: b.target_enc,
-    query_start: b.window.query_start, target_start: b.window.target_start, run_columns: [b.query_start - b.window.query_start, b.query_start - b.window.query_start + b.length] };
+  const rows = runRows(m, b);
   const wrap = el("div", "wrap"); div.appendChild(wrap);
-  for (let st = 0; st < rows.query_row.length; st += WRAP) wrap.appendChild(chunk(m, rows, st));
+  const hits = state.seq ? seqHits(rows) : null;
+  for (let st = 0; st < rows.query_row.length; st += WRAP) wrap.appendChild(chunk(m, rows, st, hits));
   return div;
 }
 // One line of an alignment block, five rows: query residues, query encoding, a mark where the classes agree, target encoding, target residues.
-// Identical residues are bold; columns outside the run (flanks) are faded; the run is underlined.
-function chunk(m, rows, start) {
+// Plain inline text, so the browser's find and copy work on the sequences. Identical residues are bold; flanks outside the run are faded; the run is underlined.
+function chunk(m, rows, start, hits) {
   const sl = str => str.slice(start, start + WRAP);
   const qRow = sl(rows.query_row), tRow = sl(rows.target_row), qEnc = sl(rows.query_enc), tEnc = sl(rows.target_enc);
-  const n = qRow.length, x0 = Math.max(m.query.label.length, m.target.label.length) * 6.6 + 70;
-  const svg = svgEl("svg", { width: x0 + n * CELL + 44, height: 5 * ROW + 10 });
+  const n = qRow.length, g = el("div", "chunk");
   const inRun = i => start + i >= rows.run_columns[0] && start + i < rows.run_columns[1];
-  const y = r => 1 + r * ROW;
-  const residueRow = (r, text, enc, other, label, full, origin) => {
-    const first = origin + residuesBefore(full, start), last = origin + residuesBefore(full, start + n);
-    svg.appendChild(svgEl("text", { x: x0 - 6, y: y(r) + BOX / 2 + 4, "text-anchor": "end" }, `${label} aa ${first + 1}`));
+  const isHit = (side, i) => hits && hits[side] && hits[side].some(([a, b]) => start + i >= a && start + i < b);
+  const line = (label, cells, right) => { g.appendChild(el("div", "lab", label)); g.appendChild(cells); g.appendChild(el("div", "lab r", right === undefined ? "" : right)); };
+  const residues = (text, enc, other, side, under) => {
+    const c = el("span", "cells" + (under ? " under" : ""));
     for (let i = 0; i < n; i++) {
       const k = text[i] === "-" ? "x" : (CLASS_KEY[enc[i]] || "x"), same = text[i] !== "-" && text[i] === other[i];
-      const g = svgEl("g", { opacity: inRun(i) ? 1 : 0.55 });
-      g.appendChild(svgEl("rect", { class: k, x: x0 + i * CELL, y: y(r), width: BOX, height: BOX, rx: 2 }));
-      g.appendChild(svgEl("text", { class: "mono " + k + (same ? " same" : ""), x: x0 + i * CELL + BOX / 2, y: y(r) + BOX / 2 + 4, "text-anchor": "middle" }, text[i]));
-      svg.appendChild(g);
+      c.appendChild(el("i", k + (same ? " same" : "") + (inRun(i) ? " run" : " flank") + (isHit(side, i) ? " hit" : ""), text[i]));
     }
-    svg.appendChild(svgEl("text", { x: x0 + n * CELL + 4, y: y(r) + BOX / 2 + 4 }, last));
+    return c;
   };
-  const encRow = (r, enc, label) => {
-    svg.appendChild(svgEl("text", { x: x0 - 6, y: y(r) + BOX / 2 + 4, "text-anchor": "end" }, `${label} ${ENC_LABEL}`));
-    for (let i = 0; i < n; i++) {
-      const k = CLASS_KEY[enc[i]] || "x";
-      svg.appendChild(svgEl("text", { class: "mono enc " + k, opacity: inRun(i) ? 1 : 0.55, x: x0 + i * CELL + BOX / 2, y: y(r) + BOX / 2 + 4, "text-anchor": "middle" }, enc[i]));
-    }
-  };
-  residueRow(0, qRow, qEnc, tRow, m.query.label, rows.query_row, rows.query_start);
-  encRow(1, qEnc, m.query.label);
-  for (let i = 0; i < n; i++) if (qEnc[i] !== "-" && qEnc[i] === tEnc[i])
-    svg.appendChild(svgEl("text", { class: "mark", opacity: inRun(i) ? 1 : 0.55, x: x0 + i * CELL + BOX / 2, y: y(2) + BOX / 2 + 4, "text-anchor": "middle" }, "|"));
-  encRow(3, tEnc, m.target.label);
-  residueRow(4, tRow, tEnc, qRow, m.target.label, rows.target_row, rows.target_start);
-  const first = Math.max(rows.run_columns[0], start) - start, last = Math.min(rows.run_columns[1], start + n) - start;
-  if (last > first) svg.appendChild(svgEl("line", { class: "underline", x1: x0 + first * CELL, x2: x0 + (last - 1) * CELL + BOX, y1: 5 * ROW + 6, y2: 5 * ROW + 6 }));
-  return svg;
+  const encoding = enc => { const c = el("span", "cells enc"); for (let i = 0; i < n; i++) c.appendChild(el("i", (CLASS_KEY[enc[i]] || "x") + (inRun(i) ? "" : " flank"), enc[i])); return c; };
+  const marks = () => { const c = el("span", "cells marks"); for (let i = 0; i < n; i++) c.appendChild(el("i", inRun(i) ? "" : "flank", qEnc[i] !== "-" && qEnc[i] === tEnc[i] ? "|" : " ")); return c; };
+  const qFirst = rows.query_start + residuesBefore(rows.query_row, start), qLast = rows.query_start + residuesBefore(rows.query_row, start + n);
+  const tFirst = rows.target_start + residuesBefore(rows.target_row, start), tLast = rows.target_start + residuesBefore(rows.target_row, start + n);
+  line(`${m.query.label} aa ${qFirst + 1}`, residues(qRow, qEnc, tRow, "query", false), qLast);
+  line(`${m.query.label} ${ENC_LABEL}`, encoding(qEnc));
+  line("", marks());
+  line(`${m.target.label} ${ENC_LABEL}`, encoding(tEnc));
+  line(`${m.target.label} aa ${tFirst + 1}`, residues(tRow, tEnc, qRow, "target", true), tLast);
+  return g;
 }
 
 // ---------- tooltip ----------
@@ -755,7 +785,7 @@ function tipRun(e, row, i) {
   const r = row.runs[i], id = identity(row, i), m = row.model.runs[i];
   const lines = [[`${r.length} aa, ${id.identical} of ${id.of} identical${id.gapped ? " after gapped alignment" : ""} (${pct(id.identical, id.of)}%)`, "b"],
                  [`${Q.label} ${r.query_start + 1}–${r.query_end}  ×  ${row.label} ${r.target_start + 1}–${r.target_end}`, "t"]];
-  if (m) lines.push([`${m.query_region} × ${m.target_region}` + (r.polar !== null ? `, ${r.polar} polar` : "") + (row.model.structure ? `, ${structurePhrase(r.structure_offset)}` : ""), "t"]);
+  if (m) lines.push([regionPhrase(row.model, m) + (r.polar !== null ? `, ${r.polar} polar` : "") + (row.model.structure ? `, ${structurePhrase(r.structure_offset)}` : ""), "t"]);
   if (m) lines.push([`${m.query_row}  ${Q.label} aa`, "m"], [`${m.query_enc}  ${ENC_LABEL}`, "m"], [`${m.target_enc}  ${ENC_LABEL}`, "m"], [`${m.target_row}  ${row.label} aa`, "m"]);
   showTip(e, lines);
 }
@@ -778,7 +808,7 @@ function rowsTsv(rows) {
 function runsTsv(rows) {
   const head = ["rank", "protein", "entry", "run", "query_start", "query_end", "target_start", "target_end", "length_aa", "identical_on_run", ...(GAPPED ? ["identical_gapped", "aligned_columns_gapped"] : []), "polar", "query_region", "target_region", "structure_offset", "query_row", "target_row"];
   const out = [head];
-  for (const r of rows) r.runs.forEach((x, i) => { const m = r.model.runs[i] || {}, g = (GAPPED && m.gapped) || null; out.push([r.rank, r.description || r.label, r.entry, x.number, x.query_start + 1, x.query_end, x.target_start + 1, x.target_end, x.length, x.identical, ...(GAPPED ? [g ? g.identical : "", g ? g.aligned : ""] : []), x.polar ?? "", m.query_region ?? "", m.target_region ?? "", x.structure_offset ?? "", g ? g.query_row : (m.query_row ?? ""), g ? g.target_row : (m.target_row ?? "")]); });
+  for (const r of rows) r.runs.forEach((x, i) => { const m = r.model.runs[i] || {}, g = (GAPPED && m.gapped) || null; out.push([r.rank, r.description || r.label, r.entry, x.number, x.query_start + 1, x.query_end, x.target_start + 1, x.target_end, x.length, x.identical, ...(GAPPED ? [g ? g.identical : "", g ? g.aligned : ""] : []), x.polar ?? "", NO_REGION(m.query_region) ? "" : m.query_region, NO_REGION(m.target_region) ? "" : m.target_region, x.structure_offset ?? "", g ? g.query_row : (m.query_row ?? ""), g ? g.target_row : (m.target_row ?? "")]); });
   return tsv(out);
 }
 function fastaOf(rows) {
@@ -867,6 +897,7 @@ function help() {
   add("TM-score", "From the structural alignment of AlphaFold models, by query length; 0.5 and above usually means the same fold.");
   add("shading", "Darker bar = larger identical fraction; the same five steps colour the run segments in the dot plot.");
   add("entries", "Database entries of one gene are folded into one row; the tag +n counts the others, hover it to list them.");
+  add("sequence box", `Keeps the rows with a run containing the letters, in either protein, and marks them in the alignments; letters from the alphabet only (${ENC_LABEL}) search the encoding instead. The browser's own find works on the alignments too.`);
   h.appendChild(dl);
   h.appendChild(el("h2", null, "Keys")).style.marginTop = "10px";
   const keys = el("div"); keys.innerHTML = "<kbd>j</kbd> <kbd>k</kbd> move between rows, <kbd>Enter</kbd> open or close, <kbd>/</kbd> search, <kbd>Esc</kbd> close what is open";
@@ -875,8 +906,8 @@ function help() {
 
 // ---------- wiring ----------
 function resetFilters() {
-  state.text = ""; state.minIdent = 0; state.maxStat = ""; state.reviewed = false; state.noFrag = false; state.regions.clear();
-  $("q").value = ""; $("min-ident").value = 0; $("max-stat").value = ""; $("reviewed").checked = false; $("no-frag").checked = false; render();
+  state.text = ""; state.seq = ""; state.minIdent = 0; state.maxStat = ""; state.reviewed = false; state.noFrag = false; state.regions.clear();
+  $("q").value = ""; $("seq").value = ""; $("min-ident").value = 0; $("max-stat").value = ""; $("reviewed").checked = false; $("no-frag").checked = false; render();
 }
 function measure() {
   if (state.dragging) return;
@@ -892,6 +923,11 @@ function setTheme(mode) {
 }
 titles(); legend(); help();
 $("q").addEventListener("input", e => { state.text = e.target.value; render(); });
+$("seq").addEventListener("input", e => {
+  state.seq = e.target.value;
+  if (seqQuery()) { const hit = ROWS.filter(r => seqRuns(r).length); if (hit.length && hit.length <= 8) for (const r of hit) state.open.add(r.rank); }
+  render();
+});
 $("min-ident").addEventListener("input", e => { state.minIdent = Number(e.target.value) || 0; render(); });
 $("max-stat").addEventListener("input", e => { state.maxStat = e.target.value; render(); });
 $("reviewed").addEventListener("change", e => { state.reviewed = e.target.checked; render(); });
