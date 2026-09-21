@@ -226,7 +226,9 @@ Pfam-A.regions work as they are. `--flank N` shows N residues either side of eac
 and switches the middle line to BLAST's: the letter where identical, `:` where only the
 class agrees. `--html` also writes the pair as a one-row page of the search report
 (same template, the row open): hover a single for its k-mer, click a run's number to
-jump to its alignment, copy the runs as FASTA or the dot plot as SVG
+jump to its alignment, copy the runs as FASTA or the dot plot as SVG. Under the row sit
+both full sequences, coloured by class, each run underlined in the shade of its bar; a
+run hovered in the plot, in its alignment or in the sequences lights up in all three
 ([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/bcl2_vs_ced9_pair_example.html)).
 
 Every lone shared k-mer is also written to the JSON as a region exactly k residues

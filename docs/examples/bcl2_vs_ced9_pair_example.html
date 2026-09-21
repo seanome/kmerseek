@@ -192,6 +192,13 @@
   .cells i.flank { opacity: .55; }
   .cells.under i.run { box-shadow: 0 3px 0 0 var(--ink); }
   .cells i.hit { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
+  /* Full sequences under an open row: runs underlined in the bar's shade, the rest faded. */
+  .seqs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 8px; row-gap: 6px; align-items: start; padding: 6px 14px 12px; border-top: 1px solid var(--grid); }
+  .seqs .lab { font-size: 11px; color: var(--secondary); text-align: right; white-space: nowrap; padding-top: 2px; }
+  .seqs .lab small { display: block; color: var(--muted); }
+  .seqs .cells { line-height: 19px; word-break: break-all; }
+  .seqs .cells i.run { cursor: pointer; }
+  .cells i.hot { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
   .none { color: var(--secondary); padding: 8px 14px; }
   .shown { color: var(--secondary); font-size: 12px; margin: 4px 0 0; }
 
@@ -285,7 +292,7 @@
 // Data. Positions are 1-based and inclusive. Everything on the page is derived from R.
 // This file is a template: the report writer replaces the placeholder on the next line (two underscores, DATA, two underscores)
 // with the JSON of the result, and the title placeholder in <title> with the page title; each token occurs once in the file.
-let R = null; try { R = {"pair": {"ksize": 12, "moltype": "hp_lehninger2", "alphabet": "2-letter hydrophobic/polar alphabet (Lehninger)", "classes": [{"symbol": "h", "residues": "AFGILMPVWY", "label": "hydrophobic (A F G I L M P V W Y)"}, {"symbol": "p", "residues": "CDEHKNQRST", "label": "polar (C D E H K N Q R S T)"}], "query": {"label": "BCL2_HUMAN", "name": "sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2", "length": 239, "domains": [{"name": "BH4", "start": 7, "end": 32}, {"name": "Bcl-2", "start": 97, "end": 195}]}, "target": {"label": "CED9_CAEEL", "name": "sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1", "length": 280, "domains": [{"name": "BH4", "start": 76, "end": 101}, {"name": "Bcl-2", "start": 116, "end": 221}]}, "n_shared": 27, "runs": [{"number": 1, "query_start": 138, "query_end": 157, "target_start": 162, "target_end": 181, "length": 19, "n_kmers": 8, "query_region": "Bcl-2", "target_region": "Bcl-2", "identical": 5, "polar": 5, "window": {"query_start": 138, "query_end": 157, "target_start": 162, "target_end": 181}, "query_row": "RDGVNWGRIVAFFEFGGVM", "target_row": "QCPMSYGRLIGLISFGGFV", "query_enc": "pphhphhphhhhhphhhhh", "target_enc": "pphhphhphhhhhphhhhh", "middle": "      GR      FGG  ", "structure_offset": 0}, {"number": 2, "query_start": 31, "query_end": 45, "target_start": 257, "target_end": 271, "length": 14, "n_kmers": 3, "query_region": "BH4", "target_region": "no region", "identical": 2, "polar": 1, "window": {"query_start": 31, "query_end": 45, "target_start": 257, "target_end": 271}, "query_row": "AGDVGAAPPGAAPA", "target_row": "GVTAGAIGIVGVVV", "query_enc": "hhphhhhhhhhhhh", "target_enc": "hhphhhhhhhhhhh", "middle": "    GA        ", "structure_offset": -157}, {"number": 3, "query_start": 130, "query_end": 144, "target_start": 145, "target_end": 159, "length": 14, "n_kmers": 3, "query_region": "Bcl-2", "target_region": "Bcl-2", "identical": 2, "polar": 6, "window": {"query_start": 130, "query_end": 144, "target_start": 145, "target_end": 159}, "query_row": "ATVVEELFRDGVNW", "target_row": "FSLYQDVVRTVGNA", "query_enc": "hphhpphhpphhph", "target_enc": "hphhpphhpphhph", "middle": "        R   N ", "structure_offset": 4}, {"number": 4, "query_start": 75, "query_end": 88, "target_start": 260, "target_end": 273, "length": 13, "n_kmers": 2, "query_region": "no region", "target_region": "no region", "identical": 2, "polar": 1, "window": {"query_start": 75, "query_end": 88, "target_start": 260, "target_end": 273}, "query_row": "AAPGAAAGPALSP", "target_row": "AGAIGIVGVVVCG", "query_enc": "hhhhhhhhhhhph", "target_enc": "hhhhhhhhhhhph", "middle": "A      G     ", "structure_offset": -166}, {"number": 5, "query_start": 200, "query_end": 213, "target_start": 267, "target_end": 280, "length": 13, "n_kmers": 2, "query_region": "no region", "target_region": "no region", "identical": 2, "polar": 4, "window": {"query_start": 200, "query_end": 213, "target_start": 267, "target_end": 280}, "query_row": "LYGPSMRPLFDFS", "target_row": "GVVVCGRMMFSLK", "query_enc": "hhhhphphhhphp", "target_enc": "hhhhphphhhphp", "middle": "      R  F   ", "structure_offset": -40}], "singles": [{"query_pos": 30, "target_pos": 94, "kmer": "phhphhhhhhhh", "query_kmer": "DAGDVGAAPPGA", "target_kmer": "NGMEWFGAPGLP"}, {"query_pos": 38, "target_pos": 260, "kmer": "hhhhhhhhhhhp", "query_kmer": "PPGAAPAPGIFS", "target_kmer": "AGAIGIVGVVVC"}, {"query_pos": 73, "target_pos": 259, "kmer": "phhhhhhhhhhh", "query_kmer": "TPAAPGAAAGPA", "target_kmer": "TAGAIGIVGVVV"}, {"query_pos": 80, "target_pos": 253, "kmer": "hhhhhhphhhhh", "query_kmer": "AAGPALSPVPPV", "target_kmer": "MIGAGVTAGAIG"}, {"query_pos": 81, "target_pos": 170, "kmer": "hhhhhphhhhhh", "query_kmer": "AGPALSPVPPVV", "target_kmer": "LIGLISFGGFVA"}, {"query_pos": 81, "target_pos": 254, "kmer": "hhhhhphhhhhh", "query_kmer": "AGPALSPVPPVV", "target_kmer": "IGAGVTAGAIGI"}, {"query_pos": 98, "target_pos": 225, "kmer": "phhpphppphpp", "query_kmer": "QAGDDFSRRYRR", "target_kmer": "TLGKQMKEDYER"}, {"query_pos": 103, "target_pos": 87, "kmer": "hppphppphhph", "query_kmer": "FSRRYRRDFAEM", "target_kmer": "FTHRIRQNGMEW"}, {"query_pos": 222, "target_pos": 265, "kmer": "hhhhhhphphhh", "query_kmer": "LALVGACITLGA", "target_kmer": "IVGVVVCGRMMF"}], "flank": 0, "structure": {"tm_score_query": 0.55352, "tm_score_target": 0.47977, "aligned": 154, "rmsd": 2.8, "seq_id": 0.188, "pairs": [[2, 67, false], [3, 68, false], [4, 69, true], [5, 70, true], [6, 71, true], [7, 74, true], [8, 77, true], [9, 78, true], [10, 79, true], [11, 80, true], [12, 81, true], [13, 82, true], [14, 83, true], [15, 84, true], [16, 85, true], [17, 86, true], [18, 87, true], [19, 88, true], [20, 89, true], [21, 90, true], [22, 91, true], [23, 92, true], [24, 93, true], [25, 94, true], [26, 95, true], [27, 96, true], [28, 97, true], [29, 98, true], [30, 99, true], [31, 100, true], [32, 101, false], [33, 102, false], [86, 105, false], [87, 106, false], [88, 107, false], [89, 108, false], [90, 109, true], [91, 110, true], [92, 111, true], [93, 112, true], [94, 113, true], [95, 114, true], [96, 115, true], [97, 116, true], [98, 117, true], [99, 118, true], [100, 119, true], [101, 120, true], [102, 121, true], [103, 122, true], [104, 123, true], [105, 124, true], [106, 125, true], [107, 126, true], [108, 127, true], [109, 128, true], [110, 129, true], [111, 130, true], [112, 131, true], [113, 132, true], [114, 133, true], [115, 134, true], [116, 135, true], [117, 136, true], [118, 137, true], [119, 138, true], [120, 139, true], [121, 140, true], [122, 141, true], [123, 142, true], [124, 143, true], [125, 144, true], [126, 145, true], [127, 146, true], [128, 147, true], [129, 148, true], [130, 149, true], [131, 150, true], [132, 151, true], [133, 152, true], [134, 153, true], [135, 154, true], [136, 155, true], [137, 156, true], [138, 157, true], [139, 159, false], [140, 164, true], [141, 165, true], [142, 166, true], [143, 167, true], [144, 168, true], [145, 169, true], [146, 170, true], [147, 171, true], [148, 172, true], [149, 173, true], [150, 174, true], [151, 175, true], [152, 176, true], [153, 177, true], [154, 178, true], [155, 179, true], [156, 180, true], [157, 181, true], [158, 182, true], [159, 183, true], [160, 184, true], [161, 185, true], [162, 186, true], [163, 187, true], [164, 188, true], [165, 190, true], [166, 191, true], [167, 192, true], [168, 193, true], [169, 194, true], [170, 195, true], [171, 196, true], [172, 197, true], [173, 198, true], [174, 199, true], [175, 200, true], [176, 201, true], [177, 202, true], [178, 203, true], [179, 204, true], [180, 205, true], [181, 206, true], [182, 207, true], [183, 208, true], [184, 209, true], [185, 210, true], [186, 211, true], [187, 212, true], [188, 213, true], [189, 214, true], [190, 215, true], [191, 217, true], [192, 218, true], [193, 219, true], [194, 220, true], [195, 221, true], [196, 222, true], [197, 223, true], [198, 224, true], [199, 225, true], [200, 226, true], [201, 227, true], [202, 228, true], [203, 229, false], [204, 231, false], [205, 232, true], [206, 233, true], [207, 234, false]], "aligner": "USalign", "query_file": "AF-P10415-F1-model_v6.cif", "target_file": "AF-P41958-F1-model_v6.cif"}}}; } catch (e) { R = null; }
+let R = null; try { R = {"pair": {"ksize": 12, "moltype": "hp_lehninger2", "alphabet": "2-letter hydrophobic/polar alphabet (Lehninger)", "classes": [{"symbol": "h", "residues": "AFGILMPVWY", "label": "hydrophobic (A F G I L M P V W Y)"}, {"symbol": "p", "residues": "CDEHKNQRST", "label": "polar (C D E H K N Q R S T)"}], "query": {"label": "BCL2_HUMAN", "name": "sp|P10415|BCL2_HUMAN Apoptosis regulator Bcl-2 OS=Homo sapiens OX=9606 GN=BCL2 PE=1 SV=2", "length": 239, "sequence": "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDAGDVGAAPPGAAPAPGIFSSQPGHTPHPAASRDPVARTSPLQTPAAPGAAAGPALSPVPPVVHLTLRQAGDDFSRRYRRDFAEMSSQLHLTPFTARGRFATVVEELFRDGVNWGRIVAFFEFGGVMCVESVNREMSPLVDNIALWMTEYLNRHLHTWIQDNGGWDAFVELYGPSMRPLFDFSWLSLKTLLSLALVGACITLGAYLGHK", "encoded": "hhphhpphhpppphhhphhphphppphhphphhphhhhhhhhhhhhhhhppphhpphphhhppphhhppphhpphhhhhhhhhhhhphhhhhhphphpphhpphppphppphhphppphphphhphphphhphhpphhpphhphhphhhhhphhhhhphpphppphphhhpphhhhhpphhppphpphhppphhhphhhphhhhphphhhphphhphpphhphhhhhhphphhhhhhpp", "domains": [{"name": "BH4", "start": 7, "end": 32}, {"name": "Bcl-2", "start": 97, "end": 195}]}, "target": {"label": "CED9_CAEEL", "name": "sp|P41958|CED9_CAEEL Apoptosis regulator ced-9 OS=Caenorhabditis elegans OX=6239 GN=ced-9 PE=1 SV=1", "length": 280, "sequence": "MTRCTADNSLTNPAYRRRTMATGEMKEFLGIKGTEPTDFGINSDAQDLPSPSRQASTRRMSIGESIDGKINDWEEPRLDIEGFVVDYFTHRIRQNGMEWFGAPGLPCGVQPEHEMMRVMGTIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFVAAKMMESVELQGQVRNLFVYTSLFIKTRIRNNWKEHNRSWDDFMTLGKQMKEDYERAEAEKVGRRKQNRRWSMIGAGVTAGAIGIVGVVVCGRMMFSLK", "encoded": "hpppphppphpphhhpppphhphphpphhhhphpphpphhhppphpphhphppphpppphphhpphphphpphpphphphphhhhphhppphppphhphhhhhhhhphhphppphhphhhphhpppphpphpphppphhhhhphphphhpphhpphhphppppphhphhphhhhhphhhhhhhphhpphphphphpphhhhpphhhppphppphpppppphpphhphhpphppphpphphpphhppppppphphhhhhhphhhhhhhhhhhphphhhphp", "domains": [{"name": "BH4", "start": 76, "end": 101}, {"name": "Bcl-2", "start": 116, "end": 221}]}, "n_shared": 27, "runs": [{"number": 1, "query_start": 138, "query_end": 157, "target_start": 162, "target_end": 181, "length": 19, "n_kmers": 8, "query_region": "Bcl-2", "target_region": "Bcl-2", "identical": 5, "polar": 5, "window": {"query_start": 138, "query_end": 157, "target_start": 162, "target_end": 181}, "query_row": "RDGVNWGRIVAFFEFGGVM", "target_row": "QCPMSYGRLIGLISFGGFV", "query_enc": "pphhphhphhhhhphhhhh", "target_enc": "pphhphhphhhhhphhhhh", "middle": "      GR      FGG  ", "structure_offset": 0}, {"number": 2, "query_start": 31, "query_end": 45, "target_start": 257, "target_end": 271, "length": 14, "n_kmers": 3, "query_region": "BH4", "target_region": "no region", "identical": 2, "polar": 1, "window": {"query_start": 31, "query_end": 45, "target_start": 257, "target_end": 271}, "query_row": "AGDVGAAPPGAAPA", "target_row": "GVTAGAIGIVGVVV", "query_enc": "hhphhhhhhhhhhh", "target_enc": "hhphhhhhhhhhhh", "middle": "    GA        ", "structure_offset": -157}, {"number": 3, "query_start": 130, "query_end": 144, "target_start": 145, "target_end": 159, "length": 14, "n_kmers": 3, "query_region": "Bcl-2", "target_region": "Bcl-2", "identical": 2, "polar": 6, "window": {"query_start": 130, "query_end": 144, "target_start": 145, "target_end": 159}, "query_row": "ATVVEELFRDGVNW", "target_row": "FSLYQDVVRTVGNA", "query_enc": "hphhpphhpphhph", "target_enc": "hphhpphhpphhph", "middle": "        R   N ", "structure_offset": 4}, {"number": 4, "query_start": 75, "query_end": 88, "target_start": 260, "target_end": 273, "length": 13, "n_kmers": 2, "query_region": "no region", "target_region": "no region", "identical": 2, "polar": 1, "window": {"query_start": 75, "query_end": 88, "target_start": 260, "target_end": 273}, "query_row": "AAPGAAAGPALSP", "target_row": "AGAIGIVGVVVCG", "query_enc": "hhhhhhhhhhhph", "target_enc": "hhhhhhhhhhhph", "middle": "A      G     ", "structure_offset": -166}, {"number": 5, "query_start": 200, "query_end": 213, "target_start": 267, "target_end": 280, "length": 13, "n_kmers": 2, "query_region": "no region", "target_region": "no region", "identical": 2, "polar": 4, "window": {"query_start": 200, "query_end": 213, "target_start": 267, "target_end": 280}, "query_row": "LYGPSMRPLFDFS", "target_row": "GVVVCGRMMFSLK", "query_enc": "hhhhphphhhphp", "target_enc": "hhhhphphhhphp", "middle": "      R  F   ", "structure_offset": -40}], "singles": [{"query_pos": 30, "target_pos": 94, "kmer": "phhphhhhhhhh", "query_kmer": "DAGDVGAAPPGA", "target_kmer": "NGMEWFGAPGLP"}, {"query_pos": 38, "target_pos": 260, "kmer": "hhhhhhhhhhhp", "query_kmer": "PPGAAPAPGIFS", "target_kmer": "AGAIGIVGVVVC"}, {"query_pos": 73, "target_pos": 259, "kmer": "phhhhhhhhhhh", "query_kmer": "TPAAPGAAAGPA", "target_kmer": "TAGAIGIVGVVV"}, {"query_pos": 80, "target_pos": 253, "kmer": "hhhhhhphhhhh", "query_kmer": "AAGPALSPVPPV", "target_kmer": "MIGAGVTAGAIG"}, {"query_pos": 81, "target_pos": 170, "kmer": "hhhhhphhhhhh", "query_kmer": "AGPALSPVPPVV", "target_kmer": "LIGLISFGGFVA"}, {"query_pos": 81, "target_pos": 254, "kmer": "hhhhhphhhhhh", "query_kmer": "AGPALSPVPPVV", "target_kmer": "IGAGVTAGAIGI"}, {"query_pos": 98, "target_pos": 225, "kmer": "phhpphppphpp", "query_kmer": "QAGDDFSRRYRR", "target_kmer": "TLGKQMKEDYER"}, {"query_pos": 103, "target_pos": 87, "kmer": "hppphppphhph", "query_kmer": "FSRRYRRDFAEM", "target_kmer": "FTHRIRQNGMEW"}, {"query_pos": 222, "target_pos": 265, "kmer": "hhhhhhphphhh", "query_kmer": "LALVGACITLGA", "target_kmer": "IVGVVVCGRMMF"}], "flank": 0, "structure": {"tm_score_query": 0.55352, "tm_score_target": 0.47977, "aligned": 154, "rmsd": 2.8, "seq_id": 0.188, "pairs": [[2, 67, false], [3, 68, false], [4, 69, true], [5, 70, true], [6, 71, true], [7, 74, true], [8, 77, true], [9, 78, true], [10, 79, true], [11, 80, true], [12, 81, true], [13, 82, true], [14, 83, true], [15, 84, true], [16, 85, true], [17, 86, true], [18, 87, true], [19, 88, true], [20, 89, true], [21, 90, true], [22, 91, true], [23, 92, true], [24, 93, true], [25, 94, true], [26, 95, true], [27, 96, true], [28, 97, true], [29, 98, true], [30, 99, true], [31, 100, true], [32, 101, false], [33, 102, false], [86, 105, false], [87, 106, false], [88, 107, false], [89, 108, false], [90, 109, true], [91, 110, true], [92, 111, true], [93, 112, true], [94, 113, true], [95, 114, true], [96, 115, true], [97, 116, true], [98, 117, true], [99, 118, true], [100, 119, true], [101, 120, true], [102, 121, true], [103, 122, true], [104, 123, true], [105, 124, true], [106, 125, true], [107, 126, true], [108, 127, true], [109, 128, true], [110, 129, true], [111, 130, true], [112, 131, true], [113, 132, true], [114, 133, true], [115, 134, true], [116, 135, true], [117, 136, true], [118, 137, true], [119, 138, true], [120, 139, true], [121, 140, true], [122, 141, true], [123, 142, true], [124, 143, true], [125, 144, true], [126, 145, true], [127, 146, true], [128, 147, true], [129, 148, true], [130, 149, true], [131, 150, true], [132, 151, true], [133, 152, true], [134, 153, true], [135, 154, true], [136, 155, true], [137, 156, true], [138, 157, true], [139, 159, false], [140, 164, true], [141, 165, true], [142, 166, true], [143, 167, true], [144, 168, true], [145, 169, true], [146, 170, true], [147, 171, true], [148, 172, true], [149, 173, true], [150, 174, true], [151, 175, true], [152, 176, true], [153, 177, true], [154, 178, true], [155, 179, true], [156, 180, true], [157, 181, true], [158, 182, true], [159, 183, true], [160, 184, true], [161, 185, true], [162, 186, true], [163, 187, true], [164, 188, true], [165, 190, true], [166, 191, true], [167, 192, true], [168, 193, true], [169, 194, true], [170, 195, true], [171, 196, true], [172, 197, true], [173, 198, true], [174, 199, true], [175, 200, true], [176, 201, true], [177, 202, true], [178, 203, true], [179, 204, true], [180, 205, true], [181, 206, true], [182, 207, true], [183, 208, true], [184, 209, true], [185, 210, true], [186, 211, true], [187, 212, true], [188, 213, true], [189, 214, true], [190, 215, true], [191, 217, true], [192, 218, true], [193, 219, true], [194, 220, true], [195, 221, true], [196, 222, true], [197, 223, true], [198, 224, true], [199, 225, true], [200, 226, true], [201, 227, true], [202, 228, true], [203, 229, false], [204, 231, false], [205, 232, true], [206, 233, true], [207, 234, false]], "aligner": "USalign", "query_file": "AF-P10415-F1-model_v6.cif", "target_file": "AF-P41958-F1-model_v6.cif"}}}; } catch (e) { R = null; }
 </script>
 <script>
 "use strict";
@@ -451,6 +458,7 @@ function legend() {
   if (!GAPPED) add(el("span", null, ""), `alignments are ungapped: a run is read straight off both sequences${R.extended ? ", extended past its exact seeds" : ""}`);
   add(el("i", "path"), "residue pairs from superposing the two AlphaFold models with USalign, solid where USalign marks the pair close (:), dotted otherwise (dot plot)");
   add(el("i", "dotm"), `single shared ${K}-mer, not in any run (dot plot)`);
+  add(el("span", null, ""), "under an open row, both full sequences with each run underlined in its bar's shade; a run lights up together in the plot, its alignment and the sequences");
 }
 
 // ---------- ruler: coverage, query domains, axis ----------
@@ -656,8 +664,56 @@ function panel(row) {
   alns.addEventListener("pointermove", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.sym) tipCell(e, c); });
   alns.addEventListener("pointerout", e => { if (e.target.closest(".cells i")) hideTip(); });
   split.appendChild(alns); p.appendChild(split);
+  const seqs = seqLines(m, p); if (seqs) p.appendChild(seqs);
   plot.appendChild(dotPlot(m, p));
   return p;
+}
+
+// One run lit everywhere it is drawn: its segment in the dot plot, its alignment block, its stretch in the sequences.
+function markRun(container, number, on) {
+  for (const n of container.querySelectorAll(`.run-seg[data-run~="${number}"], .block[data-run~="${number}"], .seqs i[data-run~="${number}"]`)) n.classList.toggle("hot", on);
+}
+
+// The two full sequences, one letter per cell as in the alignments, runs underlined in the shade of their bar.
+// Hovering a run's stretch lights the run in the plot and its alignment block; a click goes to the block.
+function seqLines(m, container) {
+  if (!m.query.sequence || !m.target.sequence) return null;
+  const g = el("div", "seqs");
+  const side = (s, startKey, endKey) => {
+    const runsAt = new Array(s.sequence.length).fill(null);
+    for (const b of m.runs) for (let i = b[startKey]; i < b[endKey]; i++) (runsAt[i] ||= []).push(b);
+    const cells = el("span", "cells");
+    for (let i = 0; i < s.sequence.length; i++) {
+      const rs = runsAt[i], c = el("i", (CLASS_KEY[s.encoded[i]] || "x") + (rs ? " run" : " flank"), s.sequence[i]);
+      c.dataset.pos = i + 1; c.dataset.prot = s.label; c.dataset.sym = s.encoded[i];
+      if (rs) {
+        c.dataset.run = rs.map(b => b.number).join(" ");
+        const b = rs[0], id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+        c.style.boxShadow = `0 3px 0 0 var(--id${bin(id.identical / id.of)})`;
+      }
+      cells.appendChild(c);
+    }
+    const lab = el("div", "lab", `${s.label} aa`); lab.appendChild(el("small", null, `${s.sequence.length} aa`));
+    g.appendChild(lab); g.appendChild(cells);
+  };
+  side(m.query, "query_start", "query_end");
+  side(m.target, "target_start", "target_end");
+  let hotRun = null;
+  const setHotRun = n => { if (n === hotRun) return; if (hotRun) markRun(container, hotRun, false); hotRun = n; if (hotRun) markRun(container, hotRun, true); };
+  const over = e => {
+    const c = e.target.closest(".cells i"); if (!c) return;
+    setHotRun(c.dataset.run ? c.dataset.run.split(" ")[0] : null);
+    const lines = cellLines(c);
+    for (const n of (c.dataset.run || "").split(" ").filter(Boolean)) {
+      const b = m.runs.find(x => String(x.number) === n), id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+      lines.push([`Run ${b.number}: ${b.length} aa, ${id.identical} of ${id.of} identical ${IDENT_HOW}; click to go to its alignment`, "t"]);
+    }
+    showTip(e, lines);
+  };
+  g.addEventListener("pointerover", over); g.addEventListener("pointermove", over);
+  g.addEventListener("pointerleave", () => { setHotRun(null); hideTip(); });
+  g.addEventListener("click", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.run) flashBlock(container, c.dataset.run.split(" ")[0]); });
+  return g;
 }
 
 function dotPlot(m, container) {
@@ -720,9 +776,9 @@ function dotPlot(m, container) {
   let hot = null;
   const setHot = seg => {
     if (hot === seg) return;
-    if (hot) { hot.classList.remove("hot"); const blk = container.querySelector(`[data-run="${hot.dataset.run}"].block`); if (blk) blk.classList.remove("hot"); }
+    if (hot) markRun(container, hot.dataset.run, false);
     hot = seg;
-    if (hot) { hot.classList.add("hot"); const blk = container.querySelector(`[data-run="${hot.dataset.run}"].block`); if (blk) blk.classList.add("hot"); }
+    if (hot) markRun(container, hot.dataset.run, true);
   };
   const nearest = (px, py) => {
     let best = null;
@@ -761,10 +817,10 @@ function dotPlot(m, container) {
   svg.addEventListener("pointermove", readout);
   svg.addEventListener("pointerleave", () => { crossX.setAttribute("visibility", "hidden"); crossY.setAttribute("visibility", "hidden"); setHot(null); for (const c of singles) c.classList.remove("hot"); hideTip(); });
   svg.addEventListener("click", e => { const f = readout(e); if (f && f.kind === "run") flashBlock(container, f.r.b.number); });
-  // The other way round: hovering an alignment block lights its run in the plot.
+  // The other way round: hovering an alignment block lights its run in the plot and in the sequences.
   container.querySelectorAll(".block").forEach(blk => {
-    blk.addEventListener("pointerenter", () => { const r = segs.find(x => String(x.b.number) === blk.dataset.run); if (r) r.seg.classList.add("hot"); });
-    blk.addEventListener("pointerleave", () => { const r = segs.find(x => String(x.b.number) === blk.dataset.run); if (r) r.seg.classList.remove("hot"); });
+    blk.addEventListener("pointerenter", () => markRun(container, blk.dataset.run, true));
+    blk.addEventListener("pointerleave", () => markRun(container, blk.dataset.run, false));
   });
   // Domain boxes name themselves.
   svg.querySelectorAll("rect.dom").forEach(r => r.addEventListener("pointermove", e => { e.stopPropagation(); showTip(e, [[r.dataset.name, "b"], [r.dataset.range, "t"]]); }));
@@ -855,14 +911,14 @@ function showTip(e, lines) {
   tip.style.top = (e.clientY + 16 + h > innerHeight ? e.clientY - h - 10 : e.clientY + 16) + "px";
 }
 function hideTip() { tip.style.display = "none"; }
-function tipCell(e, c) {
+function cellLines(c) {
   const cls = R.classes.find(x => x.symbol === c.dataset.sym);
   const name = cls ? cls.label.split(" (")[0] : "unclassified", members = cls ? [...cls.residues].join(" ") : "";
-  const lines = c.dataset.pos
+  return c.dataset.pos
     ? [[`${c.textContent} ${c.dataset.pos} of ${c.dataset.prot}`, "b"], [`${name} (${c.dataset.sym}) in the ${R.moltype || ""} alphabet`, "t"], [members, "m"]]
     : [[`${c.dataset.sym} = ${name}`, "b"], [members, "m"], [`${R.moltype || ""} alphabet`, "t"]];
-  showTip(e, lines);
 }
+function tipCell(e, c) { showTip(e, cellLines(c)); }
 function tipRun(e, row, i) {
   const r = row.runs[i], id = identity(row, i), m = row.model.runs[i];
   const lines = [[`${r.length} aa, ${id.identical} of ${id.of} identical${id.gapped ? " after gapped alignment" : ""} (${pct(id.identical, id.of)}%)`, "b"],
@@ -979,6 +1035,7 @@ function help() {
   for (const sc of SCORES) add(sc.label, (sc.note || sc.label) + (sc === PRIMARY ? ". Ranks the rows." : "") + (sc.better === "high" ? " Higher is better." : " Lower is better."));
   add("TM-score", "From superposing the two AlphaFold models with USalign, by query length; 0.5 and above usually means the same fold. The dot plot draws USalign's residue pairs as a line.");
   add("shading", "Darker bar = larger identical fraction; the same five steps colour the run segments in the dot plot.");
+  add("sequences", "Under an open row, the two full sequences, coloured by class, with each run underlined in the shade of its bar; hover a letter for its position and class, hover or click a run's stretch as in the plot.");
   add("entries", "Database entries of one gene are folded into one row; the tag +n counts the others, hover it to list them.");
   add("sequence box", `Keeps the rows with a run containing the letters, in either protein, and marks them in the alignments; letters from the alphabet only (${ENC_LABEL}) search the encoding instead. The browser's own find works on the alignments too.`);
   h.appendChild(dl);

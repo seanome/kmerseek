@@ -221,6 +221,8 @@ def _side(pair, side, domains):
         "label": short_label(pair[side]["name"]),
         "name": pair[side]["name"],
         "length": len(pair[side]["sequence"]),
+        "sequence": pair[side]["sequence"],
+        "encoded": pair[side]["encoded"],
         "domains": domains[side],
     }
 

@@ -192,6 +192,13 @@
   .cells i.flank { opacity: .55; }
   .cells.under i.run { box-shadow: 0 3px 0 0 var(--ink); }
   .cells i.hit { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
+  /* Full sequences under an open row: runs underlined in the bar's shade, the rest faded. */
+  .seqs { display: grid; grid-template-columns: max-content minmax(0, 1fr); column-gap: 8px; row-gap: 6px; align-items: start; padding: 6px 14px 12px; border-top: 1px solid var(--grid); }
+  .seqs .lab { font-size: 11px; color: var(--secondary); text-align: right; white-space: nowrap; padding-top: 2px; }
+  .seqs .lab small { display: block; color: var(--muted); }
+  .seqs .cells { line-height: 19px; word-break: break-all; }
+  .seqs .cells i.run { cursor: pointer; }
+  .cells i.hot { outline: 2px solid var(--ink); outline-offset: -1px; background: var(--flash); }
   .none { color: var(--secondary); padding: 8px 14px; }
   .shown { color: var(--secondary); font-size: 12px; margin: 4px 0 0; }
 
@@ -451,6 +458,7 @@ function legend() {
   if (!GAPPED) add(el("span", null, ""), `alignments are ungapped: a run is read straight off both sequences${R.extended ? ", extended past its exact seeds" : ""}`);
   add(el("i", "path"), "residue pairs from superposing the two AlphaFold models with USalign, solid where USalign marks the pair close (:), dotted otherwise (dot plot)");
   add(el("i", "dotm"), `single shared ${K}-mer, not in any run (dot plot)`);
+  add(el("span", null, ""), "under an open row, both full sequences with each run underlined in its bar's shade; a run lights up together in the plot, its alignment and the sequences");
 }
 
 // ---------- ruler: coverage, query domains, axis ----------
@@ -656,8 +664,56 @@ function panel(row) {
   alns.addEventListener("pointermove", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.sym) tipCell(e, c); });
   alns.addEventListener("pointerout", e => { if (e.target.closest(".cells i")) hideTip(); });
   split.appendChild(alns); p.appendChild(split);
+  const seqs = seqLines(m, p); if (seqs) p.appendChild(seqs);
   plot.appendChild(dotPlot(m, p));
   return p;
+}
+
+// One run lit everywhere it is drawn: its segment in the dot plot, its alignment block, its stretch in the sequences.
+function markRun(container, number, on) {
+  for (const n of container.querySelectorAll(`.run-seg[data-run~="${number}"], .block[data-run~="${number}"], .seqs i[data-run~="${number}"]`)) n.classList.toggle("hot", on);
+}
+
+// The two full sequences, one letter per cell as in the alignments, runs underlined in the shade of their bar.
+// Hovering a run's stretch lights the run in the plot and its alignment block; a click goes to the block.
+function seqLines(m, container) {
+  if (!m.query.sequence || !m.target.sequence) return null;
+  const g = el("div", "seqs");
+  const side = (s, startKey, endKey) => {
+    const runsAt = new Array(s.sequence.length).fill(null);
+    for (const b of m.runs) for (let i = b[startKey]; i < b[endKey]; i++) (runsAt[i] ||= []).push(b);
+    const cells = el("span", "cells");
+    for (let i = 0; i < s.sequence.length; i++) {
+      const rs = runsAt[i], c = el("i", (CLASS_KEY[s.encoded[i]] || "x") + (rs ? " run" : " flank"), s.sequence[i]);
+      c.dataset.pos = i + 1; c.dataset.prot = s.label; c.dataset.sym = s.encoded[i];
+      if (rs) {
+        c.dataset.run = rs.map(b => b.number).join(" ");
+        const b = rs[0], id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+        c.style.boxShadow = `0 3px 0 0 var(--id${bin(id.identical / id.of)})`;
+      }
+      cells.appendChild(c);
+    }
+    const lab = el("div", "lab", `${s.label} aa`); lab.appendChild(el("small", null, `${s.sequence.length} aa`));
+    g.appendChild(lab); g.appendChild(cells);
+  };
+  side(m.query, "query_start", "query_end");
+  side(m.target, "target_start", "target_end");
+  let hotRun = null;
+  const setHotRun = n => { if (n === hotRun) return; if (hotRun) markRun(container, hotRun, false); hotRun = n; if (hotRun) markRun(container, hotRun, true); };
+  const over = e => {
+    const c = e.target.closest(".cells i"); if (!c) return;
+    setHotRun(c.dataset.run ? c.dataset.run.split(" ")[0] : null);
+    const lines = cellLines(c);
+    for (const n of (c.dataset.run || "").split(" ").filter(Boolean)) {
+      const b = m.runs.find(x => String(x.number) === n), id = GAPPED && b.gapped ? { identical: b.gapped.identical, of: b.gapped.aligned } : { identical: b.identical, of: b.length };
+      lines.push([`Run ${b.number}: ${b.length} aa, ${id.identical} of ${id.of} identical ${IDENT_HOW}; click to go to its alignment`, "t"]);
+    }
+    showTip(e, lines);
+  };
+  g.addEventListener("pointerover", over); g.addEventListener("pointermove", over);
+  g.addEventListener("pointerleave", () => { setHotRun(null); hideTip(); });
+  g.addEventListener("click", e => { const c = e.target.closest(".cells i"); if (c && c.dataset.run) flashBlock(container, c.dataset.run.split(" ")[0]); });
+  return g;
 }
 
 function dotPlot(m, container) {
@@ -720,9 +776,9 @@ function dotPlot(m, container) {
   let hot = null;
   const setHot = seg => {
     if (hot === seg) return;
-    if (hot) { hot.classList.remove("hot"); const blk = container.querySelector(`[data-run="${hot.dataset.run}"].block`); if (blk) blk.classList.remove("hot"); }
+    if (hot) markRun(container, hot.dataset.run, false);
     hot = seg;
-    if (hot) { hot.classList.add("hot"); const blk = container.querySelector(`[data-run="${hot.dataset.run}"].block`); if (blk) blk.classList.add("hot"); }
+    if (hot) markRun(container, hot.dataset.run, true);
   };
   const nearest = (px, py) => {
     let best = null;
@@ -761,10 +817,10 @@ function dotPlot(m, container) {
   svg.addEventListener("pointermove", readout);
   svg.addEventListener("pointerleave", () => { crossX.setAttribute("visibility", "hidden"); crossY.setAttribute("visibility", "hidden"); setHot(null); for (const c of singles) c.classList.remove("hot"); hideTip(); });
   svg.addEventListener("click", e => { const f = readout(e); if (f && f.kind === "run") flashBlock(container, f.r.b.number); });
-  // The other way round: hovering an alignment block lights its run in the plot.
+  // The other way round: hovering an alignment block lights its run in the plot and in the sequences.
   container.querySelectorAll(".block").forEach(blk => {
-    blk.addEventListener("pointerenter", () => { const r = segs.find(x => String(x.b.number) === blk.dataset.run); if (r) r.seg.classList.add("hot"); });
-    blk.addEventListener("pointerleave", () => { const r = segs.find(x => String(x.b.number) === blk.dataset.run); if (r) r.seg.classList.remove("hot"); });
+    blk.addEventListener("pointerenter", () => markRun(container, blk.dataset.run, true));
+    blk.addEventListener("pointerleave", () => markRun(container, blk.dataset.run, false));
   });
   // Domain boxes name themselves.
   svg.querySelectorAll("rect.dom").forEach(r => r.addEventListener("pointermove", e => { e.stopPropagation(); showTip(e, [[r.dataset.name, "b"], [r.dataset.range, "t"]]); }));
@@ -855,14 +911,14 @@ function showTip(e, lines) {
   tip.style.top = (e.clientY + 16 + h > innerHeight ? e.clientY - h - 10 : e.clientY + 16) + "px";
 }
 function hideTip() { tip.style.display = "none"; }
-function tipCell(e, c) {
+function cellLines(c) {
   const cls = R.classes.find(x => x.symbol === c.dataset.sym);
   const name = cls ? cls.label.split(" (")[0] : "unclassified", members = cls ? [...cls.residues].join(" ") : "";
-  const lines = c.dataset.pos
+  return c.dataset.pos
     ? [[`${c.textContent} ${c.dataset.pos} of ${c.dataset.prot}`, "b"], [`${name} (${c.dataset.sym}) in the ${R.moltype || ""} alphabet`, "t"], [members, "m"]]
     : [[`${c.dataset.sym} = ${name}`, "b"], [members, "m"], [`${R.moltype || ""} alphabet`, "t"]];
-  showTip(e, lines);
 }
+function tipCell(e, c) { showTip(e, cellLines(c)); }
 function tipRun(e, row, i) {
   const r = row.runs[i], id = identity(row, i), m = row.model.runs[i];
   const lines = [[`${r.length} aa, ${id.identical} of ${id.of} identical${id.gapped ? " after gapped alignment" : ""} (${pct(id.identical, id.of)}%)`, "b"],
@@ -979,6 +1035,7 @@ function help() {
   for (const sc of SCORES) add(sc.label, (sc.note || sc.label) + (sc === PRIMARY ? ". Ranks the rows." : "") + (sc.better === "high" ? " Higher is better." : " Lower is better."));
   add("TM-score", "From superposing the two AlphaFold models with USalign, by query length; 0.5 and above usually means the same fold. The dot plot draws USalign's residue pairs as a line.");
   add("shading", "Darker bar = larger identical fraction; the same five steps colour the run segments in the dot plot.");
+  add("sequences", "Under an open row, the two full sequences, coloured by class, with each run underlined in the shade of its bar; hover a letter for its position and class, hover or click a run's stretch as in the plot.");
   add("entries", "Database entries of one gene are folded into one row; the tag +n counts the others, hover it to list them.");
   add("sequence box", `Keeps the rows with a run containing the letters, in either protein, and marks them in the alignments; letters from the alphabet only (${ENC_LABEL}) search the encoding instead. The browser's own find works on the alignments too.`);
   h.appendChild(dl);
