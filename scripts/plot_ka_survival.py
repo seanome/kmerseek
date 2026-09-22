@@ -40,6 +40,10 @@ def load(path):
     window = [float(r["x"]) for r in rows if r["in_fit"] == "true"]
     ref_survival = [int(r["reference_n_regions_at_least"]) if r.get("reference_n_regions_at_least") else 0 for r in rows]
     ref_density = [ref_survival[i] - (ref_survival[i + 1] if i + 1 < len(ref_survival) else 0) for i in range(len(ref_survival))]
+    # A refused fit (too few score bins above the peak) writes the curve with the fit
+    # columns empty; the picture is then the histogram alone.
+    if not meta["slope"]:
+        return meta, scores, survival, density, window, None, None, None, ref_density, ref_survival, width
     lam, k = float(meta["slope"]), float(meta["k"])
     residues, kmers = float(meta["query_residues"]), float(meta["database_kmers"])
     per_bin = 1 - math.exp(-lam * width)
@@ -60,34 +64,43 @@ def slope_standard_error(scores, density, window, lam, ln_intercept):
 
 def draw_column(axes, path, first_column, args_label=None):
     meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival, width = load(path)
-    lam, k = float(meta["slope"]), float(meta["k"])
-    se = slope_standard_error(scores, density, window, lam, ln_intercept)
-    xmax = max(window) + 12
+    fitted = fit_density is not None
+    if fitted:
+        lam, k = float(meta["slope"]), float(meta["k"])
+        se = slope_standard_error(scores, density, window, lam, ln_intercept)
+        xmax = max(window) + 12
+    else:
+        # No window to anchor on: show everything up to the last bin with a region.
+        xmax = max(s for s, d in zip(scores, density) if d > 0)
     rows = [
         (density, fit_density, ref_density, "o", "", "regions in the bin (observed)"),
         (survival, fit_survival, ref_survival, "s", "none", "regions at or above the bin (observed, same regions summed)"),
     ]
-    for ax, (observed, fitted, reference, marker, face, label) in zip(axes, rows):
+    for ax, (observed, fit_line, reference, marker, face, label) in zip(axes, rows):
         if any(reference):
             keep = [i for i, o in enumerate(reference) if o > 0 and scores[i] <= xmax]
             ax.plot([scores[i] for i in keep], [reference[i] for i in keep], "^", ms=3.5, mfc="none",
                     color=REFERENCE, label="the same queries shuffled keeping dipeptides: the fit stops where the real curve rises above this")
-        ax.axvspan(min(window), max(window) + width, color=WINDOW, lw=0,
-                   label=f"score bins the line is fitted on (≥ {MIN_BIN_COUNT} regions each)")
+        if fitted:
+            ax.axvspan(min(window), max(window) + width, color=WINDOW, lw=0,
+                       label=f"score bins the line is fitted on (≥ {MIN_BIN_COUNT} regions each)")
         keep = [i for i, o in enumerate(observed) if o > 0 and scores[i] <= xmax]
         style = dict(mfc=face) if face else {}
         ax.plot([scores[i] for i in keep], [observed[i] for i in keep], marker, ms=3.5,
                 color=OBSERVED, label=label, **style)
-        keep = [i for i in range(len(scores)) if scores[i] <= xmax]
-        ax.plot([scores[i] for i in keep], [fitted[i] for i in keep], "-", color=FITTED, lw=1.8,
-                label="fitted line: its slope, sign flipped, is the λ correction; K from its height")
+        if fitted:
+            keep = [i for i in range(len(scores)) if scores[i] <= xmax]
+            ax.plot([scores[i] for i in keep], [fit_line[i] for i in keep], "-", color=FITTED, lw=1.8,
+                    label="fitted line: its slope, sign flipped, is the λ correction; K from its height")
         ax.axhline(MIN_BIN_COUNT, color=FLOOR, ls=":", lw=1,
                    label=f"{MIN_BIN_COUNT} regions: bins below this are not fitted")
         ax.set_yscale("log")
         ax.set_ylim(0.5, max(observed) * 3)
         ax.spines[["top", "right"]].set_visible(False)
     label = args_label or f"{meta['null']} queries"
-    axes[0].set_title(f"{label}\nλ correction = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
+    verdict = (f"λ correction = {lam:.3f} ± {se:.3f}, K = {k:.4f}" if fitted
+               else f"no fit: under 4 bins above the peak hold ≥ {MIN_BIN_COUNT} regions\n({meta['n_regions_at_least']} regions from {meta['n_queries']} quer{'y' if meta['n_queries'] == '1' else 'ies'})")
+    axes[0].set_title(f"{label}\n{verdict}", fontsize=10, loc="left")
     axes[1].set_xlabel("x = λ_pair · S (nats)")
     if first_column:
         axes[0].set_ylabel(f"regions in each bin of x ({width:g} nat)\n(what the line is fitted to)")
@@ -108,7 +121,7 @@ def main():
         label = args.labels[j] if args.labels and j < len(args.labels) else None
         draw_column([axes[0][j], axes[1][j]], path, first_column=(j == 0), args_label=label)
     handles = {}
-    for ax in (axes[0][0], axes[1][0]):
+    for ax in axes.flat:
         for h, l in zip(*ax.get_legend_handles_labels()):
             handles.setdefault(l, h)
     fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.92),

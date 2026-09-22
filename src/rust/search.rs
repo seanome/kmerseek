@@ -15,8 +15,8 @@ use crate::errors::{IndexError, IndexResult};
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
 use crate::karlin_altschul::{
-    fit_scores, fit_scores_with_reference, make_decoy, DecoyNull, KaCalibration, SplitMix64,
-    BIN_WIDTH, MIN_FIT_POINTS,
+    fit_scores, fit_scores_with_reference, make_decoy, survival_counts, DecoyNull, KaCalibration,
+    SplitMix64, BIN_WIDTH, MIN_FIT_POINTS,
 };
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -111,13 +111,25 @@ const COMPOSITION_SAMPLE: usize = 200;
 /// What `ProteinSearcher::calibrate_ka` found.
 #[derive(Debug, Clone, PartialEq)]
 pub struct KaCalibrationReport {
-    /// The fit, or None when the calibration queries gave too few regions to fit on.
+    /// The fit, or None when the calibration queries gave too few usable score bins.
     pub fitted: Option<KaCalibration>,
     /// Chance that two positions drawn from the sampled database sequences share a class:
     /// the `a` of the database against itself.
     pub match_probability: f64,
     pub n_queries: usize,
     pub n_regions: usize,
+    /// Residues in the calibration queries and k-mers in the database: the L and N the
+    /// fit's K is read against.
+    pub query_residues: u64,
+    pub database_kmers: u64,
+    pub lambda_analytic: f64,
+    /// Regions with score >= each half-nat bin of x = lambda_pair S, for the calibration
+    /// queries (`survival`) and, under the database null, for the same queries shuffled
+    /// (`reference_survival`, empty otherwise). Kept whether or not the fit succeeded, so
+    /// a refused fit can still show the histogram it refused. Same shape as
+    /// `KaCalibration::survival`.
+    pub survival: Vec<(i64, u64)>,
+    pub reference_survival: Vec<(i64, u64)>,
 }
 
 /// What a calibration run is asked for; see `ProteinSearcher::calibrate_ka`.
@@ -907,13 +919,17 @@ impl ProteinSearcher {
         let (queries, match_probability) = self.calibration_queries(null, n_queries, seed)?;
         let scores = self.calibration_scores(&queries);
         // The database null is censored against the same queries shuffled (`reference`).
-        let fit = if null == DecoyNull::Database {
+        let (fit, reference_survival) = if null == DecoyNull::Database {
             let (shuffled, _) = self.calibration_queries(reference, n_queries, seed)?;
             let reference_scores = self.calibration_scores(&shuffled);
-            fit_scores_with_reference(&scores, &reference_scores)
+            (
+                fit_scores_with_reference(&scores, &reference_scores),
+                survival_counts(&reference_scores),
+            )
         } else {
-            fit_scores(&scores)
+            (fit_scores(&scores), Vec::new())
         };
+        let survival = survival_counts(&scores);
         let n_queries = queries.len();
         let query_residues: u64 =
             queries.iter().map(|(_, q)| q.get_raw_sequence().map_or(0, |r| r.len() as u64)).sum();
@@ -946,7 +962,17 @@ impl ProteinSearcher {
             reference_lambda: fit.reference_lambda,
             reference: (null == DecoyNull::Database).then_some(reference),
         });
-        Ok(KaCalibrationReport { fitted, match_probability, n_queries, n_regions: scores.len() })
+        Ok(KaCalibrationReport {
+            fitted,
+            match_probability,
+            n_queries,
+            n_regions: scores.len(),
+            query_residues,
+            database_kmers,
+            lambda_analytic,
+            survival,
+            reference_survival,
+        })
     }
 
     /// The calibration queries, each with the md5 of the database entry it came from, and
@@ -4936,6 +4962,26 @@ mod ka_calibration_tests {
         // No stored fit for penalty 3 and no queries allowed: refused, not guessed.
         let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();
         assert!(err.to_string().contains("no Karlin-Altschul fit for penalty 3"), "{err}");
+        Ok(())
+    }
+
+    /// A refused fit still reports the histogram it refused: one shuffled query gives a
+    /// few hundred regions, nearly all in the peak bin, so fewer than MIN_FIT_POINTS tail
+    /// bins reach MIN_BIN_COUNT and `fitted` is None, but `survival` is the full curve
+    /// and its first entry counts every region.
+    #[test]
+    fn test_calibrate_ka_refused_fit_still_carries_survival() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        let report = searcher.calibrate_ka(shuffled_settings(2.0, 1))?;
+        assert_eq!(report.fitted, None, "{} regions fitted", report.n_regions);
+        assert_eq!(report.n_queries, 1);
+        assert!(report.n_regions > 0);
+        assert_eq!(report.survival[0].1 as usize, report.n_regions);
+        assert!(report.survival.windows(2).all(|w| w[0].1 >= w[1].1), "survival is monotone");
+        assert!(report.reference_survival.is_empty(), "no reference under the shuffled null");
+        assert!((report.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
+        assert!(report.query_residues > 0);
+        assert_eq!(report.database_kmers, 8340);
         Ok(())
     }
 }

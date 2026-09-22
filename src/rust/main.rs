@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::karlin_altschul::{DecoyNull, KaCalibration};
-use kmerseek::search::{KaCalibrationSettings, KaSource};
+use kmerseek::karlin_altschul::{DecoyNull, KaCalibration, BIN_WIDTH};
+use kmerseek::search::{KaCalibrationReport, KaCalibrationSettings, KaSource};
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
 use std::path::{Path, PathBuf};
@@ -107,7 +107,8 @@ enum Commands {
         ka_reference: DecoyNull,
 
         /// Write the survival curve the fit was read from (score, regions with score >= it,
-        /// and the fit) to this CSV, for plotting with scripts/plot_ka_survival.py.
+        /// and the fit) to this CSV, for plotting with scripts/plot_ka_survival.py. Written
+        /// even when the fit is refused, with the fit columns empty and `fitted` false.
         #[arg(long, value_name = "PATH")]
         ka_survival_out: Option<PathBuf>,
     },
@@ -146,7 +147,9 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
         ka_reference: DecoyNull,
 
-        /// Write the survival curve the fit was read from to this CSV.
+        /// Write the survival curve the fit was read from to this CSV, for plotting with
+        /// scripts/plot_ka_survival.py. Written even when the fit is refused, with the fit
+        /// columns empty and `fitted` false.
         #[arg(long, value_name = "PATH")]
         ka_survival_out: Option<PathBuf>,
     },
@@ -1183,31 +1186,39 @@ fn calibrate_index(
         "  Closed form at the database's own match probability {:.3}: K {theory_k} (independent positions, no seed, one lambda for every pair)",
         report.match_probability
     );
-    match report.fitted {
+    match &report.fitted {
         Some(fit) => {
             eprintln!("  {}", KaSource::Fitted(fit.clone()));
-            warn_on_short_fit(&fit);
-            if let Some(path) = survival_out {
-                write_survival_csv(path, &fit)?;
-                eprintln!("  Survival curve written to {}", path.display());
-            }
-            searcher.index().put_ka_calibration(&fit)?;
+            warn_on_short_fit(fit);
+            searcher.index().put_ka_calibration(fit)?;
             eprintln!(
                 "  Stored in the index for --extend-mismatch-penalty {mismatch_penalty} --extend-xdrop {xdrop}"
             );
         }
         None => eprintln!(
-            "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
-             A search will have to fit its own lambda and K (--ka-queries) or be given --ka-k.",
-            report.n_queries, report.n_regions
+            "  {} queries gave {} regions but fewer than {} score bins above the peak with {} \
+             regions each, too few to fit; nothing stored. A search will have to fit its own \
+             lambda and K (--ka-queries) or be given --ka-k.",
+            report.n_queries,
+            report.n_regions,
+            kmerseek::karlin_altschul::MIN_FIT_POINTS,
+            kmerseek::karlin_altschul::MIN_BIN_COUNT
         ),
+    }
+    // Written after the verdict, and whether or not there was a fit: a refused fit is the
+    // one whose histogram most needs looking at.
+    if let Some(path) = survival_out {
+        write_survival_csv(path, &report, &settings)?;
+        eprintln!("  Survival curve written to {}", path.display());
     }
     Ok(())
 }
 
-/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
-/// line's count, the reference count, and whether the bin was inside the fit window.
-fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResult<()> {
+fn write_survival_csv(
+    path: &std::path::Path,
+    report: &KaCalibrationReport,
+    settings: &KaCalibrationSettings,
+) -> IndexResult<()> {
     let mut w = csv::Writer::from_path(path)?;
     w.write_record([
         "x",
@@ -1227,35 +1238,50 @@ fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResul
         "query_residues",
         "database_kmers",
         "bin_width",
+        "fitted",
     ])?;
     // The fit is a line through ln(regions in the bin at x); its survival is the same line
-    // divided by (1 - e^(-slope w)).
-    let per_bin = 1.0 - (-fit.slope * fit.bin_width).exp();
-    let ln_intercept =
-        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+    // divided by (1 - e^(-slope w)). Without a fit those three columns stay empty and the
+    // curve itself is still written.
+    let line = report.fitted.as_ref().map(|fit| {
+        let per_bin = 1.0 - (-fit.slope * fit.bin_width).exp();
+        let ln_intercept =
+            (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+        (fit, per_bin, ln_intercept)
+    });
     let reference: std::collections::HashMap<i64, u64> =
-        fit.reference_survival.iter().copied().collect();
-    for &(bin, count) in &fit.survival {
-        let x = bin as f64 * fit.bin_width;
-        let fitted = (ln_intercept - fit.slope * x).exp() / per_bin;
+        report.reference_survival.iter().copied().collect();
+    let reference_null = (settings.null == DecoyNull::Database).then_some(settings.reference);
+    for &(bin, count) in &report.survival {
+        let x = bin as f64 * BIN_WIDTH;
+        let (fitted, in_fit, slope, k) = match line {
+            Some((fit, per_bin, ln_intercept)) => (
+                format!("{:.3}", (ln_intercept - fit.slope * x).exp() / per_bin),
+                (fit.score_lo <= bin && bin <= fit.score_hi).to_string(),
+                fit.slope.to_string(),
+                fit.k.to_string(),
+            ),
+            None => (String::new(), String::new(), String::new(), String::new()),
+        };
         w.write_record([
             format!("{x:.3}"),
             count.to_string(),
-            format!("{fitted:.3}"),
+            fitted,
             reference.get(&bin).map_or(String::new(), |r| r.to_string()),
-            (fit.score_lo <= bin && bin <= fit.score_hi).to_string(),
-            fit.slope.to_string(),
-            fit.k.to_string(),
-            fit.lambda_analytic.to_string(),
-            fit.match_probability.to_string(),
-            fit.null.to_string(),
-            fit.reference.map_or(String::new(), |r| r.to_string()),
-            fit.mismatch_penalty.to_string(),
-            fit.xdrop.to_string(),
-            fit.n_queries.to_string(),
-            fit.query_residues.to_string(),
-            fit.database_kmers.to_string(),
-            fit.bin_width.to_string(),
+            in_fit,
+            slope,
+            k,
+            report.lambda_analytic.to_string(),
+            report.match_probability.to_string(),
+            settings.null.to_string(),
+            reference_null.map_or(String::new(), |r| r.to_string()),
+            settings.mismatch_penalty.to_string(),
+            settings.xdrop.to_string(),
+            report.n_queries.to_string(),
+            report.query_residues.to_string(),
+            report.database_kmers.to_string(),
+            BIN_WIDTH.to_string(),
+            report.fitted.is_some().to_string(),
         ])?;
     }
     w.flush()?;
