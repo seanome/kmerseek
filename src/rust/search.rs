@@ -3485,6 +3485,21 @@ mod tests {
         );
         assert!(c.ka_lambda > 0.0, "assessable, so the E-value is a number");
         assert!(c.evalue.is_finite());
+        // ka_lambda_scale multiplies that root once. See
+        // test_every_scored_region_lambda_solves_its_equation for the per-region site.
+        let scaled = chain_regions(
+            ext.clone(),
+            qe.as_bytes(),
+            te.as_bytes(),
+            q.get_raw_sequence(),
+            t.get_raw_sequence(),
+            ExtensionParams { ka_lambda_scale: 0.5, ..strict },
+            25.0,
+            25.0,
+            100.0,
+        );
+        assert_relative_eq!(scaled[0].ka_u, c.ka_u, epsilon = 1e-12);
+        assert_relative_eq!(scaled[0].ka_lambda, 0.5 * c.ka_lambda, epsilon = 1e-12);
         let tight = ExtensionParams { chain_max_gap: 0, ..strict };
         let kept = chain_regions(
             ext.clone(),
@@ -3540,6 +3555,31 @@ mod tests {
         assert_relative_eq!(u_region, 0.6925, epsilon = 1e-4);
         assert!(u_region > 2.0 / 3.0, "the two stretches match for free: u = {u_region}");
         assert_eq!(karlin_altschul_lambda(u_region, 2.0), 0.0);
+    }
+
+    /// `karlin_altschul_lambda` returns the root of u e^L + (1-u) e^(-C L) = 1, and
+    /// nothing else. Asserted at the penalty of the Botryllus sweep (C = 1.63) as well as
+    /// the default 2, because the root has a closed form only at C = 2 and everywhere
+    /// else comes out of the bisection.
+    #[test]
+    fn test_karlin_altschul_lambda_solves_its_defining_equation() {
+        for penalty in [1.0, 1.63, 2.0, 3.0] {
+            let boundary = penalty / (1.0 + penalty);
+            for step in 1..99 {
+                let u = step as f64 / 100.0;
+                let lambda = karlin_altschul_lambda(u, penalty);
+                if u >= boundary {
+                    assert_eq!(lambda, 0.0, "u = {u} is at or past the boundary {boundary}");
+                    continue;
+                }
+                assert!(lambda > 0.0, "u = {u} is below the boundary {boundary}");
+                let lhs = u * lambda.exp() + (1.0 - u) * (-penalty * lambda).exp();
+                assert_relative_eq!(lhs, 1.0, epsilon = 1e-9);
+            }
+        }
+        // The value the Botryllus sweep is read against: half hydrophobic on both spans.
+        assert_relative_eq!(karlin_altschul_lambda(0.5, 1.63), 0.379_054, epsilon = 1e-6);
+        assert_relative_eq!(1.63 / 2.63, 0.619_772, epsilon = 1e-6);
     }
 
     #[test]
@@ -5085,6 +5125,7 @@ mod tests {
 mod ka_calibration_tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_FASTA_GZ;
+    use approx::assert_relative_eq;
     use tempfile::TempDir;
 
     fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
@@ -5105,6 +5146,71 @@ mod ka_calibration_tests {
         let index = ProteomeIndex::new(&index_path, 12, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
         Ok((temp_dir, ProteinSearcher::new(index)?))
+    }
+
+    /// Every region a real search scores carries a lambda that is its own closed-form
+    /// root times `ka_lambda_scale`, and nothing else.
+    ///
+    /// The scale is the fitted slope of the calibration, one number per index: 1.0 keeps
+    /// the closed form, which assumes positions are drawn independently, and the fit
+    /// measures how far the database departs from that. This test pins where it enters,
+    /// so applying it twice, dropping it, or dividing by it fails here rather than
+    /// shifting every E-value in a run by a constant that only shows up when the numbers
+    /// are checked against an independent calculation.
+    #[test]
+    fn test_every_scored_region_lambda_solves_its_equation() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        let penalty = 1.63;
+        let boundary = penalty / (1.0 + penalty);
+        for scale in [1.0, 0.674_612_114_467_893_2] {
+            searcher.set_extension(Some(ExtensionParams {
+                mismatch_penalty: penalty,
+                xdrop: 6.52,
+                ka_k: 0.03,
+                ka_lambda_scale: scale,
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            }));
+            // The searcher loads signatures on demand, so the DashMap is empty until the
+            // index reads them back.
+            searcher.index().load_state()?;
+            let sigs: Vec<ProteinSketch> = searcher
+                .index()
+                .get_signatures()
+                .iter()
+                .map(|e| e.value().clone())
+                .take(5)
+                .collect();
+            let results = searcher.search(&sigs, &SearchFilters::default())?;
+            let mut scored = 0;
+            let mut refused = 0;
+            for result in &results {
+                for r in &result.matched_regions {
+                    let root = karlin_altschul_lambda(r.ka_u, penalty);
+                    assert_relative_eq!(r.ka_lambda, root * scale, epsilon = 1e-12);
+                    assert_eq!(
+                        r.ka_lambda == 0.0,
+                        r.ka_u >= boundary,
+                        "u = {}, lambda = {}",
+                        r.ka_u,
+                        r.ka_lambda
+                    );
+                    if r.ka_lambda > 0.0 {
+                        let lhs = r.ka_u * root.exp() + (1.0 - r.ka_u) * (-penalty * root).exp();
+                        assert_relative_eq!(lhs, 1.0, epsilon = 1e-9);
+                        assert!(r.evalue.is_finite());
+                        scored += 1;
+                    } else {
+                        assert_eq!(r.evalue, f64::INFINITY, "not assessable has no E-value");
+                        assert_eq!(r.ka_bits, 0.0);
+                        refused += 1;
+                    }
+                }
+            }
+            assert!(scored > 0, "no region was scored at scale {scale}");
+            assert!(refused > 0, "no region was refused at scale {scale}");
+        }
+        Ok(())
     }
 
     /// The fit is reproducible from the seed, is stored under its (penalty, X-drop) and
