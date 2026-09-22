@@ -174,8 +174,13 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_tfidf": 3.2,
         "region_mean_idf": 3.2,
         # An exact region, as every region is without --extend-mismatch-penalty: no
-        # mismatches, no Karlin-Altschul score, no E-value, not chained.
+        # mismatches, no Karlin-Altschul score, no E-value, not chained. Without a
+        # mismatch penalty no lambda is solved at all, so region_ka_u and
+        # region_ka_lambda are 0 and the infinite E-value means "not computed", not
+        # "not assessable".
         "region_n_mismatches": 0,
+        "region_ka_u": 0.0,
+        "region_ka_lambda": 0.0,
         "region_ka_bits": 0.0,
         "region_evalue": float("inf"),
         "region_n_chained": 1,
