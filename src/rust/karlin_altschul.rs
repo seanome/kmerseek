@@ -2,10 +2,11 @@
 //! on the index itself.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
-//! unrelated query of m residues and a database of n residues. lambda is solved per pair
-//! from the two class compositions (`search::karlin_altschul_lambda`), so a pair of two
-//! hydrophobic sequences, whose agreement is what their compositions do by chance, gets
-//! lambda 0 and no significance. K, and whether that per-pair lambda has the right scale,
+//! unrelated query of m residues and a database of n residues. lambda is solved per region
+//! from the class composition of the two spans that region covers
+//! (`search::karlin_altschul_lambda`), so a region joining two hydrophobic or two
+//! polar-rich stretches, whose agreement is what those compositions do by chance, gets
+//! lambda 0 and no E-value at all. K, and whether that lambda has the right scale,
 //! are read off the search itself: a few hundred database sequences are searched against
 //! the index and every region's normalised score x = lambda_pair S is binned. Under the
 //! model the count at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the
@@ -115,8 +116,8 @@ pub struct KaCalibration {
     pub match_probability: f64,
     pub lambda_analytic: f64,
     /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
-    /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
-    /// lambda by this.
+    /// closed-form lambda has the right scale; a search multiplies every region's lambda
+    /// by this.
     pub slope: f64,
     pub k: f64,
     /// Width of one x bin in nats (`BIN_WIDTH`); `score_lo`, `score_hi`, `bend_score` and

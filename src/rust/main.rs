@@ -248,7 +248,7 @@ enum Commands {
         extend_xdrop: f64,
 
         /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions,
-        /// with the closed-form lambda per pair. Normally left unset: the lambda and K
+        /// with the closed-form lambda per region. Normally left unset: the lambda and K
         /// fitted when the index was built (for its penalty and X-drop) are used, or, for
         /// another penalty or X-drop, a fit on --ka-queries database sequences runs before
         /// the search. Used only with --extend-mismatch-penalty.
