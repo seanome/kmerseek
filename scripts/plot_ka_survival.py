@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the distribution of the normalised region score x = lambda_pair * S that
+"""Plot the distribution of the normalised region score x = lambda_region * S that
 `kmerseek index --ka-survival-out` wrote, with the fitted Karlin-Altschul line and the bins
 it was read from.
 
@@ -101,7 +101,7 @@ def draw_column(axes, path, first_column, args_label=None):
     verdict = (f"λ correction = {lam:.3f} ± {se:.3f}, K = {k:.4f}" if fitted
                else f"no fit: under 4 bins above the peak hold ≥ {MIN_BIN_COUNT} regions\n({meta['n_regions_at_least']} regions from {meta['n_queries']} quer{'y' if meta['n_queries'] == '1' else 'ies'})")
     axes[0].set_title(f"{label}\n{verdict}", fontsize=10, loc="left")
-    axes[1].set_xlabel("x = λ_pair · S (nats)")
+    axes[1].set_xlabel("x = λ_region · S (nats)")
     if first_column:
         axes[0].set_ylabel(f"regions in each bin of x ({width:g} nat)\n(what the line is fitted to)")
         axes[1].set_ylabel("regions with x at or above the bin\n(the same fit, summed)")
@@ -127,7 +127,7 @@ def main():
     fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.92),
                ncol=2, frameon=False, fontsize=9)
     title = "The λ correction is the slope and K the height of ln(regions at x); the fit stops where the real curve rises above the shuffled one"
-    title += "\nS = matches − C × mismatches; λ_pair is the closed-form lambda for the pair's own compositions; ± is the slope's standard error"
+    title += "\nS = matches − C × mismatches; λ_region is the closed-form lambda for the region's own two spans; ± is the slope's standard error"
     if args.subtitle:
         title += "\n" + args.subtitle
     fig.suptitle(title, fontsize=11, x=0.02, ha="left", y=1.0)

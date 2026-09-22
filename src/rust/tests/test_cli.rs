@@ -938,7 +938,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "Closed form at the database's own match probability 0.500: K 0.1631",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 25 database queries, 9838 regions; slope 0.871 per nat of lambda_pair S \
+            "fitted now: 25 database queries, 9838 regions; slope 0.871 per nat of lambda_region S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
              0.500), K 0.0082, fit on x 6.5..10.5, rms 0.217; shuffled-dipeptide reference \
              slope 0.767 over the same bins",

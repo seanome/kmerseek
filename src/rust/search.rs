@@ -128,7 +128,7 @@ pub struct KaCalibrationReport {
     pub query_residues: u64,
     pub database_kmers: u64,
     pub lambda_analytic: f64,
-    /// Regions with score >= each half-nat bin of x = lambda_pair S, for the calibration
+    /// Regions with score >= each half-nat bin of x = lambda_region S, for the calibration
     /// queries (`survival`) and, under the database null, for the same queries shuffled
     /// (`reference_survival`, empty otherwise). Kept whether or not the fit succeeded, so
     /// a refused fit can still show the histogram it refused. Same shape as
@@ -183,7 +183,7 @@ impl Display for KaSource {
             KaSource::Flag => write!(f, "--ka-k, closed-form lambda"),
             KaSource::Index(c) | KaSource::Fitted(c) => write!(
                 f,
-                "{}: {} {} queries, {} regions; slope {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}{}, rms {:.3}{}",
+                "{}: {} {} queries, {} regions; slope {:.3} per nat of lambda_region S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}{}, rms {:.3}{}",
                 if matches!(self, KaSource::Index(_)) { "stored in the index" } else { "fitted now" },
                 c.n_queries,
                 c.null,
@@ -1107,7 +1107,7 @@ impl ProteinSearcher {
         Ok((queries, match_probability))
     }
 
-    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
+    /// Normalised score x = lambda_region S of every region the calibration queries produce,
     /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
     /// with K = 1 and lambda scale 1 during calibration, so a region's `ka_bits` x ln 2 is
     /// exactly lambda S with the closed-form lambda of that region's own two spans.
@@ -5118,7 +5118,7 @@ mod ka_calibration_tests {
         assert_eq!(searcher.extension, None, "calibration restores the extension setting");
         // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
         // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
-        // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
+        // read off the top 8 bins of x = lambda_region S (half a nat each) with at least 30
         // regions, x 7.0 to 11.0 nats.
         //
         // The same 9,561 regions as before lambda went per-region, on a different x axis:

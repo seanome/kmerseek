@@ -8,7 +8,7 @@
 //! polar-rich stretches, whose agreement is what those compositions do by chance, gets
 //! lambda 0 and no E-value at all. K, and whether that lambda has the right scale,
 //! are read off the search itself: a few hundred database sequences are searched against
-//! the index and every region's normalised score x = lambda_pair S is binned. Under the
+//! the index and every region's normalised score x = lambda_region S is binned. Under the
 //! model the count at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the
 //! database residues and w the bin width, so ln(count) against x is a line of slope -1
 //! and intercept ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). The fitted
@@ -115,7 +115,7 @@ pub struct KaCalibration {
     /// reporting.
     pub match_probability: f64,
     pub lambda_analytic: f64,
-    /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
+    /// Minus the slope of ln(count) against x = lambda_region S, per nat. 1 means the
     /// closed-form lambda has the right scale; a search multiplies every region's lambda
     /// by this.
     pub slope: f64,
@@ -149,7 +149,7 @@ impl KaCalibration {
         self.slope
     }
 
-    /// The fit window in nats of x = lambda_pair S.
+    /// The fit window in nats of x = lambda_region S.
     pub fn x_range(&self) -> (f64, f64) {
         (self.score_lo as f64 * self.bin_width, (self.score_hi + 1) as f64 * self.bin_width)
     }
@@ -160,7 +160,7 @@ impl KaCalibration {
     }
 }
 
-/// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
+/// Width of one bin of the normalised score x = lambda_region S, in nats. Half a nat is about
 /// one raw score unit at lambda 0.45.
 pub const BIN_WIDTH: f64 = 0.5;
 
@@ -235,10 +235,11 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
         .collect()
 }
 
-/// The bin of x in [0, `BIN_WIDTH`). A pair whose own lambda is near zero scores x =
-/// lambda_pair S near zero however long its region is, so this one bin collects every
-/// region of every such pair and says nothing about how scores decay. It is barred from
-/// being the peak for that reason; see `tail_bins`.
+/// The bin of x in [0, `BIN_WIDTH`). A region whose own lambda is near zero scores x =
+/// lambda_region S near zero however long it is, and a region past the composition
+/// boundary has lambda 0 and scores x = 0 exactly, so this one bin collects all of them
+/// and says nothing about how scores decay. It is barred from being the peak for that
+/// reason; see `tail_bins`.
 const DEGENERATE_BIN: i64 = 0;
 
 /// The bins above the most populated one, not counting `DEGENERATE_BIN`. Below the peak
