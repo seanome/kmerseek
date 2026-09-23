@@ -97,6 +97,7 @@ proteome.fasta.hp.k10.scaled1.nolowcomplexity.kmerseek.rocksdb  # --remove-low-c
 ```
 
 Removal is **off by default**; existing indexes and workflows are unaffected.
+
 Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 `hhhhhhhhhp` is kept.
 
@@ -140,6 +141,44 @@ expectation summed over the same survivors, so the two stay comparable.
 ![CED9 vs BCL2 regions at scaled 1, 2, 5 and 10](docs/images/scaled_region_survival.png)
 
 Choose N from the shortest match you need to see reliably, not from k. The cap is 10.
+
+## Extending matched regions past the exact seed
+
+A matched region is a maximal run of shared k-mers: one position where the encoded
+query and target disagree ends it. Between remote homologs the HP pattern is conserved
+per position (the copy rate, Cohen's κ, is about 0.45 at 20-30% identity) far better than
+any 23-residue stretch of it is conserved exactly (most such pairs share no exact
+23-mer at all), so an exact run is better read as a seed than as the match.
+
+`--extend-mismatch-penalty C` grows each region outward along the encoded sequences,
+scoring +1 per agreeing position and -C per disagreeing one, and stops when the running
+score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up margin
+(BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
+become one region.
+
+Both walks on the BH1 seed of CED9 against BCL2 (`hp`, k=12, penalty 2, give-up margin
+8). A side keeps residues only up to its best running score. To the left the first two
+classes differ, so the score starts at -4, never rises above 0, and nothing is kept. To
+the right the score climbs to +1 after 7 residues, and the walk stops once it has fallen
+9 below that peak, keeping the 7. `scripts/plot_xdrop_walk.py` draws this from the JSON
+`kmerseek pair` writes.
+
+![The walk on both sides of the BH1 seed: residues, classes, and the running score](docs/images/xdrop_walk_bcl2_ced9_bh1.png)
+
+([SVG version](docs/images/xdrop_walk_bcl2_ced9_bh1.svg))
+
+```bash
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
+    --extend-mismatch-penalty 2 --output hits.csv
+```
+
+What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
+the extended span, `region_length` with them; `region_n_shared_kmers` still counts
+exact shared k-mers (the seeds), so it no longer equals `region_length - ksize + 1`;
+and a new column `region_n_mismatches` says how many positions inside the region
+disagree. The region Poisson score keeps counting exact k-mers against the expectation
+summed over the extended span, so extension can only make a region's score more
+conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
 ## Visualizing hits
 
