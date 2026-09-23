@@ -22,6 +22,8 @@ a.card{display:block;text-decoration:none;color:inherit;background:var(--glass);
   box-shadow:var(--shadow);backdrop-filter:blur(12px) saturate(1.15);-webkit-backdrop-filter:blur(12px) saturate(1.15);transition:transform .2s ease,border-color .2s ease}
 a.card:hover,a.card:focus-visible{border-color:var(--ink);transform:translateY(-2px)}
 a.card b{display:block;font-size:1.1rem;margin-bottom:4px}
+h2{font-size:1.25rem;margin:32px 0 6px}
+h2+.sub{margin-bottom:18px}
 a.card span{color:var(--muted);font-size:.95rem}
 footer{max-width:720px;margin:0 auto;padding:0 16px 60px;color:var(--muted);font-size:.9rem;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center}
 footer a{color:inherit}
@@ -38,6 +40,13 @@ footer p{margin:0}
 <p class="sub">Interactive pages on how kmerseek scores a region and judges whether it could be chance. Every slider recomputes the equations and figures.</p>
 <a class="card" href="karlin_altschul_explainer.html"><b>Part 1: How a kmerseek region gets an E-value</b><span>The region score, the chance match rate, nats per score point, the E-value, and how K and r_database are measured when the index is built.</span></a>
 <a class="card" href="two_letters_explainer.html"><b>Part 2: What two letters can carry</b><span>The copy rate, bits per position, the trade between alphabet size and region length, short motifs, and the best mismatch penalty.</span></a>
+
+<h2>What a search looks like</h2>
+<p class="sub">C. elegans CED-9 searched against 25 human BCL-2-like proteins, hydrophobic/polar alphabet, k=12. The same pages <code>scripts/visualize_search.py</code> and <code>scripts/visualize_pair.py</code> write for any search.</p>
+<a class="card" href="examples/ced9_kmerseek_hits_example.html"><b>CED-9 against 25 BCL-2-like proteins</b><span>One row per protein, every run drawn on the CED-9 axis. Click a row for its dot plot, its alignments and both full sequences. Sort, filter, and search for a sequence such as NWGR.</span></a>
+<a class="card" href="examples/ced9_vs_bcl2_pair_example.html"><b>CED-9 against BCL-2</b><span>27 shared 12-mers. The longest run is the BH1 motif: 19 residues, 5 identical, inside the Bcl-2 domain of both proteins. It lies on the residue pairs USalign gets from the two AlphaFold models (TM-score 0.48).</span></a>
+<a class="card" href="examples/ced9_vs_bclxl_pair_example.html"><b>CED-9 against BCL-xL</b><span>The same BH1 run in another family member: 19 residues, 6 identical, TM-score 0.47. Both homologs put their longest run over the same stretch of CED-9.</span></a>
+<a class="card" href="examples/ced9_vs_rtn3_pair_example.html"><b>CED-9 against reticulon-3</b><span>100 shared 12-mers against BCL-2's 27, spread over 19 runs of a 1032-residue protein. The longest has 1 identical residue and sits 42 residues off the USalign pairs. Sharing more k-mers than a homolog does not make a match.</span></a>
 </main>
 <footer>
 <p>Source: <a href="https://github.com/seanome/kmerseek">github.com/seanome/kmerseek</a>, folder <code>docs/</code>.</p>
