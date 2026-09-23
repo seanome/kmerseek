@@ -279,7 +279,55 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::{json, Value};
 
+    /// Writes the counts a test fits, and the fit it gets, to
+    /// `$KMERSEEK_FIGURE_DATA/<test>.json` for `scripts/plot_fit_scores_tests.py`, which
+    /// draws them into `docs/images/fit_scores_tests/`. Does nothing when the variable is
+    /// unset.
+    fn save_for_figure(test: &str, cases: Vec<Value>) {
+        let Ok(dir) = std::env::var("KMERSEEK_FIGURE_DATA") else {
+            return;
+        };
+        let record = json!({
+            "test": test,
+            "min_bin_count": MIN_BIN_COUNT,
+            "min_fit_points": MIN_FIT_POINTS,
+            "reference_base": REFERENCE_BASE,
+            "bend_sigmas": BEND_SIGMAS,
+            "bend_slack": BEND_SLACK,
+            "cases": cases,
+        });
+        let path = std::path::Path::new(&dir).join(format!("{test}.json"));
+        std::fs::write(path, serde_json::to_string_pretty(&record).unwrap()).unwrap();
+    }
+
+    /// One set of scores for `save_for_figure`: its per-bin counts, the reference's, the
+    /// lambda the counts were made with (None when they follow no model) and the fit.
+    fn figure_case(
+        label: &str,
+        scores: &[f64],
+        reference: &[f64],
+        made_with_lambda: Option<f64>,
+        fit: Option<&ScoreFit>,
+    ) -> Value {
+        json!({
+            "label": label,
+            "bins": bin_counts(scores),
+            "reference_bins": bin_counts(reference),
+            "made_with_lambda": made_with_lambda,
+            "fit": fit.map(|f| json!({
+                "lambda": f.lambda,
+                "ln_intercept": f.ln_intercept,
+                "score_lo": f.score_lo,
+                "score_hi": f.score_hi,
+                "bend_score": f.bend_score,
+                "reference_lambda": f.reference_lambda,
+            })),
+        })
+    }
+
+    /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.
     #[test]
     fn test_survival_counts() {
         assert_eq!(
@@ -293,6 +341,25 @@ mod tests {
             vec![(12, 2), (13, 1)]
         );
         assert!(survival_counts(&[f64::INFINITY]).is_empty());
+        save_for_figure(
+            "survival_and_bin_counts",
+            vec![
+                figure_case(
+                    "12, 12, 13, 15.5, 15",
+                    &[12.0, 12.0, 13.0, 15.5, 15.0],
+                    &[],
+                    None,
+                    None,
+                ),
+                figure_case(
+                    "12, inf, 13, NaN, -inf",
+                    &[12.0, f64::INFINITY, 13.0, f64::NAN, f64::NEG_INFINITY],
+                    &[],
+                    None,
+                    None,
+                ),
+            ],
+        );
     }
 
     /// Made-up counts that follow the model exactly: N_SEED regions at score >= SEED_SCORE,
@@ -302,6 +369,8 @@ mod tests {
     /// TRUE_LAMBDA off the bins below the bump, to within rounding of the counts to whole
     /// regions, and the bump does not reach the bins below it the way it would on the
     /// survival curve.
+    ///
+    /// Drawn in `docs/images/fit_scores_tests/fit_scores_recovers_slope_and_stops_at_homolog_excess.png`.
     #[test]
     fn test_fit_scores_recovers_slope_and_stops_at_homolog_excess() {
         const N_SEED: f64 = 4000.0;
@@ -316,6 +385,7 @@ mod tests {
             scores.extend(std::iter::repeat_n(s as f64, exactly));
         }
         let clean = fit_scores(&scores).unwrap();
+        let clean_scores = scores.clone();
         // Bins 13..=21 hold at least MIN_BIN_COUNT regions; the top FIT_WINDOW of them are
         // the window.
         assert_eq!((clean.score_lo, clean.score_hi, clean.bend_score), (14, 21, None));
@@ -331,6 +401,19 @@ mod tests {
         assert_eq!((bent.score_lo, bent.score_hi, bent.bend_score), (14, 21, Some(27)));
         assert!((bent.lambda - clean.lambda).abs() < 1e-12);
         assert_eq!(bent.survival[0], (SEED_SCORE, scores.len() as u64));
+        save_for_figure(
+            "fit_scores_recovers_slope_and_stops_at_homolog_excess",
+            vec![
+                figure_case("model counts", &clean_scores, &[], Some(TRUE_LAMBDA), Some(&clean)),
+                figure_case(
+                    "model counts + 400 regions at score 27",
+                    &scores,
+                    &[],
+                    Some(TRUE_LAMBDA),
+                    Some(&bent),
+                ),
+            ],
+        );
     }
 
     /// Made-up counts again. Reference: N_SEED e^(-TRUE_LAMBDA (s - SEED_SCORE)) regions at
@@ -339,6 +422,8 @@ mod tests {
     /// per bin. A step test would not see a ramp; the ratio test stops two bins after it
     /// starts and the slope is read below it, 4% low from the two ramp bins inside the
     /// window.
+    ///
+    /// Drawn in `docs/images/fit_scores_tests/fit_scores_with_reference_stops_where_the_ratio_rises.png`.
     #[test]
     fn test_fit_scores_with_reference_stops_where_the_ratio_rises() {
         const N_SEED: f64 = 400_000.0;
@@ -364,22 +449,50 @@ mod tests {
             };
             real.extend(std::iter::repeat_n(s as f64, per_bin(K_RATIO) + ramp));
         }
-        let fit = fit_scores_with_reference(&real, &reference).unwrap();
-        assert_eq!((fit.bend_score, fit.score_lo, fit.score_hi), (Some(26), 18, 25), "{fit:?}");
-        assert!((fit.lambda - 0.385).abs() < 0.005, "{}", fit.lambda);
-        assert!(
-            (fit.reference_lambda.unwrap() - TRUE_LAMBDA).abs() < 0.005,
-            "{:?}",
-            fit.reference_lambda
+        let ramped = fit_scores_with_reference(&real, &reference).unwrap();
+        assert_eq!(
+            (ramped.bend_score, ramped.score_lo, ramped.score_hi),
+            (Some(26), 18, 25),
+            "{ramped:?}"
         );
-        assert_eq!(fit.reference_survival[0], (SEED_SCORE, reference.len() as u64));
+        assert!((ramped.lambda - 0.385).abs() < 0.005, "{}", ramped.lambda);
+        assert!(
+            (ramped.reference_lambda.unwrap() - TRUE_LAMBDA).abs() < 0.005,
+            "{:?}",
+            ramped.reference_lambda
+        );
+        assert_eq!(ramped.reference_survival[0], (SEED_SCORE, reference.len() as u64));
 
         // Without the ramp the fit runs to the count floor; the constant ratio is harmless.
-        let fit = fit_scores_with_reference(&plain, &reference).unwrap();
-        assert_eq!((fit.bend_score, fit.score_lo, fit.score_hi), (None, 26, 33), "{fit:?}");
-        assert!((fit.lambda - TRUE_LAMBDA).abs() < 0.005, "{}", fit.lambda);
+        let unramped = fit_scores_with_reference(&plain, &reference).unwrap();
+        assert_eq!(
+            (unramped.bend_score, unramped.score_lo, unramped.score_hi),
+            (None, 26, 33),
+            "{unramped:?}"
+        );
+        assert!((unramped.lambda - TRUE_LAMBDA).abs() < 0.005, "{}", unramped.lambda);
+        save_for_figure(
+            "fit_scores_with_reference_stops_where_the_ratio_rises",
+            vec![
+                figure_case(
+                    "1.5 x reference + related pairs from score 24",
+                    &real,
+                    &reference,
+                    Some(TRUE_LAMBDA),
+                    Some(&ramped),
+                ),
+                figure_case(
+                    "1.5 x reference",
+                    &plain,
+                    &reference,
+                    Some(TRUE_LAMBDA),
+                    Some(&unramped),
+                ),
+            ],
+        );
     }
 
+    /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.
     #[test]
     fn test_bin_counts() {
         assert_eq!(
@@ -388,6 +501,7 @@ mod tests {
         );
     }
 
+    /// Drawn in `docs/images/fit_scores_tests/fit_scores_needs_enough_bins.png`.
     #[test]
     fn test_fit_scores_needs_enough_bins() {
         // Three bins with at least MIN_BIN_COUNT regions after the skipped seed bin: fewer
@@ -398,10 +512,16 @@ mod tests {
         scores.extend(vec![15.0; MIN_BIN_COUNT as usize + 1]);
         assert_eq!(fit_scores(&scores), None);
         assert_eq!(fit_scores(&[]), None);
+        save_for_figure(
+            "fit_scores_needs_enough_bins",
+            vec![figure_case("three usable bins", &scores, &[], None, None)],
+        );
     }
 
     /// Counts that grow with the score describe no exponential tail; neither fit will read
     /// a lambda off them.
+    ///
+    /// Drawn in `docs/images/fit_scores_tests/fits_refuse_a_rising_curve.png`.
     #[test]
     fn test_fits_refuse_a_rising_curve() {
         let mut rising = vec![12.0; 100];
@@ -420,6 +540,15 @@ mod tests {
         for (score, n) in [(13.0, 60), (14.0, 50), (15.0, 40), (16.0, 30)] {
             falling.extend(std::iter::repeat_n(score, n));
         }
-        assert!((fit_scores(&falling).unwrap().lambda - 10f64.ln() / 10.0).abs() < 1e-12);
+        let falling_fit = fit_scores(&falling).unwrap();
+        assert!((falling_fit.lambda - 10f64.ln() / 10.0).abs() < 1e-12);
+        save_for_figure(
+            "fits_refuse_a_rising_curve",
+            vec![
+                figure_case("rising", &rising, &[], None, None),
+                figure_case("rising against a flat reference", &rising, &flat, None, None),
+                figure_case("falling", &falling, &[], None, Some(&falling_fit)),
+            ],
+        );
     }
 }
