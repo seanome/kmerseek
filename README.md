@@ -199,6 +199,13 @@ kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
     --extend-mismatch-penalty 2 --output hits.csv
 ```
 
+`--chain-max-gap G --chain-max-shift D` chains extended regions that follow each other on
+both sequences, at most G residues apart on the query and at most D diagonals apart (a
+net indel of up to D), into one region scored with Karlin & Altschul's (1993) statistic
+for a sum of region scores; `region_n_chained` says how many regions a row is made of. A
+domain that no single gapless run covers becomes one call. Its purpose is region-level
+transfer, where a call has to cover a domain to carry its label.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
