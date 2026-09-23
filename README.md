@@ -191,7 +191,12 @@ it on the index itself (`--ka-queries`, 200 by default): it searches that many o
 index's own sequences against it, and reads K and a correction to λ, `r_database`, off
 the straight line that ln(regions at score S) makes against S below the related pairs.
 A search with the penalty and give-up margin the index was fitted for reads the fit
-back; with another pair it fits its own before searching, or takes `--ka-k`:
+back; with another pair it fits its own before searching, or takes `--ka-k`.
+[docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
+On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+`region_poisson_score` raised the share of same-superfamily relatives found before the
+first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
+different-fold hit at E <= 0.01.
 
 ```bash
 kmerseek index --input proteome.fasta --output proteome.db --ksize 10 --alphabet hp
@@ -203,7 +208,8 @@ kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
 both sequences, at most G residues apart on the query and at most D diagonals apart (a
 net indel of up to D), into one region scored with Karlin & Altschul's (1993) statistic
 for a sum of region scores; `region_n_chained` says how many regions a row is made of. A
-domain that no single gapless run covers becomes one call. Its purpose is region-level
+domain that no single gapless run covers becomes one call. On SCOPe40 domains it changes
+ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
 transfer, where a call has to cover a domain to carry its label.
 
 ## Visualizing hits
