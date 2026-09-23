@@ -1,0 +1,654 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>What every alphabet can see</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20,400,0,0&display=block">
+<style>
+:root{
+  --bg:#fbfaf8; --bg-2:#f2efe9; --ink:#1c1a17; --ink-2:#5a554d; --ink-3:#8a847a; --line:#dcd7ce;
+  --coral:#c8553d; --coral-soft:#f6ddd6; --purple:#5b3a8c; --purple-2:#8a6bb5; --purple-soft:#e8e0f2;
+  --red:#b3261e; --grey-mark:#a09a90; --black-mark:#1c1a17;
+  --ramp-0:#d9cfe8; --ramp-1:#2e1a52;
+  --focus:#c8553d;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#15130f; --bg-2:#1e1b16; --ink:#efeae2; --ink-2:#bdb5a8; --ink-3:#8c857a; --line:#3a352d;
+    --coral:#e8846e; --coral-soft:#3a241d; --purple:#b394de; --purple-2:#8f73bd; --purple-soft:#2b2140;
+    --red:#ef7f77; --grey-mark:#6e685f; --black-mark:#efeae2;
+    --ramp-0:#3a2f52; --ramp-1:#d6c6f2;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#15130f; --bg-2:#1e1b16; --ink:#efeae2; --ink-2:#bdb5a8; --ink-3:#8c857a; --line:#3a352d;
+  --coral:#e8846e; --coral-soft:#3a241d; --purple:#b394de; --purple-2:#8f73bd; --purple-soft:#2b2140;
+  --red:#ef7f77; --grey-mark:#6e685f; --black-mark:#efeae2;
+  --ramp-0:#3a2f52; --ramp-1:#d6c6f2;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;font-size:16px;line-height:1.5}
+.wrap{max-width:1120px;margin:0 auto;padding-inline:20px;padding-block:0 64px}
+h1,h2,h3{text-wrap:balance;line-height:1.2;margin:0}
+h1{font-size:clamp(1.7rem,3.5vw,2.4rem);font-weight:600;letter-spacing:-.01em}
+h2{font-size:1.35rem;font-weight:600;display:flex;align-items:center;gap:.5rem}
+h3{font-size:1.05rem;font-weight:600}
+p{max-width:68ch;margin:0}
+.mono,code,.k{font-family:"IBM Plex Mono",ui-monospace,Menlo,monospace;font-size:.92em}
+.msym{font-family:"Material Symbols Outlined";font-weight:normal;font-style:normal;font-size:22px;line-height:1;display:inline-block;vertical-align:middle;font-variation-settings:'FILL' 0,'wght' 400,'GRAD' 0,'opsz' 20;color:var(--coral)}
+.eyebrow{font-size:.74rem;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-3);font-weight:500}
+a{color:var(--purple);text-underline-offset:.15em}
+a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible{outline:2px solid var(--focus);outline-offset:2px}
+header.top{padding-block:40px 24px;display:grid;gap:14px}
+header.top .bridge{color:var(--ink-2);max-width:72ch}
+.bar{position:relative;z-index:5;background:var(--bg);border-block:1px solid var(--line);padding-block:12px;display:grid;gap:10px}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:end}
+.ctl{display:grid;gap:4px}
+.ctl label{font-size:.74rem;letter-spacing:.06em;text-transform:uppercase;color:var(--ink-3);font-weight:500}
+select{font:inherit;font-size:.95rem;padding:6px 32px 6px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg-2);color:var(--ink);appearance:none;background-image:linear-gradient(45deg,transparent 50%,var(--ink-2) 50%),linear-gradient(135deg,var(--ink-2) 50%,transparent 50%);background-position:calc(100% - 16px) 55%,calc(100% - 11px) 55%;background-size:5px 5px;background-repeat:no-repeat}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg-2)}
+.seg button{font:inherit;font-size:.92rem;padding:7px 12px;border:0;background:transparent;color:var(--ink-2);cursor:pointer;display:inline-flex;align-items:center;gap:6px}
+.seg button .msym{font-size:18px;color:inherit}
+.seg button[aria-pressed="true"]{background:var(--coral);color:#fff}
+.seg button+button{border-left:1px solid var(--line)}
+.headline{font-size:1.02rem;color:var(--ink);max-width:100ch}
+.headline b{color:var(--coral);font-weight:600}
+nav.toc{display:flex;flex-wrap:wrap;gap:4px 14px;font-size:.86rem}
+nav.toc a{color:var(--ink-2);text-decoration:none}
+nav.toc a:hover{color:var(--purple);text-decoration:underline}
+/* Content is its own layer under the bar. Scrollable chart boxes are painted on their
+   own compositing layer in WebKit and could otherwise land above a sticky header. */
+section{position:relative;z-index:0;padding-block:40px 8px;display:grid;gap:18px;scroll-margin-top:16px}
+@media (min-width:820px){
+  .bar{position:sticky;top:env(safe-area-inset-top,0px)}
+  section{scroll-margin-top:150px}
+}
+.cases{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px}
+.case{border:1px solid var(--line);border-radius:10px;padding:14px 16px;background:var(--bg-2);display:grid;gap:6px;align-content:start}
+.case .eyebrow{display:flex;align-items:center;gap:6px}
+.case .eyebrow .msym{font-size:18px}
+.case dl{display:grid;grid-template-columns:auto 1fr;gap:2px 10px;margin:0;font-size:.92rem}
+.case dt{color:var(--ink-3)} .case dd{margin:0}
+.two{display:grid;grid-template-columns:minmax(0,1.6fr) minmax(260px,1fr);gap:22px;align-items:start}
+@media (max-width:820px){.two{grid-template-columns:1fr}}
+.fig{display:grid;gap:8px}
+.legend{display:flex;flex-wrap:wrap;gap:6px 18px;font-size:.86rem;color:var(--ink-2)}
+.legend span{display:inline-flex;align-items:center;gap:6px}
+.legend i{display:inline-block;width:14px;height:14px;border-radius:50%}
+.legend i.x{background:none;border-radius:0;position:relative;width:12px;height:12px}
+.legend i.x::before,.legend i.x::after{content:"";position:absolute;left:5px;top:-1px;width:2px;height:14px;background:var(--grey-mark);transform:rotate(45deg)}
+.legend i.x::after{transform:rotate(-45deg)}
+.legend i.dot{width:7px;height:7px;background:var(--black-mark)}
+.legend i.line{width:22px;height:0;border-top:2px dashed var(--red);border-radius:0}
+.legend i.ramp{width:40px;height:12px;border-radius:3px;background:linear-gradient(90deg,var(--ramp-1),var(--ramp-0))}
+.legend i.bar{width:14px;height:12px;border-radius:2px;background:var(--purple-2)}
+.legend i.coral{background:var(--coral)}
+.legend i.ring{background:var(--purple-2);box-shadow:0 0 0 2px var(--black-mark)}
+.legend svg{display:block}
+.chart{width:100%;overflow-x:auto;isolation:isolate;position:relative;z-index:0}
+.chart svg{display:block;max-width:100%;height:auto;font-family:"IBM Plex Sans",system-ui,sans-serif}
+.chart text{fill:var(--ink-2);font-size:11px}
+.chart .axis line,.chart .axis path{stroke:var(--line)}
+.chart .grid line{stroke:var(--line);stroke-opacity:.7}
+.chart .lbl{fill:var(--ink);font-size:12px}
+.chart .tt-target{cursor:pointer}
+.caption{font-size:.9rem;color:var(--ink-2);max-width:72ch}
+.side{display:grid;gap:14px}
+.readout{border:1px solid var(--line);border-radius:10px;padding:12px 14px;background:var(--bg-2);display:grid;gap:8px;font-size:.95rem}
+.readout .big{font-size:1.6rem;font-weight:600;line-height:1.1;font-variant-numeric:tabular-nums}
+.readout .big small{font-size:.9rem;font-weight:400;color:var(--ink-2)}
+.eq{overflow-x:auto;padding:6px 0}
+table{border-collapse:collapse;width:100%;font-size:.9rem;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:6px 8px;border-bottom:1px solid var(--line);vertical-align:top}
+th{font-weight:500;color:var(--ink-3);font-size:.78rem;letter-spacing:.05em;text-transform:uppercase}
+td.num,th.num{text-align:right}
+tr.sel td{background:var(--coral-soft)}
+tr.click{cursor:pointer}
+tr.click:hover td{background:var(--purple-soft)}
+.tbl{overflow-x:auto}
+.slider{display:grid;gap:6px}
+.slider input[type=range]{width:100%;accent-color:var(--coral)}
+.slider .val{font-variant-numeric:tabular-nums}
+details.working{border-top:1px solid var(--line);padding-top:10px}
+details.working summary{cursor:pointer;color:var(--purple);font-size:.92rem}
+details.working > *:not(summary){margin-top:10px}
+.gloss{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px 24px;font-size:.92rem}
+.gloss dt{font-weight:600} .gloss dd{margin:0 0 4px;color:var(--ink-2)}
+footer{padding-block:30px;border-top:1px solid var(--line);font-size:.86rem;color:var(--ink-2);display:grid;gap:8px}
+#tip{position:fixed;z-index:20;pointer-events:none;background:var(--ink);color:var(--bg);font-size:.82rem;line-height:1.35;padding:8px 10px;border-radius:6px;max-width:300px;box-shadow:0 4px 18px rgba(0,0,0,.25)}
+#tip b{color:var(--coral-soft)}
+.pill{display:inline-block;padding:1px 8px;border-radius:999px;font-size:.78rem;background:var(--purple-soft);color:var(--purple)}
+.note{border-left:3px solid var(--coral);padding:6px 12px;color:var(--ink-2);font-size:.92rem;max-width:72ch}
+</style>
+</head>
+<body>
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">kmerseek explainer · part 3 · measured, not modelled</div>
+  <h1>What every alphabet can see</h1>
+  <p class="bridge">Part 1 set out how a k-mer match earns a score and an E-value, and Part 2 worked out how much evidence a reduced alphabet can carry. This page measures it: when three proteins are searched against all 19_732 canonical human proteins with each of kmerseek's 19 alphabets, what does each alphabet see? Every dot below is a real search. Pick an alphabet, a test case and a ranking metric; every figure and every number on the page answers to those three choices.</p>
+  <p class="bridge"><a href="karlin_altschul_explainer.html">Part 1, how a region gets an E-value</a> · <a href="two_letters_explainer.html">Part 2, what two letters can carry</a> · results notebook 241 in <a href="https://github.com/seanome/2024-kmerseek-analysis/pull/46">2024-kmerseek-analysis #46</a></p>
+</header>
+
+<div class="bar" id="bar">
+  <div class="controls">
+    <div class="ctl"><label for="in-alpha">Alphabet</label><select id="in-alpha"></select></div>
+    <div class="ctl"><label>Test case</label>
+      <div class="seg" id="in-case" role="group" aria-label="test case">
+        <button type="button" data-case="Ced9" aria-pressed="true"><span class="msym">verified</span>gold standard</button>
+        <button type="button" data-case="P66" aria-pressed="false"><span class="msym">explore</span>the reach</button>
+        <button type="button" data-case="BHF" aria-pressed="false"><span class="msym">biotech</span>the application</button>
+      </div></div>
+    <div class="ctl"><label for="in-metric">Ranking metric</label><select id="in-metric">
+      <option>E-value</option><option>mean IDF</option><option>tf-idf</option><option>enrichment</option><option>Poisson p-value</option></select></div>
+  </div>
+  <div class="headline" id="hero-txt"></div>
+  <nav class="toc"><a href="#s1">1 · three cases</a><a href="#s2">2 · the ladder</a><a href="#s3">3 · all metrics</a><a href="#s4">4 · all 19</a><a href="#s5">5 · the bits budget</a><a href="#s6">6 · missing E-values</a><a href="#s7">7 · alphabets</a><a href="#s8">glossary</a></nav>
+</div>
+
+<section id="s1">
+  <h2><span class="msym">science</span>Three test cases, one background</h2>
+  <p>Each query is searched against the same database, the 19_732 canonical human proteins of GENCODE v49 (11_347_201 residues). The two proteins we are looking for, BCL2 and CD47, are both in it, so the search that finds BHF's partners is the search that has to find them.</p>
+  <div class="cases" id="cases"></div>
+  <p>For every alphabet the seed length k is set so one seed carries 16 to 44 bits, where bits per position is the entropy of the alphabet's class shares measured on this proteome. That makes a 2-letter k=24 seed and a 20-letter k=6 seed the same amount of information, and it is why the x axis everywhere is bits, not k. Each index was built with region extension at the alphabet's own mismatch penalty and a Karlin-Altschul fit; every metric kmerseek writes was kept for every region, with no threshold.</p>
+  <details class="working"><summary>What the five metrics measure, and how a rank is counted</summary>
+    <p><b>E-value</b>: matches this good expected by chance in the whole search, from the fitted lambda and K. <b>Mean IDF</b>: how rare the region's k-mers are in the database, averaged. <b>tf-idf</b>: those rarities summed over the region. <b>Enrichment</b>: shared k-mers divided by the number expected by chance. <b>Poisson p-value</b>: the chance of at least this many shared k-mers under a Poisson model.</p>
+    <p>A target is one human protein, scored by its best region under the metric. The partner's rank is 1 plus the number of targets strictly better; the number tied with it is shown separately, so rank 1 with 40 tied means "tied for first with 39 others", not found.</p>
+  </details>
+</section>
+
+<section id="s2">
+  <h2><span class="msym">stairs</span>The ladder for <span class="k" id="s2-alpha"></span></h2>
+  <div class="two">
+    <div class="fig">
+      <div class="legend" id="lad-legend"></div>
+      <div class="chart" id="lad"></div>
+      <p class="caption" id="lad-cap"></p>
+    </div>
+    <div class="side">
+      <div class="readout" id="lad-read"></div>
+      <p class="caption">Hover any arm for its numbers. The bits axis is the same on every figure of this page.</p>
+    </div>
+  </div>
+  <div class="tbl"><table id="lad-tbl"></table></div>
+</section>
+
+<section id="s3">
+  <h2><span class="msym">stacked_line_chart</span>All five ranking metrics for <span class="k" id="s3-alpha"></span></h2>
+  <p id="met-intro">One line per metric: where the partner ranks at each arm. The thick pale line under them is last place, the number of human proteins hit at that arm, so a metric can never sit below it. A metric with no mark at an arm either lost the partner there or, for the E-value, has no Karlin-Altschul fit at that arm.</p>
+  <div class="fig">
+    <div class="legend" id="met-legend"></div>
+    <div class="chart" id="met"></div>
+    <p class="caption" id="met-cap"></p>
+  </div>
+  <div class="readout" id="met-read" style="max-width:520px"></div>
+  <h3>Best rank of the partner, every alphabet under every metric</h3>
+  <p class="caption">Each cell is the best rank over all k for that alphabet and metric; the best cell in each row is bold. Click a row to select the alphabet.</p>
+  <div class="tbl"><table id="met-grid"></table></div>
+</section>
+
+<section id="s4">
+  <h2><span class="msym">grid_on</span>All 19 alphabets at once</h2>
+  <div class="fig">
+    <div class="legend" id="mat-legend"></div>
+    <div class="chart" id="mat"></div>
+    <p class="caption" id="mat-cap"></p>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="msym">account_balance_wallet</span>The bits budget</h2>
+  <div class="two">
+    <div class="fig">
+      <div class="legend"><span><i class="bar"></i>highest seed information at which the partner is still among the hits (any metric)</span><span><i class="line"></i>about what an E-value of 1 needs on this database for this query</span><span><i class="coral"></i>the selected alphabet</span></div>
+      <div class="chart" id="budget"></div>
+      <p class="caption" id="budget-cap"></p>
+    </div>
+    <div class="side">
+      <div class="readout" id="budget-read"></div>
+      <div class="eq">\[\text{bits needed} = \log_2\!\left(\frac{m \cdot n}{E}\right)\]</div>
+      <p class="caption">with m the query length, n the residues in the database and K taken as 1. The fitted K is smaller, which lowers the bar by a few bits; the gap does not close.</p>
+    </div>
+  </div>
+</section>
+
+<section id="s6">
+  <h2><span class="msym">block</span>Why so many regions have no E-value</h2>
+  <div class="two">
+    <div class="fig">
+      <div class="legend"><span><i class="bar"></i>share of an arm's regions with no E-value</span><span><i class="x"></i>no region at this arm</span></div>
+      <div class="chart" id="lam"></div>
+      <p class="caption">Left: for every arm of the selected alphabet, the share of matched regions whose E-value is infinite. Right: identity. The chance identity of two unrelated sequences under this alphabet is p; a region whose own identity is above C / (1 + C) gets lambda 0 and no E-value.</p>
+    </div>
+    <div class="side">
+      <div class="readout" id="lam-read"></div>
+      <div class="slider">
+        <label for="in-c">Mismatch penalty C (kmerseek's kappa-optimal value is marked)</label>
+        <input type="range" id="in-c" min="0.05" max="2.5" step="0.01">
+        <div class="val" id="in-c-val"></div>
+      </div>
+      <div class="eq">\[\text{identity limit} = \frac{C}{1+C}, \qquad \text{chance drift} = p - C\,(1-p)\]</div>
+    </div>
+  </div>
+  <p>Two things follow. First, the limit removes the best-matching regions first, because it is the regions that match well that cross it. Second, the kappa-optimal penalty was derived assuming equal class shares (1 / classes), but the real chance identity p is the sum of the squared shares, and for gbmr7, hp_lehninger_hpc3 and gbmr4 it is high enough that a chance position scores at or above zero. There no lambda exists at any k. Deriving C from the measured shares fixes that; the identity limit needs a change to how lambda is solved.</p>
+</section>
+
+<section id="s7">
+  <h2><span class="msym">abc</span>The 19 alphabets</h2>
+  <p>Click a row to select it. Bits per position is the entropy of the class shares on the human proteome; p is the chance that two unrelated positions fall in the same class, the sum of the squared shares.</p>
+  <div class="tbl"><table id="alpha-tbl"></table></div>
+</section>
+
+<section id="s8">
+  <h2><span class="msym">menu_book</span>Glossary</h2>
+  <dl class="gloss">
+    <dt>Arm</dt><dd>One alphabet at one seed length k, searched once.</dd>
+    <dt>Bits per seed</dt><dd>k times the bits per position of the alphabet: how much information one exact k-mer match carries.</dd>
+    <dt>Bits per position</dt><dd>The entropy of the alphabet's class shares on the database; below log2 of the class count whenever the classes are unequal.</dd>
+    <dt>Chance identity p</dt><dd>The probability that two unrelated positions fall in the same class: the sum over classes of the share squared.</dd>
+    <dt>Chance drift</dt><dd>The expected score of one chance position, +1 with probability p and −C otherwise. Karlin-Altschul statistics need it below zero.</dd>
+    <dt>Identity limit</dt><dd>C / (1 + C): the identity above which a match no longer counts as evidence at penalty C, and above which this build gives a region no E-value.</dd>
+    <dt>Rank</dt><dd>1 plus the number of human proteins whose best region beats the partner's under the metric; ties are counted separately.</dd>
+    <dt>Region</dt><dd>A run of shared k-mers on one diagonal, extended past its exact seed with a mismatch penalty.</dd>
+  </dl>
+</section>
+
+<footer>
+  <div><b>Provenance.</b> kmerseek 0.4.0 at commit 982a055 (branch olgabot/ka-lambda-per-region): <span class="mono">index</span> with <span class="mono">--extend-mismatch-penalty</span> at each alphabet's kappa-optimal C, <span class="mono">--ka-queries 200</span> (retried at 1_000 × 8 shuffles when refused), <span class="mono">search</span> with no thresholds, <span class="mono">pair</span> for the two known pairs. Database: GENCODE v49 canonical human proteins, 19_732 sequences, low-complexity k-mers removed, scaled 1. 152 arms. Analysis: notebook 241 and <span class="mono">alphabet_ranking_utils.py</span>, PR #46 of 2024-kmerseek-analysis. Kappa penalties: dark-set <span class="mono">assets/kappa_by_alphabet.tsv</span> (notebook 230).</div>
+  <div>Sequences: Ced9 (Caenorhabditis elegans, 280 aa), P66 (Borreliella burgdorferi, 597 aa), BHF (Botryllus schlosseri histocompatibility factor, 252 aa). Partners: BCL2 (ENSP00000329623, 239 aa), CD47 (ENSP00000355361, 323 aa).</div>
+</footer>
+</div>
+<div id="tip" hidden></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/mathjax/3.2.2/es5/tex-svg.min.js" async></script>
+<script id="sweep-data" type="application/json">{"alphabets":[{"name":"hp_kyte_doolittle2","classes":2,"clusters":"ACFILMV | DEGHKNPQRSTWY","source":"Kyte & Doolittle 1982","bits_per_position":0.937,"penalty":1.57,"p_match":0.547,"chance_drift":-0.164},{"name":"hp_lehninger2","classes":2,"clusters":"AFGILMPVWY | CDEHKNQRST","source":"Lehninger","bits_per_position":1.0,"penalty":1.51,"p_match":0.501,"chance_drift":-0.252},{"name":"hp_lehninger_c_nonpolar2","classes":2,"clusters":"ACFGILMPVWY | DEHKNQRST","source":"Lehninger, C hydrophobic","bits_per_position":0.999,"penalty":1.52,"p_match":0.501,"chance_drift":-0.257},{"name":"hp_pbotc_1st_ed2","classes":2,"clusters":"ACFILMPVWY | DEGHKNQRST","source":"Physical Biology of the Cell, 1st ed.","bits_per_position":0.994,"penalty":1.59,"p_match":0.505,"chance_drift":-0.282},{"name":"hp_thomas_dill2","classes":2,"clusters":"ACFILMVWY | DEGHKNPQRST","source":"Thomas & Dill 1996","bits_per_position":0.966,"penalty":1.63,"p_match":0.524,"chance_drift":-0.252},{"name":"hp_thomas_dill_no_c2","classes":2,"clusters":"AFILMVWY | CDEGHKNPQRST","source":"Thomas-Dill, C polar","bits_per_position":0.95,"penalty":1.62,"p_match":0.535,"chance_drift":-0.218},{"name":"hp_lehninger_hpc3","classes":3,"clusters":"AFGILMPVWY | DEHKNQRST | C","source":"Lehninger, C its own class","bits_per_position":1.134,"penalty":0.87,"p_match":0.479,"chance_drift":0.026},{"name":"gbmr4","classes":4,"clusters":"ADKERNTSQ | YFLIVMCWH | G | P","source":"Solis & Rackovsky 2000","bits_per_position":1.528,"penalty":0.67,"p_match":0.401,"chance_drift":-0.0},{"name":"polarity4","classes":4,"clusters":"GAVLIFWMP | STCYNQ | DE | HKR","source":"Ball, Hill & Scott 2014","bits_per_position":1.785,"penalty":0.54,"p_match":0.334,"chance_drift":-0.026},{"name":"wwmj5","classes":5,"clusters":"CMFILVWY | ATH | GP | DE | SNQRK","source":"Wang & Wang 1999","bits_per_position":2.197,"penalty":0.47,"p_match":0.235,"chance_drift":-0.125},{"name":"dayhoff6","classes":6,"clusters":"C | AGPST | DENQ | HKR | ILMV | FWY","source":"Dayhoff","bits_per_position":2.281,"penalty":0.41,"p_match":0.234,"chance_drift":-0.08},{"name":"gbmr7","classes":7,"clusters":"DN | AEFIKLMQRVWY | CH | T | S | G | P","source":"Solis & Rackovsky 2000","bits_per_position":1.986,"penalty":0.32,"p_match":0.393,"chance_drift":0.199},{"name":"funcgroups8","classes":8,"clusters":"GVALI | ST | CM | FY | WHP | NQ | DE | KR","source":"Jain, Jain & Jain 2014","bits_per_position":2.728,"penalty":2.0,"p_match":0.184,"chance_drift":-1.448},{"name":"mmseqs12","classes":12,"clusters":"AST | LM | IV | KR | EQ | ND | FY | C | G | H | P | W","source":"Steinegger & S\u00f6ding 2018","bits_per_position":3.298,"penalty":0.22,"p_match":0.114,"chance_drift":-0.081},{"name":"sdm12","classes":12,"clusters":"A | D | KER | N | TSQ | YF | LIVM | C | W | H | G | P","source":"Prlic et al. 2000","bits_per_position":3.134,"penalty":0.24,"p_match":0.141,"chance_drift":-0.065},{"name":"wass14","classes":14,"clusters":"WM | DI | P | C | AV | K | T | RE | G | L | Y | SH | F | NQ","source":"Ieremie et al. 2024","bits_per_position":3.629,"penalty":0.17,"p_match":0.089,"chance_drift":-0.066},{"name":"hsdm17","classes":17,"clusters":"A | D | KE | R | N | T | S | Q | Y | F | LIV | M | C | W | H | G | P","source":"Prlic et al. 2000","bits_per_position":3.745,"penalty":0.18,"p_match":0.092,"chance_drift":-0.071},{"name":"uniprot18","classes":18,"clusters":"A | R | N | D | C | Q | EP | G | HL | I | K | M | F | S | T | W | Y | V","source":"Ieremie et al. 2024","bits_per_position":3.95,"penalty":0.15,"p_match":0.072,"chance_drift":-0.067},{"name":"protein20","classes":20,"clusters":"one class per residue","source":"no reduction","bits_per_position":4.177,"penalty":0.14,"p_match":0.059,"chance_drift":-0.073}],"arms":[{"a":"protein20","k":5,"bits":20.9,"fit":true,"lam0":0.87,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1658,"P66":3424,"BHF":2003},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":7.55,"gene":"PSME2"}},{"a":"protein20","k":6,"bits":25.1,"fit":true,"lam0":0.87,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":128,"P66":223,"BHF":148},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":64.1,"gene":"IMPG1"}},{"a":"protein20","k":7,"bits":29.2,"fit":true,"lam0":0.93,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":10,"P66":15,"BHF":16},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":195.0,"gene":"ARHGEF6"}},{"a":"protein20","k":8,"bits":33.4,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":1,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"protein20","k":9,"bits":37.6,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"protein20","k":10,"bits":41.8,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"protein20","k":11,"bits":46.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"protein20","k":13,"bits":54.3,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"dayhoff6","k":7,"bits":16.0,"fit":true,"lam0":0.74,"pair":{"Ced9":1,"Ced9_groove":false,"P66":6},"hits":{"Ced9":16979,"P66":18946,"BHF":15619},"rank":{"Ced9":{"mean IDF":[8911,11,49.9],"tf-idf":[10354,21,49.9],"enrichment":[15908,1,2.03],"Poisson p-value":[16061,1,0.389]},"P66":{"E-value":[12601,21,37900.0],"mean IDF":[8841,1,89.6],"tf-idf":[10267,1,89.6],"enrichment":[6507,24,73.5],"Poisson p-value":[11716,14,0.0135]}},"bhf":{"bestE":8.25,"gene":"RNF125"}},{"a":"dayhoff6","k":9,"bits":20.5,"fit":true,"lam0":0.79,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":4305,"P66":7620,"BHF":2590},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":8.51,"gene":"SLC9C2"}},{"a":"dayhoff6","k":11,"bits":25.1,"fit":true,"lam0":0.86,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":398,"P66":782,"BHF":165},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":13.3,"gene":"TBRG4"}},{"a":"dayhoff6","k":12,"bits":27.4,"fit":true,"lam0":0.89,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":76,"P66":185,"BHF":41},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":7.57,"gene":"OSBPL6"}},{"a":"dayhoff6","k":14,"bits":31.9,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":3,"P66":11,"BHF":4},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"dayhoff6","k":15,"bits":34.2,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1,"P66":4,"BHF":2},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"dayhoff6","k":16,"bits":36.5,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":1,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"dayhoff6","k":18,"bits":41.1,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"dayhoff6","k":19,"bits":43.4,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger2","k":16,"bits":16.0,"fit":true,"lam0":0.24,"pair":{"Ced9":4,"Ced9_groove":true,"P66":10},"hits":{"Ced9":12691,"P66":15932,"BHF":10788},"rank":{"Ced9":{"E-value":[9301,6,45100.0],"mean IDF":[9670,1,11.1],"tf-idf":[7567,3,44.4],"enrichment":[8583,0,19.1],"Poisson p-value":[3592,1,6.79e-05]},"P66":{"E-value":[6183,42,7160.0],"mean IDF":[10910,0,29.4],"tf-idf":[11069,0,49.9],"enrichment":[2609,9,144.0],"Poisson p-value":[2234,0,5.34e-08]}},"bhf":{"bestE":4.71,"gene":"GLI4"}},{"a":"hp_lehninger2","k":17,"bits":17.0,"fit":true,"lam0":0.25,"pair":{"Ced9":3,"Ced9_groove":true,"P66":6},"hits":{"Ced9":8883,"P66":12323,"BHF":7557},"rank":{"Ced9":{"E-value":[6101,5,29500.0],"mean IDF":[5936,1,15.3],"tf-idf":[4878,2,46.0],"enrichment":[5784,1,28.9],"Poisson p-value":[3346,1,0.000173]},"P66":{"E-value":[4537,33,4820.0],"mean IDF":[5668,0,51.1],"tf-idf":[7821,0,51.1],"enrichment":[7303,0,59.1],"Poisson p-value":[1679,0,3.37e-08]}},"bhf":{"bestE":3.43,"gene":"GLI4"}},{"a":"hp_lehninger2","k":19,"bits":19.0,"fit":true,"lam0":0.31,"pair":{"Ced9":1,"Ced9_groove":true,"P66":3},"hits":{"Ced9":3195,"P66":5366,"BHF":2856},"rank":{"Ced9":{"E-value":[2040,5,11200.0],"mean IDF":[1204,1,46.4],"tf-idf":[1704,1,46.4],"enrichment":[2724,1,38.9],"Poisson p-value":[2865,1,0.0253]},"P66":{"mean IDF":[3910,0,11.5],"tf-idf":[3705,1,34.6],"enrichment":[3015,0,149.0],"Poisson p-value":[1398,0,1.34e-06]}},"bhf":{"bestE":2.43,"gene":"TMED8"}},{"a":"hp_lehninger2","k":20,"bits":20.0,"fit":true,"lam0":0.35,"pair":{"Ced9":0,"Ced9_groove":false,"P66":2},"hits":{"Ced9":1750,"P66":3277,"BHF":1572},"rank":{"Ced9":{},"P66":{"mean IDF":[2283,0,15.6],"tf-idf":[2338,1,31.2],"enrichment":[1889,0,195.0],"Poisson p-value":[1489,1,5.21e-05]}},"bhf":{"bestE":4.77,"gene":"NAGLU"}},{"a":"hp_lehninger2","k":24,"bits":24.0,"fit":true,"lam0":0.43,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":122,"P66":350,"BHF":124},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":2.96,"gene":"DICER1"}},{"a":"hp_lehninger2","k":28,"bits":28.0,"fit":true,"lam0":0.39,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":7,"P66":23,"BHF":11},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":1.85,"gene":"SFI1"}},{"a":"hp_lehninger2","k":32,"bits":32.0,"fit":true,"lam0":0.5,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":3,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger2","k":36,"bits":36.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger2","k":40,"bits":40.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger2","k":44,"bits":44.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill2","k":17,"bits":16.4,"fit":true,"lam0":0.59,"pair":{"Ced9":0,"Ced9_groove":false,"P66":4},"hits":{"Ced9":10326,"P66":15012,"BHF":13423},"rank":{"Ced9":{},"P66":{"E-value":[10491,29,59400.0],"mean IDF":[10424,0,35.8],"tf-idf":[12304,0,35.8],"enrichment":[5188,1,89.8],"Poisson p-value":[3721,1,6.07e-06]}},"bhf":{"bestE":1.91,"gene":"MYBPC3"}},{"a":"hp_thomas_dill2","k":21,"bits":20.3,"fit":true,"lam0":0.81,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1418,"P66":5456,"BHF":5332},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":7.56,"gene":"PSD2"}},{"a":"hp_thomas_dill2","k":25,"bits":24.1,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":113,"P66":1513,"BHF":1585},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill2","k":29,"bits":28.0,"fit":true,"lam0":0.9,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":14,"P66":195,"BHF":288},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":15.5,"gene":"PSD2"}},{"a":"hp_thomas_dill2","k":33,"bits":31.9,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":2,"P66":16,"BHF":41},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill2","k":37,"bits":35.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":1,"BHF":7},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill2","k":41,"bits":39.6,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill2","k":46,"bits":44.4,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_kyte_doolittle2","k":17,"bits":15.9,"fit":true,"lam0":0.77,"pair":{"Ced9":2,"Ced9_groove":false,"P66":4},"hits":{"Ced9":13945,"P66":17023,"BHF":16038},"rank":{"Ced9":{"mean IDF":[12570,0,8.41],"tf-idf":[12719,2,16.8],"enrichment":[7705,0,10.8],"Poisson p-value":[7624,1,0.0152]},"P66":{"E-value":[1214,0,1920.0],"mean IDF":[10008,0,94.9],"tf-idf":[12489,0,94.9],"enrichment":[10923,1,12.7],"Poisson p-value":[14375,0,0.0756]}},"bhf":{"bestE":13.1,"gene":"TTC28"}},{"a":"hp_kyte_doolittle2","k":21,"bits":19.7,"fit":true,"lam0":0.89,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":2866,"P66":7972,"BHF":7983},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":10.3,"gene":"TTC28"}},{"a":"hp_kyte_doolittle2","k":26,"bits":24.4,"fit":true,"lam0":0.96,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":181,"P66":2177,"BHF":1818},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":9.6,"gene":"TTC28"}},{"a":"hp_kyte_doolittle2","k":30,"bits":28.1,"fit":true,"lam0":0.97,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":14,"P66":352,"BHF":305},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":5.69,"gene":"ZDBF2"}},{"a":"hp_kyte_doolittle2","k":34,"bits":31.9,"fit":true,"lam0":0.98,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1,"P66":72,"BHF":45},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_kyte_doolittle2","k":38,"bits":35.6,"fit":true,"lam0":0.88,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":3,"BHF":5},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_kyte_doolittle2","k":43,"bits":40.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_kyte_doolittle2","k":47,"bits":44.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill_no_c2","k":17,"bits":16.1,"fit":true,"lam0":0.66,"pair":{"Ced9":0,"Ced9_groove":false,"P66":1},"hits":{"Ced9":11276,"P66":15844,"BHF":14993},"rank":{"Ced9":{},"P66":{"E-value":[10451,32,65600.0],"mean IDF":[11380,0,35.0],"tf-idf":[13175,1,35.0],"enrichment":[12271,0,9.04],"Poisson p-value":[14239,0,0.105]}},"bhf":{"bestE":3.19,"gene":"LRIG3"}},{"a":"hp_thomas_dill_no_c2","k":21,"bits":19.9,"fit":true,"lam0":0.84,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1735,"P66":6418,"BHF":6905},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":2450.0,"gene":"POLR2B"}},{"a":"hp_thomas_dill_no_c2","k":25,"bits":23.8,"fit":true,"lam0":0.92,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":144,"P66":1938,"BHF":2211},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":37.8,"gene":"NWD1"}},{"a":"hp_thomas_dill_no_c2","k":29,"bits":27.6,"fit":true,"lam0":0.93,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":17,"P66":235,"BHF":388},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":3.23,"gene":"NWD1"}},{"a":"hp_thomas_dill_no_c2","k":34,"bits":32.3,"fit":true,"lam0":0.98,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":11,"BHF":39},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill_no_c2","k":38,"bits":36.1,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":4},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill_no_c2","k":42,"bits":39.9,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_thomas_dill_no_c2","k":46,"bits":43.7,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_c_nonpolar2","k":16,"bits":16.0,"fit":true,"lam0":0.28,"pair":{"Ced9":7,"Ced9_groove":true,"P66":7},"hits":{"Ced9":13735,"P66":16021,"BHF":10143},"rank":{"Ced9":{"mean IDF":[10541,20,11.6],"tf-idf":[9387,4,33.3],"enrichment":[7866,2,21.3],"Poisson p-value":[2457,2,4.93e-06]},"P66":{"E-value":[12360,385,45000.0],"mean IDF":[13911,0,5.69],"tf-idf":[12590,6,34.1],"enrichment":[5388,12,123.0],"Poisson p-value":[2819,0,3.17e-07]}},"bhf":{"bestE":1.34,"gene":"MIEF1"}},{"a":"hp_lehninger_c_nonpolar2","k":20,"bits":20.0,"fit":true,"lam0":0.39,"pair":{"Ced9":1,"Ced9_groove":true,"P66":2},"hits":{"Ced9":2608,"P66":3246,"BHF":1312},"rank":{"Ced9":{"mean IDF":[1018,2,30.8],"tf-idf":[1406,2,30.8],"enrichment":[1306,4,94.3],"Poisson p-value":[1899,3,0.0105]},"P66":{"mean IDF":[2334,0,14.7],"tf-idf":[2423,1,29.4],"enrichment":[2117,1,137.0],"Poisson p-value":[1557,0,0.000106]}},"bhf":{"bestE":9.58,"gene":"NAGLU"}},{"a":"hp_lehninger_c_nonpolar2","k":24,"bits":24.0,"fit":true,"lam0":0.46,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":219,"P66":342,"BHF":106},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":4.11,"gene":"CYP21A2"}},{"a":"hp_lehninger_c_nonpolar2","k":28,"bits":28.0,"fit":true,"lam0":0.35,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":7,"P66":20,"BHF":16},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":0.844,"gene":"SFI1"}},{"a":"hp_lehninger_c_nonpolar2","k":32,"bits":32.0,"fit":true,"lam0":0.6,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":4,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_c_nonpolar2","k":36,"bits":36.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_c_nonpolar2","k":40,"bits":40.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_c_nonpolar2","k":44,"bits":44.0,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_hpc3","k":14,"bits":15.9,"fit":true,"lam0":0.99,"pair":{"Ced9":6,"Ced9_groove":true,"P66":21},"hits":{"Ced9":16685,"P66":18775,"BHF":14567},"rank":{"Ced9":{"mean IDF":[6240,7,149.0],"tf-idf":[9317,4,149.0],"enrichment":[9081,1,7.06],"Poisson p-value":[5683,1,0.00274]},"P66":{"E-value":[166,0,707.0],"mean IDF":[3186,0,285.0],"tf-idf":[5456,0,285.0],"enrichment":[13282,0,7.43],"Poisson p-value":[4071,0,5.76e-05]}},"bhf":{"bestE":3.58,"gene":"LRP6"}},{"a":"hp_lehninger_hpc3","k":18,"bits":20.4,"fit":true,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":4},"hits":{"Ced9":3513,"P66":6682,"BHF":2977},"rank":{"Ced9":{},"P66":{"mean IDF":[6253,0,14.6],"tf-idf":[5765,1,58.3],"enrichment":[2775,0,65.4],"Poisson p-value":[1029,0,5.57e-07]}},"bhf":{"bestE":12.2,"gene":"SEMA5B"}},{"a":"hp_lehninger_hpc3","k":21,"bits":23.8,"fit":true,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":1},"hits":{"Ced9":417,"P66":1518,"BHF":467},"rank":{"Ced9":{},"P66":{"mean IDF":[1151,0,57.4],"tf-idf":[1347,0,57.4],"enrichment":[755,0,148.0],"Poisson p-value":[1197,1,0.00672]}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_hpc3","k":25,"bits":28.4,"fit":true,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":27,"P66":133,"BHF":36},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_hpc3","k":28,"bits":31.8,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":3,"P66":17,"BHF":10},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_hpc3","k":32,"bits":36.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":3,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_hpc3","k":35,"bits":39.7,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_lehninger_hpc3","k":39,"bits":44.2,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_pbotc_1st_ed2","k":16,"bits":15.9,"fit":true,"lam0":0.28,"pair":{"Ced9":3,"Ced9_groove":false,"P66":6},"hits":{"Ced9":11706,"P66":15885,"BHF":12722},"rank":{"Ced9":{"E-value":[5558,106,10200.0],"mean IDF":[10898,2,4.44],"tf-idf":[10030,3,13.3],"enrichment":[3737,4,84.8],"Poisson p-value":[2513,10,7.18e-06]},"P66":{"E-value":[14133,2,210000.0],"mean IDF":[12629,0,19.9],"tf-idf":[12459,0,39.7],"enrichment":[8830,1,63.2],"Poisson p-value":[3225,6,6.35e-07]}},"bhf":{"bestE":5.23,"gene":"C1GALT1"}},{"a":"hp_pbotc_1st_ed2","k":20,"bits":19.9,"fit":true,"lam0":0.43,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1601,"P66":4368,"BHF":2275},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":1.99,"gene":"C1GALT1"}},{"a":"hp_pbotc_1st_ed2","k":24,"bits":23.9,"fit":true,"lam0":0.5,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":124,"P66":635,"BHF":220},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":14.2,"gene":"RANBP6"}},{"a":"hp_pbotc_1st_ed2","k":28,"bits":27.8,"fit":true,"lam0":0.58,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":9,"P66":34,"BHF":14},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":8.95,"gene":"GIMAP8"}},{"a":"hp_pbotc_1st_ed2","k":32,"bits":31.8,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1,"P66":1,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_pbotc_1st_ed2","k":36,"bits":35.8,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_pbotc_1st_ed2","k":40,"bits":39.8,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hp_pbotc_1st_ed2","k":44,"bits":43.7,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr4","k":10,"bits":15.3,"fit":true,"lam0":0.98,"pair":{"Ced9":16,"Ced9_groove":false,"P66":21},"hits":{"Ced9":19018,"P66":19431,"BHF":19165},"rank":{"Ced9":{"mean IDF":[16979,0,48.5],"tf-idf":[14915,1,101.0],"enrichment":[13557,2,3.18],"Poisson p-value":[4023,4,0.00747]},"P66":{"mean IDF":[10053,1,214.0],"tf-idf":[12266,0,214.0],"enrichment":[13909,18,5.38],"Poisson p-value":[13378,38,0.0542]}},"bhf":{"bestE":11.6,"gene":"SPHK2"}},{"a":"gbmr4","k":13,"bits":19.9,"fit":true,"lam0":0.99,"pair":{"Ced9":4,"Ced9_groove":false,"P66":0},"hits":{"Ced9":9452,"P66":13193,"BHF":12176},"rank":{"Ced9":{"mean IDF":[9373,2,2.5],"tf-idf":[9098,4,10.0],"enrichment":[3438,5,11.8],"Poisson p-value":[1275,6,0.000416]},"P66":{}},"bhf":{"bestE":6.1,"gene":"NFXL1"}},{"a":"gbmr4","k":16,"bits":24.4,"fit":true,"lam0":1.0,"pair":{"Ced9":1,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1834,"P66":3754,"BHF":4028},"rank":{"Ced9":{"mean IDF":[1788,7,4.34],"tf-idf":[1810,7,4.34],"enrichment":[417,7,76.6],"Poisson p-value":[1154,7,0.013]},"P66":{}},"bhf":{"bestE":4.01,"gene":"ZFP28"}},{"a":"gbmr4","k":18,"bits":27.5,"fit":true,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":464,"P66":1583,"BHF":1821},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":7.65,"gene":"ZFP28"}},{"a":"gbmr4","k":21,"bits":32.1,"fit":true,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":25,"P66":581,"BHF":363},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr4","k":24,"bits":36.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":2,"P66":32,"BHF":63},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr4","k":26,"bits":39.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":26},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr4","k":29,"bits":44.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":5},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"polarity4","k":9,"bits":16.1,"fit":true,"lam0":0.94,"pair":{"Ced9":59,"Ced9_groove":false,"P66":30},"hits":{"Ced9":18064,"P66":19037,"BHF":15253},"rank":{"Ced9":{"mean IDF":[213,0,344.0],"tf-idf":[386,0,344.0],"enrichment":[7954,95,10.7],"Poisson p-value":[10808,60,0.0893]},"P66":{"mean IDF":[2945,1,219.0],"tf-idf":[2096,1,267.0],"enrichment":[13598,0,8.92],"Poisson p-value":[8020,0,0.00493]}},"bhf":{"bestE":3.08,"gene":"ZC3H13"}},{"a":"polarity4","k":11,"bits":19.6,"fit":true,"lam0":0.97,"pair":{"Ced9":18,"Ced9_groove":false,"P66":3},"hits":{"Ced9":12508,"P66":11893,"BHF":4286},"rank":{"Ced9":{"mean IDF":[6650,1,61.8],"tf-idf":[5051,3,124.0],"enrichment":[9313,0,2.14],"Poisson p-value":[8886,0,0.24]},"P66":{"mean IDF":[3883,0,120.0],"tf-idf":[1557,2,239.0],"enrichment":[2652,2,94.5],"Poisson p-value":[6525,1,0.0105]}},"bhf":{"bestE":2.82,"gene":"BCLAF1"}},{"a":"polarity4","k":13,"bits":23.2,"fit":true,"lam0":0.99,"pair":{"Ced9":2,"Ced9_groove":false,"P66":0},"hits":{"Ced9":7005,"P66":3107,"BHF":772},"rank":{"Ced9":{"mean IDF":[2826,48,59.2],"tf-idf":[3330,77,59.2],"enrichment":[5954,14,1.35],"Poisson p-value":[5954,14,0.522]},"P66":{}},"bhf":{"bestE":0.61,"gene":"SCN10A"}},{"a":"polarity4","k":16,"bits":28.6,"fit":true,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1860,"P66":133,"BHF":38},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"polarity4","k":18,"bits":32.1,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":657,"P66":6,"BHF":2},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"polarity4","k":20,"bits":35.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":126,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"polarity4","k":22,"bits":39.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":11,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"polarity4","k":25,"bits":44.6,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wwmj5","k":7,"bits":15.4,"fit":true,"lam0":0.48,"pair":{"Ced9":5,"Ced9_groove":true,"P66":15},"hits":{"Ced9":18363,"P66":19066,"BHF":16568},"rank":{"Ced9":{"E-value":[11359,0,73400.0],"mean IDF":[15181,0,23.7],"tf-idf":[9553,12,66.1],"enrichment":[13110,0,10.0],"Poisson p-value":[4748,0,0.00356]},"P66":{"E-value":[5768,12,6990.0],"mean IDF":[2707,4,137.0],"tf-idf":[3506,5,137.0],"enrichment":[1138,26,175.0],"Poisson p-value":[6677,1,0.00148]}},"bhf":{"bestE":3.12,"gene":"ATAD2B"}},{"a":"wwmj5","k":9,"bits":19.8,"fit":true,"lam0":0.52,"pair":{"Ced9":1,"Ced9_groove":false,"P66":0},"hits":{"Ced9":5153,"P66":6563,"BHF":3247},"rank":{"Ced9":{"E-value":[1352,0,1950.0],"mean IDF":[934,1,103.0],"tf-idf":[1192,1,103.0],"enrichment":[2149,1,88.5],"Poisson p-value":[2858,3,0.0112]},"P66":{}},"bhf":{"bestE":19.3,"gene":"APCDD1L"}},{"a":"wwmj5","k":11,"bits":24.2,"fit":true,"lam0":0.53,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":393,"P66":472,"BHF":240},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":5.33,"gene":"TRARG1"}},{"a":"wwmj5","k":13,"bits":28.6,"fit":true,"lam0":0.51,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":18,"P66":27,"BHF":14},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":4.31,"gene":"SPAG17"}},{"a":"wwmj5","k":15,"bits":33.0,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":2,"P66":2,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wwmj5","k":16,"bits":35.2,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wwmj5","k":18,"bits":39.5,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wwmj5","k":20,"bits":43.9,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":8,"bits":15.9,"fit":true,"lam0":1.0,"pair":{"Ced9":24,"Ced9_groove":true,"P66":76},"hits":{"Ced9":19526,"P66":19533,"BHF":19427},"rank":{"Ced9":{"mean IDF":[7814,45,283.0],"tf-idf":[8026,2,305.0],"enrichment":[15318,19,1.51],"Poisson p-value":[16371,11,0.485]},"P66":{"mean IDF":[3452,4,363.0],"tf-idf":[4572,5,363.0],"enrichment":[16257,3,3.18],"Poisson p-value":[12010,10,0.0703]}},"bhf":{"bestE":0.991,"gene":"FXYD5"}},{"a":"gbmr7","k":10,"bits":19.9,"fit":false,"lam0":1.0,"pair":{"Ced9":1,"Ced9_groove":false,"P66":7},"hits":{"Ced9":18303,"P66":18023,"BHF":16808},"rank":{"Ced9":{"mean IDF":[17372,192,0.787],"tf-idf":[17991,119,0.787],"enrichment":[17372,192,2.2],"Poisson p-value":[17991,119,0.366]},"P66":{"mean IDF":[8058,253,3.4],"tf-idf":[12145,132,3.4],"enrichment":[7781,260,29.8],"Poisson p-value":[11671,143,0.033]}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":12,"bits":23.8,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":12996,"P66":9361,"BHF":7129},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":14,"bits":27.8,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":5522,"P66":1389,"BHF":2180},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":16,"bits":31.8,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":578,"P66":151,"BHF":142},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":18,"bits":35.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":116,"P66":5,"BHF":16},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":20,"bits":39.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":34,"P66":0,"BHF":2},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"gbmr7","k":22,"bits":43.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":6,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":6,"bits":16.4,"fit":false,"lam0":1.0,"pair":{"Ced9":11,"Ced9_groove":false,"P66":58},"hits":{"Ced9":17980,"P66":19158,"BHF":16831},"rank":{"Ced9":{"mean IDF":[15504,195,1.86],"tf-idf":[12482,387,3.72],"enrichment":[15485,201,6.42],"Poisson p-value":[12984,390,0.0395]},"P66":{"mean IDF":[7384,62,5.05],"tf-idf":[7830,39,7.36],"enrichment":[7272,62,156.0],"Poisson p-value":[8130,40,0.00167]}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":7,"bits":19.1,"fit":false,"lam0":1.0,"pair":{"Ced9":5,"Ced9_groove":false,"P66":16},"hits":{"Ced9":12571,"P66":15143,"BHF":8912},"rank":{"Ced9":{"mean IDF":[7625,369,2.5],"tf-idf":[5271,325,5.08],"enrichment":[7582,374,12.2],"Poisson p-value":[5839,456,0.012]},"P66":{"mean IDF":[5935,86,5.27],"tf-idf":[8939,58,5.27],"enrichment":[5913,48,195.0],"Poisson p-value":[8416,31,0.00512]}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":9,"bits":24.6,"fit":false,"lam0":1.0,"pair":{"Ced9":1,"Ced9_groove":false,"P66":0},"hits":{"Ced9":3848,"P66":1430,"BHF":367},"rank":{"Ced9":{"mean IDF":[2386,191,2.82],"tf-idf":[2895,181,2.82],"enrichment":[2349,192,16.7],"Poisson p-value":[2895,181,0.0581]},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":10,"bits":27.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":2300,"P66":230,"BHF":50},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":12,"bits":32.7,"fit":true,"lam0":0.96,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":909,"P66":15,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":4.63,"gene":"ATOH8"}},{"a":"funcgroups8","k":13,"bits":35.5,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":495,"P66":1,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":15,"bits":40.9,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":125,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"funcgroups8","k":16,"bits":43.6,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":73,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"sdm12","k":5,"bits":15.7,"fit":true,"lam0":0.91,"pair":{"Ced9":0,"Ced9_groove":false,"P66":13},"hits":{"Ced9":18634,"P66":19346,"BHF":18401},"rank":{"Ced9":{},"P66":{"E-value":[5072,5,5550.0],"mean IDF":[12364,4,36.4],"tf-idf":[3827,1,70.0],"enrichment":[5343,43,109.0],"Poisson p-value":[10437,26,0.00914]}},"bhf":{"bestE":29.7,"gene":"KIRREL3"}},{"a":"sdm12","k":6,"bits":18.8,"fit":true,"lam0":0.92,"pair":{"Ced9":0,"Ced9_groove":false,"P66":3},"hits":{"Ced9":10966,"P66":13845,"BHF":10649},"rank":{"Ced9":{},"P66":{"E-value":[866,1,899.0],"mean IDF":[858,0,89.4],"tf-idf":[1064,1,89.4],"enrichment":[9468,50,39.6],"Poisson p-value":[10378,38,0.0249]}},"bhf":{"bestE":11.4,"gene":"ITGAM"}},{"a":"sdm12","k":8,"bits":25.1,"fit":true,"lam0":0.94,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":426,"P66":941,"BHF":600},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":28.4,"gene":"PTCH2"}},{"a":"sdm12","k":9,"bits":28.2,"fit":true,"lam0":0.95,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":55,"P66":171,"BHF":94},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":178.0,"gene":"PRR5-ARHGAP8"}},{"a":"sdm12","k":10,"bits":31.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":4,"P66":37,"BHF":16},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"sdm12","k":11,"bits":34.5,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1,"P66":6,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"sdm12","k":13,"bits":40.7,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"sdm12","k":14,"bits":43.9,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"mmseqs12","k":5,"bits":16.5,"fit":true,"lam0":0.8,"pair":{"Ced9":1,"Ced9_groove":false,"P66":4},"hits":{"Ced9":15370,"P66":18664,"BHF":16160},"rank":{"Ced9":{"mean IDF":[8584,36,29.2],"tf-idf":[9144,34,29.2],"enrichment":[14117,11,7.58],"Poisson p-value":[14181,11,0.124]},"P66":{"E-value":[7679,33,10600.0],"mean IDF":[8489,0,54.9],"tf-idf":[9299,0,54.9],"enrichment":[10209,42,63.9],"Poisson p-value":[12602,29,0.0155]}},"bhf":{"bestE":23.5,"gene":"OR4C15"}},{"a":"mmseqs12","k":6,"bits":19.8,"fit":true,"lam0":0.82,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":4503,"P66":10572,"BHF":5682},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":10.0,"gene":"ARHGAP1"}},{"a":"mmseqs12","k":7,"bits":23.1,"fit":true,"lam0":0.86,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":666,"P66":2695,"BHF":985},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":23.0,"gene":"SIDT2"}},{"a":"mmseqs12","k":8,"bits":26.4,"fit":true,"lam0":0.87,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":82,"P66":487,"BHF":137},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":4.27,"gene":"WDTC1"}},{"a":"mmseqs12","k":10,"bits":33.0,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1,"P66":14,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"mmseqs12","k":11,"bits":36.3,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":1,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"mmseqs12","k":12,"bits":39.6,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"mmseqs12","k":13,"bits":42.9,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wass14","k":6,"bits":21.8,"fit":true,"lam0":0.82,"pair":{"Ced9":1,"Ced9_groove":false,"P66":0},"hits":{"Ced9":1161,"P66":1675,"BHF":1374},"rank":{"Ced9":{"mean IDF":[489,1,28.5],"tf-idf":[521,1,28.5],"enrichment":[938,1,253.0],"Poisson p-value":[950,1,0.00394]},"P66":{}},"bhf":{"bestE":13.9,"gene":"MOGAT1"}},{"a":"wass14","k":7,"bits":25.4,"fit":true,"lam0":0.84,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":114,"P66":136,"BHF":148},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":23.0,"gene":"C1orf146"}},{"a":"wass14","k":8,"bits":29.0,"fit":true,"lam0":0.86,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":16,"P66":8,"BHF":20},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wass14","k":9,"bits":32.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":3,"P66":1,"BHF":4},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wass14","k":10,"bits":36.3,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wass14","k":11,"bits":39.9,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"wass14","k":12,"bits":43.5,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hsdm17","k":5,"bits":18.7,"fit":true,"lam0":0.95,"pair":{"Ced9":0,"Ced9_groove":false,"P66":2},"hits":{"Ced9":9314,"P66":14091,"BHF":8840},"rank":{"Ced9":{},"P66":{"mean IDF":[11213,2,5.37],"tf-idf":[9605,2,10.7],"enrichment":[5776,3,177.0],"Poisson p-value":[873,10,6.31e-05]}},"bhf":{"bestE":17.7,"gene":"POLK"}},{"a":"hsdm17","k":6,"bits":22.5,"fit":true,"lam0":0.95,"pair":{"Ced9":0,"Ced9_groove":false,"P66":1},"hits":{"Ced9":1817,"P66":3064,"BHF":1484},"rank":{"Ced9":{},"P66":{"mean IDF":[1834,16,7.8],"tf-idf":[1965,14,7.8],"enrichment":[413,55,2440.0],"Poisson p-value":[682,54,0.00041]}},"bhf":{"bestE":24.4,"gene":"SSU72L3"}},{"a":"hsdm17","k":7,"bits":26.2,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":174,"P66":324,"BHF":133},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hsdm17","k":9,"bits":33.7,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":3,"P66":1,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hsdm17","k":10,"bits":37.5,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":1,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hsdm17","k":11,"bits":41.2,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"hsdm17","k":12,"bits":44.9,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"uniprot18","k":5,"bits":19.8,"fit":true,"lam0":0.89,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":3433,"P66":5754,"BHF":5479},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":25.2,"gene":"PSME2"}},{"a":"uniprot18","k":6,"bits":23.7,"fit":true,"lam0":0.9,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":300,"P66":457,"BHF":578},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":20.2,"gene":"ARHGAP31"}},{"a":"uniprot18","k":7,"bits":27.6,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":21,"P66":34,"BHF":56},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"uniprot18","k":8,"bits":31.6,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":2,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"uniprot18","k":9,"bits":35.5,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"uniprot18","k":10,"bits":39.5,"fit":false,"lam0":1.0,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":1},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}},{"a":"uniprot18","k":11,"bits":43.5,"fit":false,"lam0":null,"pair":{"Ced9":0,"Ced9_groove":false,"P66":0},"hits":{"Ced9":0,"P66":0,"BHF":0},"rank":{"Ced9":{},"P66":{}},"bhf":{"bestE":null,"gene":null}}],"bits_per_position":{"protein20":4.176831394195529,"dayhoff6":2.281343094749597,"hp_lehninger2":0.9999842456253976,"hp_thomas_dill2":0.9660342330108598,"hp_kyte_doolittle2":0.9369781442674594,"hp_thomas_dill_no_c2":0.9499673234982369,"hp_lehninger_c_nonpolar2":0.9987860586607973,"hp_lehninger_hpc3":1.1340417705093804,"hp_pbotc_1st_ed2":0.9941277696068841,"gbmr4":1.5278174960405724,"polarity4":1.7847203632236435,"wwmj5":2.1971972076563886,"gbmr7":1.9855141310502684,"funcgroups8":2.7279758097935347,"sdm12":3.1337885911960326,"mmseqs12":3.29792445374803,"wass14":3.629363699380275,"hsdm17":3.745142129541453,"uniprot18":3.949737983536474},"n_human":19732}</script>
+<script>
+(function(){
+const DATA = JSON.parse(document.getElementById('sweep-data').textContent);
+const METRICS = ["E-value","mean IDF","tf-idf","enrichment","Poisson p-value"];
+const CASES = {
+  Ced9:{label:"gold standard", query:"Ced9", partner:"BCL2", qlen:280, icon:"verified",
+        why:"BCL2 and Ced9 are the same SCOP superfamily, structure-verified, under 30% identity. We know the answer."},
+  P66:{label:"the reach", query:"P66", partner:"CD47", qlen:597, icon:"explore",
+       why:"CD47 is the proposed partner. Nothing here assumes it is right; the same scoring says whether any alphabet supports it."},
+  BHF:{label:"the application", query:"BHF", partner:null, qlen:252, icon:"biotech",
+       why:"The Botryllus histocompatibility factor. No known partner; this is the protein the method is for."}
+};
+const N_RES = 11347201;
+const state = {alpha:"hp_lehninger2", case:"Ced9", metric:"E-value", C:null};
+const byAlpha = {}; DATA.alphabets.forEach(a=>byAlpha[a.name]=a);
+const armsOf = a => DATA.arms.filter(r=>r.a===a).sort((x,y)=>x.bits-y.bits);
+const fmt = n => n==null?"–":(Number.isInteger(n)? n.toLocaleString("en-US").replace(/,/g,"_") : (Math.abs(n)>=100? Math.round(n).toLocaleString("en-US").replace(/,/g,"_") : n.toPrecision(3)));
+const fmtE = e => e==null?"–":(e>=100?fmt(Math.round(e)):e>=1?e.toFixed(2):e.toExponential(1));
+const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+const lerp=(a,b,t)=>a+(b-a)*t;
+function hex2rgb(h){h=h.replace('#','');return [0,2,4].map(i=>parseInt(h.slice(i,i+2),16));}
+function rampColor(t){ // t 0 (best) .. 1 (worst)
+  const a=hex2rgb(css('--ramp-1')), b=hex2rgb(css('--ramp-0'));
+  const c=a.map((v,i)=>Math.round(lerp(v,b[i],Math.max(0,Math.min(1,t)))));
+  return `rgb(${c.join(',')})`;
+}
+const rankT = r => Math.log10(Math.max(1,r))/4;   // 1 -> 0, 10_000 -> 1
+const bitsNeeded = (qlen,E=1) => Math.log2(qlen*N_RES/E);
+const X = {min:13,max:47};
+const NS="http://www.w3.org/2000/svg";
+function el(tag,attrs,parent){const e=document.createElementNS(NS,tag);for(const k in attrs)e.setAttribute(k,attrs[k]);if(parent)parent.appendChild(e);return e;}
+function txt(parent,x,y,s,attrs={}){const t=el('text',Object.assign({x,y},attrs),parent);t.textContent=s;return t;}
+
+// tooltip
+const tip=document.getElementById('tip');
+function showTip(html,ev){tip.innerHTML=html;tip.hidden=false;moveTip(ev);}
+function moveTip(ev){const pad=14;let x=ev.clientX+pad,y=ev.clientY+pad;const r=tip.getBoundingClientRect();if(x+r.width>innerWidth-8)x=ev.clientX-r.width-pad;if(y+r.height>innerHeight-8)y=ev.clientY-r.height-pad;tip.style.left=x+'px';tip.style.top=y+'px';}
+function hideTip(){tip.hidden=true;}
+function bindTip(node,html){node.classList.add('tt-target');node.addEventListener('pointerenter',e=>showTip(html(),e));node.addEventListener('pointermove',moveTip);node.addEventListener('pointerleave',hideTip);}
+
+function partnerRank(arm,c,m){const q=CASES[c].query;if(!CASES[c].partner)return null;const r=arm.rank[q]&&arm.rank[q][m];return r||null;}
+function armTip(arm,c){
+  const A=byAlpha[arm.a], cs=CASES[c];
+  let s=`<b>${arm.a}</b> k=${arm.k} · ${arm.bits} bits<br>human proteins hit by ${cs.query}: ${fmt(arm.hits[cs.query])}<br>`;
+  if(cs.partner){
+    const pr=partnerRank(arm,c,state.metric);
+    s+= pr? `${cs.partner} rank under ${state.metric}: <b>${fmt(pr[0])}</b>${pr[1]?` (${pr[1]} tied)`:''}; its value ${fmtE(pr[2])}<br>`
+          : `${cs.partner} is not among the hits<br>`;
+    const sh = arm.pair[cs.query]; s+=`exact k-mers the two proteins share (no database): ${sh==null?'–':sh}${arm.pair.Ced9_groove&&c==='Ced9'?' · in the BH3 groove':''}<br>`;
+  } else {
+    s+= arm.bhf.bestE!=null? `best E-value of any human protein: ${fmtE(arm.bhf.bestE)} (${arm.bhf.gene})<br>`:`no E-value at this arm<br>`;
+  }
+  s+= arm.fit===true?`Karlin-Altschul fit: yes${arm.lam0!=null?`; ${Math.round(arm.lam0*100)}% of regions still have no E-value (identity limit)`:''}`:`Karlin-Altschul fit: refused, so no E-value`;
+  return s;
+}
+
+// ---------- controls ----------
+const selA=document.getElementById('in-alpha');
+DATA.alphabets.forEach(a=>{const o=document.createElement('option');o.value=a.name;o.textContent=`${a.name}  (${a.classes} letters)`;selA.appendChild(o);});
+selA.value=state.alpha;
+selA.addEventListener('change',()=>{state.alpha=selA.value;state.C=null;draw();});
+document.getElementById('in-metric').addEventListener('change',e=>{state.metric=e.target.value;draw();});
+document.querySelectorAll('#in-case button').forEach(b=>b.addEventListener('click',()=>{state.case=b.dataset.case;document.querySelectorAll('#in-case button').forEach(x=>x.setAttribute('aria-pressed',x===b));draw();}));
+const slC=document.getElementById('in-c');
+slC.addEventListener('input',()=>{state.C=parseFloat(slC.value);drawLam();});
+
+// ---------- case cards ----------
+(function(){const box=document.getElementById('cases');Object.keys(CASES).forEach(k=>{const c=CASES[k];const d=document.createElement('div');d.className='case';
+ d.innerHTML=`<div class="eyebrow"><span class="msym">${c.icon}</span>${c.label}</div><h3>${c.query} → ${c.partner||'unknown'}</h3>
+ <dl><dt>query</dt><dd>${c.query}, ${c.qlen} aa</dd><dt>right answer</dt><dd>${c.partner||'none known'}</dd><dt>E = 1 needs</dt><dd>about ${bitsNeeded(c.qlen).toFixed(0)} bits in one seed</dd></dl><p class="caption">${c.why}</p>`;box.appendChild(d);});})();
+
+// ---------- headline ----------
+function summary(alpha,c){
+  const arms=armsOf(alpha), cs=CASES[c];
+  if(!cs.partner){
+    const withE=arms.filter(a=>a.fit===true&&a.bhf.bestE!=null);
+    const best=withE.slice().sort((x,y)=>x.bhf.bestE-y.bhf.bestE)[0];
+    const below=withE.filter(a=>a.bhf.bestE<1);
+    return {arms,best,below,withE};
+  }
+  const seen=arms.filter(a=>METRICS.some(m=>partnerRank(a,c,m)));
+  let best=null;
+  arms.forEach(a=>METRICS.forEach(m=>{const r=partnerRank(a,c,m);if(r&&(!best||r[0]<best.r[0]||(r[0]===best.r[0]&&r[1]<best.r[1])))best={arm:a,m,r};}));
+  let bestSel=null;
+  arms.forEach(a=>{const r=partnerRank(a,c,state.metric);if(r&&(!bestSel||r[0]<bestSel.r[0]))bestSel={arm:a,r};});
+  return {arms,seen,best,bestSel,lastBits:seen.length?Math.max(...seen.map(a=>a.bits)):null};
+}
+function drawHeadline(){
+  const cs=CASES[state.case], s=summary(state.alpha,state.case), need=bitsNeeded(cs.qlen).toFixed(0);
+  let h;
+  if(cs.partner){
+    if(!s.seen.length) h=`<b>${state.alpha}</b>: ${cs.partner} is never among the hits when ${cs.query} is the query, at any k. An E-value of 1 on this database needs about ${need} bits in one seed.`;
+    else h=`<b>${state.alpha}</b>: ${cs.partner} is among the hits up to <b>${s.lastBits} bits</b>; its best rank is <b>${fmt(s.best.r[0])}</b> of ${fmt(s.best.arm.hits[cs.query])} proteins hit (${s.best.m}, k=${s.best.arm.k}). Under ${state.metric}: ${s.bestSel?`${fmt(s.bestSel.r[0])} of ${fmt(s.bestSel.arm.hits[cs.query])} at k=${s.bestSel.arm.k}`:'never among the hits'}. An E-value of 1 here needs about ${need} bits.`;
+  } else {
+    h= s.best? `<b>${state.alpha}</b>: BHF's best human hit is <b>${s.best.bhf.gene}</b> at E = ${fmtE(s.best.bhf.bestE)} (k=${s.best.arm?'' :''}${s.best.k}); ${s.below.length} of ${s.withE.length} arms with an E-value go below E = 1.` : `<b>${state.alpha}</b>: no arm of this alphabet has an E-value for BHF, so there is no hit that can be judged against chance.`;
+  }
+  document.getElementById('hero-txt').innerHTML=h;
+}
+
+// ---------- ladder ----------
+function xScale(w,l,r){return b=>l+(b-X.min)/(X.max-X.min)*(w-l-r);}
+function drawLadder(){
+  const cs=CASES[state.case], arms=armsOf(state.alpha), A=byAlpha[state.alpha];
+  document.getElementById('s2-alpha').textContent=state.alpha;
+  const W=720,H=300,L=56,R=16,T=18,B=44;const x=xScale(W,L,R);
+  const box=document.getElementById('lad');box.innerHTML='';
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,width:W,height:H},box);
+  // crowd track (top): log10 hits
+  const cy0=T+96, cy1=T+8; const hitsMax=5; const ys=v=>cy0-(Math.log10(Math.max(1,v)+0)/hitsMax)*(cy0-cy1);
+  const g1=el('g',{class:'grid'},svg);
+  [1,10,100,1000,10000].forEach(v=>{el('line',{x1:L,x2:W-R,y1:ys(v),y2:ys(v)},g1);txt(svg,L-6,ys(v)+4,fmt(v),{'text-anchor':'end'});});
+  txt(svg,L-6,cy1-6,'proteins hit',{'text-anchor':'end',class:'lbl'});
+  // partner track (bottom)
+  const py=T+150; txt(svg,L-6,py+4,cs.partner?`${cs.partner} rank`:'best E-value',{'text-anchor':'end',class:'lbl'});
+  el('line',{x1:L,x2:W-R,y1:py,y2:py,class:'grid'},svg).setAttribute('stroke',css('--line'));
+  // budget line
+  const need=bitsNeeded(cs.qlen); if(need<X.max){el('line',{x1:x(need),x2:x(need),y1:cy1-2,y2:py+40,stroke:css('--red'),'stroke-dasharray':'5 4','stroke-width':1.5},svg);txt(svg,x(need)+4,cy1+6,`E = 1 needs ≈ ${need.toFixed(0)} bits`,{fill:css('--red')});}
+  // axis
+  const ax=el('g',{class:'axis'},svg); el('line',{x1:L,x2:W-R,y1:H-B+4,y2:H-B+4},ax);
+  for(let b=16;b<=44;b+=4){txt(svg,x(b),H-B+18,b,{'text-anchor':'middle'});}
+  txt(svg,(L+W-R)/2,H-6,'information in one seed (bits = k × bits per position); k written above each arm',{'text-anchor':'middle',class:'lbl'});
+  let prevBits=-99, stagger=false;
+  arms.forEach(arm=>{
+    const cx=x(arm.bits); const n=arm.hits[cs.query];
+    const r=el('rect',{x:cx-5,width:10,y:ys(n),height:Math.max(0,cy0-ys(n)),fill:css('--purple-2'),opacity:.75,rx:1.5},svg);
+    if(n===0){el('line',{x1:cx-4,x2:cx+4,y1:cy0-4,y2:cy0+4,stroke:css('--grey-mark'),'stroke-width':1.5},svg);el('line',{x1:cx-4,x2:cx+4,y1:cy0+4,y2:cy0-4,stroke:css('--grey-mark'),'stroke-width':1.5},svg);}
+    // Arms closer than 1.5 bits alternate label height so the k labels do not collide.
+    stagger = (arm.bits-prevBits<1.5) ? !stagger : false; prevBits=arm.bits;
+    txt(svg,cx,cy1-(stagger?24:12),`k${arm.k}`,{'text-anchor':'middle',class:'lbl'});
+    let mark;
+    if(cs.partner){
+      const pr=partnerRank(arm,state.case,state.metric);
+      if(state.metric==='E-value'&&arm.fit!==true) mark=el('circle',{cx,cy:py,r:3.2,fill:css('--black-mark')},svg);
+      else if(pr){mark=el('circle',{cx,cy:py,r:9,fill:rampColor(rankT(pr[0])),stroke:css('--bg'),'stroke-width':1},svg);if(pr[0]<=999)txt(svg,cx,py+28,fmt(pr[0]),{'text-anchor':'middle',class:'lbl'});}
+      else {mark=el('g',{},svg);el('line',{x1:cx-5,x2:cx+5,y1:py-5,y2:py+5,stroke:css('--grey-mark'),'stroke-width':1.6},mark);el('line',{x1:cx-5,x2:cx+5,y1:py+5,y2:py-5,stroke:css('--grey-mark'),'stroke-width':1.6},mark);}
+    } else {
+      if(arm.fit!==true) mark=el('circle',{cx,cy:py,r:3.2,fill:css('--black-mark')},svg);
+      else if(arm.bhf.bestE!=null){const t=Math.max(0,Math.min(1,(Math.log10(arm.bhf.bestE)+3)/6));mark=el('circle',{cx,cy:py,r:9,fill:rampColor(t),stroke:arm.bhf.bestE<1?css('--black-mark'):css('--bg'),'stroke-width':arm.bhf.bestE<1?2.5:1},svg);if(arm.bhf.bestE<1)txt(svg,cx,py+28,`${arm.bhf.gene} E=${fmtE(arm.bhf.bestE)}`,{'text-anchor':'middle',class:'lbl'});}
+      else {mark=el('g',{},svg);el('line',{x1:cx-5,x2:cx+5,y1:py-5,y2:py+5,stroke:css('--grey-mark'),'stroke-width':1.6},mark);el('line',{x1:cx-5,x2:cx+5,y1:py+5,y2:py-5,stroke:css('--grey-mark'),'stroke-width':1.6},mark);}
+    }
+    const hit=el('rect',{x:cx-12,y:cy1-24,width:24,height:py-cy1+40,fill:'transparent'},svg);
+    bindTip(hit,()=>armTip(arm,state.case));
+  });
+  // legend
+  const lg=document.getElementById('lad-legend');
+  lg.innerHTML = cs.partner
+   ? `<span><i class="bar"></i>bar: human proteins with at least one region (log scale)</span><span><i class="ramp"></i>dot: ${cs.partner}'s rank under ${state.metric}, dark = best, number written when under 1_000</span><span><i class="x"></i>${cs.partner} not among the hits</span><span><i class="dot"></i>no E-value at this arm (fit refused)${state.metric==='E-value'?'':' (E-value panel only)'}</span><span><i class="line"></i>bits an E-value of 1 needs</span>`
+   : `<span><i class="bar"></i>bar: human proteins with at least one region (log scale)</span><span><i class="ramp"></i>dot: best E-value of any human protein, dark = lowest</span><span><i class="ring"></i>ring: below E = 1, gene written</span><span><i class="x"></i>no region at all</span><span><i class="dot"></i>no E-value at this arm (fit refused)</span><span><i class="line"></i>bits an E-value of 1 needs</span>`;
+  const s=summary(state.alpha,state.case);
+  document.getElementById('lad-cap').textContent = cs.partner
+   ? `${state.alpha}: ${A.bits_per_position} bits per position, so k=${arms[0].k} is ${arms[0].bits} bits and k=${arms[arms.length-1].k} is ${arms[arms.length-1].bits}. The crowd shrinks about tenfold every four bits; ${cs.partner} has to be in view and ahead of the crowd at the same arm.`
+   : `${state.alpha}: ${A.bits_per_position} bits per position. BHF has no known partner, so the dot is the best any human protein does at each arm; a ring marks the arms where that beats chance.`;
+  // readout
+  const rd=document.getElementById('lad-read');
+  if(cs.partner){
+    rd.innerHTML = s.seen.length
+     ? `<div class="eyebrow">${cs.partner}, best over every k and metric</div><div class="big">${fmt(s.best.r[0])} <small>of ${fmt(s.best.arm.hits[cs.query])} proteins hit</small></div><div>${s.best.m}, k=${s.best.arm.k} (${s.best.arm.bits} bits)${s.best.r[1]?`, ${s.best.r[1]} tied`:''}</div><div>${cs.partner}'s own E-value there: ${fmtE(s.best.arm.rank[cs.query]['E-value']?s.best.arm.rank[cs.query]['E-value'][2]:null)}</div><div>in view from ${Math.min(...s.seen.map(a=>a.bits))} to ${s.lastBits} bits; E = 1 needs ≈ ${bitsNeeded(cs.qlen).toFixed(0)}</div>`
+     : `<div class="eyebrow">${cs.partner}</div><div class="big">never <small>among the hits</small></div><div>${arms.length} arms from ${arms[0].bits} to ${arms[arms.length-1].bits} bits</div>`;
+  } else {
+    rd.innerHTML = s.best
+     ? `<div class="eyebrow">BHF's best human hit</div><div class="big">${s.best.bhf.gene} <small>E = ${fmtE(s.best.bhf.bestE)}</small></div><div>k=${s.best.k}, ${s.best.bits} bits</div><div>${s.below.length} of ${s.withE.length} arms with an E-value go below E = 1</div>`
+     : `<div class="eyebrow">BHF</div><div class="big">no E-value <small>at any arm of this alphabet</small></div>`;
+  }
+  // table
+  const tb=document.getElementById('lad-tbl');
+  let hd=`<tr><th class="num">k</th><th class="num">bits</th><th>fit</th><th class="num">no E-value share</th><th class="num">proteins hit</th>`;
+  hd+= cs.partner? `<th class="num">${cs.partner} rank (${state.metric})</th><th class="num">tied</th><th class="num">its ${state.metric}</th><th class="num">shared k-mers, pairwise</th>` : `<th>best hit</th><th class="num">its E-value</th>`;
+  hd+='</tr>';
+  tb.innerHTML=hd+arms.map(arm=>{
+    const pr=cs.partner?partnerRank(arm,state.case,state.metric):null;
+    let row=`<tr><td class="num">${arm.k}</td><td class="num">${arm.bits}</td><td>${arm.fit===true?'yes':'refused'}</td><td class="num">${arm.lam0==null?'–':Math.round(arm.lam0*100)+'%'}</td><td class="num">${fmt(arm.hits[cs.query])}</td>`;
+    row+= cs.partner? `<td class="num">${pr?fmt(pr[0]):'–'}</td><td class="num">${pr?pr[1]:'–'}</td><td class="num">${pr?fmtE(pr[2]):'–'}</td><td class="num">${arm.pair[cs.query]==null?'–':arm.pair[cs.query]}</td>` : `<td>${arm.bhf.gene||'–'}</td><td class="num">${arm.bhf.bestE==null?'–':fmtE(arm.bhf.bestE)}</td>`;
+    return row+'</tr>';}).join('');
+}
+
+// ---------- matrix ----------
+function drawMatrix(){
+  const cs=CASES[state.case]; const order=DATA.alphabets.map(a=>a.name);
+  const W=760,rowH=19,L=180,R=16,T=10,B=40; const groups=[[2,3],[4,8],[12,18],[20,20]];
+  const rows={};let y=T+10,gi=0;order.forEach((a,i)=>{const n=byAlpha[a].classes;const g=groups.findIndex(([lo,hi])=>n>=lo&&n<=hi);if(g!==gi){y+=rowH*0.7;gi=g;}rows[a]=y;y+=rowH;});
+  const H=y+B; const x=xScale(W,L,R);
+  const box=document.getElementById('mat');box.innerHTML='';
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,width:W,height:H},box);
+  for(let b=16;b<=44;b+=4){el('line',{x1:x(b),x2:x(b),y1:T,y2:H-B+4,class:'grid'},svg).setAttribute('stroke',css('--line'));txt(svg,x(b),H-B+18,b,{'text-anchor':'middle'});}
+  txt(svg,(L+W-R)/2,H-4,'information in one seed (bits)',{'text-anchor':'middle',class:'lbl'});
+  const need=bitsNeeded(cs.qlen); el('line',{x1:x(need),x2:x(need),y1:T,y2:H-B+4,stroke:css('--red'),'stroke-dasharray':'5 4','stroke-width':1.5},svg);
+  order.forEach(a=>{
+    const yy=rows[a]; const sel=a===state.alpha;
+    if(sel)el('rect',{x:0,y:yy-rowH/2,width:W,height:rowH,fill:css('--coral-soft'),rx:3},svg);
+    el('line',{x1:L,x2:W-R,y1:yy,y2:yy,stroke:css('--line'),'stroke-width':.6},svg);
+    const lab=txt(svg,L-8,yy+4,`${a} (${byAlpha[a].classes})`,{'text-anchor':'end',class:'lbl',style:'cursor:pointer'});
+    lab.addEventListener('click',()=>{state.alpha=a;selA.value=a;state.C=null;draw();});
+    armsOf(a).forEach(arm=>{
+      const cx=x(arm.bits);let m;
+      if(cs.partner){
+        const pr=partnerRank(arm,state.case,state.metric);
+        if(state.metric==='E-value'&&arm.fit!==true) m=el('circle',{cx,cy:yy,r:2.6,fill:css('--black-mark')},svg);
+        else if(pr) m=el('circle',{cx,cy:yy,r:6.5,fill:rampColor(rankT(pr[0])),stroke:css('--bg'),'stroke-width':.8},svg);
+        else {m=el('g',{},svg);el('line',{x1:cx-3.5,x2:cx+3.5,y1:yy-3.5,y2:yy+3.5,stroke:css('--grey-mark'),'stroke-width':1.3},m);el('line',{x1:cx-3.5,x2:cx+3.5,y1:yy+3.5,y2:yy-3.5,stroke:css('--grey-mark'),'stroke-width':1.3},m);}
+      } else {
+        if(arm.fit!==true) m=el('circle',{cx,cy:yy,r:2.6,fill:css('--black-mark')},svg);
+        else if(arm.bhf.bestE!=null){const t=Math.max(0,Math.min(1,(Math.log10(arm.bhf.bestE)+3)/6));m=el('circle',{cx,cy:yy,r:6.5,fill:rampColor(t),stroke:arm.bhf.bestE<1?css('--black-mark'):css('--bg'),'stroke-width':arm.bhf.bestE<1?2.2:.8},svg);}
+        else {m=el('g',{},svg);el('line',{x1:cx-3.5,x2:cx+3.5,y1:yy-3.5,y2:yy+3.5,stroke:css('--grey-mark'),'stroke-width':1.3},m);el('line',{x1:cx-3.5,x2:cx+3.5,y1:yy+3.5,y2:yy-3.5,stroke:css('--grey-mark'),'stroke-width':1.3},m);}
+      }
+      const hit=el('rect',{x:cx-8,y:yy-rowH/2,width:16,height:rowH,fill:'transparent'},svg);
+      bindTip(hit,()=>armTip(arm,state.case));
+      hit.addEventListener('click',()=>{state.alpha=a;selA.value=a;state.C=null;draw();});
+    });
+  });
+  const lg=document.getElementById('mat-legend');
+  lg.innerHTML = cs.partner
+   ? `<span><i class="ramp"></i>${cs.partner}'s rank under ${state.metric}, dark = best</span><span><i class="x"></i>${cs.partner} not among the hits</span><span><i class="dot"></i>no E-value (fit refused)${state.metric==='E-value'?'':', shown for the E-value metric only'}</span><span><i class="line"></i>bits an E-value of 1 needs for ${cs.query}</span><span><i class="coral"></i>selected alphabet; click a row to select</span>`
+   : `<span><i class="ramp"></i>best E-value of any human protein, dark = lowest</span><span><i class="ring"></i>ring: below E = 1</span><span><i class="x"></i>no region at all</span><span><i class="dot"></i>no E-value (fit refused)</span><span><i class="line"></i>bits an E-value of 1 needs for BHF</span>`;
+  // caption with counts
+  if(cs.partner){
+    const seenA=order.filter(a=>armsOf(a).some(arm=>METRICS.some(m=>partnerRank(arm,state.case,m))));
+    let best=null; DATA.arms.forEach(arm=>METRICS.forEach(m=>{const r=partnerRank(arm,state.case,m);if(r&&(!best||r[0]<best.r[0]))best={arm,m,r};}));
+    const maxBits=Math.max(...DATA.arms.filter(arm=>METRICS.some(m=>partnerRank(arm,state.case,m))).map(a=>a.bits));
+    document.getElementById('mat-cap').textContent=`${cs.partner} is among the hits for ${seenA.length} of 19 alphabets and never ranks better than ${fmt(best.r[0])} of ${fmt(best.arm.hits[cs.query])} (${best.arm.a}, ${best.m}, k=${best.arm.k}). Above ${maxBits} bits it is not among the hits under any alphabet. Never: ${order.filter(a=>!seenA.includes(a)).join(', ')}.`;
+  } else {
+    const withE=DATA.arms.filter(a=>a.fit===true&&a.bhf.bestE!=null), below=withE.filter(a=>a.bhf.bestE<1).sort((x,y)=>x.bhf.bestE-y.bhf.bestE);
+    document.getElementById('mat-cap').textContent=`${below.length} of ${withE.length} arms with an E-value put a human protein below E = 1: ${below.map(a=>`${a.bhf.gene} E=${fmtE(a.bhf.bestE)} (${a.a} k=${a.k})`).join('; ')}. Over ${withE.length} independent searches that is what chance produces.`;
+  }
+}
+
+// ---------- budget ----------
+function drawBudget(){
+  const cs=CASES[state.case]; const order=DATA.alphabets.map(a=>a.name);
+  const W=720,rowH=17,L=180,R=110,T=8,B=36,H=T+order.length*rowH+B; const x=xScale(W,L,R);
+  const box=document.getElementById('budget');box.innerHTML='';
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,width:W,height:H},box);
+  for(let b=16;b<=44;b+=4){el('line',{x1:x(b),x2:x(b),y1:T,y2:H-B+4,stroke:css('--line')},svg);txt(svg,x(b),H-B+18,b,{'text-anchor':'middle'});}
+  txt(svg,(L+W-R)/2,H-4,'information in one seed (bits)',{'text-anchor':'middle',class:'lbl'});
+  const need=bitsNeeded(cs.qlen); el('line',{x1:x(need),x2:x(need),y1:T,y2:H-B+4,stroke:css('--red'),'stroke-dasharray':'5 4','stroke-width':1.5},svg);
+  txt(svg,x(need)+4,T+10,`E = 1 ≈ ${need.toFixed(0)} bits`,{fill:css('--red')});
+  let gaps=[];
+  order.forEach((a,i)=>{
+    const yy=T+i*rowH+rowH/2; const sel=a===state.alpha;
+    txt(svg,L-8,yy+4,`${a} (${byAlpha[a].classes})`,{'text-anchor':'end',class:'lbl'});
+    let last=null;
+    armsOf(a).forEach(arm=>{const ok=cs.partner?METRICS.some(m=>partnerRank(arm,state.case,m)):arm.hits.BHF>0;if(ok)last=Math.max(last??0,arm.bits);});
+    if(last==null){txt(svg,x(X.min)+4,yy+4,cs.partner?'never among the hits':'no hit',{fill:css('--grey-mark')});return;}
+    gaps.push(need-last);
+    el('rect',{x:x(X.min),y:yy-6,width:x(last)-x(X.min),height:12,rx:2,fill:sel?css('--coral'):css('--purple-2'),opacity:sel?1:.8},svg);
+    txt(svg,x(last)+5,yy+4,`${last} bits, ${(need-last).toFixed(0)} short`,{fill:sel?css('--coral'):css('--ink-2')});
+  });
+  const s=summary(state.alpha,state.case);
+  const lastSel = cs.partner? s.lastBits : (armsOf(state.alpha).filter(a=>a.hits.BHF>0).reduce((m,a)=>Math.max(m,a.bits),null));
+  document.getElementById('budget-cap').textContent = cs.partner
+   ? `Every alphabet loses ${cs.partner} between ${Math.min(...gaps).toFixed(0)} and ${Math.max(...gaps).toFixed(0)} bits short of what E = 1 needs for a ${cs.qlen}-residue query. The seed alphabets differ in how far they get, not in whether they get there.`
+   : `For BHF the bar is the highest seed information at which any human protein is hit at all. Hits go on past the budget line, and those are the arms where a chance region can score E ≈ 1.`;
+  document.getElementById('budget-read').innerHTML = `<div class="eyebrow">${state.alpha}, ${cs.label}</div><div class="big">${lastSel==null?'–':lastSel} <small>bits, last seen</small></div><div>E = 1 for ${cs.query} (${cs.qlen} aa) needs log2(${cs.qlen} × ${fmt(N_RES)}) ≈ <b>${need.toFixed(1)} bits</b></div><div>${lastSel==null?'':`gap: ${(need-lastSel).toFixed(0)} bits, about ${((need-lastSel)/byAlpha[state.alpha].bits_per_position).toFixed(0)} more matching positions`}</div>`;
+}
+
+// ---------- lambda / mechanism ----------
+function drawLam(){
+  const A=byAlpha[state.alpha]; const arms=armsOf(state.alpha);
+  if(state.C==null){state.C=A.penalty;slC.value=A.penalty;}
+  const C=state.C, p=A.p_match, lim=C/(1+C), drift=p-C*(1-p), minC=p/(1-p);
+  document.getElementById('in-c-val').innerHTML=`C = <b>${C.toFixed(2)}</b> (kappa-optimal for ${state.alpha}: ${A.penalty})`;
+  const W=720,H=230,L=56,R=16; const x=xScale(W,L,R);
+  const box=document.getElementById('lam');box.innerHTML='';
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,width:W,height:H},box);
+  // left: share lambda0 per arm (bars)
+  const y0=110,y1=20; const ys=v=>y0-v*(y0-y1);
+  [0,.5,1].forEach(v=>{el('line',{x1:L,x2:W*0.58,y1:ys(v),y2:ys(v),stroke:css('--line')},svg);txt(svg,L-6,ys(v)+4,`${Math.round(v*100)}%`,{'text-anchor':'end'});});
+  const xl=b=>L+(b-X.min)/(X.max-X.min)*(W*0.58-L);
+  for(let b=16;b<=44;b+=8)txt(svg,xl(b),y0+16,b,{'text-anchor':'middle'});
+  txt(svg,(L+W*0.58)/2,y0+32,'bits per seed',{'text-anchor':'middle',class:'lbl'});
+  txt(svg,L,y1-6,`share of regions with no E-value, ${state.alpha}`,{class:'lbl'});
+  arms.forEach(arm=>{const cx=xl(arm.bits);if(arm.lam0==null){el('line',{x1:cx-4,x2:cx+4,y1:y0-4,y2:y0+4,stroke:css('--grey-mark'),'stroke-width':1.4},svg);el('line',{x1:cx-4,x2:cx+4,y1:y0+4,y2:y0-4,stroke:css('--grey-mark'),'stroke-width':1.4},svg);return;}
+    const r=el('rect',{x:cx-5,width:10,y:ys(arm.lam0),height:y0-ys(arm.lam0),fill:css('--purple-2'),rx:1.5},svg);bindTip(r,()=>`<b>${arm.a}</b> k=${arm.k} · ${arm.bits} bits<br>${Math.round(arm.lam0*100)}% of regions have no E-value<br>fit: ${arm.fit===true?'yes':'refused'}`);});
+  // right: identity line 0..1
+  const ix0=W*0.66, ix1=W-R, iy=60; const xi=v=>ix0+v*(ix1-ix0);
+  txt(svg,ix0,y1-6,'identity of a region’s two spans',{class:'lbl'});
+  el('line',{x1:ix0,x2:ix1,y1:iy,y2:iy,stroke:css('--ink-3'),'stroke-width':2},svg);
+  [0,.25,.5,.75,1].forEach(v=>{el('line',{x1:xi(v),x2:xi(v),y1:iy-4,y2:iy+4,stroke:css('--ink-3')},svg);txt(svg,xi(v),iy+18,`${Math.round(v*100)}%`,{'text-anchor':'middle'});});
+  // no-E region
+  el('rect',{x:xi(lim),y:iy-10,width:Math.max(0,xi(1)-xi(lim)),height:20,fill:css('--black-mark'),opacity:.18},svg);
+  el('line',{x1:xi(lim),x2:xi(lim),y1:iy-16,y2:iy+8,stroke:css('--black-mark'),'stroke-width':2},svg);
+  txt(svg,xi(lim),iy-22,`limit ${Math.round(lim*100)}%: no E-value above`,{'text-anchor':lim>.6?'end':'start',class:'lbl'});
+  el('circle',{cx:xi(p),cy:iy,r:6,fill:css('--coral')},svg);
+  txt(svg,xi(p),iy+34,`chance identity p = ${Math.round(p*100)}%`,{'text-anchor':'middle',fill:css('--coral')});
+  // drift readout in svg
+  txt(svg,ix0,iy+64,`chance drift p − C(1−p) = ${drift>=0?'+':''}${drift.toFixed(3)}`,{class:'lbl',fill:drift>=0?css('--red'):css('--ink')});
+  txt(svg,ix0,iy+82,drift>=0?'at or above 0: no lambda can exist, every region loses its E-value':`below 0: a lambda exists; C must stay above ${minC.toFixed(2)}`,{fill:drift>=0?css('--red'):css('--ink-2')});
+  const meanLam=arms.filter(a=>a.lam0!=null).reduce((s,a)=>s+a.lam0,0)/Math.max(1,arms.filter(a=>a.lam0!=null).length);
+  document.getElementById('lam-read').innerHTML=`<div class="eyebrow">${state.alpha} at its kappa-optimal C = ${A.penalty}</div><div class="big">${Math.round(meanLam*100)}% <small>of regions have no E-value (mean over arms)</small></div><div>identity limit ${Math.round(A.penalty/(1+A.penalty)*100)}%; chance identity p = ${Math.round(p*100)}%; drift ${(p-A.penalty*(1-p))>=0?'+':''}${(p-A.penalty*(1-p)).toFixed(3)}</div><div>${(p-A.penalty*(1-p))>=0?'<span class="pill">no lambda at any k</span>':`lowest C with a lambda: ${minC.toFixed(2)}`}</div>`;
+}
+
+// ---------- alphabet table ----------
+function drawAlphaTable(){
+  const tb=document.getElementById('alpha-tbl');
+  tb.innerHTML=`<tr><th>alphabet</th><th class="num">letters</th><th>classes</th><th>source</th><th class="num">bits / position</th><th class="num">chance identity p</th><th class="num">kappa penalty C</th><th class="num">identity limit</th><th class="num">chance drift</th></tr>`+
+   DATA.alphabets.map(a=>`<tr class="click${a.name===state.alpha?' sel':''}" data-a="${a.name}"><td class="k">${a.name}</td><td class="num">${a.classes}</td><td class="k" style="font-size:.8em">${a.clusters}</td><td>${a.source}</td><td class="num">${a.bits_per_position.toFixed(2)}</td><td class="num">${a.p_match==null?'–':a.p_match.toFixed(2)}</td><td class="num">${a.penalty}</td><td class="num">${Math.round(a.penalty/(1+a.penalty)*100)}%</td><td class="num" style="color:${a.chance_drift>=0?'var(--red)':'inherit'}">${a.chance_drift==null?'–':(a.chance_drift>=0?'+':'')+a.chance_drift.toFixed(3)}</td></tr>`).join('');
+  tb.querySelectorAll('tr.click').forEach(tr=>tr.addEventListener('click',()=>{state.alpha=tr.dataset.a;selA.value=state.alpha;state.C=null;draw();document.getElementById('s2').scrollIntoView({behavior:'smooth'});}));
+}
+
+// ---------- all five metrics ----------
+const SHAPES={"E-value":"circle","mean IDF":"square","tf-idf":"triangle","enrichment":"diamond","Poisson p-value":"plus"};
+function shape(parent,kind,cx,cy,r,color,filled=true){
+  const f=filled?color:'none', st={stroke:color,'stroke-width':1.6};
+  if(kind==='circle') return el('circle',Object.assign({cx,cy,r,fill:f},st),parent);
+  if(kind==='square') return el('rect',Object.assign({x:cx-r*.9,y:cy-r*.9,width:r*1.8,height:r*1.8,fill:f},st),parent);
+  if(kind==='triangle') return el('polygon',Object.assign({points:`${cx},${cy-r*1.1} ${cx+r},${cy+r*.8} ${cx-r},${cy+r*.8}`,fill:f},st),parent);
+  if(kind==='diamond') return el('polygon',Object.assign({points:`${cx},${cy-r*1.2} ${cx+r*1.1},${cy} ${cx},${cy+r*1.2} ${cx-r*1.1},${cy}`,fill:f},st),parent);
+  const g=el('g',{},parent);
+  el('line',{x1:cx-r,x2:cx+r,y1:cy,y2:cy,stroke:color,'stroke-width':2.2},g);
+  el('line',{x1:cx,x2:cx,y1:cy-r,y2:cy+r,stroke:color,'stroke-width':2.2},g);
+  return g;
+}
+function shapeIcon(kind,color){const s=document.createElementNS(NS,'svg');s.setAttribute('width',16);s.setAttribute('height',16);s.setAttribute('viewBox','0 0 16 16');shape(s,kind,8,8,5,color);return s.outerHTML;}
+function drawMetrics(){
+  const cs=CASES[state.case], arms=armsOf(state.alpha);
+  document.getElementById('s3-alpha').textContent=state.alpha;
+  const box=document.getElementById('met');box.innerHTML='';
+  const lg=document.getElementById('met-legend'), rd=document.getElementById('met-read'), grid=document.getElementById('met-grid');
+  if(!cs.partner){
+    lg.innerHTML='';grid.innerHTML='';
+    document.getElementById('met-cap').textContent='';
+    rd.innerHTML=`<div class="eyebrow">the application</div><div>BHF has no known partner, so there is no rank to plot. Switch the test case to the gold standard or the reach; section 2 shows what BHF gets.</div>`;
+    return;
+  }
+  const ink=css('--ink-2'), hi=css('--coral');
+  lg.innerHTML=METRICS.map(m=>`<span>${shapeIcon(SHAPES[m],m===state.metric?hi:ink)}${m}${m===state.metric?' (your ranking metric)':''}</span>`).join('')+
+    `<span><i class="bar" style="background:var(--line);height:6px"></i>last place: the number of human proteins hit</span>`;
+  const W=1080,H=380,L=72,R=170,T=16,B=46,YMAX=20000;
+  const x=xScale(W,L,R), y=r=>T+Math.log10(Math.max(1,r))/Math.log10(YMAX)*(H-B-T);
+  const svg=el('svg',{viewBox:`0 0 ${W} ${H}`,width:W,height:H},box);
+  [1,10,100,1000,10000].forEach(v=>{el('line',{x1:L,x2:W-R,y1:y(v),y2:y(v),stroke:css('--line')},svg);txt(svg,L-8,y(v)+4,fmt(v),{'text-anchor':'end'});});
+  for(let b=16;b<=44;b+=4){txt(svg,x(b),H-B+18,b,{'text-anchor':'middle'});}
+  txt(svg,(L+W-R)/2,H-8,'information in one seed (bits = k × bits per position)',{'text-anchor':'middle',class:'lbl'});
+  const yl=txt(svg,14,(T+H-B)/2,`rank of ${cs.partner} (1 = best, log scale)`,{'text-anchor':'middle',class:'lbl',transform:`rotate(-90 14 ${(T+H-B)/2})`});
+  // last place, drawn first as a wide pale line
+  const lp=arms.filter(a=>a.hits[cs.query]>0);
+  if(lp.length){el('polyline',{points:lp.map(a=>`${x(a.bits)},${y(a.hits[cs.query])}`).join(' '),fill:'none',stroke:css('--line'),'stroke-width':9,'stroke-linecap':'round','stroke-linejoin':'round'},svg);}
+  // one line per metric; selected metric drawn last so it sits on top
+  const order=METRICS.filter(m=>m!==state.metric).concat([state.metric]);
+  const ends=[];
+  order.forEach(m=>{
+    const col=m===state.metric?hi:ink, lw=m===state.metric?2.4:1.3;
+    const pts=arms.map(a=>({a,r:partnerRank(a,state.case,m)}));
+    for(let i=1;i<pts.length;i++){const p0=pts[i-1],p1=pts[i];if(p0.r&&p1.r)el('line',{x1:x(p0.a.bits),y1:y(p0.r[0]),x2:x(p1.a.bits),y2:y(p1.r[0]),stroke:col,'stroke-width':lw,'stroke-dasharray':m===state.metric?'':'4 3'},svg);}
+    let last=null;
+    pts.forEach(p=>{if(!p.r)return;const node=shape(svg,SHAPES[m],x(p.a.bits),y(p.r[0]),m===state.metric?5.5:4.5,col,m===state.metric);
+      const hit=el('circle',{cx:x(p.a.bits),cy:y(p.r[0]),r:9,fill:'transparent'},svg);
+      bindTip(hit,()=>`<b>${m}</b> · ${p.a.a} k=${p.a.k} (${p.a.bits} bits)<br>${cs.partner} rank <b>${fmt(p.r[0])}</b> of ${fmt(p.a.hits[cs.query])} hit${p.r[1]?` (${p.r[1]} tied)`:''}<br>its ${m}: ${fmtE(p.r[2])}`);
+      last=p;});
+    if(last)ends.push({m,col,y:y(last.r[0]),y0:y(last.r[0]),x:x(last.a.bits)});
+  });
+  // direct labels in the right margin, pushed apart so they never overlap
+  ends.sort((a,b)=>a.y-b.y);for(let i=1;i<ends.length;i++)if(ends[i].y-ends[i-1].y<14)ends[i].y=ends[i-1].y+14;
+  ends.forEach(e=>{const lx=W-R+14;el('line',{x1:e.x+7,x2:lx-3,y1:e.y0,y2:e.y,stroke:e.col,'stroke-width':.8,opacity:.6},svg);txt(svg,lx,e.y+4,e.m,{fill:e.col,'font-weight':e.m===state.metric?600:400});});
+  // readout: best rank per metric
+  const bestBy=METRICS.map(m=>{let b=null;arms.forEach(a=>{const r=partnerRank(a,state.case,m);if(r&&(!b||r[0]<b.r[0]))b={a,r};});return {m,b};});
+  const found=bestBy.filter(x=>x.b);
+  rd.innerHTML=`<div class="eyebrow">${cs.partner}, best rank per metric, ${state.alpha}</div>`+
+    (found.length? `<table><tr><th>metric</th><th class="num">rank</th><th class="num">of</th><th class="num">k</th></tr>`+
+      bestBy.map(({m,b})=>`<tr${m===state.metric?' class="sel"':''}><td>${m}</td><td class="num">${b?fmt(b.r[0]):'–'}</td><td class="num">${b?fmt(b.a.hits[cs.query]):''}</td><td class="num">${b?b.a.k:''}</td></tr>`).join('')+`</table>`
+      : `<div>${cs.partner} is never among the hits under any metric.</div>`);
+  const spread=found.length?[Math.min(...found.map(x=>x.b.r[0])),Math.max(...found.map(x=>x.b.r[0]))]:null;
+  document.getElementById('met-cap').textContent = found.length
+    ? `${state.alpha}: the five metrics put ${cs.partner} between rank ${fmt(spread[0])} and ${fmt(spread[1])} at their best. They reorder the crowd without lifting ${cs.partner} out of it, because at every arm where ${cs.partner} is in view, thousands of other proteins are too.`
+    : `${state.alpha}: ${cs.partner} has no region at any arm, so no metric can rank it.`;
+  // grid: 19 alphabets x 5 metrics
+  let g=`<tr><th>alphabet</th>${METRICS.map(m=>`<th class="num">${m}</th>`).join('')}</tr>`;
+  DATA.alphabets.forEach(A=>{
+    const bs=METRICS.map(m=>{let b=null;armsOf(A.name).forEach(a=>{const r=partnerRank(a,state.case,m);if(r&&(!b||r[0]<b.r[0]))b={a,r};});return b;});
+    const min=Math.min(...bs.filter(Boolean).map(b=>b.r[0]));
+    g+=`<tr class="click${A.name===state.alpha?' sel':''}" data-a="${A.name}"><td class="k">${A.name}</td>`+bs.map(b=>`<td class="num"${b&&b.r[0]===min?' style="font-weight:600"':''}>${b?`${fmt(b.r[0])} <span style="color:var(--ink-3)">k${b.a.k}</span>`:'–'}</td>`).join('')+'</tr>';
+  });
+  grid.innerHTML=g;
+  grid.querySelectorAll('tr.click').forEach(tr=>tr.addEventListener('click',()=>{state.alpha=tr.dataset.a;selA.value=state.alpha;state.C=null;draw();}));
+}
+
+function draw(){drawHeadline();drawLadder();drawMetrics();drawMatrix();drawBudget();drawLam();drawAlphaTable();}
+draw();
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change',draw);
+new MutationObserver(draw).observe(document.documentElement,{attributes:true,attributeFilter:['data-theme']});
+})();
+</script>
+</body>
+</html>
