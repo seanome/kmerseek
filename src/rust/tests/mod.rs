@@ -1,3 +1,4 @@
+mod test_ambiguous_residues;
 mod test_cli;
 pub mod test_fixtures;
 mod test_hp_encoding;

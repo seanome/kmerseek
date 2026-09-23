@@ -147,6 +147,9 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "containment_target_in_query": containment,
         "f_weighted_target_in_query": 1.0,
         "query_tfidf": 1.0,
+        # Folddisco's coverage score: IDF sum over the shared k-mers divided by
+        # sqrt(target length). One k-mer with IDF 3.2 in a 25-residue target.
+        "coverage_score": 0.64,
         "mean_matched_kmer_freq": 0.1,
         "sum_matched_kmer_freq": 0.5,
         "query_expected_shared_kmers": 1.0,
@@ -170,6 +173,11 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_poisson_score": region_poisson_score,
         "region_tail_probability": region_tail_probability,
         "region_enrichment": region_enrichment,
+        # One shared k-mer (region_n_shared_kmers above), so the IDF sum equals its mean.
+        "region_tfidf": 3.2,
+        "region_mean_idf": 3.2,
+        # Exact region (no --extend-mismatch-penalty), so nothing inside it disagrees.
+        "region_n_mismatches": 0,
     }
 
 

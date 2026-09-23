@@ -10,7 +10,9 @@ use serde::{Deserialize, Serialize};
 
 use statrs::distribution::{DiscreteCDF, Poisson};
 
+use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
+use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -21,6 +23,10 @@ pub const DEFAULT_PROGRESS_INTERVAL: u32 = 1000;
 
 /// Default batch size for FASTA processing (process N sequences per batch)
 pub const DEFAULT_BATCH_SIZE: usize = 1000;
+
+/// Exponent of the target-length penalty in `SearchResult::coverage_score`: the score is
+/// divided by `target_length^COVERAGE_LENGTH_EXPONENT`. Folddisco's default, 0.5.
+pub const COVERAGE_LENGTH_EXPONENT: f64 = 0.5;
 
 /// Result-level filters applied while a search is running, so that results failing the
 /// filters are never allocated into the results `Vec` in the first place (as opposed to
@@ -60,6 +66,47 @@ impl Default for SearchFilters {
             min_region_score: f64::NEG_INFINITY,
         }
     }
+}
+
+/// Score subtracted per encoded position where query and target disagree, unless
+/// `--extend-mismatch-penalty` sets another. Every benchmark uses 2.
+pub const DEFAULT_MISMATCH_PENALTY: f64 = 2.0;
+
+/// The give-up margin unless `--extend-xdrop` sets another. With a penalty of 2, four
+/// disagreeing positions in a row cost 8 and end the extension.
+pub const DEFAULT_XDROP: f64 = 8.0;
+
+/// The two numbers that decide how a region grows past its seed and what its score is.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExtensionScoring {
+    /// Score subtracted per disagreeing encoded position; each agreeing position adds 1.
+    /// Must be positive.
+    pub mismatch_penalty: f64,
+    /// The give-up margin (BLAST's X-drop): extension stops once the running score has
+    /// fallen this far below its best so far.
+    pub xdrop: f64,
+}
+
+impl Default for ExtensionScoring {
+    fn default() -> Self {
+        Self { mismatch_penalty: DEFAULT_MISMATCH_PENALTY, xdrop: DEFAULT_XDROP }
+    }
+}
+
+/// How far past its exact seed a matched region may grow, and at what cost per mismatch.
+///
+/// A region from `find_matched_regions` is a maximal exact run in the encoded alphabet: one
+/// class flip ends it. Between remote homologs the HP pattern is conserved per column far
+/// better than any 23-residue stretch of it is conserved exactly (2024-kmerseek-analysis
+/// notebooks 230 and 232), so an exact run is a seed, not the match. `extend_regions` walks
+/// outward from each seed along the stored encoded sequences, +1 per agreeing position and
+/// `-mismatch_penalty` per disagreeing one, and stops when the running score has fallen
+/// `xdrop` below its best. Two seeds on one diagonal whose extensions meet become one
+/// region.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ExtensionParams {
+    /// Mismatch penalty and give-up margin.
+    pub scoring: ExtensionScoring,
 }
 
 impl SearchFilters {
@@ -105,6 +152,7 @@ pub struct SearchResultCsv {
     pub containment_target_in_query: f64,
     pub f_weighted_target_in_query: f64,
     pub query_tfidf: f64,
+    pub coverage_score: f64,
     pub mean_matched_kmer_freq: f64,
     pub sum_matched_kmer_freq: f64,
     pub query_expected_shared_kmers: f64,
@@ -145,6 +193,9 @@ pub struct SearchResultCsv {
     pub region_tfidf: f64,
     /// region_tfidf divided by region_n_shared_kmers (see MatchedRegion::mean_idf).
     pub region_mean_idf: f64,
+    /// Encoded positions inside the region where query and target disagree. Zero unless the
+    /// search ran with `--extend-mismatch-penalty`.
+    pub region_n_mismatches: u32,
 }
 
 impl SearchResultCsv {
@@ -186,6 +237,7 @@ impl SearchResultCsv {
             containment_target_in_query: result.containment_target_in_query,
             f_weighted_target_in_query: result.f_weighted_target_in_query,
             query_tfidf: result.query_tfidf,
+            coverage_score: result.coverage_score,
             mean_matched_kmer_freq: result.mean_matched_kmer_freq,
             sum_matched_kmer_freq: result.sum_matched_kmer_freq,
             query_expected_shared_kmers: result.query_expected_shared_kmers,
@@ -211,6 +263,7 @@ impl SearchResultCsv {
             region_enrichment: region.enrichment,
             region_tfidf: region.tfidf,
             region_mean_idf: region.mean_idf,
+            region_n_mismatches: region.n_mismatches,
         }
     }
 }
@@ -268,6 +321,14 @@ pub struct SearchResult {
 
     /// TF-IDF score for the query signature against the target database
     pub query_tfidf: f64,
+
+    /// Folddisco's coverage score for this hit (Kim, Mirdita and Steinegger, 2025):
+    /// the sum of `ln(N / freq_target(h))` over the k-mers shared with the target, times
+    /// `L^-0.5`, where L is the target length in residues. The sum rewards rare shared
+    /// k-mers; the length term stops long targets that share many k-mers by chance from
+    /// ranking high. Unlike `query_tfidf`, this changes from target to target. 0.0 without
+    /// database context or when the target stores no sequence.
+    pub coverage_score: f64,
 
     /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
     /// Higher = matched k-mers are common in the target DB (less discriminative).
@@ -359,12 +420,18 @@ pub struct MatchedRegion {
     pub length: u32,
 
     /// Number of k-mers in the sketch that fall inside this region and are shared with the
-    /// target. At scaled=1 every k-mer is in the sketch, so this is `length - ksize + 1`.
-    /// At scaled>1 only sampled k-mers are, so it is smaller: the region spans the whole
-    /// exact match, but only the sampled k-mers count as observations. The Poisson test
-    /// compares this against `expected_shared_kmers`, which is summed over the same sampled
-    /// k-mers, so the two stay on the same footing.
+    /// target. At scaled=1 every k-mer is in the sketch, so for a region as
+    /// `find_matched_regions` emits it this is `length - ksize + 1`. At scaled>1 only
+    /// sampled k-mers are, so it is smaller: the region spans the whole exact match, but
+    /// only the sampled k-mers count as observations. Extension (see `extend_regions`) adds
+    /// residues that were not shared k-mers, so on an extended region it is smaller than
+    /// that formula too. The Poisson test compares this against `expected_shared_kmers`,
+    /// which is summed over the same sampled k-mers, so the two stay on the same footing.
     pub n_shared: u32,
+
+    /// Encoded positions inside the region where query and target disagree. Zero unless the
+    /// region was extended with a mismatch penalty.
+    pub n_mismatches: u32,
 
     /// Expected number of shared k-mers by chance within this region: for every query k-mer
     /// whose start position falls inside this region, sum how often that k-mer's hash appears
@@ -516,6 +583,35 @@ fn region_expectation(prefix: &[f64], start: u32, end: u32, ksize: usize) -> f64
     prefix[window_end] - prefix[window_start]
 }
 
+impl MatchedRegion {
+    /// A region between `query_name` and `target_name` before it is compared against the
+    /// database: every score field at its "no evidence" value and every span field empty,
+    /// for the caller to fill with struct update syntax. The one place those defaults live.
+    fn unscored(query_name: &str, target_name: &str, moltype: &MolType) -> Self {
+        Self {
+            query_name: query_name.to_string(),
+            start: 0,
+            end: 0,
+            subseq: String::new(),
+            target_name: target_name.to_string(),
+            target_start: 0,
+            target_end: 0,
+            target_subseq: String::new(),
+            moltype: moltype.clone(),
+            moltype_seq: String::new(),
+            length: 0,
+            n_shared: 0,
+            n_mismatches: 0,
+            expected_shared_kmers: 0.0,
+            poisson_score: 0.0,
+            tail_probability: 1.0,
+            enrichment: 0.0,
+            tfidf: 0.0,
+            mean_idf: 0.0,
+        }
+    }
+}
+
 impl Display for MatchedRegion {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "Query Name: {}", self.query_name)?;
@@ -603,9 +699,16 @@ pub struct ProteinSearcher {
     /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
     /// on every candidate pair.
     db_n_kmers: usize,
+    /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
+    extension: Option<ExtensionParams>,
 }
 
 impl ProteinSearcher {
+    /// Extend every matched region past its exact seed with these parameters. Off by default.
+    pub fn set_extension(&mut self, params: Option<ExtensionParams>) {
+        self.extension = params;
+    }
+
     /// Create a searcher over an index built in this process.
     ///
     /// Finalizes the index so its inverted index is on disk, then reads the search
@@ -642,6 +745,7 @@ impl ProteinSearcher {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
+            extension: None,
         }
     }
 
@@ -1004,6 +1108,15 @@ impl ProteinSearcher {
         let query_enrichment =
             fold_enrichment(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
+        if let Some(params) = self.extension {
+            result.matched_regions = extend_regions(
+                std::mem::take(&mut result.matched_regions),
+                query.sketch,
+                target,
+                params,
+            );
+        }
+
         // Rescope the same Poisson test to each matched region individually, so a tight local
         // match doesn't get diluted by the whole protein's k-mer count.
         let ksize = query.sketch.protein_ksize() as usize;
@@ -1014,8 +1127,8 @@ impl ProteinSearcher {
             let lambda =
                 region_expectation(&query.position_prefix, region.start, region.end, ksize);
             // find_matched_regions never emits a region shorter than ksize or with no
-            // shared k-mer in it. debug_assert catches either loudly if that invariant is
-            // ever broken.
+            // shared k-mer in it, and extension only grows a region. debug_assert catches
+            // either loudly if that invariant is ever broken.
             debug_assert!(
                 region.length >= ksize as u32 && region.n_shared >= 1,
                 "bad region: length={}, n_shared={}, ksize={ksize}",
@@ -1067,6 +1180,7 @@ impl ProteinSearcher {
         };
 
         result.query_tfidf = query.tfidf;
+        result.coverage_score = self.calculate_coverage_score(&intersection, target);
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.query_expected_shared_kmers = query_expected_shared_kmers;
@@ -1138,6 +1252,21 @@ impl ProteinSearcher {
     /// Sum of target-DB frequencies for matched k-mers: Σ freq_target[h]/N over intersection.
     /// Takes the pre-computed intersection set directly.
     /// Higher = matched k-mers are collectively more common in the target DB.
+    /// Folddisco's coverage score: `sum of IDF over the shared k-mers * L^-alpha`, with
+    /// `alpha = COVERAGE_LENGTH_EXPONENT` and L the target length in residues. See
+    /// `SearchResult::coverage_score`. A hash the database has never seen contributes 0,
+    /// matching `calculate_tfidf`.
+    fn calculate_coverage_score(&self, intersection: &HashSet<u64>, target: &ProteinSketch) -> f64 {
+        let Some(target_length) = target.get_raw_sequence().map(str::len) else {
+            return 0.0;
+        };
+        let idf_sum: f64 = intersection
+            .iter()
+            .map(|hashval| self.stats.idf.get(hashval).copied().unwrap_or(0.0))
+            .sum();
+        idf_sum * (target_length as f64).powf(-COVERAGE_LENGTH_EXPONENT)
+    }
+
     fn calculate_sum_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
         intersection
@@ -1292,6 +1421,7 @@ fn calculate_similarity_from_precomputed(
         containment_target_in_query,
         f_weighted_target_in_query,
         query_tfidf: 0.0,                 // requires database context
+        coverage_score: 0.0,              // requires database context
         mean_matched_kmer_freq: 0.0,      // requires database context
         sum_matched_kmer_freq: 0.0,       // requires database context
         query_expected_shared_kmers: 0.0, // requires database context
@@ -1389,21 +1519,39 @@ fn shared_position_pairs(
     query_target_pairs
 }
 
+/// Whether two stored encoded residues agree under `moltype`: the same class, or an
+/// ambiguous letter on either side that can encode to the other side's class. A protein20
+/// sketch stores no encoded sequence, so its raw residues are compared, and there an
+/// ambiguous letter agrees with either residue it stands for.
+fn residues_agree(moltype: &str) -> impl Fn(u8, u8) -> bool {
+    let encode = residue_encoder(moltype);
+    move |query, target| encoded_residues_agree(query, target, &encode)
+}
+
+/// Whether two stored encoded regions of equal length agree residue by residue.
+fn encoded_regions_agree(query: &str, target: &str, agree: &impl Fn(u8, u8) -> bool) -> bool {
+    query.len() == target.len() && query.bytes().zip(target.bytes()).all(|(q, t)| agree(q, t))
+}
+
 /// The maximal stretch of agreeing encoded residues on one diagonal through the seed k-mer
 /// at (`qpos`, `tpos`), as `[start, end)` in query coordinates. `None` when the seed window
-/// itself disagrees, which happens when two k-mers share a hash only through an ambiguous
-/// residue's expansion; the dense path drops those regions the same way.
+/// itself disagrees, which can only be a hash collision now that an ambiguous residue
+/// agrees with either class it stands for.
 fn exact_run_around(
     query: &[u8],
     target: &[u8],
     qpos: usize,
     tpos: usize,
     ksize: usize,
+    residues_agree: &impl Fn(u8, u8) -> bool,
 ) -> Option<(usize, usize)> {
     let offset = tpos as isize - qpos as isize;
     let agree = |i: usize| {
         let j = i as isize + offset;
-        i < query.len() && j >= 0 && (j as usize) < target.len() && query[i] == target[j as usize]
+        i < query.len()
+            && j >= 0
+            && (j as usize) < target.len()
+            && residues_agree(query[i], target[j as usize])
     };
     if !(qpos..qpos + ksize).all(agree) {
         return None;
@@ -1463,6 +1611,7 @@ fn find_sampled_regions(
     let query_name = query_sketch.signature().name.clone();
     let target_name = target_sketch.signature().name.clone();
     let moltype = query_sketch.moltype().clone();
+    let agree = residues_agree(&moltype.to_string());
 
     // Seeds grouped by diagonal (target start minus query start), sorted within each.
     let mut seeds_by_diagonal: BTreeMap<isize, Vec<usize>> = BTreeMap::new();
@@ -1487,6 +1636,7 @@ fn find_sampled_regions(
                 qpos,
                 tpos,
                 ksize,
+                &agree,
             ) else {
                 continue;
             };
@@ -1497,15 +1647,12 @@ fn find_sampled_regions(
             let target_start = (start as isize + diagonal) as usize;
             let target_end = target_start + (end - start);
             regions.push(MatchedRegion {
-                query_name: query_name.clone(),
                 start: start as u32,
                 end: end as u32,
                 subseq: query_raw[start..end].to_string(),
-                target_name: target_name.clone(),
                 target_start: target_start as u32,
                 target_end: target_end as u32,
                 target_subseq: target_raw[target_start..target_end].to_string(),
-                moltype: moltype.clone(),
                 moltype_seq: if has_encoded {
                     target_encoded[target_start..target_end].to_string()
                 } else {
@@ -1513,12 +1660,7 @@ fn find_sampled_regions(
                 },
                 length: (end - start) as u32,
                 n_shared: n_shared as u32,
-                expected_shared_kmers: 0.0,
-                poisson_score: 0.0,
-                tail_probability: 1.0,
-                enrichment: 0.0,
-                tfidf: 0.0,
-                mean_idf: 0.0,
+                ..MatchedRegion::unscored(&query_name, &target_name, &moltype)
             });
         }
     }
@@ -1551,6 +1693,7 @@ pub fn find_matched_regions(
     // Ensure that both query and target have the same moltypes
     assert_eq!(query_sketch.moltype(), target_sketch.moltype());
     let moltype = query_sketch.moltype().clone();
+    let agree = residues_agree(&moltype.to_string());
 
     // A sampled sketch has too few adjacent shared k-mers for the consecutive-position rule
     // below; see find_sampled_regions.
@@ -1639,25 +1782,17 @@ pub fn find_matched_regions(
                     // We reuse the already-extracted subsequences to avoid duplicate bounds checking.
                     // Note: query_subseq and target_subseq are already defined above, so we use them directly.
 
+                    // No encoded sequence stored, so `moltype_seq` stays empty.
                     consecutive_regions.push(MatchedRegion {
-                        query_name: query_name.clone(),
                         start: query_start_pos as u32,
                         end: query_end_pos as u32,
                         subseq: query_subseq.to_string(),
-                        target_name: target_name.clone(),
                         target_start: target_start_pos as u32,
                         target_end: target_end_pos as u32,
                         target_subseq: target_subseq.to_string(),
-                        moltype: moltype.clone(),
-                        moltype_seq: String::new(), // Empty since we don't have encoded sequence
                         length: (query_end_pos - query_start_pos) as u32,
                         n_shared: consecutive_count as u32,
-                        expected_shared_kmers: 0.0,
-                        poisson_score: 0.0,
-                        tail_probability: 1.0,
-                        enrichment: 0.0,
-                        tfidf: 0.0,
-                        mean_idf: 0.0,
+                        ..MatchedRegion::unscored(&query_name, &target_name, &moltype)
                     });
 
                     i = j;
@@ -1677,31 +1812,25 @@ pub fn find_matched_regions(
         let query_moltype_seq = &query_moltype_sequence[query_start_pos..query_end_pos];
         let target_moltype_seq = &target_moltype_sequence[target_start_pos..target_end_pos];
 
-        // Validate that moltype sequences match (they should since they share the same k-mers).
-        if query_moltype_seq != target_moltype_seq {
+        // The two encoded regions must agree residue by residue, with an ambiguous letter
+        // agreeing with either class it stands for. They share the same k-mers, so a
+        // disagreement can only be a hash collision.
+        if !encoded_regions_agree(query_moltype_seq, target_moltype_seq, &agree) {
             i = j;
             continue;
         }
 
         consecutive_regions.push(MatchedRegion {
-            query_name: query_name.clone(),
             start: query_start_pos as u32,
             end: query_end_pos as u32,
             subseq: query_subseq.to_string(),
-            target_name: target_name.clone(),
             target_start: target_start_pos as u32,
             target_end: target_end_pos as u32,
             target_subseq: target_subseq.to_string(),
-            moltype: moltype.clone(),
             moltype_seq: target_moltype_seq.to_string(),
             length: (query_end_pos - query_start_pos) as u32,
             n_shared: consecutive_count as u32,
-            expected_shared_kmers: 0.0,
-            poisson_score: 0.0,
-            tail_probability: 1.0,
-            enrichment: 0.0,
-            tfidf: 0.0,
-            mean_idf: 0.0,
+            ..MatchedRegion::unscored(&query_name, &target_name, &moltype)
         });
 
         i = j;
@@ -1719,6 +1848,111 @@ pub fn find_matched_regions(
     consecutive_regions.sort_by_key(|a| a.start);
 
     consecutive_regions
+}
+
+/// Walk one direction from a seed edge along the encoded sequences until the give-up
+/// margin ends it.
+///
+/// `positions` yields (query index, target index) pairs stepping away from the seed. Returns
+/// how many positions the best-scoring extension covers. The score starts at 0 on the seed
+/// edge, so a side whose score never rises above 0 keeps nothing, however far the walk went
+/// before giving up. `extend_regions` calls this once per side; `docs/images/xdrop_walk_bcl2_ced9_bh1.png`
+/// shows both walks on one seed.
+fn xdrop_walk(
+    q: &[u8],
+    t: &[u8],
+    positions: impl Iterator<Item = (usize, usize)>,
+    params: ExtensionParams,
+) -> usize {
+    let mut score = 0.0;
+    let mut best = 0.0;
+    let mut best_len = 0;
+    for (n, (qi, ti)) in positions.enumerate() {
+        score += if q[qi] == t[ti] { 1.0 } else { -params.scoring.mismatch_penalty };
+        if score > best {
+            best = score;
+            best_len = n + 1;
+        } else if best - score > params.scoring.xdrop {
+            break;
+        }
+    }
+    best_len
+}
+
+/// Grow each exact-run region outward with mismatches allowed, then merge regions on one
+/// diagonal whose extended spans touch. See `ExtensionParams` for the why.
+///
+/// `n_shared` is carried from the seeds (summed on merge) and never recomputed from the
+/// extended length, so the Poisson test keeps counting shared k-mers rather than residues.
+/// `n_mismatches` is recounted over the final span. Regions come back sorted by query start.
+///
+/// Both sketches must carry encoded and raw sequences; without them the regions are returned
+/// unchanged, which is also what `find_matched_regions` does in that case.
+pub fn extend_regions(
+    regions: Vec<MatchedRegion>,
+    query_sketch: &ProteinSketch,
+    target_sketch: &ProteinSketch,
+    params: ExtensionParams,
+) -> Vec<MatchedRegion> {
+    if regions.is_empty() || params.scoring.mismatch_penalty <= 0.0 {
+        return regions;
+    }
+    let (Some(q_enc), Some(t_enc), Some(q_raw), Some(t_raw)) = (
+        query_sketch.get_moltype_sequence(),
+        target_sketch.get_moltype_sequence(),
+        query_sketch.get_raw_sequence(),
+        target_sketch.get_raw_sequence(),
+    ) else {
+        return regions;
+    };
+    let (q, t) = (q_enc.as_bytes(), t_enc.as_bytes());
+
+    // Extend every seed on its own diagonal.
+    let mut extended: Vec<MatchedRegion> = regions
+        .into_iter()
+        .map(|mut r| {
+            let (qs, qe) = (r.start as usize, r.end as usize);
+            let (ts, te) = (r.target_start as usize, r.target_end as usize);
+            let right = xdrop_walk(q, t, (qe..q.len()).zip(te..t.len()), params);
+            let left = xdrop_walk(q, t, (0..qs).rev().zip((0..ts).rev()), params);
+            r.start = (qs - left) as u32;
+            r.end = (qe + right) as u32;
+            r.target_start = (ts - left) as u32;
+            r.target_end = (te + right) as u32;
+            r
+        })
+        .collect();
+
+    // Merge on (diagonal, start): two seeds whose extensions meet are one match.
+    let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
+    extended.sort_by_key(|r| (diagonal(r), r.start));
+    let mut merged: Vec<MatchedRegion> = Vec::with_capacity(extended.len());
+    for r in extended {
+        if let Some(last) = merged.last_mut() {
+            if diagonal(last) == diagonal(&r) && r.start <= last.end {
+                // The union of the two spans. Both walks past the later seed see the same
+                // residues from the same score, so in practice the ends already agree.
+                last.end = last.end.max(r.end);
+                last.target_end = last.target_end.max(r.target_end);
+                last.n_shared += r.n_shared;
+                continue;
+            }
+        }
+        merged.push(r);
+    }
+
+    // Rebuild the derived fields over the final spans.
+    for r in merged.iter_mut() {
+        let (qs, qe) = (r.start as usize, r.end as usize);
+        let (ts, te) = (r.target_start as usize, r.target_end as usize);
+        r.length = (qe - qs) as u32;
+        r.n_mismatches = q[qs..qe].iter().zip(&t[ts..te]).filter(|(a, b)| a != b).count() as u32;
+        r.subseq = q_raw[qs..qe].to_string();
+        r.target_subseq = t_raw[ts..te].to_string();
+        r.moltype_seq = t_enc[ts..te].to_string();
+    }
+    merged.sort_by_key(|r| r.start);
+    merged
 }
 
 impl ProteinSearcher {
@@ -1742,16 +1976,13 @@ mod tests {
         use crate::types::MolType;
 
         let region = MatchedRegion {
-            query_name: "q".to_string(),
             start: 3,
             end: 9,
             subseq: "QSUBSEQ".to_string(),
-            target_name: "t".to_string(),
             target_start: 11,
             target_end: 17,
             target_subseq: "TSUBSEQ".to_string(),
             moltype_seq: "hphph".to_string(),
-            moltype: MolType::new("hp_lehninger2").unwrap(),
             length: 6,
             n_shared: 2,
             expected_shared_kmers: 2.0,
@@ -1760,6 +1991,7 @@ mod tests {
             enrichment: 1.5,
             tfidf: 7.0,
             mean_idf: 3.5,
+            ..MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap())
         };
 
         let result = SearchResult {
@@ -1780,6 +2012,7 @@ mod tests {
             containment_target_in_query: 0.4,
             f_weighted_target_in_query: 0.3,
             query_tfidf: 1.5,
+            coverage_score: 2.5,
             mean_matched_kmer_freq: 0.1,
             sum_matched_kmer_freq: 0.7,
             query_expected_shared_kmers: 3.0,
@@ -1801,6 +2034,8 @@ mod tests {
         assert_eq!(row.n_intersecting_hashes, 7);
         assert_eq!(row.ksize, 5);
         assert_eq!(row.containment, 0.5);
+        assert_eq!(row.query_tfidf, 1.5);
+        assert_eq!(row.coverage_score, 2.5);
         assert_eq!(row.query_poisson_pvalue, 0.01);
         // Fields carried from the MatchedRegion.
         assert_eq!(row.region_start, 3);
@@ -2325,6 +2560,157 @@ mod tests {
         Ok(())
     }
 
+    /// The HP pattern behind `one_flip_pair`: 25 positions with no repeated 8-mer, so at
+    /// k=8 the only shared k-mers between two copies sit on one diagonal.
+    const HP_PATTERN: &str = "hpphhpphphphhppphhhppphhp";
+
+    /// A protein whose Lehninger HP encoding is `pattern`. h-class residues cycle through
+    /// AFILMV and p-class through DEKNQR, so two sketches built from the same pattern share
+    /// their encoding but not their raw sequence.
+    fn sketch_from_hp_pattern(name: &str, pattern: &str) -> ProteinSketch {
+        let (h, p) = ("AFILMV".as_bytes(), "DEKNQR".as_bytes());
+        let mut hi = 0usize;
+        let mut pi = 0usize;
+        let seq: String = pattern
+            .bytes()
+            .map(|c| {
+                let r = if c == b'h' {
+                    hi += 1;
+                    h[hi % h.len()]
+                } else {
+                    pi += 1;
+                    p[pi % p.len()]
+                };
+                r as char
+            })
+            .collect();
+        ProteinSketch::from_protein_sequence(name, &seq, 8, 1, "hp").unwrap()
+    }
+
+    /// Two sequences whose HP encodings agree on 25 positions except one flip in the
+    /// middle, so the exact runs are 0..12 and 13..25 on the main diagonal.
+    fn one_flip_pair() -> (ProteinSketch, ProteinSketch) {
+        let flipped = format!("{}p{}", &HP_PATTERN[..12], &HP_PATTERN[13..]);
+        assert_eq!(&HP_PATTERN[12..13], "h", "position 12 is the h that gets flipped");
+        (sketch_from_hp_pattern("q", HP_PATTERN), sketch_from_hp_pattern("t", &flipped))
+    }
+
+    /// Where a region sits and what it counts; the fields `extend_regions` promises to
+    /// leave alone when it has nothing to work with.
+    fn region_span(r: &MatchedRegion) -> (u32, u32, u32, u32, u32, u32) {
+        (r.start, r.end, r.target_start, r.target_end, r.n_shared, r.n_mismatches)
+    }
+
+    fn extension(mismatch_penalty: f64, xdrop: f64) -> ExtensionParams {
+        ExtensionParams { scoring: ExtensionScoring { mismatch_penalty, xdrop } }
+    }
+
+    #[test]
+    fn test_extend_regions_bridges_one_flip() {
+        let (q, t) = one_flip_pair();
+        let intersection = q.intersect(&t);
+        let exact = find_matched_regions(&q, &t, &intersection);
+        // Exact runs stop at the flip: positions 0..12 and 13..25, five 8-mers each.
+        assert_eq!(exact.len(), 2, "{exact:?}");
+        assert_eq!((exact[0].start, exact[0].end, exact[0].n_shared), (0, 12, 5));
+        assert_eq!((exact[1].start, exact[1].end, exact[1].n_shared), (13, 25, 5));
+        assert!(exact.iter().all(|r| r.n_mismatches == 0));
+
+        let extended = extend_regions(exact.clone(), &q, &t, extension(2.0, 8.0));
+        assert_eq!(extended.len(), 1, "{extended:?}");
+        let r = &extended[0];
+        assert_eq!((r.start, r.end, r.target_start, r.target_end), (0, 25, 0, 25));
+        assert_eq!(r.length, 25);
+        assert_eq!(r.n_shared, 10, "shared k-mers are summed from the seeds, not recomputed");
+        assert_eq!(r.n_mismatches, 1);
+        assert_eq!(r.subseq.len(), 25);
+        assert_eq!(r.target_subseq.len(), 25);
+        assert_eq!(r.moltype_seq, t.get_moltype_sequence().unwrap());
+
+        // A penalty larger than the give-up margin cannot cross the flip: the two seeds
+        // stay apart, and nothing else changes about them.
+        let kept = extend_regions(exact.clone(), &q, &t, extension(9.0, 8.0));
+        assert_eq!(kept.len(), 2);
+        for (a, b) in kept.iter().zip(&exact) {
+            assert_eq!(
+                (a.start, a.end, a.n_shared, a.n_mismatches),
+                (b.start, b.end, b.n_shared, 0)
+            );
+        }
+
+        // Penalty 0 is "off" and returns the regions untouched.
+        let same = extend_regions(exact.clone(), &q, &t, extension(0.0, 8.0));
+        assert_eq!(same.len(), exact.len());
+    }
+
+    #[test]
+    fn test_extend_regions_leaves_regions_alone_without_sequences() {
+        // A sketch built without stored sequences has nothing to walk along, so the seeds
+        // come back as they were.
+        let (q, t) = one_flip_pair();
+        let exact = find_matched_regions(&q, &t, &q.intersect(&t));
+        assert_eq!(exact.len(), 2);
+        let bare = |name: &str, seq: &str| {
+            let mut s = ProteinSketch::new(name, 8, 1, "hp").unwrap();
+            s.add_protein(seq, false).unwrap();
+            s
+        };
+        let bq = bare("q", q.get_raw_sequence().unwrap());
+        let bt = bare("t", t.get_raw_sequence().unwrap());
+        assert_eq!((bq.get_raw_sequence(), bq.get_moltype_sequence()), (None, None));
+        assert_eq!(find_matched_regions(&bq, &bt, &bq.intersect(&bt)).len(), 0);
+        let spans: Vec<_> = exact.iter().map(region_span).collect();
+        let unextended = extend_regions(exact.clone(), &bq, &bt, extension(2.0, 8.0));
+        assert_eq!(unextended.iter().map(region_span).collect::<Vec<_>>(), spans);
+    }
+
+    #[test]
+    fn test_extend_regions_contains_seeds_on_real_pair() -> Result<()> {
+        // CED9 vs BCL2 at hp k=12: every extended region must contain the seed it grew from,
+        // stay on its diagonal, and count its mismatches correctly.
+        let (ced9_name, ced9_sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let (bcl2_name, bcl2_sequence) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let q = ProteinSketch::from_protein_sequence(&ced9_name, &ced9_sequence, 12, 1, "hp")?;
+        let t = ProteinSketch::from_protein_sequence(&bcl2_name, &bcl2_sequence, 12, 1, "hp")?;
+        let intersection = q.intersect(&t);
+        let exact = find_matched_regions(&q, &t, &intersection);
+        assert!(!exact.is_empty());
+        let extended = extend_regions(exact.clone(), &q, &t, extension(2.0, 8.0));
+        assert!(!extended.is_empty());
+        assert!(extended.len() <= exact.len());
+        let (qe, te) = (
+            q.get_moltype_sequence().unwrap().as_bytes(),
+            t.get_moltype_sequence().unwrap().as_bytes(),
+        );
+        let mut seeds_covered = 0;
+        for r in &extended {
+            assert_eq!(r.length, r.end - r.start);
+            assert_eq!(r.target_end - r.target_start, r.length);
+            let recount = qe[r.start as usize..r.end as usize]
+                .iter()
+                .zip(&te[r.target_start as usize..r.target_end as usize])
+                .filter(|(a, b)| a != b)
+                .count() as u32;
+            assert_eq!(r.n_mismatches, recount);
+            let inside: Vec<_> = exact
+                .iter()
+                .filter(|s| {
+                    s.target_start as i64 - s.start as i64 == r.target_start as i64 - r.start as i64
+                        && s.start >= r.start
+                        && s.end <= r.end
+                })
+                .collect();
+            assert!(!inside.is_empty(), "extended region {r:?} contains no seed");
+            assert_eq!(r.n_shared, inside.iter().map(|s| s.n_shared).sum::<u32>());
+            seeds_covered += inside.len();
+        }
+        assert_eq!(seeds_covered, exact.len(), "every seed lands in exactly one extended region");
+        let total_growth: u32 = extended.iter().map(|r| r.length).sum::<u32>();
+        let total_seed: u32 = exact.iter().map(|r| r.length).sum::<u32>();
+        assert!(total_growth >= total_seed);
+        Ok(())
+    }
+
     #[test]
     fn test_find_matched_regions_multiple() -> Result<()> {
         // 14 is the minimum k-mersize that finds multiple match regions from Delilah's analyses
@@ -2595,6 +2981,7 @@ mod tests {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
+            extension: None,
         };
 
         let tfidf = searcher.calculate_tfidf(&query);
@@ -2874,6 +3261,10 @@ mod tests {
         // hash, so the summation order (and therefore the last bits) depends on the hash
         // values themselves.
         approx::assert_relative_eq!(bcl2_result.query_tfidf, 565.119680433367, epsilon = 1e-9);
+        // Coverage score: the 24 shared k-mers' IDF sums to 36.51 (mean 1.52, so a typical
+        // shared k-mer sits in about 5 of the 25 targets), times 239^-0.5 for BCL2_HUMAN's
+        // 239 residues. Same HashMap-order caveat as query_tfidf above.
+        approx::assert_relative_eq!(bcl2_result.coverage_score, 2.361544022707993, epsilon = 1e-9);
 
         assert!(
             bcl2_result.mean_matched_kmer_freq > 0.0,
@@ -3103,11 +3494,45 @@ mod tests {
         // BCL2 positions 138..157 and the same stretch with one residue changed in the middle.
         let q = b"RDGVNWGRIVAFFEFGGVM";
         let t = b"RDGVNWGRIVKFFEFGGVM"; // A -> K at index 10
-        assert_eq!(exact_run_around(q, t, 0, 0, 5), Some((0, 10)));
-        assert_eq!(exact_run_around(q, t, 12, 12, 5), Some((11, 19)));
-        assert_eq!(exact_run_around(q, t, 8, 8, 5), None, "window 8..13 crosses the mismatch");
+        let agree = residues_agree("protein20");
+        assert_eq!(exact_run_around(q, t, 0, 0, 5, &agree), Some((0, 10)));
+        assert_eq!(exact_run_around(q, t, 12, 12, 5, &agree), Some((11, 19)));
+        assert_eq!(
+            exact_run_around(q, t, 8, 8, 5, &agree),
+            None,
+            "window 8..13 crosses the mismatch"
+        );
         // A seed near the end grows left to the mismatch and right to the sequence end.
-        assert_eq!(exact_run_around(q, t, 14, 14, 5), Some((11, 19)));
+        assert_eq!(exact_run_around(q, t, 14, 14, 5, &agree), Some((11, 19)));
+    }
+
+    /// An ambiguous residue agrees with either residue it stands for, so a run grows through
+    /// it. Under protein20 the raw sequences are compared: BCL2 residues 1-19 with Asp10
+    /// written as B run against the real fragment end to end, and a query Z against a target
+    /// Asp is a mismatch, since Z stands for Glu or Gln. Under an HP alphabet the stored
+    /// sequence already holds the class, so the same run is exact.
+    #[test]
+    fn test_exact_run_grows_through_an_ambiguous_residue() {
+        let q = b"MAHAGRTGYBNREIVMKYI";
+        let t = b"MAHAGRTGYDNREIVMKYI";
+        let agree = residues_agree("protein20");
+        assert_eq!(exact_run_around(q, t, 0, 0, 5, &agree), Some((0, 19)));
+        assert_eq!(exact_run_around(q, t, 7, 7, 5, &agree), Some((0, 19)));
+
+        let z = b"MAHAGRTGYZNREIVMKYI";
+        assert_eq!(exact_run_around(z, t, 0, 0, 5, &agree), Some((0, 9)));
+        assert_eq!(exact_run_around(z, t, 7, 7, 5, &agree), None);
+
+        let hp = residues_agree("hp_lehninger2");
+        let q_hp = b"hhphhpphpppphhhhpph";
+        assert_eq!(exact_run_around(q_hp, q_hp, 0, 0, 5, &hp), Some((0, 19)));
+        // sdm12 keeps Asp and Asn apart, so the stored query keeps its B, and B agrees with
+        // the class of D and of N but not with the class of A.
+        let sdm12 = residues_agree("sdm12");
+        let encode = residue_encoder("sdm12");
+        assert!(sdm12(b'B', encode(b'D')));
+        assert!(sdm12(b'B', encode(b'N')));
+        assert!(!sdm12(b'B', encode(b'A')));
     }
 
     /// `protein20` sketches store no encoded copy of the sequence (the full alphabet encodes to

@@ -1,5 +1,7 @@
 # Kmerseek
 
+How kmerseek scores a region and gives it an E-value is explained, with sliders on every quantity, at [seanome.github.io/kmerseek](https://seanome.github.io/kmerseek/) (source in `docs/`).
+
 ## Compiling on Mac
 
 You may need to add these magical `export` commands to make your Python install work:
@@ -45,10 +47,11 @@ drop them:
 kmerseek index -i proteome.fasta --ksize 10 --alphabet hp_lehninger2 --remove-low-complexity
 ```
 
-Two independent checks run per k-mer: the **raw amino-acid** window (any encoding),
-and for the HP-family alphabets the **HP-encoded** window as well. The second catches
-windows that aren't raw homopolymers but still collapse to one symbol -- `LIVMA` is
-five different residues that all encode to `h`.
+A k-mer is dropped when its **encoded** window is a run of one symbol. Under
+`protein20` that is a raw homopolymer. Under a reduced alphabet it also catches windows
+that aren't raw homopolymers but collapse to one class -- `LIVMA` is five different
+residues that all encode to `h` under the Lehninger split, and `EEEDD` encodes to
+`ccccc` under `dayhoff6`.
 
 Indexing reports what was removed, so you can tell whether the flag mattered:
 
@@ -94,6 +97,7 @@ proteome.fasta.hp.k10.scaled1.nolowcomplexity.kmerseek.rocksdb  # --remove-low-c
 ```
 
 Removal is **off by default**; existing indexes and workflows are unaffected.
+
 Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 `hhhhhhhhhp` is kept.
 
@@ -137,6 +141,44 @@ expectation summed over the same survivors, so the two stay comparable.
 ![CED9 vs BCL2 regions at scaled 1, 2, 5 and 10](docs/images/scaled_region_survival.png)
 
 Choose N from the shortest match you need to see reliably, not from k. The cap is 10.
+
+## Extending matched regions past the exact seed
+
+A matched region is a maximal run of shared k-mers: one position where the encoded
+query and target disagree ends it. Between remote homologs the HP pattern is conserved
+per position (the copy rate, Cohen's κ, is about 0.45 at 20-30% identity) far better than
+any 23-residue stretch of it is conserved exactly (most such pairs share no exact
+23-mer at all), so an exact run is better read as a seed than as the match.
+
+`--extend-mismatch-penalty C` grows each region outward along the encoded sequences,
+scoring +1 per agreeing position and -C per disagreeing one, and stops when the running
+score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up margin
+(BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
+become one region.
+
+Both walks on the BH1 seed of CED9 against BCL2 (`hp`, k=12, penalty 2, give-up margin
+8). A side keeps residues only up to its best running score. To the left the first two
+classes differ, so the score starts at -4, never rises above 0, and nothing is kept. To
+the right the score climbs to +1 after 7 residues, and the walk stops once it has fallen
+9 below that peak, keeping the 7. `scripts/plot_xdrop_walk.py` draws this from the JSON
+`kmerseek pair` writes.
+
+![The walk on both sides of the BH1 seed: residues, classes, and the running score](docs/images/xdrop_walk_bcl2_ced9_bh1.png)
+
+([SVG version](docs/images/xdrop_walk_bcl2_ced9_bh1.svg))
+
+```bash
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
+    --extend-mismatch-penalty 2 --output hits.csv
+```
+
+What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
+the extended span, `region_length` with them; `region_n_shared_kmers` still counts
+exact shared k-mers (the seeds), so it no longer equals `region_length - ksize + 1`;
+and a new column `region_n_mismatches` says how many positions inside the region
+disagree. The region Poisson score keeps counting exact k-mers against the expectation
+summed over the extended span, so extension can only make a region's score more
+conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
 ## Visualizing hits
 
@@ -473,18 +515,24 @@ Where each k-mer count comes from:
   `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
   at 14.
 
-Every ambiguous residue in a k-mer expands, so a k-mer carrying *n* of them becomes 2^*n*
-k-mers. Indexing every reading rather than a chosen subset keeps matching from depending on
-which reading was kept.
+A k-mer is encoded first and disambiguated second, so only the residues the alphabet still
+cannot tell apart expand: a k-mer carrying *n* of them becomes 2^*n* k-mers. Under every HP
+alphabet, `dayhoff6`, `gbmr4`, `gbmr7` and `mmseqs12`, `B` and `Z` are not ambiguous at all
+and cost nothing. Indexing every reading rather than a chosen subset keeps matching from
+depending on which reading was kept. A matched region runs through an ambiguous residue in
+the same way: the stored encoded sequence writes the residue as its class where the alphabet
+merges the two readings and as the letter itself where it does not, and the letter agrees
+with either class it stands for.
 
 The expansion is affordable because ambiguous residues are rare and stay sparse within any one
 window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
 across 146 of its 575_748 sequences. The densest window at any k up to 30, in Swiss-Prot and
 among UniRef50 representatives alike, holds 9, so the worst single k-mer expands to 512
 readings, and expansion grows the index by 0.0012% at k=4 and 0.034% at k=30. A k-mer
-carrying more than 10 is dropped, which bounds memory on a pathological input such as a long
-run of `B`. At the default `--ksize 10` that can never happen, and no window in either
-database reaches it at any k up to 30.
+carrying more than 20 residues that are still ambiguous after encoding is dropped, which
+bounds memory on a pathological input such as a long run of `B`. No real window comes near
+it: the densest in Swiss-Prot, topi pancreatic ribonuclease (P00659, 22 ambiguous residues
+in 124), holds 12 at k=43.
 
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,
