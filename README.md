@@ -169,6 +169,31 @@ disagree. The region Poisson score keeps counting exact k-mers against the expec
 summed over the extended span, so extension can only make a region's score more
 conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
+Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
+statistics (Karlin & Altschul 1990, the statistics behind BLAST):
+
+```
+S    = matches - C × mismatches
+E    = K × m × n × e^(-λS)
+bits = (λS - ln K) / ln 2
+```
+
+`m` is the query length and `n` the number of k-mers in the database. `λ` is solved
+per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
+`a` that a random position from each falls in the same class gives λ as the positive
+root of `a e^λ + (1 - a) e^(-Cλ) = 1`. When `a ≥ C / (1 + C)` no positive root exists,
+which is what two hydrophobic runs look like, and the region gets 0 bits and no
+significance: agreement is what those two compositions do by default. `K` is the
+fraction of the m × n cells that can start a region. It depends on the alphabet, the
+seed length, the penalty, the give-up margin and the database, so it has to be measured
+on decoys for the index in use and passed with `--ka-k`:
+
+```bash
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
+    --extend-mismatch-penalty 2 --ka-k 0.03 --output hits.csv
+```
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
