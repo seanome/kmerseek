@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>kmerseek docs</title>
+<style>
+:root{--bg:#F6F7F5;--surface:#FFFFFF;--ink:#1C211F;--muted:#5E6663;--hair:#D9DDDA}
+@media (prefers-color-scheme: dark){:root:not([data-theme="light"]){--bg:#141716;--surface:#1B1F1E;--ink:#E6EAE8;--muted:#A3ABA7;--hair:#2E3432}}
+:root[data-theme="dark"]{--bg:#141716;--surface:#1B1F1E;--ink:#E6EAE8;--muted:#A3ABA7;--hair:#2E3432}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font:17px/1.6 -apple-system,'Segoe UI',Roboto,Helvetica,Arial,sans-serif}
+main{max-width:720px;margin:0 auto;padding:56px 16px 80px}
+h1{font-size:1.9rem;line-height:1.2;margin:0 0 8px}
+.sub{color:var(--muted);margin:0 0 28px}
+a.card{display:block;text-decoration:none;color:inherit;background:var(--surface);border:1px solid var(--hair);border-radius:10px;padding:16px 18px;margin:0 0 14px}
+a.card:hover,a.card:focus-visible{border-color:var(--ink)}
+a.card b{display:block;font-size:1.1rem;margin-bottom:4px}
+a.card span{color:var(--muted);font-size:.95rem}
+footer{color:var(--muted);font-size:.9rem;margin-top:32px}
+footer a{color:inherit}
+</style>
+</head>
+<body>
+<main>
+<h1>kmerseek docs</h1>
+<p class="sub">Interactive pages on how kmerseek scores a region and judges whether it could be chance. Every slider recomputes the equations and figures.</p>
+<a class="card" href="karlin_altschul_explainer.html"><b>Part 1: How a kmerseek region gets an E-value</b><span>The region score, the chance match rate, nats per score point, the E-value, and how K and r_database are measured when the index is built.</span></a>
+<a class="card" href="two_letters_explainer.html"><b>Part 2: What two letters can carry</b><span>The copy rate, bits per position, the trade between alphabet size and region length, short motifs, and the best mismatch penalty.</span></a>
+<footer>Source: <a href="https://github.com/seanome/kmerseek">github.com/seanome/kmerseek</a>, folder <code>docs/</code>.</footer>
+</main>
+</body>
+</html>
