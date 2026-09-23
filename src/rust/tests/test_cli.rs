@@ -828,19 +828,29 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 /// The BH1 match between CED9 and BCL2 (the landmark of
 /// `test_cli_landmark_region_across_scaled`, here in the `hp` alphabet) is an exact
 /// 19-residue run, CED9 162..181 against BCL2 138..157. With a mismatch penalty of 2 and a
-/// give-up margin of 8 it grows 7 residues to the right, across two class flips, and stops
-/// where the sequences stop agreeing:
+/// give-up margin of 8 the walk runs both ways from the seed, +1 where the two classes agree
+/// and -2 where they differ, and keeps each side up to its best running score. To the left
+/// the first two classes differ, so the score starts at -4, never gets back above 0, and
+/// nothing is kept. To the right the score dips to -2, climbs to +1 after 7 residues, then
+/// falls 9 below that peak and the walk stops, keeping the 7. Below, `|` marks two residues
+/// in the same class and `x` two in different classes; `docs/images/xdrop_walk_bh1.png`
+/// draws the same two walks.
 ///
 /// ```text
-/// Ced9 pr: …QCPMSYGRLIGLISFGGFV AAKMMES VE…
-/// Ced9 hp: …pphhphhphhhhhphhhhh hhphhpp hp
-///          ||||||||||||||||||| |.||.||
-/// BCL2 hp: …pphhphhphhhhhphhhhh phpphpp pp
-/// BCL2 pr: …RDGVNWGRIVAFFEFGGVM CVESVNR EM…
+///           left walk    seed, exact           right walk
+/// Ced9 pr: …TVGNAQTD  QCPMSYGRLIGLISFGGFV  AAKMMES VELQGQ…
+/// Ced9 hp: …phhphppp  pphhphhphhhhhphhhhh  hhphhpp hphhph
+///           xx|xx|xx  |||||||||||||||||||  x||x||| xxxx|x
+/// BCL2 hp: …hphhpphh  pphhphhphhhhhphhhhh  phpphpp phphhh
+/// BCL2 pr: …ATVVEELF  RDGVNWGRIVAFFEFGGVM  CVESVNR EMSPLV…
+///
+/// running score, reading outward from the seed:
+///   left:  -2 -4 -3 -5 -7 -6 -8 -10                 best 0, keeps 0
+///   right: -2 -1  0 -2 -1  0 +1 -1 -3 -5 -7 -6 -8   best +1 after 7, keeps 7
 /// ```
 ///
-/// The 7 new positions score 5 - 2 x 2 = +1, so the walk keeps them; the region is now
-/// 26 residues with 2 mismatches, and still has the 8 shared k-mers of its seed.
+/// The region is now 26 residues with 2 mismatches, and still has the 8 shared k-mers of
+/// its seed.
 #[test]
 fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
     const KSIZE: u32 = 12;
