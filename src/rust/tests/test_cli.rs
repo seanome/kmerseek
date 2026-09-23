@@ -854,8 +854,8 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 ///
 /// Its Karlin-Altschul score with `--ka-k 0.03`: S = 24 matches - 2 x 2 mismatches = 20.
 /// CED9 is 143/280 hydrophobic in the Lehninger classes and BCL2_HUMAN 146/239, so the
-/// chance two random positions agree is a = 0.510714 x 0.610879 + 0.489286 x 0.389121 =
-/// 0.502376, and the positive root of a e^x + (1 - a) e^(-2x) = 1 is lambda = 0.474339.
+/// chance two random positions agree is u = 0.510714 x 0.610879 + 0.489286 x 0.389121 =
+/// 0.502376, and the positive root of u e^x + (1 - u) e^(-2x) = 1 is lambda = 0.474339.
 /// bits = (lambda S - ln K) / ln 2 = (9.48678 + 3.50656) / 0.693147 = 18.7454, and
 /// E = K m n e^(-lambda S) with m = 280 query residues and n = 8340 database k-mers is
 /// 0.03 x 280 x 8340 x e^(-9.48678) = 5.31363.

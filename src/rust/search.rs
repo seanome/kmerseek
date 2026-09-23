@@ -122,6 +122,20 @@ pub struct KaParams {
     pub k: f64,
 }
 
+impl KaParams {
+    /// Bit score of raw score `score` at this pair's `lambda`: (lambda S - ln K) / ln 2,
+    /// floored at 0.
+    pub fn bits(&self, lambda: f64, score: f64) -> f64 {
+        ((lambda * score - self.k.ln()) / std::f64::consts::LN_2).max(0.0)
+    }
+
+    /// E-value of raw score `score` at this pair's `lambda`, for a query of `m` residues
+    /// against a database of `n`: K m n e^(-lambda S).
+    pub fn evalue(&self, lambda: f64, score: f64, m: f64, n: f64) -> f64 {
+        self.k * m * n * (-lambda * score).exp()
+    }
+}
+
 /// Fraction of an encoded sequence in each class, indexed by the class's byte. Gaps and
 /// unknowns count too, since a match against them is also a match in the run. An array,
 /// not a map: `compare` needs the target's composition once per candidate pair, and 256
@@ -146,36 +160,41 @@ fn match_probability(p: &ClassComposition, q: &ClassComposition) -> f64 {
 }
 
 /// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
-/// matches with probability `a`: the positive root of a e^x + (1-a) e^(-penalty x) = 1.
+/// falls in the same class with probability `match_prob`: the positive root of
+/// match_prob e^x + (1 - match_prob) e^(-penalty x) = 1. The explainer
+/// (<https://seanome.github.io/kmerseek/karlin_altschul_explainer.html>) calls `match_prob`
+/// `u`.
 ///
-/// A positive root exists only when the expected score a - penalty (1-a) is negative,
-/// i.e. a < penalty / (1 + penalty). Above that, agreement is what these two compositions
-/// do by default and no run of it is surprising: returns 0. The left side is convex with
-/// value 1 at x = 0 and slope a - penalty (1-a) there, so bisection on [0, hi] with hi
-/// pushed out until f(hi) > 1 is safe; e^hi overflows by hi = 1024, so with a > 0 that
-/// takes at most ten doublings.
-pub fn karlin_altschul_lambda(a: f64, penalty: f64) -> f64 {
-    let b = 1.0 - a;
-    if a <= 0.0 || a.is_nan() || a - penalty * b >= 0.0 {
+/// A positive root exists only when the expected score match_prob - penalty (1 - match_prob)
+/// is negative, i.e. match_prob < penalty / (1 + penalty). Above that, agreement is what
+/// these two compositions do by default and no run of it is surprising: returns 0.
+///
+/// The root is found by bisection between 0 and an upper bound. The left side is convex,
+/// equals 1 at x = 0 and falls from there, so it crosses 1 exactly once above 0. The upper
+/// bound starts at 1 and doubles until the left side is above 1 there, which puts the root
+/// between 0 and it; e^x overflows by x = 1024, so that takes at most ten doublings.
+pub fn karlin_altschul_lambda(match_prob: f64, penalty: f64) -> f64 {
+    let mismatch_prob = 1.0 - match_prob;
+    if match_prob <= 0.0 || match_prob.is_nan() || match_prob - penalty * mismatch_prob >= 0.0 {
         return 0.0;
     }
-    let f = |x: f64| a * x.exp() + b * (-penalty * x).exp();
-    let mut hi = 1.0;
-    while f(hi) <= 1.0 {
-        hi *= 2.0;
+    let f = |x: f64| match_prob * x.exp() + mismatch_prob * (-penalty * x).exp();
+    let mut upper = 1.0;
+    while f(upper) <= 1.0 {
+        upper *= 2.0;
     }
-    let (mut lo, mut hi) = (0.0, hi);
+    let mut lower = 0.0;
     for _ in 0..80 {
-        let mid = 0.5 * (lo + hi);
+        let mid = 0.5 * (lower + upper);
         if f(mid) > 1.0 {
-            hi = mid;
+            upper = mid;
         } else {
-            lo = mid;
+            lower = mid;
         }
     }
-    let root = 0.5 * (lo + hi);
-    // At the boundary a = penalty / (1 + penalty) the root is 0 up to rounding; a lambda of
-    // 1e-8 would make every E-value ~ K m n, which is the same "no evidence" answer.
+    let root = 0.5 * (lower + upper);
+    // At the boundary match_prob = penalty / (1 + penalty) the root is 0 up to rounding; a
+    // lambda of 1e-8 would make every E-value ~ K m n, which is the same "no evidence" answer.
     if root < 1e-6 {
         0.0
     } else {
@@ -1262,8 +1281,9 @@ impl ProteinSearcher {
                 target.get_moltype_sequence(),
                 query.composition.as_ref(),
             ) {
-                let a = match_probability(q_composition, &class_composition(t_enc.as_bytes()));
-                let ka_lambda = karlin_altschul_lambda(a, params.scoring.mismatch_penalty);
+                let match_prob =
+                    match_probability(q_composition, &class_composition(t_enc.as_bytes()));
+                let ka_lambda = karlin_altschul_lambda(match_prob, params.scoring.mismatch_penalty);
                 let m = q_enc.len() as f64;
                 let n = self.db_n_kmers as f64;
                 for region in result.matched_regions.iter_mut() {
@@ -1271,10 +1291,8 @@ impl ProteinSearcher {
                     let raw =
                         matches - params.scoring.mismatch_penalty * region.n_mismatches as f64;
                     if ka_lambda > 0.0 && params.ka.k > 0.0 {
-                        region.ka_bits = ((ka_lambda * raw - params.ka.k.ln())
-                            / std::f64::consts::LN_2)
-                            .max(0.0);
-                        region.evalue = params.ka.k * m * n * (-ka_lambda * raw).exp();
+                        region.ka_bits = params.ka.bits(ka_lambda, raw);
+                        region.evalue = params.ka.evalue(ka_lambda, raw, m, n);
                     }
                 }
             }
@@ -2742,19 +2760,23 @@ mod tests {
 
     #[test]
     fn test_karlin_altschul_lambda() {
-        // a e^x + (1-a) e^(-2x) = 1 at a = 0.5: with y = e^x this is y^3 - 2y^2 + 1 = 0,
+        // u e^x + (1-u) e^(-2x) = 1 at u = 0.5: with y = e^x this is y^3 - 2y^2 + 1 = 0,
         // whose root above 1 is the golden ratio, so x = ln(golden ratio).
         let lam = karlin_altschul_lambda(0.5, 2.0);
         assert_relative_eq!(lam, ((1.0 + 5f64.sqrt()) / 2.0).ln(), epsilon = 1e-9);
-        // No positive root once agreement is expected: a >= penalty / (1 + penalty).
+        // No positive root once agreement is expected: u >= penalty / (1 + penalty).
         assert_eq!(karlin_altschul_lambda(2.0 / 3.0, 2.0), 0.0);
         assert_eq!(karlin_altschul_lambda(0.9, 2.0), 0.0);
         // Rarer agreement, larger lambda.
         assert!(karlin_altschul_lambda(0.3, 2.0) > lam);
         // The root satisfies the equation for a 20-letter-like composition too.
-        let a = 0.06;
-        let l = karlin_altschul_lambda(a, 1.0);
-        assert_relative_eq!(a * l.exp() + (1.0 - a) * (-l).exp(), 1.0, epsilon = 1e-9);
+        let match_prob = 0.06;
+        let l = karlin_altschul_lambda(match_prob, 1.0);
+        assert_relative_eq!(
+            match_prob * l.exp() + (1.0 - match_prob) * (-l).exp(),
+            1.0,
+            epsilon = 1e-9
+        );
     }
 
     #[test]
