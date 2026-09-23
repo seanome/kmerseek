@@ -192,8 +192,8 @@ bits = (λS - ln K) / ln 2
 
 `m` is the query length and `n` the number of k-mers in the database. `λ` is solved
 per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
-`a` that a random position from each falls in the same class gives λ as the positive
-root of `a e^λ + (1 - a) e^(-Cλ) = 1`. When `a ≥ C / (1 + C)` no positive root exists,
+`u` that a random position from each falls in the same class gives λ as the positive
+root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,
 which is what two hydrophobic runs look like, and the region gets 0 bits and no
 significance: agreement is what those two compositions do by default. `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
