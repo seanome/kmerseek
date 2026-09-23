@@ -1,5 +1,7 @@
 # Kmerseek
 
+How kmerseek scores a region and gives it an E-value is explained, with sliders on every quantity, at [seanome.github.io/kmerseek](https://seanome.github.io/kmerseek/) (source in `docs/`).
+
 ## Compiling on Mac
 
 You may need to add these magical `export` commands to make your Python install work:
