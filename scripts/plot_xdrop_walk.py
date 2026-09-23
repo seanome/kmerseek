@@ -13,7 +13,7 @@ and draws the residues, their classes, and the running score on both sides:
     kmerseek pair --query tests/testdata/fasta/bcl2.fasta --target tests/testdata/fasta/ced9.fasta \\
         --ksize 12 --alphabet hp --output scripts/testdata/bcl2_vs_ced9.hp.k12.pair.json
     python scripts/plot_xdrop_walk.py scripts/testdata/bcl2_vs_ced9.hp.k12.pair.json \\
-        --output docs/images/xdrop_walk_bh1
+        --output docs/images/xdrop_walk_bcl2_ced9_bh1
 """
 
 import argparse

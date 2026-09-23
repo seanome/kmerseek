@@ -154,6 +154,17 @@ score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up
 (BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
 become one region.
 
+Both walks on the BH1 seed of CED9 against BCL2 (`hp`, k=12, penalty 2, give-up margin
+8). A side keeps residues only up to its best running score. To the left the first two
+classes differ, so the score starts at -4, never rises above 0, and nothing is kept. To
+the right the score climbs to +1 after 7 residues, and the walk stops once it has fallen
+9 below that peak, keeping the 7. `scripts/plot_xdrop_walk.py` draws this from the JSON
+`kmerseek pair` writes.
+
+![The walk on both sides of the BH1 seed: residues, classes, and the running score](docs/images/xdrop_walk_bcl2_ced9_bh1.png)
+
+([SVG version](docs/images/xdrop_walk_bcl2_ced9_bh1.svg))
+
 ```bash
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
     --extend-mismatch-penalty 2 --output hits.csv

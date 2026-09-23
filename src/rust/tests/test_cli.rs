@@ -833,7 +833,7 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 /// the first two classes differ, so the score starts at -4, never gets back above 0, and
 /// nothing is kept. To the right the score dips to -2, climbs to +1 after 7 residues, then
 /// falls 9 below that peak and the walk stops, keeping the 7. Below, `|` marks two residues
-/// in the same class and `x` two in different classes; `docs/images/xdrop_walk_bh1.png`
+/// in the same class and `x` two in different classes; `docs/images/xdrop_walk_bcl2_ced9_bh1.png`
 /// draws the same two walks.
 ///
 /// ```text

@@ -1856,7 +1856,7 @@ pub fn find_matched_regions(
 /// `positions` yields (query index, target index) pairs stepping away from the seed. Returns
 /// how many positions the best-scoring extension covers. The score starts at 0 on the seed
 /// edge, so a side whose score never rises above 0 keeps nothing, however far the walk went
-/// before giving up. `extend_regions` calls this once per side; `docs/images/xdrop_walk_bh1.png`
+/// before giving up. `extend_regions` calls this once per side; `docs/images/xdrop_walk_bcl2_ced9_bh1.png`
 /// shows both walks on one seed.
 fn xdrop_walk(
     q: &[u8],
