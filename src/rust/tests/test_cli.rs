@@ -976,27 +976,76 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     assert_relative_eq!(grown.region_evalue, 5.313631588881071, epsilon = 1e-9);
     // Without extension there is no score: 0 bits, E infinite.
     assert_eq!((seed.region_ka_bits, seed.region_evalue), (0.0, f64::INFINITY));
+    Ok(())
+}
 
-    // Extension without a K has no E-value to print, so it is refused, not guessed; a K
-    // of zero would silently print none either.
-    let refuse = |extra: &[&str], message: &str| -> Result<(), Box<dyn std::error::Error>> {
-        let mut cmd = Command::cargo_bin("kmerseek")?;
-        cmd.args([
-            "search",
-            "--query",
-            TEST_CED9_FASTA,
-            "--target",
-            target_index_path.to_str().unwrap(),
+/// Without `--ka-k`, `kmerseek search` fits r_database and K on the target index's own
+/// sequences before searching: the 25 BCL2-family proteins of the fixture at hp k=12,
+/// against a shuffled-dipeptide reference. `--ka-k` overrides the fit, and `--ka-queries
+/// 0` refuses to search without one rather than guess.
+#[test]
+fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
             "--output",
-            temp_dir.path().join("no_k.csv").to_str().unwrap(),
-            "--extend-mismatch-penalty",
-            "2",
-        ]);
-        cmd.args(extra);
-        cmd.assert().failure().stderr(predicate::str::contains(message));
-        Ok(())
-    };
-    refuse(&[], "--extend-mismatch-penalty needs --ka-k")?;
-    refuse(&["--ka-k", "0"], "--ka-k must be positive")?;
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+        ])
+        .assert()
+        .success();
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            let mut cmd = Command::cargo_bin("kmerseek")?;
+            cmd.args([
+                "search",
+                "--query",
+                TEST_CED9_FASTA,
+                "--target",
+                index_path.to_str().unwrap(),
+                "--output",
+                temp_dir.path().join("out.csv").to_str().unwrap(),
+            ]);
+            cmd.args(extra);
+            Ok(cmd.assert())
+        };
+
+    // 200 queries asked for, 25 in the index: all of them, 9838 regions, the line read
+    // off x 7.5..11.5 nats below the relatives.
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: K 0.0115, r_database 0.806 (fitted now: 25 database queries, 9838 \
+         regions; r_database 0.806 per nat of lambda_pair S (1 = closed form holds; closed \
+         form 0.481 at the database's match probability 0.500), K 0.0115, fit on x \
+         7.5..11.5, rms 0.086; shuffled-dipeptide reference slope 0.760 over the same bins",
+    ));
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0300, r_database 1.000 (--ka-k, closed-form lambda)",
+        ),
+    );
+    // A K of zero would silently print no bits and infinite E-values.
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-k must be positive"));
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.failure().stderr(
+        predicate::str::contains("no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8"),
+    );
+    // Shuffled queries have no relatives, so no reference is searched and none is reported.
+    search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0768, r_database 0.913 (fitted now: 25 shuffled queries, \
+             9570 regions; r_database 0.913 per nat of lambda_pair S (1 = closed form holds; \
+             closed form 0.609 at the database's match probability 0.500), K 0.0768, fit on \
+             x 8.5..12.5, rms 0.156)\n",
+        ),
+    );
     Ok(())
 }
