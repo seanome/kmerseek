@@ -382,6 +382,20 @@ mod tests {
     /// see. A mismatch penalty of 9 stops extension at each of them; chaining joins the four
     /// into one region over the mature chain, bovine 26-150, with those 3 mismatches. The
     /// 22 B and Z inside it are not mismatches.
+    /// Topi RNase against itself is one exact run over its whole length. Each window holding
+    /// a B or Z is sketched under every reading, and both copies hold every reading, so a
+    /// (query, target) position is listed once per shared reading; counted twice, it would
+    /// break the run where the ambiguous residue sits.
+    #[test]
+    fn test_an_ambiguous_residue_shared_with_itself_does_not_break_a_run() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 10, 1, "protein20")?;
+        let regions = find_matched_regions(&topi, &topi, &topi.intersect(&topi));
+        let spans: Vec<_> = regions.iter().map(|r| (r.start, r.end, r.target_start)).collect();
+        println!("{spans:?}");
+        assert_eq!(spans, vec![(0, TOPI_RNASE.len() as u32, 0)]);
+        Ok(())
+    }
+
     #[test]
     fn test_chain_counts_an_ambiguous_residue_as_agreeing() -> Result<()> {
         let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 12, 1, "sdm12")?;
