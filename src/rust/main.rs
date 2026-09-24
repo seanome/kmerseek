@@ -201,6 +201,8 @@ enum Commands {
         /// (see --extend-xdrop).
         /// The region's shared k-mer count and Poisson score still count exact k-mers only;
         /// `region_n_mismatches` reports how many positions inside the region disagree.
+        /// Extended regions get `region_ka_evalue`, which becomes `region_evalue` when the
+        /// pair has a positive lambda; without this flag `region_evalue` is `region_run_evalue`.
         #[arg(long, default_value = "0.0")]
         extend_mismatch_penalty: f64,
 
@@ -222,7 +224,8 @@ enum Commands {
         /// query position and a random target position fall in the same class, from the
         /// two sequences' class frequencies (Karlin & Altschul 1990). See
         /// https://seanome.github.io/kmerseek/karlin_altschul_explainer.html.
-        /// Used only with --extend-mismatch-penalty.
+        /// Used only with --extend-mismatch-penalty. `region_run_evalue`, which
+        /// `region_evalue` falls back to on every other row, needs no K.
         #[arg(long)]
         ka_k: Option<f64>,
 
