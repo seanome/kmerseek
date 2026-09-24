@@ -427,8 +427,9 @@ pub struct SearchResultCsv {
     /// Karlin-Altschul bit score of the region (see MatchedRegion::ka_bits). 0 without
     /// `--extend-mismatch-penalty`.
     pub region_ka_bits: f64,
-    /// E-value of the region against the searched database (see MatchedRegion::evalue).
-    pub region_evalue: f64,
+    /// Karlin-Altschul E-value of an extended region (see MatchedRegion::ka_evalue). Empty
+    /// when the region was not extended or the pair has no positive lambda.
+    pub region_ka_evalue: Option<f64>,
     /// Number of extended regions chained into this row (see MatchedRegion::n_chained).
     pub region_n_chained: u32,
     /// Expected number of regions at least this surprising in the whole search, by chance
@@ -503,7 +504,7 @@ impl SearchResultCsv {
             region_mean_idf: region.mean_idf,
             region_n_mismatches: region.n_mismatches,
             region_ka_bits: region.ka_bits,
-            region_evalue: region.evalue,
+            region_ka_evalue: region.ka_evalue,
             region_n_chained: region.n_chained,
             region_poisson_evalue: region.poisson_evalue,
         }
@@ -770,13 +771,16 @@ pub struct MatchedRegion {
     /// that stands alone, which is every region unless `--chain-max-gap` is set.
     pub n_chained: u32,
 
-    /// E-value for `ka_bits` against the searched database: K * m * n * exp(-lambda * S), with
-    /// m the query's encoded length and n = `db_n_kmers`, the number of distinct sketched
-    /// hashes per target summed over targets (about residues / scaled). K is `KaParams::k`,
-    /// fitted on the index for the alphabet, penalty, give-up margin and `--scaled` in use:
-    /// K absorbs the scaled factor, so a K measured at one `--scaled` does not carry to
-    /// another. Infinity without extension or DB context.
-    pub evalue: f64,
+    /// Karlin-Altschul E-value for `ka_bits` against the searched database:
+    /// K * m * n * exp(-lambda * S), with m the query's encoded length and n = `db_n_kmers`,
+    /// the number of distinct sketched hashes per target summed over targets (about
+    /// residues / scaled). K is `KaParams::k`, fitted on the index for the alphabet,
+    /// penalty, give-up margin and `--scaled` in use: K absorbs the scaled factor, so a K
+    /// measured at one `--scaled` does not carry to another. For a chain it is the sum
+    /// P-value times the number of targets (see `chain_regions`). None without extension,
+    /// without DB context, or when the pair has no positive lambda: then no score is
+    /// surprising and there is no number to report.
+    pub ka_evalue: Option<f64>,
 
     /// Poisson E-value: how many regions at least this surprising the whole search would turn up
     /// by chance. `tail_probability` times the number of places a region could have come
@@ -888,7 +892,7 @@ impl MatchedRegion {
             mean_idf: 0.0,
             ka_bits: 0.0,
             n_chained: 1,
-            evalue: f64::INFINITY,
+            ka_evalue: None,
             poisson_evalue: 0.0,
         }
     }
@@ -1736,7 +1740,7 @@ impl ProteinSearcher {
                         matches - params.scoring.mismatch_penalty * region.n_mismatches as f64;
                     if ka_lambda > 0.0 && params.ka.k > 0.0 {
                         region.ka_bits = params.ka.bits(ka_lambda, raw);
-                        region.evalue = params.ka.evalue(ka_lambda, raw, m, n);
+                        region.ka_evalue = Some(params.ka.evalue(ka_lambda, raw, m, n));
                     }
                 }
                 if params.chain_max_gap > 0 && ka_lambda > 0.0 && params.ka.k > 0.0 {
@@ -2750,7 +2754,7 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         merged.subseq = q_raw[qs..qe].to_string();
         merged.target_subseq = t_raw[ts..te].to_string();
         merged.moltype_seq = String::from_utf8_lossy(&t[ts..te]).into_owned();
-        merged.evalue = ln_p.exp() * pair.n_targets;
+        merged.ka_evalue = Some(ln_p.exp() * pair.n_targets);
         // Bits on the same scale as a single region, whose bits are (lambda S - ln K) / ln 2.
         // For one member -ln P = lambda S - ln(K m n_t), so adding ln(m n_t) back puts the
         // size of the search where a single region has it: in the E-value, not the bits.
@@ -3584,7 +3588,7 @@ mod tests {
         // ln(m n_t) - ln P over ln 2.
         let t_sum = 2.0 * (0.5 * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
         let p = (-t_sum).exp() * t_sum / 2.0;
-        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), p * 100.0, epsilon = 1e-12);
         assert_relative_eq!(
             c.ka_bits,
             (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
@@ -3730,8 +3734,8 @@ mod tests {
         // n_t) with S its run length (no mismatches), and P(T >= t) = e^-t t / 2 for r = 2.
         let t_sum = 0.5 * (9.0 + 15.0) - 2.0 * (0.03 * 25.0 * 24.0f64).ln();
         let p = (-t_sum).exp() * t_sum / 2.0;
-        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
-        assert_relative_eq!(c.evalue, 0.619_041_406_804_322, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), 0.619_041_406_804_322, epsilon = 1e-12);
         // Bits put the search size back: ln(m n_t) - ln P, in bits.
         assert_relative_eq!(
             c.ka_bits,
@@ -3787,8 +3791,8 @@ mod tests {
         let lambda = karlin_altschul_lambda(314.0 / 625.0, 9.0);
         let t_sum = 2.0 * (lambda * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
         let p = (-t_sum).exp() * t_sum / 2.0;
-        assert_relative_eq!(c.evalue, p, epsilon = 1e-12);
-        assert_relative_eq!(c.evalue, 0.000_128_092_796_225_336_54, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), p, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), 0.000_128_092_796_225_336_54, epsilon = 1e-12);
         assert_relative_eq!(
             c.ka_bits,
             (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
