@@ -184,6 +184,8 @@ enum Commands {
         /// (see --extend-xdrop).
         /// The region's shared k-mer count and Poisson score still count exact k-mers only;
         /// `region_n_mismatches` reports how many positions inside the region disagree.
+        /// Extended regions get `region_ka_evalue`, which becomes `region_evalue` when the
+        /// pair has a positive lambda; without this flag `region_evalue` is `region_run_evalue`.
         #[arg(long, default_value = "0.0")]
         extend_mismatch_penalty: f64,
 
@@ -197,7 +199,8 @@ enum Commands {
         /// r_database and K fitted when the index was built (for its penalty and give-up
         /// margin) are used, or, for another penalty or give-up margin, a fit on
         /// --ka-queries database sequences runs before the search. Used only with
-        /// --extend-mismatch-penalty.
+        /// --extend-mismatch-penalty. `region_run_evalue`, which `region_evalue` falls back
+        /// to on every other row, needs no K.
         #[arg(long)]
         ka_k: Option<f64>,
 

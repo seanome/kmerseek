@@ -167,7 +167,7 @@ disagree. The region Poisson score keeps counting exact k-mers against the expec
 summed over the extended span, so extension can only make a region's score more
 conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
-Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+Two more columns come with the flag. `region_ka_bits` and `region_ka_evalue` score the
 extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
 statistics (Karlin & Altschul 1990, the statistics behind BLAST):
 
@@ -181,8 +181,9 @@ bits = (λS - ln K) / ln 2
 per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
 `a` that a random position from each falls in the same class gives λ as the positive
 root of `a e^λ + (1 - a) e^(-Cλ) = 1`. When `a ≥ C / (1 + C)` no positive root exists,
-which is what two hydrophobic runs look like, and the region gets 0 bits and no
-significance: agreement is what those two compositions do by default. `K` is the
+which is what two hydrophobic runs look like, and the region gets 0 bits and an empty
+`region_ka_evalue`: agreement is what those two compositions do by default. Its
+`region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
 seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
 it on the index itself (`--ka-queries`, 200 by default): it searches that many of the
@@ -191,7 +192,7 @@ the straight line that ln(regions at score S) makes against S below the related 
 A search with the penalty and give-up margin the index was fitted for reads the fit
 back; with another pair it fits its own before searching, or takes `--ka-k`.
 [docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
-On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_ka_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
 different-fold hit at E <= 0.01.
@@ -210,25 +211,63 @@ domain that no single gapless run covers becomes one call. On SCOPe40 domains it
 ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
 transfer, where a call has to cover a domain to carry its label.
 
-## Poisson E-value
+## E-values in the CSV
 
-Every CSV row is one matched region, and `region_poisson_evalue` is how many regions at least
-that surprising the whole search would turn up by chance: the region's Poisson tail
-probability (`region_tail_probability`) times the number of places a region could have
-come from, `region_search_space` (positions in the query) times `db_n_targets`. A tail
-probability of 1e-6 in a 300-residue query against 25 targets is an E-value of 0.007;
-against 500,000 targets it is 150. Unlike the tail probability, it can be compared
-across searches of different sizes.
+Every row is one matched region, and every row gets an E-value. It is the number of
+regions at least this good that an unrelated query would turn up in the whole database. Rank
+and filter by `region_evalue`. A value that could not be computed is an empty field,
+never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 
-It is not yet calibrated. Searching the 25 BCL-2-like test proteins against 500 decoys
-(each protein shuffled 20 times with its dipeptide counts kept,
-`shuffle_fasta_2mer.py --seed 1`) at `hp_lehninger2`, k=15 returns 2995 query-target
-pairs with a best region at E <= 1, where a calibrated E-value gives about 25 (one per
-query), and 4165 at E <= 10 where it gives about 250. The two reasons are documented on
-`MatchedRegion::poisson_score`: the k-mers in a run overlap, and the run's length is
-both what defines the region and what the test measures. Rank by it; do not read it as
-an expected count. The test `region_poisson_evalue_on_2mer_shuffled_decoys_overstates_hits`
-pins these numbers so a change to the statistic shows up there.
+| column | what it is | on which rows |
+|---|---|---|
+| `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
+| `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
+| `region_run_evalue` | (1 − Pr(same)) × m × n × Pr(same)^L | all |
+| `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
+| `region_poisson_evalue` | `region_tail_probability` × `region_search_space` × `db_n_targets` | all |
+| `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
+| `region_evalue_source` | `ka`, `run`, or `run_upper_bound` (below) | all |
+
+`region_evalue` is never the smaller of the two E-values. Picking the better of two tests
+makes a region look more significant than either test says.
+
+The run E-value is the Karlin-Altschul E-value for +1 per match with no mismatch allowed,
+where λ = ln(1 / Pr(same)) and K = 1 − Pr(same). K is the chance that the position before
+a run disagrees, so each run is counted once, where it starts. `m` is the query length.
+`n` is the database's residue count, which the index does not store, so it is estimated
+as `scaled × db_n_kmers + (ksize − 1) × db_n_targets`. That comes out low by k-mers that
+repeat within a target and k-mers removed as low-complexity, which makes the E-value
+slightly too small.
+
+When Pr(same) is above 0.99, both sequences are made almost entirely of one class. There
+1 − Pr(same) is close to 0 and would make every run look significant. The factor is
+dropped, the value is an upper bound, and `region_evalue_source` says `run_upper_bound`.
+
+On sequences whose letters are drawn independently, the formula predicts how many runs
+an exact search reports. At `hp_lehninger2` the search finds 198 runs of 20 or more where
+the formula predicts 200.7; at `gbmr4`, 60 runs of 17 or more against 60.4 (test
+`region_run_evalue_matches_runs_between_random_sequences`).
+
+Real proteins are not random, so the E-values were also measured on decoys. The 25
+BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
+search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
+protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value gives about 25
+query-target pairs with a best region at E <= 1 (one per query), and 250 at E <= 10:
+
+| k | E <= | `region_run_evalue` | `region_poisson_evalue` | calibrated |
+|---|---|---|---|---|
+| 15 | 1 | 6 | 2995 | 25 |
+| 15 | 10 | 165 | 4165 | 250 |
+| 12 | 1 | 6 | 2351 | 25 |
+| 12 | 10 | 175 | 4858 | 250 |
+
+The run E-value calls fewer decoy pairs than a calibrated one would. The Poisson E-value
+calls 94 to 120 times too many at E <= 1. The two reasons are documented on
+`MatchedRegion::poisson_score`: the k-mers in a run overlap, and the run's length is both
+what defines the region and what the test measures. Rank by it; do not read it as an
+expected count. The tests `region_run_evalue_on_2mer_shuffled_decoys` and
+`region_poisson_evalue_on_2mer_shuffled_decoys_overstates_hits` pin these numbers so a
+change to either statistic shows up there.
 
 ## Visualizing hits
 

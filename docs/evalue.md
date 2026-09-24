@@ -1,10 +1,12 @@
 # How a region gets an E-value
 
 `kmerseek search --extend-mismatch-penalty C` scores every extended region the way BLAST
-scores an ungapped alignment, and reports the result in two CSV columns: `region_evalue`,
+scores an ungapped alignment, and reports the result in two CSV columns: `region_ka_evalue`,
 the number of regions at least this good expected between an unrelated query and the
 whole database (smaller is better), and `region_ka_bits`, the same evidence on BLAST's
-bit scale (larger is better). This page names every quantity in the formula, says where
+bit scale (larger is better). A region that was not extended, or whose pair has no
+positive λ, has an empty `region_ka_evalue` and is ranked by `region_run_evalue` instead;
+the README section "E-values in the CSV" lists every E-value column. This page names every quantity in the formula, says where
 each one comes from, and shows the fit that supplies the two constants. The code is in
 `src/rust/evalue.rs` and the search side of `src/rust/search.rs`.
 
@@ -197,7 +199,7 @@ query and within D diagonals of each other, into one region scored with the Karl
 Altschul (1993) statistic for a sum of scores: each member's score in nats, less the
 size of the search, is λ S_i − ln(K m n_t), and the chance that r such scores add up to
 at least t is about e^(−t) t^(r−1) / (r! (r−1)!). That chance times the number of
-targets is the chain's `region_evalue`. Its `region_ka_bits` is (ln(m n_t) − ln P) / ln 2,
+targets is the chain's `region_ka_evalue`. Its `region_ka_bits` is (ln(m n_t) − ln P) / ln 2,
 which for a chain of one member is the single region's (λ S − ln K) / ln 2, so the two
 kinds of row rank on one scale. `region_n_chained` counts the members. On SCOPe40 domains chaining barely moves ranking;
 its purpose is region transfer in the QfO benchmark, where a call has to cover half a
