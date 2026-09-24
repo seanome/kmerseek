@@ -2402,6 +2402,9 @@ pub fn find_matched_regions(
     // (BCL-2 against its own sequence at hp k=12 reported 144 residues, not 239).
     let diagonal = |p: &(usize, usize, u64)| p.1 as isize - p.0 as isize;
     query_target_pairs.sort_by(|a, b| diagonal(a).cmp(&diagonal(b)).then_with(|| a.0.cmp(&b.0)));
+    // A position whose ambiguous residue gives two readings appears once per reading, so
+    // duplicate positions are dropped.
+    query_target_pairs.dedup_by_key(|&mut (q, t, _)| (q, t));
 
     // Find all consecutive regions where both query and target positions are consecutive
     let mut consecutive_regions = Vec::new();
