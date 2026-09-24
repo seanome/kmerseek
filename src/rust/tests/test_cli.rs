@@ -11,9 +11,9 @@ use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
 
 /// Rows `kmerseek search` writes for CED9 against the 25-protein fixture at hp k=12 with
-/// `--max-pvalue 0.7` and every other filter open: 364 pairs unfiltered, 242 once the
+/// `--max-pvalue 0.7` and every other filter open: 330 rows unfiltered, 218 once the
 /// p-value cap drops the pairs not enriched above chance in this small, BCL2-heavy set.
-const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 242;
+const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 218;
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
@@ -322,7 +322,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             assert_eq!(&record?[col], expected);
             rows += 1;
         }
-        assert_eq!(rows, 362, "ced9 against the 25-sequence bcl2 index at k=12");
+        assert_eq!(rows, 330, "ced9 against the 25-sequence bcl2 index at k=12");
     }
 
     Ok(())
@@ -783,7 +783,7 @@ fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error
         output.to_str().unwrap(),
     ]);
     cmd.assert().success().stderr(predicate::str::contains(
-        "27 shared 12-mers in 14 matched regions (hp_lehninger2)",
+        "27 shared 12-mers in 13 matched regions (hp_lehninger2)",
     ));
 
     let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&output)?)?;
@@ -1284,7 +1284,7 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     // (HP pairs sit near pr_same 0.5, below 2/3); at 0.67 none does (the cutoff is 0.401).
     type Search<'a> = (&'a str, Vec<&'a str>, &'a [(&'a str, usize)]);
     let searches: [Search; 4] = [
-        ("exact", vec![], &[("run", 362)]),
+        ("exact", vec![], &[("run", 330)]),
         ("extended", extend.to_vec(), &[("ka", 322)]),
         ("no_lambda", no_lambda.to_vec(), &[("run", 118)]),
         ("chained", [extend.as_slice(), chain.as_slice()].concat(), &[("ka", 317)]),

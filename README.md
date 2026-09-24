@@ -222,9 +222,9 @@ across searches of different sizes.
 
 It is not yet calibrated. Searching the 25 BCL-2-like test proteins against 500 decoys
 (each protein shuffled 20 times with its dipeptide counts kept,
-`shuffle_fasta_2mer.py --seed 1`) at `hp_lehninger2`, k=15 returns 2953 query-target
+`shuffle_fasta_2mer.py --seed 1`) at `hp_lehninger2`, k=15 returns 2995 query-target
 pairs with a best region at E <= 1, where a calibrated E-value gives about 25 (one per
-query), and 4131 at E <= 10 where it gives about 250. The two reasons are documented on
+query), and 4165 at E <= 10 where it gives about 250. The two reasons are documented on
 `MatchedRegion::poisson_score`: the k-mers in a run overlap, and the run's length is
 both what defines the region and what the test measures. Rank by it; do not read it as
 an expected count. The test `region_poisson_evalue_on_2mer_shuffled_decoys_overstates_hits`

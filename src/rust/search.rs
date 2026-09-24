@@ -2361,9 +2361,14 @@ pub fn find_matched_regions(
         return Vec::new();
     }
 
-    // Sort pairs by query position, then by target position
-    // WHY: This allows us to efficiently find consecutive regions in both query and target.
-    query_target_pairs.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    // Sort pairs by diagonal (target position minus query position), then query position, so
+    // the steps of one run sit next to each other. Sorting by query position alone put a
+    // k-mer's other target positions between them, and a run through any k-mer that occurs
+    // twice in the target came back as overlapping pieces: 18,360 of 60,175 regions between
+    // random HP sequences at k=12. A position whose ambiguous residue gives two readings
+    // appears once per reading, so duplicate positions are dropped.
+    query_target_pairs.sort_by_key(|&(q, t, _)| (t as isize - q as isize, q));
+    query_target_pairs.dedup_by_key(|&mut (q, t, _)| (q, t));
 
     // Find all consecutive regions where both query and target positions are consecutive
     let mut consecutive_regions = Vec::new();
@@ -4859,9 +4864,9 @@ mod tests {
         };
         // Every pair with a shared k-mer; the CLI drops those with only one.
         assert_eq!(results.len(), 8762);
-        // 118 times the 25 a calibrated E-value would give, and 16.5 times the 250.
-        assert_eq!(pairs_at_or_below(1.0), 2953);
-        assert_eq!(pairs_at_or_below(10.0), 4131);
+        // 120 times the 25 a calibrated E-value would give, and 16.7 times the 250.
+        assert_eq!(pairs_at_or_below(1.0), 2995);
+        assert_eq!(pairs_at_or_below(10.0), 4165);
         Ok(())
     }
 
@@ -5256,10 +5261,10 @@ mod tests {
 
     /// Complements `test_pvalue_scopes_combine_with_or`'s BCL2/CED9 example, where the region
     /// scope rescues a hit the query scope rejects, with a real case running the other
-    /// direction. BCL2A1 vs ASPP2/TP53BP2 at k=9, in the same 25-sequence fixture database, is
-    /// an overwhelming whole-protein match (115 shared k-mers scattered across 333 short
+    /// direction. BCL2A1 vs FBX10 at k=9, in the same 25-sequence fixture database, is an
+    /// overwhelming whole-protein match (116 shared k-mers scattered across 151 short
     /// regions) with no single region concentrated enough to pass on its own. Its strongest
-    /// region only reaches p=0.0956 (score ~1.02), below the ~1.301 default cap (p=0.05).
+    /// region only reaches p=0.068 (score ~1.17), below the ~1.301 default cap (p=0.05).
     /// This shows the OR only needs one scope to hold, in either direction.
     #[test]
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
@@ -5283,15 +5288,15 @@ mod tests {
         fn find_hit(results: &[SearchResult]) -> Option<&SearchResult> {
             results
                 .iter()
-                .find(|r| r.query_name.contains("B2LA1") && r.target_name.contains("ASPP2"))
+                .find(|r| r.query_name.contains("B2LA1") && r.target_name.contains("FBX10"))
         }
 
         // Unfiltered, to inspect the pair's raw numbers.
         let all_results = searcher.search(&query_signatures, &SearchFilters::default())?;
-        let hit = find_hit(&all_results).expect("BCL2A1 vs ASPP2/TP53BP2 should be found");
+        let hit = find_hit(&all_results).expect("BCL2A1 vs FBX10 should be found");
 
-        assert_eq!(hit.n_intersecting_hashes, 115);
-        assert_relative_eq!(hit.query_poisson_pvalue, 2.356_930_483e-7, epsilon = 1e-15);
+        assert_eq!((hit.n_intersecting_hashes, hit.matched_regions.len()), (116, 151));
+        assert_relative_eq!(hit.query_poisson_pvalue, 1.382_553_145_301_557_2e-7, epsilon = 1e-15);
         assert!(hit.query_poisson_pvalue < 0.05, "whole-query scope should clearly pass");
 
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
@@ -5301,11 +5306,7 @@ mod tests {
             .iter()
             .map(|region| region.poisson_score)
             .fold(f64::NEG_INFINITY, f64::max);
-        assert_relative_eq!(
-            best_region_score,
-            -0.095_589_196_102_397_8_f64.log10(),
-            epsilon = 1e-12
-        );
+        assert_relative_eq!(best_region_score, 1.166_357_564_610_534_6, epsilon = 1e-12);
         let default_min_region_score = -0.05_f64.log10();
         assert!(
             best_region_score < default_min_region_score,
