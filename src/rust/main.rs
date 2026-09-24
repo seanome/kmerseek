@@ -209,7 +209,7 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_XDROP)]
         extend_xdrop: f64,
 
-        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
+        /// Karlin-Altschul K for `region_ka_evalue` and `region_ka_bits` on extended regions.
         /// Optional: without it, the r_database and K fitted when the index was built (for
         /// its penalty and give-up margin) are used, or, for another penalty or give-up
         /// margin, a fit on --ka-queries database sequences runs before the search. With

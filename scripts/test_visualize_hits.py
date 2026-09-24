@@ -180,7 +180,8 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_n_mismatches": 0,
         # Karlin-Altschul bits and E-value need --extend-mismatch-penalty; off here.
         "region_ka_bits": 0.0,
-        "region_evalue": float("inf"),
+        # Empty in the CSV (None here) unless the region was extended.
+        "region_ka_evalue": None,
         # A region that stands alone; only --chain-max-gap joins regions into one row.
         "region_n_chained": 1,
     }
