@@ -191,6 +191,9 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         # (1 - 0.5) x 285 query residues x (7,629 + 14 x 25) database residues x
         # 0.5^region_length.
         "region_run_evalue": 0.5 * 285 * 7979 * 0.5**region_length,
+        # Not extended, so region_evalue is the run E-value.
+        "region_evalue": 0.5 * 285 * 7979 * 0.5**region_length,
+        "region_evalue_source": "run",
         # A region that stands alone; only --chain-max-gap joins regions into one row.
         "region_n_chained": 1,
     }
