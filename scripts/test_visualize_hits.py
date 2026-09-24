@@ -184,6 +184,13 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_ka_evalue": None,
         # Poisson tail probability times region_search_space times db_n_targets.
         "region_poisson_evalue": region_tail_probability * 271 * 25,
+        # An exact region is one unbroken run of agreeing positions.
+        "region_run_length": region_length,
+        # Two HP classes at about half each.
+        "region_pr_same": 0.5,
+        # (1 - 0.5) x 285 query residues x (7,629 + 14 x 25) database residues x
+        # 0.5^region_length.
+        "region_run_evalue": 0.5 * 285 * 7979 * 0.5**region_length,
         # A region that stands alone; only --chain-max-gap joins regions into one row.
         "region_n_chained": 1,
     }
