@@ -976,9 +976,9 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     assert_eq!((grown.region_n_shared_kmers, grown.region_n_mismatches), (8, 2));
     assert_eq!(grown.db_n_kmers, 8340);
     assert_relative_eq!(grown.region_ka_bits, 18.745416480655074, epsilon = 1e-9);
-    assert_relative_eq!(grown.region_evalue, 5.313631588881071, epsilon = 1e-9);
-    // Without extension there is no score: 0 bits, E infinite.
-    assert_eq!((seed.region_ka_bits, seed.region_evalue), (0.0, f64::INFINITY));
+    assert_relative_eq!(grown.region_ka_evalue.unwrap(), 5.313631588881071, epsilon = 1e-9);
+    // Without extension there is no score: 0 bits and an empty E-value field.
+    assert_eq!((seed.region_ka_bits, seed.region_ka_evalue), (0.0, None));
     Ok(())
 }
 
