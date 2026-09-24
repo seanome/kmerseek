@@ -1262,3 +1262,66 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
     );
     Ok(())
 }
+
+/// No column of `kmerseek search` output holds `inf` or `NaN`, exact, extended with and
+/// without a positive lambda, or chained. A missing value is an empty field: an awk filter
+/// reads "inf" as 0, so `E <= 10000` kept every row that had no E-value. Every row has a
+/// `region_evalue` and a `region_evalue_source`, since the fixture stores its sequences.
+#[test]
+fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output"])
+        .arg(&target_index_path)
+        .args(["--ksize", "12", "--alphabet", "hp", "--ka-queries", "0"])
+        .assert()
+        .success();
+    let extend = ["--extend-mismatch-penalty", "2", "--ka-k", "0.03"];
+    let no_lambda = ["--extend-mismatch-penalty", "0.67", "--ka-k", "0.03"];
+    let chain = ["--chain-max-gap", "30", "--chain-max-shift", "10"];
+    // Rows by region_evalue_source. At penalty 2 every pair here has a positive lambda
+    // (HP pairs sit near pr_same 0.5, below 2/3); at 0.67 none does (the cutoff is 0.401).
+    type Search<'a> = (&'a str, Vec<&'a str>, &'a [(&'a str, usize)]);
+    let searches: [Search; 4] = [
+        ("exact", vec![], &[("run", 362)]),
+        ("extended", extend.to_vec(), &[("ka", 322)]),
+        ("no_lambda", no_lambda.to_vec(), &[("run", 118)]),
+        ("chained", [extend.as_slice(), chain.as_slice()].concat(), &[("ka", 317)]),
+    ];
+    for (name, extra, expected) in searches {
+        let out = temp_dir.path().join(format!("{name}.csv"));
+        Command::cargo_bin("kmerseek")?
+            .args(["search", "--query", TEST_CED9_FASTA, "--target"])
+            .arg(&target_index_path)
+            .arg("--output")
+            .arg(&out)
+            .args(["--ksize", "12", "--alphabet", "hp", "--min-shared-kmers", "0"])
+            .args(extra)
+            .assert()
+            .success();
+        let mut reader = csv::Reader::from_path(&out)?;
+        let header = reader.headers()?.clone();
+        let column = |name: &str| header.iter().position(|h| h == name).unwrap();
+        let (evalue, source) = (column("region_evalue"), column("region_evalue_source"));
+        let mut sources: Vec<(String, usize)> = Vec::new();
+        for record in reader.records() {
+            let record = record?;
+            for (h, field) in header.iter().zip(record.iter()) {
+                // Whole fields only: a residue string can hold the letters I, N, F in a row.
+                let lower = field.to_ascii_lowercase();
+                let not_finite = ["inf", "-inf", "infinity", "-infinity", "nan"];
+                assert!(!not_finite.contains(&lower.as_str()), "{name}: {h} = {field}");
+            }
+            assert_ne!(&record[evalue], "", "{name}");
+            match sources.iter_mut().find(|(s, _)| s == &record[source]) {
+                Some((_, n)) => *n += 1,
+                None => sources.push((record[source].to_string(), 1)),
+            }
+        }
+        let expected: Vec<(String, usize)> =
+            expected.iter().map(|&(s, n)| (s.to_string(), n)).collect();
+        assert_eq!(sources, expected, "{name}");
+    }
+    Ok(())
+}

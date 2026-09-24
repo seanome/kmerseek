@@ -146,10 +146,11 @@ def protein_key(header):
 
 def ranking(rows):
     """{target_name: (statistic, is_evalue)} for ordering rows: region_evalue when the CSV
-    carries it, else the BH q-value of the best region's tail probability."""
+    carries it, else the BH q-value of the best region's tail probability. An empty
+    region_evalue (no E-value could be computed) ranks last."""
     best = _target_best_rows(rows)
     if "region_evalue" in rows[0]:
-        return {t: float(r["region_evalue"]) for t, r in best.items()}, True
+        return {t: float(r["region_evalue"] or "inf") for t, r in best.items()}, True
     return benjamini_hochberg(_target_tail_probabilities(rows)), False
 
 
@@ -305,7 +306,7 @@ class SearchReport:
             "alphabet": protein_rows[0]["model"]["alphabet"] if protein_rows else rows[0]["moltype"],
             "classes": protein_rows[0]["model"]["classes"] if protein_rows else [],
             "stat_name": "E-value" if is_evalue else "q-value",
-            "stat_note": "Karlin-Altschul E-value of the best region" if is_evalue else "Benjamini-Hochberg corrected tail probability of the best region",
+            "stat_note": "E-value of the best region: Karlin-Altschul for an extended region, the run E-value otherwise (region_evalue_source)" if is_evalue else "Benjamini-Hochberg corrected tail probability of the best region",
             "n_entries": len(_target_best_rows(rows)),
             "n_proteins": len(fold_entries(rows)),
             "solid_identical": self.args.solid_identical,

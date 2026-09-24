@@ -465,6 +465,18 @@ pub fn karlin_altschul_k_theory(a: f64, penalty: f64) -> Option<f64> {
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
 }
 
+/// Which E-value a region's `region_evalue` is, written in `region_evalue_source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalueSource {
+    /// `region_ka_evalue`: the region was extended and its pair has a positive lambda.
+    Ka,
+    /// `region_run_evalue`.
+    Run,
+    /// `region_run_evalue` at pr_same above `RUN_UPPER_BOUND_PR_SAME`, an upper bound.
+    RunUpperBound,
+}
+
 /// Above this `pr_same`, `run_evalue` drops its (1 - pr_same) factor and returns an upper
 /// bound.
 pub const RUN_UPPER_BOUND_PR_SAME: f64 = 0.99;

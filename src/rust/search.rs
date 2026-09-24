@@ -13,8 +13,8 @@ use statrs::distribution::{DiscreteCDF, Poisson};
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::{
-    fit_scores, fit_scores_with_reference, make_decoy, run_evalue, DecoyNull, KaCalibration,
-    SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
+    fit_scores, fit_scores_with_reference, make_decoy, run_evalue, DecoyNull, EvalueSource,
+    KaCalibration, SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS, RUN_UPPER_BOUND_PR_SAME,
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
@@ -455,6 +455,11 @@ pub struct SearchResultCsv {
     /// Expected number of runs at least region_run_length long by chance (see
     /// MatchedRegion::run_evalue).
     pub region_run_evalue: Option<f64>,
+    /// region_ka_evalue when present, otherwise region_run_evalue (see
+    /// MatchedRegion::evalue). Empty only when both are.
+    pub region_evalue: Option<f64>,
+    /// `ka`, `run` or `run_upper_bound`: which E-value region_evalue is.
+    pub region_evalue_source: Option<EvalueSource>,
 }
 
 impl SearchResultCsv {
@@ -530,6 +535,8 @@ impl SearchResultCsv {
             region_run_length: region.run_length,
             region_pr_same: region.pr_same,
             region_run_evalue: region.run_evalue,
+            region_evalue: region.evalue,
+            region_evalue_source: region.evalue_source,
         }
     }
 }
@@ -833,6 +840,15 @@ pub struct MatchedRegion {
     /// `evalue::run_evalue`, including the upper bound used when pr_same > 0.99. None without
     /// DB context or `pr_same`.
     pub run_evalue: Option<f64>,
+
+    /// The E-value to rank and filter by: `ka_evalue` when there is one, otherwise
+    /// `run_evalue`. Never the smaller of the two, since picking the better of two tests
+    /// makes a region look more significant than either test says. None only when both
+    /// are.
+    pub evalue: Option<f64>,
+
+    /// Which of the two `evalue` is (see `EvalueSource`).
+    pub evalue_source: Option<EvalueSource>,
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -937,7 +953,25 @@ impl MatchedRegion {
             run_length: 0,
             pr_same: None,
             run_evalue: None,
+            evalue: None,
+            evalue_source: None,
         }
+    }
+
+    /// Set `evalue` and `evalue_source` from `ka_evalue` and `run_evalue`.
+    fn choose_evalue(&mut self) {
+        let run_source = |p: f64| {
+            if p > RUN_UPPER_BOUND_PR_SAME {
+                EvalueSource::RunUpperBound
+            } else {
+                EvalueSource::Run
+            }
+        };
+        (self.evalue, self.evalue_source) = match (self.ka_evalue, self.run_evalue, self.pr_same) {
+            (Some(e), _, _) => (Some(e), Some(EvalueSource::Ka)),
+            (None, Some(e), Some(p)) => (Some(e), Some(run_source(p))),
+            _ => (None, None),
+        };
     }
 }
 
@@ -1796,7 +1830,8 @@ impl ProteinSearcher {
         Some(result)
     }
 
-    /// Fill `pr_same` and `run_evalue` on every region of one pair.
+    /// Fill `pr_same`, `run_evalue`, and the `evalue` chosen from it and `ka_evalue`, on
+    /// every region of one pair.
     fn score_runs(
         &self,
         regions: &mut [MatchedRegion],
@@ -1808,6 +1843,7 @@ impl ProteinSearcher {
             region.pr_same = pr_same;
             region.run_evalue =
                 pr_same.map(|p| run_evalue(p, region.run_length, m, self.db_n_residues));
+            region.choose_evalue();
         }
     }
 
@@ -4711,6 +4747,70 @@ mod tests {
         assert_relative_eq!(region.run_evalue.unwrap(), expected, max_relative = 1e-12);
         assert_relative_eq!(region.run_evalue.unwrap(), 2.671_370_550_951_629, epsilon = 1e-9);
         Ok(())
+    }
+
+    /// CED-9 against the 25 BCL-2-like proteins, extended at hp_lehninger2 k=15. The pair
+    /// CED-9/BCL2 has pr_same 0.502. At mismatch penalty 0.67 a positive lambda needs pr_same
+    /// below 0.67 / 1.67 = 0.401, so there is none: no Karlin-Altschul E-value, and
+    /// region_evalue falls back to the run E-value. At penalty 2 the cutoff is 2/3, lambda is
+    /// positive, and region_evalue is the Karlin-Altschul one.
+    #[test]
+    fn region_evalue_falls_back_to_run_evalue_without_a_positive_lambda() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let query = query_index.get_signatures().iter().next().unwrap().value().clone();
+        let mut best_bcl2_region = |mismatch_penalty: f64| -> Result<MatchedRegion> {
+            searcher.set_extension(Some(ExtensionParams {
+                scoring: ExtensionScoring { mismatch_penalty, xdrop: 8.0 },
+                ka: KaParams { k: 0.03, r_database: 1.0 },
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            }));
+            let results =
+                searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+            let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+            Ok(bcl2.matched_regions.iter().max_by_key(|r| r.run_length).unwrap().clone())
+        };
+
+        let flat = best_bcl2_region(0.67)?;
+        assert_relative_eq!(flat.pr_same.unwrap(), 0.502_375_971_309_025_7, epsilon = 1e-12);
+        // Extension at this penalty runs far past the seed, but the longest stretch without a
+        // mismatch is still the 19-residue exact region, with the exact search's run E-value.
+        assert_eq!((flat.length, flat.n_mismatches, flat.run_length), (99, 41, 19));
+        assert_relative_eq!(flat.run_evalue.unwrap(), 2.671_370_550_951_629, epsilon = 1e-9);
+        assert_eq!(flat.ka_evalue, None);
+        assert_eq!(flat.evalue, flat.run_evalue);
+        assert_eq!(flat.evalue_source, Some(EvalueSource::Run));
+
+        let steep = best_bcl2_region(2.0)?;
+        assert_relative_eq!(steep.ka_evalue.unwrap(), 5.629_646_129_418_843, epsilon = 1e-9);
+        assert_eq!((steep.length, steep.n_mismatches, steep.run_length), (26, 2, 19));
+        assert_eq!(steep.evalue, steep.ka_evalue);
+        assert_eq!(steep.evalue_source, Some(EvalueSource::Ka));
+        Ok(())
+    }
+
+    /// Pr(same) above 0.99 marks the run E-value as an upper bound; at or below it, as run.
+    #[test]
+    fn choose_evalue_marks_the_upper_bound() {
+        let unscored = MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap());
+        let with = |pr_same: f64| {
+            let mut r =
+                MatchedRegion { pr_same: Some(pr_same), run_evalue: Some(3.0), ..unscored.clone() };
+            r.choose_evalue();
+            (r.evalue, r.evalue_source)
+        };
+        assert_eq!(with(0.99), (Some(3.0), Some(EvalueSource::Run)));
+        assert_eq!(with(0.995), (Some(3.0), Some(EvalueSource::RunUpperBound)));
+        let mut neither = unscored;
+        neither.choose_evalue();
+        assert_eq!((neither.evalue, neither.evalue_source), (None, None));
     }
 
     /// An extended region's run is its longest stretch without a mismatch: here positions
