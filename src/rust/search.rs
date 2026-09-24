@@ -400,6 +400,9 @@ pub struct SearchResultCsv {
     pub region_evalue: f64,
     /// Number of extended regions chained into this row (see MatchedRegion::n_chained).
     pub region_n_chained: u32,
+    /// Expected number of regions at least this surprising in the whole search, by chance
+    /// (see MatchedRegion::poisson_evalue).
+    pub region_poisson_evalue: f64,
 }
 
 impl SearchResultCsv {
@@ -471,6 +474,7 @@ impl SearchResultCsv {
             region_ka_bits: region.ka_bits,
             region_evalue: region.evalue,
             region_n_chained: region.n_chained,
+            region_poisson_evalue: region.poisson_evalue,
         }
     }
 }
@@ -740,6 +744,18 @@ pub struct MatchedRegion {
     /// K is `KaParams::k`, fitted on the index for the alphabet, penalty and give-up margin
     /// in use. Infinity without extension or DB context.
     pub evalue: f64,
+
+    /// Poisson E-value: how many regions at least this surprising the whole search would turn up
+    /// by chance. `tail_probability` times the number of places a region could have come
+    /// from, `region_search_space` (query positions) times `db_n_targets` (targets). A
+    /// tail probability of 1e-6 in a 300-residue query against 25 targets is an E-value of
+    /// about 0.007; the same probability against 500,000 targets is about 150, meaning a
+    /// region like it is expected many times over. Comparable across searches of
+    /// different sizes, where `tail_probability` is not. Inherits both problems documented
+    /// on `poisson_score`, so it is a ranking statistic until checked against a decoy
+    /// database. 0.0 without DB context, where `tail_probability` is 1.0 but the search
+    /// space is unknown.
+    pub poisson_evalue: f64,
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -840,6 +856,7 @@ impl MatchedRegion {
             ka_bits: 0.0,
             n_chained: 1,
             evalue: f64::INFINITY,
+            poisson_evalue: 0.0,
         }
     }
 }
@@ -1569,6 +1586,7 @@ impl ProteinSearcher {
         // Rescope the same Poisson test to each matched region individually, so a tight local
         // match doesn't get diluted by the whole protein's k-mer count.
         let ksize = query.sketch.protein_ksize() as usize;
+        let n_candidates = (result.region_search_space * self.stats.total_signatures) as f64;
         for region in result.matched_regions.iter_mut() {
             // lambda: for each query k-mer positioned inside this region, how many target
             // signatures contain that k-mer's hash, divided by the total number of target
@@ -1590,6 +1608,7 @@ impl ProteinSearcher {
             region.expected_shared_kmers = lambda;
             region.poisson_score = neg_log10_score(tail_probability);
             region.tail_probability = tail_probability;
+            region.poisson_evalue = tail_probability * n_candidates;
             region.enrichment = fold_enrichment(n_shared, lambda);
             // Same window as lambda, summing IDF instead of frequency: how rare the k-mers
             // that make up this region are, in total and on average.
@@ -2584,7 +2603,9 @@ impl ProteinSearcher {
 mod tests {
     use super::*;
     use crate::sketch::ProteinSketch;
-    use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
+    use crate::tests::test_fixtures::{
+        TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_DECOYS_2MER_GZ, TEST_FASTA_GZ,
+    };
     use approx::assert_relative_eq;
     use needletail::parse_fastx_file;
     use rstest::{fixture, rstest};
@@ -2611,6 +2632,7 @@ mod tests {
             enrichment: 1.5,
             tfidf: 7.0,
             mean_idf: 3.5,
+            poisson_evalue: 0.02,
             ..MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap())
         };
 
@@ -2673,6 +2695,7 @@ mod tests {
         assert_eq!(row.region_enrichment, 1.5);
         assert_eq!(row.region_tfidf, 7.0);
         assert_eq!(row.region_mean_idf, 3.5);
+        assert_eq!(row.region_poisson_evalue, 0.02);
         // region_search_space, db_n_targets, db_n_kmers, and run_n_queries travel as
         // separate columns, never folded into a p-value.
         assert_eq!(row.region_search_space, 300);
@@ -4513,6 +4536,71 @@ mod tests {
                 assert_eq!(region.n_shared, region.length - ksize + 1);
             }
         }
+    }
+
+    /// The E-value is the tail probability times the number of candidate regions, so a
+    /// calibrated one gives about x regions with E <= x per query when nothing is related.
+    #[test]
+    fn region_poisson_evalue_is_tail_probability_times_candidate_regions() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let queries: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+        let results = searcher.search(&queries, &SearchFilters::default())?;
+        let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+        // CED-9 is 280 residues, so 266 places a 15-mer can start, times 25 targets.
+        assert_eq!(bcl2.region_search_space * bcl2.db_n_targets, 266 * 25);
+        for region in &bcl2.matched_regions {
+            assert_relative_eq!(
+                region.poisson_evalue,
+                region.tail_probability * 6650.0,
+                epsilon = 1e-12
+            );
+        }
+        Ok(())
+    }
+
+    /// How far the E-value is from calibrated, measured on decoys: the 25 real proteins
+    /// searched against 500 sequences with their 2-mer counts kept and nothing else. A
+    /// calibrated E-value gives about x query-target pairs with a best region at E <= x per
+    /// query, so 25 pairs at E <= 1 and 250 at E <= 10. The counts here are the measured
+    /// values, far above that, for the two reasons documented on `poisson_score`: the k-mers
+    /// in a run overlap, and the run's length is both what defines the region and what is
+    /// tested. The test pins the numbers so a change to the statistic shows up as a change
+    /// here; it is not a claim that they are right.
+    #[test]
+    fn region_poisson_evalue_on_2mer_shuffled_decoys_overstates_hits() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_DECOYS_2MER_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let queries: Vec<_> =
+            query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
+        assert_eq!(queries.len(), 25);
+        let results = searcher.search(&queries, &SearchFilters::default())?;
+        assert_eq!(results[0].db_n_targets, 500);
+        let pairs_at_or_below = |x: f64| {
+            results
+                .iter()
+                .filter(|r| r.matched_regions.iter().any(|region| region.poisson_evalue <= x))
+                .count()
+        };
+        // Every pair with a shared k-mer; the CLI drops those with only one.
+        assert_eq!(results.len(), 8762);
+        // 118 times the 25 a calibrated E-value would give, and 16.5 times the 250.
+        assert_eq!(pairs_at_or_below(1.0), 2953);
+        assert_eq!(pairs_at_or_below(10.0), 4131);
+        Ok(())
     }
 
     /// The same 5 shared k-mers that read as a weak whole-protein match (containment ~0.019
