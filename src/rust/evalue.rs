@@ -465,6 +465,32 @@ pub fn karlin_altschul_k_theory(a: f64, penalty: f64) -> Option<f64> {
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
 }
 
+/// Above this `pr_same`, `run_evalue` drops its (1 - pr_same) factor and returns an upper
+/// bound.
+pub const RUN_UPPER_BOUND_PR_SAME: f64 = 0.99;
+
+/// Expected number of runs of at least `run_length` class-identical positions between an
+/// unrelated query of `m` residues and a database of `n` residues:
+///
+/// E_run = (1 - pr_same) m n pr_same^run_length
+///
+/// `pr_same` is the chance that one query position and one target position fall in the
+/// same class, from the pair's class compositions (`search::match_probability`). This is
+/// the Karlin-Altschul E-value for +1 per match with no mismatch allowed, where lambda is
+/// ln(1 / pr_same) and K is 1 - pr_same. The K factor is the chance that the position before
+/// a run disagrees, so each run is counted once, at its start, and not once for every
+/// k-mer inside it. Positions are drawn independently, so real proteins, whose classes
+/// repeat in patterns, give more long runs than this predicts.
+///
+/// When `pr_same` is above `RUN_UPPER_BOUND_PR_SAME` (both sequences almost all one class),
+/// 1 - pr_same goes to 0 and would make a run look significant only because nearly every
+/// position starts none. The factor is dropped there, which counts every position as a
+/// possible start: an upper bound on the expected count.
+pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64) -> f64 {
+    let starts = if pr_same > RUN_UPPER_BOUND_PR_SAME { 1.0 } else { 1.0 - pr_same };
+    starts * m * n * pr_same.powi(run_length as i32)
+}
+
 /// Which sequences are searched to fit r_database and K.
 ///
 /// What each choice keeps and loses, and what it does to the fit, is measured in
@@ -771,6 +797,7 @@ pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexR
 mod tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_BLC2_FASTA;
+    use approx::assert_relative_eq;
 
     /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
     /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,
@@ -779,6 +806,34 @@ mod tests {
     /// 1 - e^-lambda = 1 - p/q, so K = (q - p)(q - p) / q. Ewens & Grant, Statistical
     /// Methods in Bioinformatics (2nd ed., 2005), reach the same (q - p)^2 / q for this walk
     /// in their BLAST chapter.
+    /// E_run = (1 - pr_same) m n pr_same^L, worked by hand. The first two are the handoff's
+    /// simulated settings (300-residue query, 3,000 residues of targets): two equal classes
+    /// at L = 16 is 0.5 x 900,000 / 2^16, and four equal classes at L = 8 is
+    /// 0.75 x 900,000 / 4^8.
+    #[test]
+    fn test_run_evalue_by_hand() {
+        assert_eq!(run_evalue(0.5, 16, 300.0, 3000.0), 6.866_455_078_125);
+        assert_eq!(run_evalue(0.25, 8, 300.0, 3000.0), 10.299_682_617_187_5);
+        // At the cutoff the factor stays: 0.01 x 100 x 1,000 x 0.99^50.
+        assert_relative_eq!(
+            run_evalue(0.99, 50, 100.0, 1000.0),
+            605.006_067_137_536_3,
+            epsilon = 1e-9
+        );
+    }
+
+    /// Above pr_same 0.99 the (1 - pr_same) factor is dropped: 100 x 1,000 x 0.995^100, not
+    /// 0.005 of it, which would call a 100-residue run of one class in two sequences made
+    /// of that class significant (E = 303).
+    #[test]
+    fn test_run_evalue_upper_bound_above_099() {
+        assert_relative_eq!(
+            run_evalue(0.995, 100, 100.0, 1000.0),
+            60_577.043_649_072_795,
+            epsilon = 1e-9
+        );
+    }
+
     #[test]
     fn test_k_theory_matches_the_plus_minus_one_random_walk() {
         let (p, q) = (0.3, 0.7);

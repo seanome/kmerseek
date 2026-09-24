@@ -13,8 +13,8 @@ use statrs::distribution::{DiscreteCDF, Poisson};
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::{
-    fit_scores, fit_scores_with_reference, make_decoy, DecoyNull, KaCalibration, SplitMix64,
-    BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
+    fit_scores, fit_scores_with_reference, make_decoy, run_evalue, DecoyNull, KaCalibration,
+    SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
@@ -268,6 +268,50 @@ fn match_probability(p: &ClassComposition, q: &ClassComposition) -> f64 {
     p.iter().zip(q).map(|(a, b)| a * b).sum()
 }
 
+/// The sequence a match is counted on: the encoded sequence, or the raw residues for
+/// `protein`, which stores no encoded one. None when the sketch stores no sequence.
+fn class_sequence(sketch: &ProteinSketch) -> Option<&[u8]> {
+    sketch.get_moltype_sequence().or_else(|| sketch.get_raw_sequence()).map(str::as_bytes)
+}
+
+/// `match_probability` of a query and one target. The target's composition is counted
+/// here, once per pair: one pass over a few hundred bytes, next to `find_matched_regions`'
+/// walk over both sequences.
+fn pair_pr_same(query: &PreparedQuery<'_>, target: &ProteinSketch) -> Option<f64> {
+    let q_composition = query.composition.as_ref()?;
+    Some(match_probability(q_composition, &class_composition(class_sequence(target)?)))
+}
+
+/// Set `run_length` on every region, before any chaining, while each region still sits on
+/// one diagonal.
+fn measure_runs(regions: &mut [MatchedRegion], query: &ProteinSketch, target: &ProteinSketch) {
+    let (Some(q), Some(t)) = (class_sequence(query), class_sequence(target)) else {
+        return;
+    };
+    let agree = residues_agree(&query.moltype().to_string());
+    for region in regions.iter_mut() {
+        region.run_length = longest_agreeing_run(q, t, region, &agree);
+    }
+}
+
+/// Longest stretch of agreeing positions inside `region`'s span, walking its diagonal from
+/// (`start`, `target_start`).
+fn longest_agreeing_run(
+    q: &[u8],
+    t: &[u8],
+    region: &MatchedRegion,
+    agree: &impl Fn(u8, u8) -> bool,
+) -> u32 {
+    let q_span = q.get(region.start as usize..region.end as usize).unwrap_or_default();
+    let t_span = t.get(region.target_start as usize..).unwrap_or_default();
+    let (mut best, mut current) = (0, 0);
+    for (&a, &b) in q_span.iter().zip(t_span) {
+        current = if agree(a, b) { current + 1 } else { 0 };
+        best = best.max(current);
+    }
+    best
+}
+
 /// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
 /// matches with probability `a`: the positive root of a e^x + (1-a) e^(-penalty x) = 1.
 ///
@@ -404,6 +448,13 @@ pub struct SearchResultCsv {
     /// Expected number of regions at least this surprising in the whole search, by chance
     /// (see MatchedRegion::poisson_evalue).
     pub region_poisson_evalue: f64,
+    /// Longest run of agreeing positions in the region (see MatchedRegion::run_length).
+    pub region_run_length: u32,
+    /// Chance that two positions of this pair share a class (see MatchedRegion::pr_same).
+    pub region_pr_same: Option<f64>,
+    /// Expected number of runs at least region_run_length long by chance (see
+    /// MatchedRegion::run_evalue).
+    pub region_run_evalue: Option<f64>,
 }
 
 impl SearchResultCsv {
@@ -476,6 +527,9 @@ impl SearchResultCsv {
             region_ka_evalue: region.ka_evalue,
             region_n_chained: region.n_chained,
             region_poisson_evalue: region.poisson_evalue,
+            region_run_length: region.run_length,
+            region_pr_same: region.pr_same,
+            region_run_evalue: region.run_evalue,
         }
     }
 }
@@ -760,6 +814,25 @@ pub struct MatchedRegion {
     /// database. 0.0 without DB context, where `tail_probability` is 1.0 but the search
     /// space is unknown.
     pub poisson_evalue: f64,
+
+    /// Length of the longest run of agreeing positions inside the region, on its diagonal:
+    /// L in `run_evalue`. Agreement is the rule exact regions are found with
+    /// (`residues_agree`), so for an exact region this is `length`. For an extended region
+    /// it is the longest stretch with no mismatch. For a chain it is the longest of its
+    /// members'.
+    pub run_length: u32,
+
+    /// Chance that one query position and one target position fall in the same class, from
+    /// this pair's class compositions (`match_probability`). The same for every region of a
+    /// pair. None when either sequence is not stored.
+    pub pr_same: Option<f64>,
+
+    /// Expected number of runs at least `run_length` long between an unrelated query and
+    /// the database: (1 - pr_same) m n pr_same^run_length, with m the query length and n
+    /// the database's residues (`ProteinSearcher::db_n_residues`). See
+    /// `evalue::run_evalue`, including the upper bound used when pr_same > 0.99. None without
+    /// DB context or `pr_same`.
+    pub run_evalue: Option<f64>,
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -861,6 +934,9 @@ impl MatchedRegion {
             n_chained: 1,
             ka_evalue: None,
             poisson_evalue: 0.0,
+            run_length: 0,
+            pr_same: None,
+            run_evalue: None,
         }
     }
 }
@@ -956,6 +1032,13 @@ pub struct ProteinSearcher {
     /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
     /// on every candidate pair.
     db_n_kmers: usize,
+    /// Residues in the database, n in `run_evalue`. The index does not store it, so it is
+    /// estimated from the k-mer count as `scaled * db_n_kmers + (ksize - 1) * db_n_targets`:
+    /// a sequence of L residues has L - k + 1 k-mers, and a sketch keeps 1 in `scaled` of
+    /// them. `db_n_kmers` counts a k-mer once per target however often it occurs there, and
+    /// leaves out k-mers removed as low-complexity, so this comes out low by those. A low n
+    /// makes every run E-value smaller by the same fraction.
+    db_n_residues: f64,
     /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
     extension: Option<ExtensionParams>,
 }
@@ -1204,7 +1287,9 @@ impl ProteinSearcher {
 
     fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
         let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
-        let db_n_kmers = stats.kmer_frequencies.values().sum();
+        let db_n_kmers: usize = stats.kmer_frequencies.values().sum();
+        let db_n_residues = index.scaled() as f64 * db_n_kmers as f64
+            + (index.ksize() as f64 - 1.0) * stats.total_signatures as f64;
         Self {
             index,
             stats,
@@ -1214,6 +1299,7 @@ impl ProteinSearcher {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
+            db_n_residues,
             extension: None,
         }
     }
@@ -1238,7 +1324,7 @@ impl ProteinSearcher {
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
             idf_prefix: self.build_idf_prefix(query),
-            composition: query.get_moltype_sequence().map(|enc| class_composition(enc.as_bytes())),
+            composition: class_sequence(query).map(class_composition),
         }
     }
 
@@ -1620,15 +1706,15 @@ impl ProteinSearcher {
             region.mean_idf = region.tfidf / n_shared as f64;
         }
 
+        let pr_same = pair_pr_same(query, target);
+        measure_runs(&mut result.matched_regions, query.sketch, target);
+
         // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
         // Only meaningful with a mismatch penalty, which is the score's mismatch term.
         if let Some(params) = self.extension {
-            if let (Some(q_enc), Some(t_enc), Some(q_composition)) = (
-                query.sketch.get_moltype_sequence(),
-                target.get_moltype_sequence(),
-                query.composition.as_ref(),
-            ) {
-                let a = match_probability(q_composition, &class_composition(t_enc.as_bytes()));
+            if let (Some(q_enc), Some(t_enc), Some(a)) =
+                (query.sketch.get_moltype_sequence(), target.get_moltype_sequence(), pr_same)
+            {
                 let ka_lambda = karlin_altschul_lambda(a, params.scoring.mismatch_penalty)
                     * params.ka.r_database;
                 let m = q_enc.len() as f64;
@@ -1661,6 +1747,8 @@ impl ProteinSearcher {
                 }
             }
         }
+
+        self.score_runs(&mut result.matched_regions, pr_same, query.sketch);
 
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
@@ -1706,6 +1794,21 @@ impl ProteinSearcher {
         result.run_n_queries = total_queries;
 
         Some(result)
+    }
+
+    /// Fill `pr_same` and `run_evalue` on every region of one pair.
+    fn score_runs(
+        &self,
+        regions: &mut [MatchedRegion],
+        pr_same: Option<f64>,
+        query: &ProteinSketch,
+    ) {
+        let m = class_sequence(query).map_or(0, <[u8]>::len) as f64;
+        for region in regions.iter_mut() {
+            region.pr_same = pr_same;
+            region.run_evalue =
+                pr_same.map(|p| run_evalue(p, region.run_length, m, self.db_n_residues));
+        }
     }
 
     /// Set query-proteome k-mer frequencies for two-pass joint_kmer_freq computation.
@@ -2558,6 +2661,7 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
             chain.iter().map(|x| x.n_mismatches).sum()
         };
         merged.n_chained = r;
+        merged.run_length = chain.iter().map(|x| x.run_length).max().unwrap_or(0);
         merged.subseq = q_raw[qs..qe].to_string();
         merged.target_subseq = t_raw[ts..te].to_string();
         merged.moltype_seq = String::from_utf8_lossy(&t[ts..te]).into_owned();
@@ -3890,6 +3994,7 @@ mod tests {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
+            db_n_residues: 0.0,
             extension: None,
         };
 
@@ -4568,6 +4673,59 @@ mod tests {
             );
         }
         Ok(())
+    }
+
+    /// CED-9 against the 25 BCL-2-like proteins, exact search at hp_lehninger2 k=15. BCL2
+    /// shares one 19-residue region with CED-9. An exact region is one unbroken run, so its
+    /// run length is its length. pr_same is recounted here from the two HP strings, and the
+    /// run E-value from the formula with m = 280 CED-9 residues and n = db_n_kmers +
+    /// 14 x 25 targets.
+    #[test]
+    fn region_run_evalue_on_exact_regions_uses_the_whole_region() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let query = query_index.get_signatures().iter().next().unwrap().value().clone();
+        let results = searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+        let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+        let target = searcher.index.get_signature_by_md5(&bcl2.target_md5)?.unwrap();
+        let h_fraction =
+            |enc: &str| enc.bytes().filter(|&b| b == b'h').count() as f64 / enc.len() as f64;
+        let (hq, ht) = (
+            h_fraction(query.get_moltype_sequence().unwrap()),
+            h_fraction(target.get_moltype_sequence().unwrap()),
+        );
+        let pr_same = hq * ht + (1.0 - hq) * (1.0 - ht);
+        let n = (bcl2.db_n_kmers + 14 * 25) as f64;
+        assert_eq!(bcl2.matched_regions.len(), 1);
+        let region = &bcl2.matched_regions[0];
+        assert_eq!((region.length, region.run_length), (19, 19));
+        assert_relative_eq!(region.pr_same.unwrap(), pr_same, epsilon = 1e-12);
+        assert_relative_eq!(pr_same, 0.502_375_971_309_025_7, epsilon = 1e-12);
+        let expected = (1.0 - pr_same) * 280.0 * n * pr_same.powi(19);
+        assert_relative_eq!(region.run_evalue.unwrap(), expected, max_relative = 1e-12);
+        assert_relative_eq!(region.run_evalue.unwrap(), 2.671_370_550_951_629, epsilon = 1e-9);
+        Ok(())
+    }
+
+    /// An extended region's run is its longest stretch without a mismatch: here positions
+    /// 0-4 agree (hhpph), 5 does not (h against p), and 6-7 agree again, so 5.
+    #[test]
+    fn longest_agreeing_run_stops_at_a_mismatch() {
+        let agree = residues_agree("hp_lehninger2");
+        let region = MatchedRegion {
+            start: 0,
+            end: 8,
+            target_start: 2,
+            target_end: 10,
+            ..MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap())
+        };
+        assert_eq!(longest_agreeing_run(b"hhpphhhp", b"pphhpphphp", &region, &agree), 5);
     }
 
     /// How far the E-value is from calibrated, measured on decoys: the 25 real proteins
