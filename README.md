@@ -524,6 +524,13 @@ the same way: the stored encoded sequence writes the residue as its class where 
 merges the two readings and as the letter itself where it does not, and the letter agrees
 with either class it stands for.
 
+Containment, its target-side counterpart and Jaccard count a window once however many
+readings it was sketched under. A true homolog matches one reading per window, so counting
+hashes would count the others as misses: topi pancreatic ribonuclease (P00659, 12 `B` and
+10 `Z` in 124 residues) holds 541 hashes for 115 windows at k=10, and against goat
+ribonuclease, which matches 105 of those windows, its containment could never pass
+115/541. A sketch with no ambiguous residue keeps the containment sourmash reports.
+
 The expansion is affordable because ambiguous residues are rare and stay sparse within any one
 window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
 across 146 of its 575_748 sequences. The densest window at any k up to 30, in Swiss-Prot and

@@ -283,7 +283,8 @@ pub struct SearchResult {
     /// Target sequence MD5 hash
     pub target_md5: String,
 
-    /// Containment score (intersection / query_size)
+    /// Fraction of the query's k-mers found in the target, the readings of one window
+    /// counted once (see `n_kmers`).
     pub containment: f64,
 
     /// Number of intersecting k-mers
@@ -298,7 +299,7 @@ pub struct SearchResult {
     /// Molecular type (hp, dayhoff, protein)
     pub moltype: String,
 
-    /// Jaccard similarity (intersection / union)
+    /// Shared k-mers over the union of both sketches' k-mers, counted as `containment` is.
     pub jaccard: f64,
 
     /// Maximum containment (max of query->target and target->query containment)
@@ -313,7 +314,7 @@ pub struct SearchResult {
     /// Standard deviation of abundance of intersecting k-mers
     pub std_abund: f64,
 
-    /// Containment of target in query
+    /// Fraction of the target's k-mers found in the query, counted as `containment` is.
     pub containment_target_in_query: f64,
 
     /// Weighted fraction of target in query
@@ -646,6 +647,9 @@ pub struct PreparedQuery<'a> {
     pub sketch: &'a ProteinSketch,
     /// Pre-computed minhash values as a HashSet for efficient intersection calculations
     pub mins: HashSet<u64>,
+    /// K-mers the query holds, the readings of one window counted once (see `n_kmers`): the
+    /// denominator of its containment.
+    pub n_kmers: usize,
     /// Pre-computed TF-IDF score for the query
     pub tfidf: f64,
     /// Prefix sums of target-DB k-mer frequency by query position, indexed 0..=max_position.
@@ -766,6 +770,11 @@ impl ProteinSearcher {
         PreparedQuery {
             sketch: query,
             mins: query.mins_as_set(),
+            n_kmers: n_kmers(
+                query,
+                &multi_reading_windows(query),
+                query.signature().minhash.mins().iter(),
+            ),
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
             idf_prefix: self.build_idf_prefix(query),
@@ -1081,9 +1090,15 @@ impl ProteinSearcher {
         // when either scope clears, and the region score isn't known until the regions exist.
         // So this filtering happens after the result is built, and pairs that fail the query
         // scope now pay for region-finding before being rejected.
+        //
+        // Shared hashes over the query's k-mers is an upper bound on containment (a window
+        // matched under two readings counts once in the real figure, see `n_kmers`), so
+        // rejecting on it here is safe; the exact value is checked again once the result
+        // exists.
         let n_intersecting_hashes = intersection.len();
-        let containment = n_intersecting_hashes as f64 / query.mins.len() as f64;
-        if containment < filters.threshold || n_intersecting_hashes < filters.min_shared_kmers {
+        let containment_bound = n_intersecting_hashes as f64 / query.n_kmers as f64;
+        if containment_bound < filters.threshold || n_intersecting_hashes < filters.min_shared_kmers
+        {
             return None;
         }
 
@@ -1104,6 +1119,9 @@ impl ProteinSearcher {
             &target_mins,
             &intersection,
         )?;
+        if result.containment < filters.threshold {
+            return None;
+        }
 
         let query_enrichment =
             fold_enrichment(n_intersecting_hashes as u32, query_expected_shared_kmers);
@@ -1340,6 +1358,62 @@ impl ProteinSearcher {
     }
 }
 
+/// Start positions of the windows of `sketch` sketched under more than one hash: the
+/// windows holding a residue the alphabet keeps ambiguous (see `disambiguate_kmer`).
+fn multi_reading_windows(sketch: &ProteinSketch) -> HashSet<usize> {
+    let mut hashes_at: HashMap<usize, usize> = HashMap::new();
+    for positions in sketch.kmer_positions().values() {
+        // Almost every hash sits at one position. A repeated k-mer holds several, and an
+        // index written before readings were merged after encoding holds the same position
+        // 2^n times, hence the dedup.
+        if let [position] = positions.as_slice() {
+            *hashes_at.entry(*position).or_default() += 1;
+            continue;
+        }
+        let mut positions = positions.clone();
+        positions.sort_unstable();
+        positions.dedup();
+        for position in positions {
+            *hashes_at.entry(position).or_default() += 1;
+        }
+    }
+    hashes_at.into_iter().filter(|&(_, n)| n > 1).map(|(position, _)| position).collect()
+}
+
+/// How many k-mers the hashes in `hashes` stand for in `sketch`. A hash counts once, except
+/// in a window sketched under several readings (`multi_reading_windows`), where the window
+/// counts once however many of its readings are in `hashes`.
+///
+/// A window holding n residues the alphabet keeps ambiguous is sketched under 2^n hashes,
+/// and a true homolog matches one of them. Counting hashes would count the other readings
+/// as misses: topi ribonuclease (P00659) holds 541 hashes for 115 windows at k=10, so
+/// against goat ribonuclease, which matches 105 of its windows, its containment could never
+/// pass 115/541. Counting hashes on the matched side fails the other way, since a copy of the
+/// same protein matches all 541. So containment and jaccard count with this on both sides.
+/// For a sketch with no ambiguous residue it is the hash count, so those sketches keep the
+/// containment and jaccard sourmash reports.
+fn n_kmers<'a>(
+    sketch: &ProteinSketch,
+    multi_reading: &HashSet<usize>,
+    hashes: impl Iterator<Item = &'a u64>,
+) -> usize {
+    let mut windows: HashSet<usize> = HashSet::new();
+    let mut single_reading = 0;
+    for hash in hashes {
+        let mut in_multi_reading_window = false;
+        for position in sketch.kmer_positions().get(hash).into_iter().flatten() {
+            if multi_reading.contains(position) {
+                windows.insert(*position);
+                in_multi_reading_window = true;
+            }
+        }
+        if !in_multi_reading_window {
+            single_reading += 1;
+        }
+    }
+    single_reading + windows.len()
+}
+
 /// Inner implementation: calculate similarity given pre-computed mins sets and intersection.
 ///
 /// WHY: Called from both `calculate_similarity` (which computes the HashSets itself) and
@@ -1358,13 +1432,21 @@ fn calculate_similarity_from_precomputed(
         return None;
     }
 
-    let query_size = query_mins.len();
-    let target_size = target_mins.len();
-    let union_size = query_size + target_size - n_intersecting_hashes;
+    // The readings of one window count once on both sides of every fraction (see `n_kmers`).
+    // Jaccard takes the smaller of the two shared counts, so it reads the same from either
+    // side and a sketch against a copy of itself scores 1.
+    let query_multi = multi_reading_windows(query);
+    let target_multi = multi_reading_windows(target);
+    let query_size = n_kmers(query, &query_multi, query_mins.iter());
+    let target_size = n_kmers(target, &target_multi, target_mins.iter());
+    let shared_in_query = n_kmers(query, &query_multi, intersection.iter());
+    let shared_in_target = n_kmers(target, &target_multi, intersection.iter());
+    let shared = shared_in_query.min(shared_in_target);
+    let union_size = query_size + target_size - shared;
 
-    let containment = n_intersecting_hashes as f64 / query_size as f64;
-    let jaccard = n_intersecting_hashes as f64 / union_size as f64;
-    let containment_target_in_query = n_intersecting_hashes as f64 / target_size as f64;
+    let containment = shared_in_query as f64 / query_size as f64;
+    let jaccard = shared as f64 / union_size as f64;
+    let containment_target_in_query = shared_in_target as f64 / target_size as f64;
     let max_containment = containment.max(containment_target_in_query);
 
     let query_abunds = query.signature().minhash.abunds();
