@@ -39,7 +39,8 @@ footer p{margin:0}
 <h1>kmerseek docs</h1>
 <p class="sub">Interactive pages on how kmerseek scores a region and judges whether it could be chance. Every slider recomputes the equations and figures.</p>
 <a class="card" href="karlin_altschul_explainer.html"><b>Part 1: How a kmerseek region gets an E-value</b><span>The region score, the chance match rate, nats per score point, the E-value, and how K and r_database are measured when the index is built.</span></a>
-<a class="card" href="two_letters_explainer.html"><b>Part 2: What two letters can carry</b><span>The copy rate, bits per position, the trade between alphabet size and region length, short motifs, and the best mismatch penalty.</span></a>
+<a class="card" href="two_letters_explainer.html"><b>Part 2: What two letters can carry</b><span>The copy rate, bits per position, the trade between alphabet size and region length, short motifs, summing several regions, and the best mismatch penalty.</span></a>
+<a class="card" href="alphabet_sweep_explainer.html"><b>Part 3: What every alphabet can see</b><span>Ced9, P66 and BHF searched against the human proteome with all 19 alphabets: where each alphabet ranks the known partner under five metrics, the seed information an E-value of 1 needs, and why many regions get no E-value.</span></a>
 
 <h2>What a search looks like</h2>
 <p class="sub">C. elegans CED-9 searched against 25 human BCL-2-like proteins, hydrophobic/polar alphabet, k=12. The same pages <code>scripts/visualize_search.py</code> and <code>scripts/visualize_pair.py</code> write for any search.</p>
