@@ -309,8 +309,12 @@ if (!R.rows) {
     description: (m.target.name || "").includes(" ") ? m.target.name.split(" ").slice(1).join(" ").split(" OS=")[0] : m.target.label,
     n_entries: 1, other_entries: [], length: m.target.length, n_runs: m.runs.length, best_length: m.runs[0] ? m.runs[0].length : 0, best_identical: m.runs[0] ? m.runs[0].identical : 0,
     tm_score: m.structure ? m.structure.tm_score_query : null, n_shared: m.n_shared, runs: m.runs, model: m };
-  const any = new Array(m.query.length).fill(0), solid = new Array(m.query.length).fill(0);
-  for (const r of m.runs) for (let i = r.query_start; i < r.query_end; i++) { any[i] = 1; if (r.identical >= (R.solid_identical || 5)) solid[i] = 1; }
+  // With one target, "entries with a run here" is 0 or 1 everywhere, so the ruler counts shared k-mers instead:
+  // every shared k-mer covers k query residues; dark is the k-mers of runs with SOLID or more identical residues.
+  const any = new Array(m.query.length).fill(0), solid = new Array(m.query.length).fill(0), K0 = m.ksize, SOLID0 = R.solid_identical || 5;
+  const cover = (start, n, dark) => { for (let s = start; s < start + n; s++) for (let i = s; i < s + K0 && i < any.length; i++) { any[i]++; if (dark) solid[i]++; } };
+  for (const r of m.runs) cover(r.query_start, r.query_end - r.query_start - K0 + 1, r.identical >= SOLID0);
+  for (const sg of m.singles) cover(sg.query_pos, 1, false);
   R = { ksize: m.ksize, moltype: m.moltype, alphabet: m.alphabet, classes: m.classes, query: m.query, n_entries: 1, n_proteins: 1, solid_identical: R.solid_identical || 5,
         structures: !!m.structure, max_runs_shown: R.max_runs_shown || 50, coverage: { any, solid }, rows: [row], score_columns: [], gapped: R.gapped === true, extended: R.extended === true, pair: true };
 }
@@ -450,7 +454,7 @@ function legend() {
   const add = (mark, text) => { const s = el("span"); s.appendChild(mark); s.appendChild(document.createTextNode(text)); box.appendChild(s); };
   const ramp = el("span", "ramp"); for (let i = 0; i < 5; i++) ramp.appendChild(el("i", "id" + i));
   add(ramp, `run, shaded by its identical residues ${IDENT_HOW}: under 20%, 20–40, 40–60, 60–80, 80% and over`);
-  add(el("i", "cov-sw"), R.pair ? `query residues under a run (light) and under a run with ${SOLID} or more identical residues (dark)` : `database entries with any run over the residue (light) and with a run of ${SOLID} or more identical residues (dark)`);
+  add(el("i", "cov-sw"), R.pair ? `shared ${K}-mers over each query residue (light) and those in a run with ${SOLID} or more identical residues (dark)` : `database entries with any run over the residue (light) and with a run of ${SOLID} or more identical residues (dark)`);
   add(el("i", "trk"), "query, with its domains as boxes; click a domain to keep only rows with a run in it");
   for (const c of R.classes) add(el("i", "sw " + CLASS_KEY[c.symbol]), `${c.symbol} = ${c.label}`);
   if (R.moltype) add(el("span", null, ""), `alphabet ${R.moltype}: ${R.alphabet}; hover a letter in an alignment for its class`);
@@ -500,8 +504,8 @@ function ruler() {
   const g = $("ruler"); g.textContent = "";
   const { any, solid } = R.coverage, mx = Math.max(1, ...any);
   const lbl = el("div", "lbl");
-  lbl.appendChild(el("b", null, R.pair ? "Where the runs land" : "Where the hits land"));
-  lbl.appendChild(document.createTextNode(R.pair ? ` \u2014 the query residues covered by a run (light) and by a run with ${SOLID} or more identical residues (dark).` :
+  lbl.appendChild(el("b", null, R.pair ? "Where the shared k-mers land" : "Where the hits land"));
+  lbl.appendChild(document.createTextNode(R.pair ? ` \u2014 up to ${mx} shared ${K}-mers over one query residue (at ${any.indexOf(mx) + 1}); each ${K}-mer covers ${K} residues, so a run of n k-mers reads ${K} high with ramps of ${K - 1} at each end. Dark: k-mers of runs with ${SOLID} or more identical residues.` :
     ` \u2014 up to ${mx} of ${R.n_entries} entries have a run over one residue (at ${any.indexOf(mx) + 1}), ${Math.max(0, ...solid)} of them with ${SOLID} or more identical residues.`));
   lbl.appendChild(el("span", "n", `${Q.label}, ${QL} aa, drawn as a line with its domains; the same axis runs through every row.`));
   g.appendChild(lbl);

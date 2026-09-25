@@ -270,7 +270,11 @@ class agrees. `--html` also writes the pair as a one-row page of the search repo
 (same template, the row open): hover a single for its k-mer, click a run's number to
 jump to its alignment, copy the runs as FASTA or the dot plot as SVG. Under the row sit
 both full sequences, coloured by class, each run underlined in the shade of its bar; a
-run hovered in the plot, in its alignment or in the sequences lights up in all three
+run hovered in the plot, in its alignment or in the sequences lights up in all three.
+The ruler at the top counts shared k-mers over each query residue (every k-mer covers k
+residues), dark for k-mers of runs with 5 or more identical residues: BCL-2 against
+CED-9 is one dark peak at BH1, a composition hit such as RTN3 is a light landscape
+across the whole protein with no dark
 ([example](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/bcl2_vs_ced9_pair_example.html)).
 
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
