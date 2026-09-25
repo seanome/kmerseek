@@ -92,7 +92,9 @@ would, and the E-value needs two corrections that the closed form cannot give:
 
 Both are fitted by `kmerseek index` and stored in the index under their C and X. A search
 with the same pair reads them back; a search with another pair fits its own on
-`--ka-queries` database sequences first, or is refused unless `--ka-k` is given.
+`--ka-queries` database sequences first. When there is no fit and no `--ka-k`, the search
+still extends every region, but leaves `region_ka_bits` and `region_ka_evalue` empty and
+reports `region_run_evalue` as `region_evalue`; the search log says why there is no fit.
 
 How the fit works:
 
