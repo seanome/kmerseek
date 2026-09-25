@@ -256,14 +256,15 @@ window.MathJax = {
 <body>
 <header>
   <h1>What two letters can carry</h1>
-  <p class="sub"><a href="karlin_altschul_explainer.html">Part 1, how a kmerseek region gets an E-value</a>, says how one region is judged. This part asks how much evidence a two-letter region can hold at all. It needs one more number, \(\kappa\), the copy rate: the fraction of positions where the target copies the query's class, in the coin model that the walk of Figure 1 of Part 1 uses.</p>
+  <p class="sub"><a href="karlin_altschul_explainer.html">Part 1, how a kmerseek region gets an E-value</a>, says how one region is judged. <a href="alphabet_sweep_explainer.html">Part 3, what every alphabet can see</a>, measures the predictions here on real searches. This part asks how much evidence a two-letter region can hold at all. It needs one more number, \(\kappa\), the copy rate: the fraction of positions where the target copies the query's class, in the coin model that the walk of Figure 1 of Part 1 uses.</p>
+  <p class="sub">The one fact this page rests on: a two-letter position carries about 0.16 bits at ordinary conservation, and E = 1 on a proteome costs about 25 to 32 bits. So a single region has to be about 150 to 200 residues long with no gap, and a 37-residue window such as the BH1 region below cannot get there in any alphabet. Every number here uses k = 12 and C = 2 unless a control says otherwise. The same pairs were also searched against the human proteome with k = 16 to 24 for two letters and C at C<sub>best</sub> (analysis notebook 241); those measured numbers are quoted where they check a prediction.</p>
 </header>
 <div class="sticky" id="sticky"><div class="sticky-in">
   <div class="eq live hero-eq" id="eq-hero">\[\text{positions needed} = \frac{\log_2(K \cdot m \cdot n / E)}{\text{bits per position}}\]</div>
   <p class="note" id="hero-note"><select id="in-alpha"><option value="hp_lehninger2">hp_lehninger2 (2)</option><option value="hp_thomas_dill2" selected>hp_thomas_dill2 (2)</option><option value="hp_kyte_doolittle2">hp_kyte_doolittle2 (2)</option><option value="hp_thomas_dill_no_c2">hp_thomas_dill_no_c2 (2)</option><option value="hp_lehninger_c_nonpolar2">hp_lehninger_c_nonpolar2 (2)</option><option value="hp_pbotc_1st_ed2">hp_pbotc_1st_ed2 (2)</option><option value="hp_lehninger_hpc3">hp_lehninger_hpc3 (3)</option><option value="gbmr4">gbmr4 (4)</option><option value="polarity4">polarity4 (4)</option><option value="wwmj5">wwmj5 (5)</option><option value="dayhoff6">dayhoff6 (6)</option><option value="gbmr7">gbmr7 (7)</option><option value="funcgroups8">funcgroups8 (8)</option><option value="sdm12">sdm12 (12)</option><option value="mmseqs12">mmseqs12 (12)</option><option value="wass14">wass14 (14)</option><option value="hsdm17">hsdm17 (17)</option><option value="uniprot18">uniprot18 (18)</option><option value="protein20">protein20 (20)</option></select> · <span id="hero-txt"></span></p>
   <nav aria-label="Sections"><ul>
     <li><a href="#s1">1 κ, the copy rate</a></li><li><a href="#s2">2 Bits per position</a></li><li><a href="#s3">3 Two letters against twenty</a></li>
-    <li><a href="#s4">4 Short motifs</a></li><li><a href="#s5">5 C_best</a></li><li><a href="#s6">6 Glossary</a></li><li><a href="#refs">References</a></li>
+    <li><a href="#s4">4 Short motifs</a></li><li><a href="#s5">5 Several regions</a></li><li><a href="#s6">6 C_best</a></li><li><a href="#s7">7 Glossary</a></li><li><a href="#refs">References</a></li>
     <li><button type="button" class="theme-btn" id="theme-btn" data-icon="contrast" aria-label="colour theme">theme: system</button></li>
   </ul></nav>
 </div></div>
@@ -303,6 +304,15 @@ window.MathJax = {
     <div><span class="k">simulated: match rate</span><span class="v" id="r-kobs">—</span></div>
     <div><span class="k">simulated: κ recovered, against the copy rate set</span><span class="v" id="r-krec">—</span></div>
   </div>
+  <p class="note">The same window as evidence, against the database and query length set beside Figure 2 (Equations (2a) and (2b) below, at this pair's own κ and class shares):</p>
+  <div class="readout">
+    <div><span class="k">bits per position this window carries at its own κ (mutual information, Eq. 2a)</span><span class="v" id="r-wbits1">—</span></div>
+    <div><span class="k">bits in all 37 positions</span><span class="v" id="r-wbits">—</span></div>
+    <div><span class="k">bits that E = 1 costs, log₂(K · m · n)</span><span class="v" id="r-wneed">—</span></div>
+    <div><span class="k">the window scored +1 / −C: S, and E for that S</span><span class="v" id="r-wE">—</span></div>
+  </div>
+  <p class="note" id="window-verdict">—</p>
+  <p class="note">Measured, not modelled: searched against the 19,732 canonical human proteins with every kmerseek alphabet at k set so one seed carries 16 to 44 bits, and C at C<sub>best</sub>, the best E-value this pair reached was 11,200 in two letters (hp_lehninger2, k = 19) and 1,950 in any alphabet (wwmj5, k = 9); BCL-2 ranked 1,352nd of 5,153 human proteins hit under the E-value, and 213th of 18,064 under the mean IDF of the region's k-mers (polarity4, k = 9). Analysis notebook 241, 2024-kmerseek-analysis PR #46. The E-values are far above 1, as the readout above predicts. The ranks say what a window this short can still do: put the partner in the top 1 to 25% of the proteome, not at the top.</p>
 </section>
 <section id="s2">
   <h2>Bits per position: how many bits two letters carry, and how long a twilight-zone match must be</h2>
@@ -334,8 +344,16 @@ window.MathJax = {
     <div class="eq"><span class="eqno">(2a)</span>\[\text{bits per position} = \sum_{i,j \,\in\, \text{classes}} \Pr(i,j)\,\log_2 \frac{\Pr(i,j)}{\Pr(i)\,\Pr(j)}\]</div>
   <p>Divide the bits the search space costs, \(\log_2(K \cdot m \cdot n / E)\), by the bits per position, and you get how long an ungapped stretch has to be, Equation (2b):</p>
   <div class="eq"><span class="eqno">(2b)</span>\[\text{positions needed} = \frac{\log_2\bigl(K\,m\,n / E\bigr)}{\text{bits per position}}\]</div>
-  <p>What the numbers say: at \(\kappa = 0.46\) two letters carry about 0.16 bits per position, against 0.38 for BLOSUM45 in 20 letters. \(E = 1\) costs \(\log_2(K\,m\,n)\) bits: about 24 on SCOPe40, 25 on one proteome, 30 on Swiss-Prot and 35 on UniRef50 for a 240-residue query. So an ungapped stretch needs about 150 positions on SCOPe40, 160 on one proteome, 190 on Swiss-Prot and 220 on UniRef50; the readouts under Figure 2 recompute these for the sliders. A 200-residue domain at ordinary conservation gets through on SCOPe40 (\(E \approx 0.004\)) and just about on Swiss-Prot (\(E \approx 0.3\)). A 150-residue one sits at the threshold on SCOPe40 (\(E \approx 1\)) and is lost on the proteomes (\(E \approx 60\) on Swiss-Prot, 3,000 on UniRef50). Pfam domains run 100 to 200 residues, and gaps break the stretch. So on a database the size of Swiss-Prot or UniRef50 most of the twilight zone is out of reach for a two-letter search; on SCOPe40, or on one proteome, which costs about the same, the longer half of it is in reach. Out of reach means the E-value cannot single the pair out from the chance regions that share its seed. The seed itself is found: the 19-residue class-identical run between BCL-2 and CED-9 under Figure 1 is in the index, together with about 10⁵ unrelated Swiss-Prot proteins that carry the same two-letter string. Against a smaller search space, one proteome or one family, the same evidence can be enough, because \(E\) scales with \(K \, m \, n\).</p>
-  <p>The estimate is a ceiling in one sense and a floor in another. It is a ceiling with respect to scoring: \(+1/-C\) collects only <span id="r-score-bits">—</span> bits per position at these settings, under the <span id="r-mi-2">—</span> bits the mutual information allows, because a flat penalty cannot weight a rare-class match above a common one. It is a floor with respect to conservation varying along the domain, for three reasons. It is an average: pairs with a conserved hydrophobic core or a strong amphipathic pattern carry more bits per position, and those are the pairs a search finds. The coin uses one \(\kappa\) for every position, but conservation varies along a domain, and mutual information is convex in \(\kappa\), so a mix of strongly and weakly conserved positions carries more than the single-\(\kappa\) figure. And it is a statement about one ungapped region: summing several regions (Karlin and Altschul 1993), a matrix over classes in place of \(+1/-C\), or a profile over the class string all collect more of the available bits. Separately from bits, the 12-mer seed is its own filter: the median longest class-identical run at 20–30% identity is 12 residues, so about half of true pairs never produce a seed however many bits they carry. Switch the alphabet in Part 1, section 2 to see the bits per position grow with the number of classes.</p>
+  <p>What the numbers say: at \(\kappa = 0.46\), the value measured for hp_thomas_dill2, two letters carry about 0.16 bits per position, against 0.38 for BLOSUM45 in 20 letters. \(E = 1\) costs \(\log_2(K\,m\,n)\) bits: about 24 on SCOPe40, 25 on one proteome, 30 on Swiss-Prot and 35 on UniRef50 for a 240-residue query. So an ungapped stretch needs about 150 positions on SCOPe40, 160 on one proteome, 190 on Swiss-Prot and 220 on UniRef50; the readouts under Figure 2 recompute these for the sliders. A 200-residue domain at ordinary conservation gets through on SCOPe40 (\(E \approx 0.004\)) and just about on Swiss-Prot (\(E \approx 0.3\)). A 150-residue one sits at the threshold on SCOPe40 (\(E \approx 1\)) and is lost on the proteomes (\(E \approx 60\) on Swiss-Prot, 3,000 on UniRef50). Pfam domains run 100 to 200 residues, and gaps break the stretch.</p>
+  <p>So on a database the size of Swiss-Prot or UniRef50 most of the twilight zone is out of reach for a two-letter search. On SCOPe40, or on one proteome, which costs about the same, the longer half of it is in reach, but only for a region that stays ungapped for 150 residues or more. A pair whose conserved part is one short block is not: the BH1 window of Figure 1 is 37 residues and carries <span id="s2-wbits">—</span> bits, and no proteome-sized database costs less than 24. Out of reach means the E-value cannot single the pair out from the chance regions that share its seed. The seed itself is found: the <span id="s2-run">—</span>-residue class-identical run between BCL-2 and CED-9 under Figure 1 is in the index, together with about <span id="s2-copies">—</span> unrelated places in <span id="s2-db">—</span> that carry the same class string (n / <span id="s2-k">2</span><sup><span id="s2-run2">—</span></sup>). Against a smaller search space, one family instead of a proteome, the same evidence can be enough, because \(E\) scales with \(K \, m \, n\).</p>
+  <p>Ranking the hits by how rare their shared k-mers are (mean IDF, tf-idf, enrichment) does not change this. IDF is \(\log(n / \text{count of the k-mer})\), the same search-space term \(E\) already contains. In two letters every 19-mer is about equally common, so a "rare" two-letter region is one of unusual composition, not one of shared ancestry. Re-weighting the same shared positions cannot add bits the pair does not carry. Measured on 687 Pfam pairs, the E-value ranks true regions best (average precision 0.82) and mean IDF worst (0.22). On the BCL-2/CED-9 pair against the human proteome, mean IDF moved BCL-2 from 1,352nd to 213th, still not first (2024-kmerseek-analysis, PR #44 and notebook 241).</p>
+  <p>The estimate is a ceiling in one sense and a floor in another.</p>
+  <ul class="defs">
+    <li>Too high, with respect to scoring: \(+1/-C\) collects only <span id="r-score-bits">—</span> bits per position at these settings, under the <span id="r-mi-2">—</span> bits the mutual information allows, because a flat penalty cannot weight a rare-class match above a common one.</li>
+    <li>Too low, with respect to conservation varying along the domain. The coin uses one \(\kappa\) for every position. Real domains have a conserved core and drifted loops, and mutual information is convex in \(\kappa\), so a mix of strongly and weakly conserved positions carries more than the single-\(\kappa\) figure. Pairs with a conserved hydrophobic core or a strong amphipathic pattern carry more still, and those are the pairs a search finds.</li>
+    <li>Too low, with respect to what is scored: one ungapped region. Summing several regions in consistent order (section 5), a matrix over classes in place of \(+1/-C\), or a profile over the class string all collect more of the available bits.</li>
+  </ul>
+  <p>Separately from bits, the 12-mer seed is its own filter: the median longest class-identical run at 20–30% identity is 12 residues, so about half of true pairs never produce a seed however many bits they carry. Switch the alphabet in the bar at the top to see the bits per position grow with the number of classes.</p>
 </section>
 <section id="s3">
   <h2>Can two letters see what twenty cannot?</h2>
@@ -346,7 +364,7 @@ window.MathJax = {
     <figcaption>Figure 3. The trade the alphabet makes. Left: bits per aligned position rise with the number of classes, and no reduced alphabet reaches the full matrix. Right: the longest run of class-identical positions falls with the number of classes, and only two letters reach the 12-mer seed at 20–30% identity. Both panels use the Swiss-Prot average composition and the κ measured for each alphabet in aligned Pfam pairs at 20–30% identity.</figcaption>
   </figure>
   </div><aside class="fig-side">
-  <p>The twilight zone is named for 20-letter identity: below about 30% identity, alignment in the full alphabet stops being able to tell relatives from chance. It is natural to hope that a two-letter string, where the same pairs still match at 70% of positions, sees through it. Per aligned position it cannot, and this is a theorem rather than a measurement: the class of a residue is a function of the residue, so merging letters can only lose mutual information, never create it. Figure 3 puts numbers on it with the coin model at each alphabet's own measured \(\kappa\). Two letters carry 0.16 bits per position, four 0.25, and twenty 0.28 under the coin model, which treats every substitution as a miss. BLOSUM45, which scores twenty letters with a full matrix, collects 0.38. A 70% class match rate against a 50% chance rate is worth less than a 25% residue match rate against a 6% chance rate.</p>
+  <p>No: per aligned position, two letters cannot see what twenty cannot. This is a theorem, not a measurement. The class of a residue is a function of the residue, so merging letters can only lose mutual information, never create it. The twilight zone is named for 20-letter identity: below about 30% identity, alignment in the full alphabet stops being able to tell relatives from chance. The hope is that a two-letter string, where the same pairs still match at 70% of positions, sees through it; the theorem rules that out. Figure 3 puts numbers on it with the coin model at each alphabet's own measured \(\kappa\). Two letters carry 0.16 bits per position, four 0.25, and twenty 0.28 under the coin model, which treats every substitution as a miss. BLOSUM45, which scores twenty letters with a full matrix, collects 0.38. A 70% class match rate against a 50% chance rate is worth less than a 25% residue match rate against a 6% chance rate.</p>
 </aside></div>
   <p>What a small alphabet buys is not bits but seeds. kmerseek finds a region only through an exact shared 12-mer, and the expected longest class-identical run in a 150-residue domain at 20–30% identity is about 12 in two letters, 9 in four, 6 in five and 3 in twenty. Exact 12-mers exist at that divergence only in the two-letter string. So a two-letter k-mer index can find pairs that a twenty-letter k-mer index cannot find at all, and it does so without alignment. But each pair it finds carries fewer bits than a matrix-scored alignment of the same pair would, and the E-value says so. That sets the fair claim for kmerseek. Against another k-mer index (a twenty-letter k-mer search, which needs exact twenty-letter k-mers), two letters reach lower identity, at k-mer speed. Against BLAST, which aligns with a full substitution matrix and needs no exact k-mer, two letters do not see more: they see less per position, and only faster.</p>
   
@@ -382,43 +400,67 @@ window.MathJax = {
   </div>
 </section>
 <section id="s5">
-  <h2>The best mismatch penalty \(C_{\text{best}}\) shrinks as the alphabet grows</h2>
-  <p>The scoring system that finds a shared domain most efficiently gives each pair of classes the log of how often they meet in a shared domain over how often they meet by chance, \(\ln\bigl(\Pr(i, j \mid \text{shared domain}) / \Pr(i, j \mid \text{unrelated})\bigr)\); this is the result behind BLOSUM (Altschul 1991). In the coin model of \(\kappa\) above, two different classes meet in a shared domain only on a tails flip. So a mismatch scores \(\ln(1 - \kappa)\) whatever the two classes are. A match of class \(c\) scores \(\ln(1 + \kappa / f(c) - \kappa)\), where \(f(c)\) is the share of class \(c\): rarer classes, stronger matches. kmerseek scores +1 and \(-C\), so the \(C\) that copies this system is the ratio of the two:</p>
-  <div class="eq"><span class="eqno">(3)</span>\[C_{\text{best}} = \frac{-\ln(1 - \kappa)}{\ln\bigl(1 + \kappa / f(c) - \kappa\bigr)}\]</div>
+  <h2>Several regions in a row: what summing adds, and what each extra region costs</h2>
+  <p>BCL-2 and CED-9 share four short conserved blocks, BH4, BH3, BH1 and BH2, in the same order along both proteins, and kmerseek reports each as its own region. Adding their scores is the idea behind the sum statistics of Karlin and Altschul (1993). A second region only counts as evidence when it sits where a shared domain would put it: after the first, in both sequences, within some gap allowance \(g\). Saying where it sits costs bits, about \(\log_2 g\) for its place in the query and \(\log_2 g\) for its place in the target. So \(r\) regions of \(b\) bits each are worth about Equation (3). This is the page's own rough count; the exact statistic is in the reference.</p>
+  <div class="eq"><span class="eqno">(3)</span>\[\text{bits from } r \text{ regions} \approx (r \cdot b) - \bigl((r - 1) \cdot 2 \cdot \log_2 g\bigr)\]</div>
+  <p class="note">\(r\): regions in consistent order. \(b\): bits one region carries (its score times λ_pair times r_database, in bits). \(g\): the largest gap allowed between consecutive regions, in residues, in either sequence.</p>
   <div class="fig-row"><div class="fig-main">
   <figure>
-    <div class="legend"><span><i class="sw" style="border-color:var(--purple)"></i> C_best against the number of equal classes, at the κ of the slider</span><span><i class="dotsw" style="background:var(--ink)"></i> an alphabet with a measured κ, at its own κ (bold in the list)</span><span><i class="dotsw" style="background:var(--surface);border:1.5px solid var(--ink);box-sizing:border-box"></i> an alphabet with no measured κ, at a κ estimated from its number of classes (the line between the measured alphabets)</span><span><i class="sw dash" style="border-color:var(--coral)"></i> the C of this page (2 to start, kmerseek's setting); drag it and every C slider on the page follows</span></div>
+    <div class="legend"><span><i class="bandsw" style="background:none;border:1.5px solid var(--ink)"></i> outline: r × b, the bits the regions carry before placement</span><span><i class="bandsw" style="background:var(--purple)"></i> filled: what is left after paying (r − 1) × 2 log₂ g to place them</span><span><i class="sw dash" style="border-color:var(--ink)"></i> bits that E = 1 costs, log₂(K m n), on the database set beside Figure 2</span></div>
+    <div class="chart" id="chart-sum"></div>
+    <p class="note" id="sum-note">—</p>
+    <figcaption>Figure 5. Equation (3) drawn for one to eight regions. Each region carries the bits set on the slider; the starting value is what the BH1 window of Figure 1 scores at +1 / −C. The filled bar rises with r only while one region carries more than the 2 log₂ g bits its placement costs; below that, adding regions loses evidence. The dashed line is the same E = 1 cost as in Figure 2.</figcaption>
+  </figure>
+  </div><aside class="fig-side">
+  <div class="controls">
+    <div class="ctl"><label>b, bits per region <output id="o-sb">9</output></label><input type="range" id="in-sb" min="1" max="40" step="0.5" value="9"></div>
+    <div class="ctl"><label>g, gap allowed between regions (residues) <output id="o-sg">50</output></label><input type="range" id="in-sg" min="5" max="300" step="5" value="50"></div>
+  </div>
+  <p>Four regions at the BH1 window's <span id="sum-b">—</span> bits, with a gap allowance of <span id="sum-g">—</span> residues, sum to <span id="sum-net">—</span> bits after placement, against the <span id="sum-need">—</span> bits E = 1 costs on <span id="sum-db">—</span>. Summing helps only when each region is long enough to pay for itself, about <span id="sum-break">—</span> bits at this gap. <span id="sum-verdict">—</span> Two levers add evidence without adding positions. One is on the query side. Search several sequences that carry the same domain, the query's orthologs or paralogs, the way a Pfam profile is built from many sequences, and keep the targets every one of them finds at the same place. Each query is a separate draw of the same conserved core, and a target hit by all of them shares the domain, whatever its ancestry. The other is the alphabet. Every alphabet merges different residues, so the chance hits at the top of one alphabet's list differ from those at the top of another, while a true match stays high in many. A rank combined across alphabets can then sort the partner above the chance hits even when no single E-value can. Neither raises the bits a pair carries above the 20-letter matrix; both change the rank, not E. A mimic, which shares a surface patch or a short motif and not a domain, is the case of section 4: findable as a class-identical run, not assessable by any pairwise E-value.</p>
+  </aside></div>
+</section>
+
+<section id="s6">
+  <h2>The best mismatch penalty \(C_{\text{best}}\) shrinks as the alphabet grows</h2>
+  <p>The scoring system that finds a shared domain most efficiently gives each pair of classes the log of how often they meet in a shared domain over how often they meet by chance, \(\ln\bigl(\Pr(i, j \mid \text{shared domain}) / \Pr(i, j \mid \text{unrelated})\bigr)\); this is the result behind BLOSUM (Altschul 1991). In the coin model of \(\kappa\) above, two different classes meet in a shared domain only on a tails flip. So a mismatch scores \(\ln(1 - \kappa)\) whatever the two classes are. A match of class \(c\) scores \(\ln(1 + \kappa / f(c) - \kappa)\), where \(f(c)\) is the share of class \(c\): rarer classes, stronger matches. kmerseek scores +1 and \(-C\), so the \(C\) that copies this system is the ratio of the two:</p>
+  <div class="eq"><span class="eqno">(4)</span>\[C_{\text{best}} = \frac{-\ln(1 - \kappa)}{\ln\bigl(1 + \kappa / f(c) - \kappa\bigr)}\]</div>
+  <div class="fig-row"><div class="fig-main">
+  <figure>
+    <div class="legend"><span><i class="sw" style="border-color:var(--purple)"></i> C_best against the number of equal classes, at the κ of the slider</span><span><i class="dotsw" style="background:var(--ink)"></i> an alphabet with a measured κ, at its own κ (bold in the list)</span><span><i class="dotsw" style="background:var(--surface);border:1.5px solid var(--ink);box-sizing:border-box"></i> an alphabet with no measured κ, at a κ estimated from its number of classes (the line between the measured alphabets)</span><span><i class="sw" style="border-color:var(--gray)"></i> C_min = p / (1 − p) with equal shares: below it a chance position scores zero or more, no λ exists, and no E-value can be computed</span><span><i class="dotsw" style="background:none;color:var(--red);font-style:normal;font-weight:700;line-height:12px;text-align:center">×</i> an alphabet whose C_best at equal shares is under its own C_min at the Swiss-Prot shares: kmerseek at that C has no λ for it</span><span><i class="sw dash" style="border-color:var(--coral)"></i> the C of this page (2 to start, kmerseek's setting); drag it or the slider and every figure on the page follows</span></div>
     <div class="chart" id="chart-cbest"></div>
     <p class="note" id="cbest-hover">Hover a dot or a name to read it off; click one to make it the alphabet of the whole page.</p>
     <p class="note" id="cbest-note"></p>
-    <figcaption>Figure 5. Equation (3) with equal class shares, f(c) = 1 / classes. The curve is one κ for every alphabet size. Every alphabet of Part 1, section 2 is a dot at its number of classes: a filled dot uses the κ measured for that alphabet in aligned Pfam pairs at 20–30% identity, which itself falls as the alphabet grows; an open dot has no measured κ and uses a κ estimated from its number of classes, on the line between the four measured alphabets against log classes. Alphabets with the same number of classes share a dot and are listed one per row. C = 2 sits above the two-letter value of 1.6 and well above every larger alphabet's. Drag the coral line to change C for the whole page, or drag the purple curve to change the κ it is drawn at.</figcaption>
+    <figcaption>Figure 6. Equation (4) with equal class shares, f(c) = 1 / classes. The curve is one κ for every alphabet size. Every alphabet of Part 1, section 2 is a dot at its number of classes: a filled dot uses the κ measured for that alphabet in aligned Pfam pairs at 20–30% identity, which itself falls as the alphabet grows; an open dot has no measured κ and uses a κ estimated from its number of classes, on the line between the four measured alphabets against log classes. Alphabets with the same number of classes share a dot and are listed one per row. C = 2 sits above the two-letter value of 1.6 and well above every larger alphabet's. The grey line is the floor: with equal shares a chance position scores +1 with probability 1 / classes and −C otherwise, and that has to average below zero, so C must exceed 1 / (classes − 1). Alphabets with unequal shares have a higher floor, p / (1 − p) with p the chance match rate at the Swiss-Prot shares, and a red × marks those whose C_best falls under it. Drag the coral line to change C for the whole page, or drag the purple curve to change the κ it is drawn at.</figcaption>
   </figure>
   </div><aside class="fig-side">
   <div class="controls">
     <div class="ctl"><label>κ, the copy rate, for the curve <output id="o-kapC">0.46</output></label><input type="range" id="in-kapC" min="0.05" max="0.80" step="0.01" value="0.46"></div>
+    <div class="ctl"><label>C, the mismatch penalty for the whole page (kmerseek: 2; the measured search used C_best) <output id="o-C">2</output></label><input type="range" id="in-C" min="0.1" max="2.6" step="0.1" value="2"></div>
   </div>
   <p>With two letters a match is a coin flip that came up right, weak evidence, so a mismatch must count for a lot beside it. With 20 letters a match is rare by chance and strong evidence, while a mismatch is what most positions of a true pair at 20–30% identity look like, so it should cost little. Any \(C\) gives valid E-values once \(K\) and \(r_{\text{database}}\) are recalibrated at that \(C\); they were fitted at \(C = 2\). \(C\) sets which regions score high, not whether the statistics hold, and \(X\) should scale with it. Above two letters a flat \(-C\) also ignores that some class pairs are near-misses. That is where a matrix over classes would beat any single \(C\).</p>
+  <p>Equation (4) has a floor. The expected score of one chance position is \(p - C \cdot (1 - p)\), with \(p = \Pr(\text{match} \mid \text{unrelated})\), and Karlin–Altschul statistics need it below zero, so \(C > p / (1 - p)\). With equal shares \(p = 1 / \text{classes}\) and the floor is \(1 / (\text{classes} - 1)\), the grey line. Real shares are unequal, \(p\) is the sum of the squared shares and is larger, and the floor rises. In the measured search (notebook 241) that is what happened for hp_lehninger_hpc3, gbmr4 and gbmr7: at the \(C_{\text{best}}\) derived with equal shares a chance position scored zero or more, no \(\lambda\) existed, and no region of theirs got an E-value at any \(k\). The fix is to derive \(C_{\text{best}}\) from the measured shares, so the note under Figure 6 prints it at the shares of the chosen alphabet.</p>
   </aside></div>
   </section>
 
 
-<section id="s6">
+<section id="s7">
   <h2>Glossary</h2>
   <p>Alphabetical: Latin letters first, then Greek by name, then words. Symbols defined in Part 1 are marked so.</p>
   <ul class="defs">
     <li>bits per position: the mutual information between the query class and the target class at one aligned position, Equation (2a).</li>
-    <li>\(C\): mismatch penalty, <code>--extend-mismatch-penalty</code>; every number on this page uses 2. \(C_{\text{best}}\): the penalty that copies the log-odds scoring, Equation (3).</li>
+    <li>\(C\): mismatch penalty, <code>--extend-mismatch-penalty</code>; 2 unless the slider in section 6 is moved. The measured search of notebook 241 used \(C_{\text{best}}\) for each alphabet. \(C_{\text{best}}\): the penalty that copies the log-odds scoring, Equation (4). \(C_{\text{min}}\): the penalty below which a chance position scores zero or more and no \(\lambda\) exists, \(p / (1 - p)\); section 6.</li>
     <li>\(E\): expected number of chance regions scoring at least \(S\), Part 1, Equation (6a). Smaller is better.</li>
     <li>\(f(c)\): the share of class \(c\) in a sequence; \(h\) and \(p\) for two classes.</li>
     <li>\(K\): the per-database constant in front of \(E\), measured when the index is built; Part 1, section 5.</li>
-    <li>\(k\): seed length; a region is found only if it contains an exact shared k-mer. 12.</li>
+    <li>\(k\): seed length; a region is found only if it contains an exact shared k-mer. 12 on this page; 16 to 24 for two letters in the measured search of notebook 241, where k was set so one seed carries 16 to 44 bits in every alphabet.</li>
     <li>\(m\): query length in residues. \(n\): database residues.</li>
     <li>\(\Pr(\text{match} \mid \text{shared domain})\): fraction of aligned positions, between two sequences that carry the same domain, where the classes match; Equation (1a).</li>
     <li>\(\Pr(\text{match} \mid \text{unrelated})\), the chance match rate: how often one query position and one target position, drawn independently, carry the same class; Part 1, Equation (2b).</li>
     <li>\(r_{\text{database}}\): the share of a region's score that counts as evidence, one number per database; Part 1, section 5.</li>
+    <li>\(r\), \(b\), \(g\): in Equation (3), the number of regions summed in consistent order, the bits one region carries, and the largest gap allowed between two of them, in residues.</li>
     <li>\(S\): region score, matches minus \(C\) times mismatches; Part 1, Equation (1).</li>
     <li>\(\kappa\) (kappa), the copy rate, Cohen's \(\kappa\): the match rate above chance as a fraction of the room above chance, Equation (1b).</li>
-    <li>\(\lambda_{\text{pair}}\) (lambda): nats per unit of score for this pair; Part 1, Equation (4).</li>
+    <li>\(\lambda_{\text{pair}}\) (lambda): nats per unit of score for this pair; Part 1, Equation (3).</li>
     <li>alphabet: the classes the 20 amino acids are merged into before anything is scored (<code>--alphabet</code>); chosen in the bar at the top.</li>
     <li>nat: the natural-log unit of evidence; one nat is \(1/\ln 2 = 1.44\) bits.</li>
   </ul>
@@ -428,8 +470,8 @@ window.MathJax = {
 <footer id="refs">
   <p>References, in order of year. Each entry is the full citation, then a note in bold on what the page takes from it. Every citation was checked against its PubMed record on 2026-09-21.</p>
   <ol>
-    <li>Karlin, S., and S. F. Altschul. “Methods for Assessing the Statistical Significance of Molecular Sequence Features by Using General Scoring Schemes.” <i>Proceedings of the National Academy of Sciences of the United States of America</i> 87, no. 6 (1990): 2264–68. <a href="https://doi.org/10.1073/pnas.87.6.2264">https://doi.org/10.1073/pnas.87.6.2264</a>.<span class="refnote">The Karlin–Altschul theory this page rests on: for ungapped scoring with a negative expected score, the number of chance regions scoring at least S falls as K·m·n·e<sup>−λS</sup>, with λ the positive solution of Equation (4).</span></li>
-    <li>Altschul, S. F. “Amino Acid Substitution Matrices from an Information Theoretic Perspective.” <i>Journal of Molecular Biology</i> 219, no. 3 (1991): 555–65. <a href="https://doi.org/10.1016/0022-2836(91)90193-a">https://doi.org/10.1016/0022-2836(91)90193-a</a>.<span class="refnote">Any substitution matrix is a log-odds matrix; the score for a pair should be the log of how often it occurs in related sequences over how often by chance. The basis of C<sub>best</sub>, Equation (3).</span></li>
+    <li>Karlin, S., and S. F. Altschul. “Methods for Assessing the Statistical Significance of Molecular Sequence Features by Using General Scoring Schemes.” <i>Proceedings of the National Academy of Sciences of the United States of America</i> 87, no. 6 (1990): 2264–68. <a href="https://doi.org/10.1073/pnas.87.6.2264">https://doi.org/10.1073/pnas.87.6.2264</a>.<span class="refnote">The Karlin–Altschul theory this page rests on: for ungapped scoring with a negative expected score, the number of chance regions scoring at least S falls as K·m·n·e<sup>−λS</sup>, with λ the positive solution of Equation (3).</span></li>
+    <li>Altschul, S. F. “Amino Acid Substitution Matrices from an Information Theoretic Perspective.” <i>Journal of Molecular Biology</i> 219, no. 3 (1991): 555–65. <a href="https://doi.org/10.1016/0022-2836(91)90193-a">https://doi.org/10.1016/0022-2836(91)90193-a</a>.<span class="refnote">Any substitution matrix is a log-odds matrix; the score for a pair should be the log of how often it occurs in related sequences over how often by chance. The basis of C<sub>best</sub>, Equation (4).</span></li>
     <li>Henikoff, S., and J. G. Henikoff. “Amino Acid Substitution Matrices from Protein Blocks.” <i>Proceedings of the National Academy of Sciences of the United States of America</i> 89, no. 22 (1992): 10915–19. <a href="https://doi.org/10.1073/pnas.89.22.10915">https://doi.org/10.1073/pnas.89.22.10915</a>.<span class="refnote">The BLOSUM matrices. BLOSUM45 is the 20-letter comparison used on this page; its relative entropy of about 0.4 bit per position is the 0.38 in Figures 2 to 4.</span></li>
     <li>Karlin, S., and S. F. Altschul. “Applications and Statistics for Multiple High-Scoring Segments in Molecular Sequences.” <i>Proceedings of the National Academy of Sciences of the United States of America</i> 90, no. 12 (1993): 5873–77. <a href="https://doi.org/10.1073/pnas.90.12.5873">https://doi.org/10.1073/pnas.90.12.5873</a>.<span class="refnote">Sum statistics: how to assess several high-scoring segments together. The way to collect more bits from a pair than one ungapped region carries.</span></li>
   </ol>
@@ -851,8 +893,25 @@ function drawKappa() {
     var best = 0, bEnd = -1, cur = 0; real.forEach(function (mm, j) { cur = mm ? cur + 1 : 0; if (cur > best) { best = cur; bEnd = j; } });
     var dbh = DB[state.db], lpP = lambdaPair(pc, state.C), kA = A.classes.length, need = Math.log(dbh.K * state.m * dbh.n), nats = lpP * dbh.lc * best, E = lpP > 0 ? Math.exp(need - nats) : Infinity;
     var copies = dbh.n / Math.pow(kA, best), esH = (1 + state.C) * (pc + rk * (1 - pc)) - state.C, sNeed = lpP > 0 ? Math.ceil(need / (lpP * dbh.lc)) : Infinity;
-    el.textContent = 'The longest class-identical run in this window is ' + best + ' residues (' + (bEnd - best + 2) + ' to ' + (bEnd + 1) + ' of ' + n0 + ' in ' + A.name + '). As a seed it is found: the index holds it, so the pair is in the hit list. As evidence it is worth ' + best + ' × λ_pair × r_database = ' + best + ' × ' + fx(lpP, 3) + ' × ' + dbh.lc + ' = ' + fx(nats, 1) + ' nats (' + fx(nats / Math.LN2, 0) + ' bits) against a search space of ln(K m n) = ' + fx(need, 1) + ' nats (' + fx(need / Math.LN2, 0) + ' bits) for ' + dbh.name + ' with m = ' + state.m + ', so on its own it gets E = ' + plainNum(E) + '. ' + dbh.name + ' holds about n / ' + kA + '^' + best + ' = ' + plainNum(copies) + ' chance copies of this exact ' + best + '-letter class string per query position, so the same seed also finds about ' + plainNum(copies * state.m) + ' unrelated proteins. What separates the real pair from those is the flank: inside the shared domain, at this pair\u2019s κ = ' + fx(rk, 2) + ', the walk gains ' + fx(esH, 2) + ' points per position on average, and E = 1 needs S ≥ ' + sNeed + '.';
+    el.textContent = 'The longest class-identical run in this window is ' + best + ' residues (' + (bEnd - best + 2) + ' to ' + (bEnd + 1) + ' of ' + n0 + ' in ' + A.name + '). As a seed it is found: the index holds it, so the pair is in the hit list. As evidence it is worth ' + best + ' × λ_pair × r_database = ' + best + ' × ' + fx(lpP, 3) + ' × ' + dbh.lc + ' = ' + fx(nats, 1) + ' nats (' + fx(nats / Math.LN2, 0) + ' bits) against a search space of ln(K m n) = ' + fx(need, 1) + ' nats (' + fx(need / Math.LN2, 0) + ' bits) for ' + dbh.name + ' with m = ' + state.m + ', so on its own it gets E = ' + plainNum(E) + '. ' + dbh.name + ' holds about n / ' + kA + '^' + best + ' = ' + plainNum(copies) + ' chance copies of this exact ' + best + '-letter class string, so the same seed also finds up to about ' + plainNum(copies) + ' unrelated proteins. What separates the real pair from those is the flank: inside the shared domain, at this pair\u2019s κ = ' + fx(rk, 2) + ', the walk gains ' + fx(esH, 2) + ' points per position on average, and E = 1 needs S ≥ ' + sNeed + '.';
     // the same run length in every alphabet: the hp tables disagree on C, G, P, W and Y, and that decides whether a long run exists
+    // the whole window as evidence: its mutual information at its own kappa and shares, and its +1/-C score, against the search space
+    (function () {
+      var kw = Math.max(0, Math.min(1, rk)), miw = 0;
+      for (var i2 = 0; i2 < fq.length; i2++) { for (var j2 = 0; j2 < ft.length; j2++) { var pij = fq[i2] * ((i2 === j2 ? kw : 0) + (1 - kw) * ft[j2]); if (pij <= 0) continue; var pt = 0; for (var i3 = 0; i3 < fq.length; i3++) pt += fq[i3] * ((i3 === j2 ? kw : 0) + (1 - kw) * ft[j2]); miw += pij * Math.log2(pij / (fq[i2] * pt)); } }
+      var need2 = need / Math.LN2, wbits = miw * n0, Sw = rm - state.C * (n0 - rm), Ew = lpP > 0 ? Math.exp(need - lpP * dbh.lc * Sw) : Infinity;
+      var put = function (id, t) { var e = $('#' + id); if (e) e.textContent = t; };
+      put('r-wbits1', fx(miw, 3) + ' at κ = ' + fx(rk, 2));
+      put('s2-wbits', fx(wbits, 0)); put('s2-run', String(best)); put('s2-run2', String(best)); put('s2-k', String(kA)); put('s2-copies', plainNum(copies)); put('s2-db', dbh.name); put('r-wbits', fx(wbits, 1)); put('r-wneed', fx(need2, 1) + ' on ' + dbh.name + ' at m = ' + state.m);
+      put('r-wE', 'S = ' + rm + ' − ' + fx(state.C, 1).replace(/\.0$/, '') + ' × ' + (n0 - rm) + ' = ' + fx(Sw, 1) + ', E = ' + plainNum(Ew));
+      winEv.scoreBits = lpP > 0 ? Math.max(0, lpP * dbh.lc * Sw) / Math.LN2 : 0; winEv.miBits = wbits; winEv.need = need2; winEv.db = dbh.name;
+      if (!winEv.touched) { var sb = $('#in-sb'); if (sb) { sb.value = Math.round(winEv.scoreBits * 2) / 2; var ob = $('#o-sb'); if (ob) ob.textContent = fx(Number(sb.value), 1); } }
+      if (typeof drawSum === 'function') drawSum();
+      var gap = need2 - wbits, v = $('#window-verdict');
+      if (v) v.textContent = wbits >= need2
+        ? 'This window carries ' + fx(wbits, 1) + ' bits against the ' + fx(need2, 1) + ' that E = 1 costs on ' + dbh.name + ', so on its own it can reach E ≤ 1 here.'
+        : 'This window carries ' + fx(wbits, 1) + ' bits against the ' + fx(need2, 1) + ' that E = 1 costs on ' + dbh.name + ': ' + fx(gap, 0) + ' bits short, a factor of about ' + plainNum(Math.pow(2, gap)) + ' in E. No mismatch penalty, no seed length and no re-weighting of the shared k-mers closes that gap, because they all re-score the same ' + n0 + ' positions. Only more positions (a longer ungapped region), evidence from outside the pair (several queries that carry the same domain, all hitting the same target; section 5), or a smaller search space (a family instead of a proteome) can.';
+    })();
     var byAlpha = Object.keys(ALPHABETS).map(function (key) { var B = ALPHABETS[key], b2 = 0, c2 = 0; for (var j = 0; j < n0; j++) { c2 = classOf(B, q[j]) === classOf(B, t[j]) ? c2 + 1 : 0; if (c2 > b2) b2 = c2; } return B.name + ' ' + b2; });
     el.textContent += ' Longest run in this window by alphabet: ' + byAlpha.join(' · ') + '. The hp tables differ only on C, G, P, W and Y, and that is enough to make or break a seed here.';
   })();
@@ -1393,6 +1452,34 @@ function drawBits() {
   });
 }
 
+var winEv = { scoreBits: 9, miBits: 0, need: 30, db: '', touched: false }; // the BH1 window of Figure 1, as Figure 5's starting region
+function drawSum() {
+  if (!$('#chart-sum')) return;
+  var b = Number($('#in-sb').value), g = Number($('#in-sg').value), need = winEv.need, cost = 2 * Math.log2(g), R = 8;
+  var gross = [], net = []; for (var r = 1; r <= R; r++) { gross.push(r * b); net.push(r * b - (r - 1) * cost); }
+  var ymax = Math.max(need * 1.15, Math.max.apply(null, gross) * 1.05, 10);
+  var c = chart({ h: 320, xlim: [0.4, R + 0.6], ylim: [0, ymax], xticks: [1, 2, 3, 4, 5, 6, 7, 8], yticks: [0, 10, 20, 30, 40, 50, 60, 70, 80].filter(function (v) { return v <= ymax; }), xlabel: 'r, regions in consistent order', ylabel: 'bits', aria: 'Bits carried by r regions before and after the cost of placing them, against the bits E = 1 costs' }).axes();
+  var bw = (c.x(2) - c.x(1)) * 0.62;
+  for (r = 1; r <= R; r++) {
+    var x = c.x(r) - bw / 2, top = c.y(Math.min(ymax, gross[r - 1])), nt = c.y(Math.max(0, Math.min(ymax, net[r - 1])));
+    c.parts.push('<rect x="' + x + '" y="' + top + '" width="' + bw + '" height="' + (c.y0 - top) + '" fill="none" stroke="var(--ink)" stroke-width="1.5"/>');
+    if (net[r - 1] > 0) c.parts.push('<rect x="' + x + '" y="' + nt + '" width="' + bw + '" height="' + (c.y0 - nt) + '" fill="var(--purple)" opacity="0.85"/>');
+    var ly = Math.min(top, nt) - 5; if (need <= ymax && Math.abs(ly - c.y(need)) < 9) ly = c.y(need) - 9;
+    c.parts.push('<text class="tk" x="' + c.x(r) + '" y="' + ly + '" text-anchor="middle">' + fx(net[r - 1], 0).replace(/^-0$/, '0').replace('-', '−') + '</text>');
+  }
+  if (need <= ymax) { var lt = fx(need, 0) + ' bits: E = 1 on ' + winEv.db, lw = lt.length * 6.6 + 10; c.parts.push('<line x1="' + c.x0 + '" y1="' + c.y(need) + '" x2="' + c.x1 + '" y2="' + c.y(need) + '" stroke="var(--ink)" stroke-width="1.5" stroke-dasharray="6,4"/><rect x="' + (c.x1 - lw) + '" y="' + (c.y(need) - 20) + '" width="' + lw + '" height="17" fill="var(--surface)" opacity="0.92"/><text class="an" x="' + (c.x1 - 5) + '" y="' + (c.y(need) - 7) + '" text-anchor="end">' + lt + '</text>'); }
+  $('#chart-sum').innerHTML = c.html();
+  $('#o-sb').textContent = fx(b, 1); $('#o-sg').textContent = String(g);
+  var put = function (id, t) { var e = $('#' + id); if (e) e.textContent = t; };
+  put('sum-b', fx(b, 1)); put('sum-verdict', b > cost ? 'At ' + fx(b, 1) + ' bits per region that holds, and four regions give ' + fx(net[3], 0) + ' bits.' : 'At ' + fx(b, 1) + ' bits per region it does not: four regions give ' + fx(net[3], 0) + ' bits, less than the ' + fx(b, 1) + ' one region carries alone. Short blocks of the BH kind lose by summing.'); put('sum-g', String(g)); put('sum-net', fx(net[3], 0)); put('sum-need', fx(need, 0)); put('sum-db', winEv.db); put('sum-break', fx(cost, 0));
+  var bestR = 1; for (r = 2; r <= R; r++) if (net[r - 1] > net[bestR - 1]) bestR = r;
+  $('#sum-note').textContent = 'Placing one more region costs 2 × log₂ ' + g + ' = ' + fx(cost, 1) + ' bits. ' + (b > cost
+    ? 'Each region carries ' + fx(b, 1) + ' bits, more than that, so every region added helps: eight give ' + fx(net[7], 0) + ' bits' + (net[7] >= need ? ', over the E = 1 line.' : ', still under the E = 1 line.')
+    : 'Each region carries ' + fx(b, 1) + ' bits, less than that, so a second region already loses evidence' + (bestR === 1 ? '; one region alone is the best this pair can do by summing.' : '.'));
+}
+on('in-sb', 'input', function () { winEv.touched = true; drawSum(); });
+on('in-sg', 'input', function () { drawSum(); });
+
 /* ---------- wiring ---------- */
 function updateAll() { if (!state.fq) resetShares(); syncAlphaMirrors(); buildShareSliders(); drawAlphaTable(); drawRegion(); drawKappa(); drawMosaic(); drawF(); drawLambdaCurve(); drawE(); drawCbest(); drawBits(); drawAlphaBits(); drawChain(); drawMotif(); drawCalibration(); drawRho(); }
 function walkThenE() { drawRegion(); drawLambdaCurve(); drawE(); drawChain(); }
@@ -1423,7 +1510,13 @@ bindRange('in-kapC', 'kapC', 'o-kapC', function (v) { return fx(v, 2); }, drawCb
 bindRange('in-X', 'X', 'o-X', function (v) { return String(v); }, function () { walkThenE(); drawRho(); });
 bindRange('in-hom', 'homLen', 'o-hom', function (v) { return String(v); }, walkThenE);
 bindRange('in-kapF', 'kapF', 'o-kapF', function (v) { return fx(v, 2); }, walkThenE);
-function afterC() { $('#in-C').value = state.C; $('#in-C3').value = state.C; $('#o-C').textContent = $('#o-C3').textContent = fx(state.C, 1).replace(/\.0$/, ''); drawAlphaTable(); drawRegion(); drawMosaic(); drawF(); drawLambdaCurve(); drawE(); drawCbest(); drawChain(); drawRho(); }
+function afterC() {
+  var Ctxt = fx(state.C, 1).replace(/\.0$/, '');
+  ['in-C', 'in-C3'].forEach(function (id) { var e = $('#' + id); if (e) e.value = state.C; });
+  ['o-C', 'o-C3'].forEach(function (id) { var e = $('#' + id); if (e) e.textContent = Ctxt; });
+  drawAlphaTable(); drawRegion(); drawMosaic(); drawF(); drawLambdaCurve(); drawE(); drawCbest(); drawChain(); drawRho();
+  drawKappa(); drawBits(); drawMotif(); drawSum();
+}
 bindRange('in-C', 'C', 'o-C', function (v) { return fx(v, 1).replace(/\.0$/, ''); }, afterC);
 bindRange('in-C3', 'C', 'o-C3', function (v) { return fx(v, 1).replace(/\.0$/, ''); }, afterC);
 bindRange('in-m', 'm', 'o-m', function (v) { return String(v); }, drawE);
@@ -1722,9 +1815,14 @@ function syncAlphaMirrors() {
     if (!sel.options.length) { sel.innerHTML = ALPHA_OPTIONS; sel.addEventListener('change', function () { var main = $('#in-alpha'); main.value = sel.value; main.dispatchEvent(new Event('change', { bubbles: true })); }); }
     sel.value = state.alpha;
   });
+  // every alphabet option says which residues each class holds, so the code name is not the only label a reader sees
+  Array.prototype.forEach.call(document.querySelectorAll('select#in-alpha option, select.alpha-mirror option, select#in-kAlpha option'), function (o) {
+    var B = ALPHABETS[o.value]; if (!B || o.title) return;
+    o.title = B.desc + ': ' + B.classes.map(function (c) { return c[0] + ' = ' + c[1]; }).join(' | ');
+  });
 }
 
-/* ---------- Figure 5: the best mismatch penalty against alphabet size ---------- */
+/* ---------- Figure 6: the best mismatch penalty against alphabet size ---------- */
 // kappa for an alphabet with no measured value: read off the line between the measured alphabets, against log(number of classes)
 function kappaGuess(n) {
   var pts = Object.keys(ALPHABETS).filter(function (k) { return ALPHABETS[k].kappa !== undefined; }).map(function (k) { return [ALPHABETS[k].classes.length, ALPHABETS[k].kappa]; }).sort(function (a, b) { return a[0] - b[0]; });
@@ -1741,12 +1839,16 @@ function drawCbest() {
   var pts = []; for (var n = 2; n <= 20; n += 0.25) pts.push([c.x(n), c.y(Math.min(2.6, cBest(kap, 1 / n)))]);
   c.parts.push(dragPath('kap', pts.map(function (p, i) { return (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1); }).join(' '), 'stroke="var(--purple)" stroke-width="2" stroke-linejoin="round"', 'ns'));
   c.parts.push('<text class="tk" x="' + (c.x(7) + 6) + '" y="' + (c.y(Math.min(2.6, cBest(kap, 1 / 7))) - 12) + '" fill="var(--purple)">κ = ' + fx(kap, 2) + ' for every size (drag the curve: sets κ)</text>');
+  // the floor: with equal shares a chance position scores +1 with probability 1/n and -C otherwise; that must average below zero
+  var fpts = []; for (var n2 = 2; n2 <= 20; n2 += 0.25) fpts.push([c.x(n2), c.y(Math.min(2.6, 1 / (n2 - 1)))]);
+  c.path(fpts, 'var(--gray)'); c.parts.push('<line x1="' + c.x(2.6) + '" y1="' + c.y(1 / 1.6) + '" x2="' + c.x(3.2) + '" y2="' + (c.y(1.78) + 4) + '" stroke="var(--gray)" stroke-width="1"/><rect x="' + (c.x(3.2) - 3) + '" y="' + (c.y(1.78) - 8) + '" width="330" height="16" fill="var(--surface)" opacity="0.9"/><text class="tk" x="' + c.x(3.2) + '" y="' + (c.y(1.78) + 4) + '" fill="var(--gray)">C_min = 1 / (classes − 1), the floor: below it no λ exists</text>');
   // every alphabet: a filled dot at its measured kappa, an open dot at the slider's kappa when none is measured.
   // Labels go in a column to the right, one row each, pushed apart so no two rows touch, with a leader line back to the dot.
   var marks = [];
   Object.keys(ALPHABETS).forEach(function (key) {
     var B = ALPHABETS[key], n = B.classes.length, measured = B.kappa !== undefined, kk = measured ? B.kappa : kappaGuess(n), v = cBest(kk, 1 / n);
-    marks.push({ key: key, n: n, v: v, measured: measured, kk: kk, px: c.x(n), py: c.y(Math.min(2.6, v)), text: B.name + ' ' + fx(v, 2) });
+    var fB = classShares(hBackground(B), B), pB = prSameShares(fB, fB), floorB = pB / (1 - pB), under = v <= floorB;
+    marks.push({ key: key, n: n, v: v, measured: measured, kk: kk, px: c.x(n), py: c.y(Math.min(2.6, v)), text: B.name + ' ' + fx(v, 2) + (under ? ' × floor ' + fx(floorB, 2) : ''), under: under, floorB: floorB });
   });
   marks.forEach(function (mk) { mk.ly = mk.py; });
   marks.sort(function (a, b) { return a.py - b.py || a.n - b.n; });
@@ -1759,6 +1861,7 @@ function drawCbest() {
     c.parts.push('<g class="mk' + (mk.key === state.alpha ? ' sel' : '') + '" data-key="' + mk.key + '" data-n="' + mk.n + '" data-k="' + fx(mk.kk, 2) + '" data-m="' + (mk.measured ? 1 : 0) + '" data-v="' + fx(mk.v, 2) + '">');
     c.parts.push('<line x1="' + (mk.px + 5) + '" y1="' + mk.py + '" x2="' + (lx - 4) + '" y2="' + mk.ly + '" stroke="var(--hair2)" stroke-width="0.8"/>');
     c.parts.push(mk.measured ? '<circle cx="' + mk.px + '" cy="' + mk.py + '" r="5" fill="var(--ink)"/>' : '<circle cx="' + mk.px + '" cy="' + mk.py + '" r="4" fill="var(--surface)" stroke="var(--ink)" stroke-width="1.5"/>');
+    if (mk.under) c.parts.push('<text x="' + mk.px + '" y="' + (mk.py + 5) + '" text-anchor="middle" font-size="15" font-weight="700" fill="var(--red)">×</text>');
     c.parts.push('<rect x="' + (lx - 6) + '" y="' + (mk.ly - sp / 2) + '" width="' + (c.W - lx + 4) + '" height="' + sp + '" fill="transparent"/>');
     c.parts.push('<text class="tk" x="' + lx + '" y="' + (mk.ly + 4) + '"' + (mk.measured ? ' font-weight="600" fill="var(--ink)"' : '') + '>' + mk.text + '</text>');
     c.parts.push('</g>');
@@ -1771,7 +1874,10 @@ function drawCbest() {
   });
   var A = ALPHABET_NOW(), fq = state.fq || [], vals = fq.filter(function (f) { return f > 0.005; }).map(function (f) { return cBest(A.kappa !== undefined ? A.kappa : kap, f); });
   var kUsed = A.kappa !== undefined ? A.kappa : kap;
-  $('#cbest-note').textContent = 'At the Part 1, section 2 shares of ' + A.name + ' (' + A.classes.length + ' classes) and κ = ' + fx(kUsed, 2) + (A.kappa !== undefined ? ' (measured)' : ' (the slider; no κ measured for this alphabet)') + ', C_best runs from ' + fx(Math.min.apply(null, vals), 2) + ' for the commonest class to ' + fx(Math.max.apply(null, vals), 2) + ' for the rarest; equal shares give ' + fx(cBest(kUsed, 1 / A.classes.length), 2) + '. kmerseek uses C = 2.';
+  var fA = state.fq && state.fq.length === A.classes.length ? state.fq : classShares(hBackground(A), A), pA = prSameShares(fA, fA), floorA = pA / (1 - pA);
+  var underAll = Object.keys(ALPHABETS).filter(function (key) { var B = ALPHABETS[key], fB = classShares(hBackground(B), B), pB = prSameShares(fB, fB); return cBest(B.kappa !== undefined ? B.kappa : kappaGuess(B.classes.length), 1 / B.classes.length) <= pB / (1 - pB); });
+  $('#cbest-note').textContent = 'Floor for ' + A.name + ' at its Swiss-Prot shares: p = ' + fx(pA, 3) + ', so C must exceed p / (1 − p) = ' + fx(floorA, 2) + '; the page\'s C = ' + fx(state.C, 1).replace(/\.0$/, '') + (state.C > floorA ? ' is above it.' : ' is not, so no λ exists for this alphabet at this C.') + (underAll.length ? ' Alphabets whose equal-share C_best is under their own floor: ' + underAll.join(', ') + '.' : ' Every alphabet\'s equal-share C_best is above its own floor.') + ' ';
+  $('#cbest-note').textContent += 'At the Part 1, section 2 shares of ' + A.name + ' (' + A.classes.length + ' classes) and κ = ' + fx(kUsed, 2) + (A.kappa !== undefined ? ' (measured)' : ' (the slider; no κ measured for this alphabet)') + ', C_best runs from ' + fx(Math.min.apply(null, vals), 2) + ' for the commonest class to ' + fx(Math.max.apply(null, vals), 2) + ' for the rarest; equal shares give ' + fx(cBest(kUsed, 1 / A.classes.length), 2) + '. kmerseek uses C = 2.';
 }
 // Figure 2: hover a line's name to read it, click to make it the page's alphabet
 (function () {
@@ -2111,14 +2217,15 @@ if (document.fonts && document.fonts.load) document.fonts.load('20px "Material S
 /* ---------- which figures a control redraws: glow them and say so under the control ---------- */
 var DEPS = (function () {
   return {
-    'in-alpha': { figs: [1, 2, 3, 4, 5], top: true },
-    'in-kapD': { figs: [1] }, 'in-kAlpha': { figs: [1] }, 'btn-kappa': { figs: [1] },
-    'in-kappa': { figs: [2, 4], top: true }, 'in-hk': { figs: [2, 4], top: true }, 'in-mc': { figs: [1, 2, 4], top: true }, dbc: { figs: [1, 2, 4], top: true },
+    'in-alpha': { figs: [1, 2, 3, 4, 5, 6], top: true },
+    'in-kapD': { figs: [1] }, 'in-kAlpha': { figs: [1, 5] }, 'btn-kappa': { figs: [1] },
+    'in-kappa': { figs: [2, 4], top: true }, 'in-hk': { figs: [2, 4], top: true }, 'in-mc': { figs: [1, 2, 4, 5], top: true }, dbc: { figs: [1, 2, 4, 5], top: true },
     'in-mL': { figs: [4] }, 'in-mI': { figs: [4] }, 'in-k': { figs: [3, 4] }, 'btn-grow': { figs: [3] },
-    'in-kapC': { figs: [5] }
+    'in-sb': { figs: [5] }, 'in-sg': { figs: [5] },
+    'in-kapC': { figs: [6] }, 'in-C': { figs: [1, 2, 4, 5, 6] }
   };
 })();
-var FIG_NAMES = { 1: 'κ', 2: 'bits', 3: 'the alphabet trade', 4: 'a short motif', 5: 'the best C' }; var FIG_NAMES_PART1 = { 17: 'the best C', 13: 'κ', 1: 'the walk', 2: 'the square', 3: 'Equation (4)', 4: 'λ_pair by alphabet', 5: 'E against S', 7: 'one region start to finish', 8: 'the counts', 9: 'the ratio', 10: 'what moves r_database', 11: 'what r_database means', 12: 'what r_database does to the scores', 14: 'bits', 15: 'the alphabet trade', 16: 'a short motif' };
+var FIG_NAMES = { 1: 'κ', 2: 'bits', 3: 'the alphabet trade', 4: 'a short motif', 5: 'summing regions', 6: 'the best C' }; var FIG_NAMES_PART1 = { 17: 'the best C', 13: 'κ', 1: 'the walk', 2: 'the square', 3: 'Equation (4)', 4: 'λ_pair by alphabet', 5: 'E against S', 7: 'one region start to finish', 8: 'the counts', 9: 'the ratio', 10: 'what moves r_database', 11: 'what r_database means', 12: 'what r_database does to the scores', 14: 'bits', 15: 'the alphabet trade', 16: 'a short motif' };
 (function () {
   // give every figure an anchor, fig-N, from its caption
   Array.prototype.forEach.call(document.querySelectorAll('figure'), function (f) { var cap = f.querySelector('figcaption'), m = cap && cap.textContent.match(/^Figure (\d+)\./); if (m) f.id = 'fig-' + m[1]; });
