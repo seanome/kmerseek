@@ -760,9 +760,15 @@ pub fn calibrate_index(
             );
         }
         None => eprintln!(
-            "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
-             A search will have to fit its own r_database and K (--ka-queries) or be given --ka-k.",
-            report.n_queries, report.n_regions
+            "  {} queries gave {} regions and {} shuffled queries gave {} chance regions, but \
+             fewer than {MIN_FIT_POINTS} score bins above the peak hold {MIN_BIN_COUNT} of each, \
+             too few to fit; nothing stored. Raise --ka-reference-shuffles when the chance \
+             regions are what ran out, --ka-queries when both did. Without a fit a search \
+             still extends regions but gives them no Karlin-Altschul E-value.",
+            report.n_queries,
+            report.n_regions,
+            report.n_reference_queries,
+            report.n_reference_regions,
         ),
     }
     Ok(())
