@@ -274,11 +274,32 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
         .collect()
 }
 
-/// The bins above the most populated one. Below the peak sit the bare seeds and the pairs
-/// whose lambda is small; the Karlin-Altschul tail is what comes after it.
+/// The bin of x in [0, `BIN_WIDTH`). A pair whose own lambda is near zero scores x =
+/// lambda_pair S near zero however long its region is, so this one bin collects every
+/// region of every such pair and says nothing about how scores decay. It is barred from
+/// being the peak for that reason; see `tail_bins`.
+const DEGENERATE_BIN: i64 = 0;
+
+/// The bins above the most populated one, not counting `DEGENERATE_BIN`. Below the peak
+/// sit the bare seeds and the pairs whose lambda is small; the Karlin-Altschul tail is
+/// what comes after it.
+///
+/// Barring bin 0 from the peak matters because it is often the tallest bin: in the 0.4
+/// dark-set store (140 indexes, 2026-09-22) it held 2% to 99% of all regions and was the
+/// mode for 24 of them. Taken as the peak it puts the whole rising flank of the real peak
+/// into the fit, and the line is then read off bins that are climbing rather than
+/// decaying: on those 140 curves that refused 12 fits outright (the window's slope came
+/// out positive) and left 4 more fitted on a window far up the flattened tail. Barring it
+/// recovers all 12 and loses none.
 fn tail_bins(bins: &[(i64, u64)]) -> Vec<(i64, u64)> {
-    match bins.iter().enumerate().max_by_key(|(_, b)| b.1) {
-        Some((peak, _)) => bins[peak + 1..].to_vec(),
+    let peak = bins
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.0 != DEGENERATE_BIN)
+        .max_by_key(|(_, b)| b.1)
+        .map(|(i, _)| i);
+    match peak {
+        Some(peak) => bins[peak + 1..].to_vec(),
         None => Vec::new(),
     }
 }
@@ -739,9 +760,15 @@ pub fn calibrate_index(
             );
         }
         None => eprintln!(
-            "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
-             A search will have to fit its own r_database and K (--ka-queries) or be given --ka-k.",
-            report.n_queries, report.n_regions
+            "  {} queries gave {} regions and {} shuffled queries gave {} chance regions, but \
+             fewer than {MIN_FIT_POINTS} score bins above the peak hold {MIN_BIN_COUNT} of each, \
+             too few to fit; nothing stored. Raise --ka-reference-shuffles when the chance \
+             regions are what ran out, --ka-queries when both did. Without a fit a search \
+             still extends regions but gives them no Karlin-Altschul E-value.",
+            report.n_queries,
+            report.n_regions,
+            report.n_reference_queries,
+            report.n_reference_regions,
         ),
     }
     Ok(())
@@ -810,6 +837,37 @@ mod tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_BLC2_FASTA;
     use approx::assert_relative_eq;
+
+    /// A chance curve whose scores decay by e^-0.9 per bin from a peak at bin 5, with a
+    /// spike at bin 0 (every pair whose own lambda is near zero) and, in the real curve
+    /// only, homologs from bin 12 on. The fit reads the decay it was built with, 0.9, off
+    /// the bins just after the real peak. Taking bin 0 as the peak instead puts bins 2 to
+    /// 9 in the window -- the rising flank and the peak itself -- and returns 0.17, which
+    /// is not the decay rate of anything.
+    #[test]
+    fn test_fit_ignores_the_zero_bin_when_it_is_the_tallest() {
+        let (mut real, mut reference) = (Vec::new(), Vec::new());
+        for b in 0..=20i64 {
+            let chance = if b == DEGENERATE_BIN {
+                5_000
+            } else {
+                (2_000.0 * (-0.9 * (b - 5).abs() as f64).exp()).round() as usize
+            };
+            let homologs = if b >= 12 {
+                (900.0 * (-0.15 * (b - 12) as f64).exp()).round() as usize
+            } else {
+                0
+            };
+            reference.extend(std::iter::repeat_n(b as f64, chance));
+            real.extend(std::iter::repeat_n(b as f64, chance + homologs));
+        }
+        let fit = fit_scores_with_reference(&real, &reference).unwrap();
+        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (6, 9, None), "{fit:?}");
+        assert!((fit.lambda - 0.9).abs() < 0.01, "{}", fit.lambda);
+
+        // The spike alone is not a curve: nothing above it to fit, and no panic.
+        assert_eq!(fit_scores(&vec![0.25; 5_000]), None);
+    }
 
     /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
     /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,

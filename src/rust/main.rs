@@ -112,6 +112,16 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
         ka_reference: DecoyNull,
 
+        /// How many times each reference query is shuffled when --ka-null is `database`.
+        /// The fit needs at least 30 chance regions in a score bin before it can use that
+        /// bin, and above about 40 bits per seed (k x log2 of the alphabet's class count)
+        /// one shuffle per query does not reach that however many queries are searched.
+        /// Each extra shuffle is another search of the same sequence, so this costs
+        /// linearly; it is worth raising only for the alphabet and k where the fit is
+        /// refused with plenty of real regions and almost no shuffled ones.
+        #[arg(long, default_value = "1")]
+        ka_reference_shuffles: usize,
+
         /// Write the survival curve the fit was read from (score, regions with score >= it,
         /// and the fit) to this CSV, for plotting with scripts/plot_ka_survival.py.
         #[arg(long, value_name = "PATH")]
@@ -223,6 +233,16 @@ enum Commands {
         /// The reference for `--ka-null database` when a fit runs here; see `kmerseek index --help`.
         #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
         ka_reference: DecoyNull,
+
+        /// How many times each reference query is shuffled when --ka-null is `database`.
+        /// The fit needs at least 30 chance regions in a score bin before it can use that
+        /// bin, and above about 40 bits per seed (k x log2 of the alphabet's class count)
+        /// one shuffle per query does not reach that however many queries are searched.
+        /// Each extra shuffle is another search of the same sequence, so this costs
+        /// linearly; it is worth raising only for the alphabet and k where the fit is
+        /// refused with plenty of real regions and almost no shuffled ones.
+        #[arg(long, default_value = "1")]
+        ka_reference_shuffles: usize,
 
         /// Chain extended regions on one diagonal at most this many residues apart into one
         /// region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
@@ -396,6 +416,7 @@ fn main() -> IndexResult<()> {
             ka_seed,
             ka_null,
             ka_reference,
+            ka_reference_shuffles,
             ka_survival_out,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
@@ -507,6 +528,7 @@ fn main() -> IndexResult<()> {
                         },
                         null: ka_null,
                         reference: ka_reference,
+                        reference_shuffles: ka_reference_shuffles,
                         n_queries: ka_queries,
                         seed: ka_seed,
                     };
@@ -541,6 +563,7 @@ fn main() -> IndexResult<()> {
             ka_seed,
             ka_null,
             ka_reference,
+            ka_reference_shuffles,
             chain_max_gap,
             chain_max_shift,
             verbose,
@@ -660,6 +683,7 @@ fn main() -> IndexResult<()> {
                     scoring,
                     null: ka_null,
                     reference: ka_reference,
+                    reference_shuffles: ka_reference_shuffles,
                     n_queries: ka_queries,
                     seed: ka_seed,
                 };
