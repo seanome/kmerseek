@@ -183,7 +183,9 @@ per pair from the two sequences' class compositions (Schäffer et al. 2001): the
 root of `a e^λ + (1 - a) e^(-Cλ) = 1`. When `a ≥ C / (1 + C)` no positive root exists,
 which is what two hydrophobic runs look like, and the region gets 0 bits and an empty
 `region_ka_evalue`: agreement is what those two compositions do by default. Its
-`region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). `K` is the
+`region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). The
+same happens on every row when the index has no fit for the penalty and none can be made:
+the regions are still extended, and the log says why there is no K. `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
 seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
 it on the index itself (`--ka-queries`, 200 by default): it searches that many of the
