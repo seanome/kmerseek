@@ -851,6 +851,14 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 ///
 /// The region is now 26 residues with 2 mismatches, and still has the 8 shared k-mers of
 /// its seed.
+///
+/// Its Karlin-Altschul score with `--ka-k 0.03`: S = 24 matches - 2 x 2 mismatches = 20.
+/// CED9 is 143/280 hydrophobic in the Lehninger classes and BCL2_HUMAN 146/239, so the
+/// chance two random positions agree is u = 0.510714 x 0.610879 + 0.489286 x 0.389121 =
+/// 0.502376, and the positive root of u e^x + (1 - u) e^(-2x) = 1 is lambda = 0.474339.
+/// bits = (lambda S - ln K) / ln 2 = (9.48678 + 3.50656) / 0.693147 = 18.7454, and
+/// E = K m n e^(-lambda S) with m = 280 query residues and n = 8340 database k-mers is
+/// 0.03 x 280 x 8340 x e^(-9.48678) = 5.31363.
 #[test]
 fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
     const KSIZE: u32 = 12;
@@ -900,7 +908,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
 
     let exact = run(&[], &temp_dir.path().join("exact.csv"))?;
     let extended = run(
-        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8"],
+        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8", "--ka-k", "0.03"],
         &temp_dir.path().join("extended.csv"),
     )?;
 
@@ -963,5 +971,32 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     assert_eq!(grown.target_subseq, "RDGVNWGRIVAFFEFGGVMCVESVNR");
     assert_eq!(grown.moltype_seq, "pphhphhphhhhhphhhhhphpphpp");
     assert_eq!((grown.region_n_shared_kmers, grown.region_n_mismatches), (8, 2));
+    assert_eq!(grown.db_n_kmers, 8340);
+    assert_relative_eq!(grown.region_ka_bits, 18.745416480655074, epsilon = 1e-9);
+    assert_relative_eq!(grown.region_evalue, 5.313631588881071, epsilon = 1e-9);
+    // Without extension there is no score: 0 bits, E infinite.
+    assert_eq!((seed.region_ka_bits, seed.region_evalue), (0.0, f64::INFINITY));
+
+    // Extension without a K has no E-value to print, so it is refused, not guessed; a K
+    // of zero would silently print none either.
+    let refuse = |extra: &[&str], message: &str| -> Result<(), Box<dyn std::error::Error>> {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            target_index_path.to_str().unwrap(),
+            "--output",
+            temp_dir.path().join("no_k.csv").to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            "2",
+        ]);
+        cmd.args(extra);
+        cmd.assert().failure().stderr(predicate::str::contains(message));
+        Ok(())
+    };
+    refuse(&[], "--extend-mismatch-penalty needs --ka-k")?;
+    refuse(&["--ka-k", "0"], "--ka-k must be positive")?;
     Ok(())
 }
