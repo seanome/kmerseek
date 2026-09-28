@@ -4,14 +4,20 @@ the regions' p-values against the default region cutoff (p = 0.05).
 
 Input is the CSV from `kmerseek search -o hits.csv` (one row per matched region). A second
 CSV from an older build overlays its p-values as an outline, to show what a change to region
-detection did to one pair. The figure in docs/images was made with
+detection did to one pair. Each `--run K AFTER BEFORE` is one k-mer size and gets one row per
+`--pair`. The figure in docs/images was made with
 
-    kmerseek index -i tests/testdata/fasta/bcl2_first25_*.fasta.gz -o idx -k 9 -a hp_lehninger2
-    kmerseek search -q tests/testdata/fasta/bcl2_first25_*.fasta.gz -t idx -k 9 -a hp_lehninger2 -o after.csv
-    # same search with the build from the parent commit -> before.csv
-    python scripts/plot_matched_regions.py --after after.csv --before before.csv \\
-        --pair BCL2_HUMAN RTN3_HUMAN --pair B2LA1_HUMAN ASPP2_HUMAN \\
+    for k in 12 15 19; do
+        kmerseek index -i tests/testdata/fasta/bcl2_first25_*.fasta.gz -o idx_$k -k $k -a hp_lehninger2
+        kmerseek search -q tests/testdata/fasta/bcl2_first25_*.fasta.gz -t idx_$k -k $k \\
+            -a hp_lehninger2 -o after_k$k.csv
+        # same two commands with the build from the parent commit -> before_k$k.csv
+    done
+    python scripts/plot_matched_regions.py \\
+        --run 12 after_k12.csv before_k12.csv --run 15 after_k15.csv before_k15.csv \\
+        --run 19 after_k19.csv before_k19.csv --pair B2L13_HUMAN MCL1_HUMAN \\
         --query-fasta tests/testdata/fasta/bcl2_first25_*.fasta.gz \\
+        --title "hp_lehninger2: AFGILMPVWY hydrophobic, CDEHKNQRST polar" \\
         --output docs/images/regions_before_after_chaining
 """
 
@@ -32,7 +38,6 @@ REGION = "#8a8a8a"  # a matched region in the current build
 BEFORE = "#e08214"  # regions from the older build, histogram outline only
 BEST = "#2166ac"  # the best-scoring region (lowest p) in the current build
 CUTOFF = 0.05
-HIST_BINS = np.logspace(np.log10(0.03), 0, 25)
 
 
 def read_fasta_lengths(path):
@@ -55,7 +60,7 @@ def pair_rows(df, query, target):
     )
 
 
-def draw_dot_plot(ax, rows, best, query, qlen, target, tlen, n_before):
+def draw_dot_plot(ax, rows, best, query, qlen, target, tlen, n_before, ksize):
     for r in rows.iter_rows(named=True):
         ax.plot(
             [r["region_start"], r["region_end"]],
@@ -76,14 +81,14 @@ def draw_dot_plot(ax, rows, best, query, qlen, target, tlen, n_before):
     ax.set_xlabel(f"position in query {query.split('_')[0]} (aa)")
     ax.set_ylabel(f"position in target {target.split('_')[0]} (aa)")
     ax.set_title(
-        f"{query.split('_')[0]} ({qlen} aa) vs {target.split('_')[0]} ({tlen} aa)\n"
-        f"{rows['n_intersecting_hashes'][0]} shared k-mers in {rows.height} regions"
-        f" (were {n_before} in the older build)",
+        f"k = {ksize}: {query.split('_')[0]} ({qlen} aa) vs {target.split('_')[0]} ({tlen} aa)\n"
+        f"{rows['n_intersecting_hashes'][0]} distinct shared {ksize}-mers, {rows.height} regions"
+        f" ({n_before} before chaining)",
         fontsize=10,
         loc="left",
     )
     ax.annotate(
-        f"best region: {best['region_length']} aa, p = {best['region_tail_probability']:.3f}",
+        f"best region: {best['region_length']} aa, p = {best['region_tail_probability']:.2g}",
         xy=(best["region_end"], best["target_end"]),
         xytext=(0.97, 0.06),
         textcoords="axes fraction",
@@ -96,17 +101,20 @@ def draw_dot_plot(ax, rows, best, query, qlen, target, tlen, n_before):
     )
 
 
-def draw_pvalue_histogram(ax, rows, before, best):
-    ax.hist(rows["region_tail_probability"], bins=HIST_BINS, color=REGION)
-    ax.hist(before["region_tail_probability"], bins=HIST_BINS, histtype="step", edgecolor=BEFORE, lw=1.5)
-    ax.axvline(CUTOFF, color="black", ls="--", lw=1)
+def pvalue_bins(tables):
+    """Log-spaced bins from the lowest region p-value in any drawn pair up to 1, shared by every row."""
+    lowest = min(df["region_tail_probability"].min() for df in tables)
+    return np.logspace(np.floor(np.log10(lowest)), 0, 25)
+
+
+def draw_pvalue_histogram(ax, rows, before, best, bins):
     best_p = best["region_tail_probability"]
-    ax.axvline(best_p, color=BEST, lw=3)
+    ax.axvline(best_p, color=BEST, lw=3, zorder=0)
+    ax.hist(rows["region_tail_probability"], bins=bins, color=REGION)
+    ax.hist(before["region_tail_probability"], bins=bins, histtype="step", edgecolor=BEFORE, lw=1.5)
+    ax.axvline(CUTOFF, color="black", ls="--", lw=1)
     ax.set_xscale("log")
-    ticks = [0.03, 0.05, 0.1, 0.2, 0.5, 1.0]
-    ax.set_xticks(ticks)
-    ax.set_xticklabels([f"{t:g}" for t in ticks])
-    ax.minorticks_off()
+    ax.set_xlim(bins[0], 1)
     ax.set_xlabel(
         "p-value of the region\n"
         "(Poisson tail: chance of at least this many shared k-mers in a window this long)",
@@ -114,48 +122,58 @@ def draw_pvalue_histogram(ax, rows, before, best):
     )
     ax.set_ylabel("number of regions")
     verdict = "passes" if best_p < CUTOFF else "does not pass"
-    ax.set_title(f"best region p = {best_p:.4f}, cutoff {CUTOFF}: {verdict}", fontsize=10, loc="left")
+    ax.set_title(f"best region p = {best_p:.2g}, cutoff {CUTOFF}: {verdict}", fontsize=10, loc="left")
 
 
 def legend_handles():
     return [
-        Line2D([], [], color=REGION, lw=2, label="a matched region in this build: shared k-mers on one diagonal"),
-        Patch(facecolor="none", edgecolor=BEFORE, lw=1.5, label="regions in the older build"),
-        Line2D([], [], color=BEST, lw=3, label="best-scoring region (lowest p) in this build"),
+        Line2D([], [], color=REGION, lw=2, label="a matched region after chaining: shared k-mers on one diagonal"),
+        Patch(facecolor="none", edgecolor=BEFORE, lw=1.5, label="regions before chaining (parent commit)"),
+        Line2D([], [], color=BEST, lw=3, label="best-scoring region (lowest p) after chaining"),
         Line2D([], [], color="black", ls="--", lw=1, label=f"default region cutoff, p = {CUTOFF}"),
     ]
 
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--after", required=True, help="hits CSV from the current build")
-    parser.add_argument("--before", required=True, help="hits CSV from the older build")
+    parser.add_argument(
+        "--run", nargs=3, action="append", metavar=("K", "AFTER", "BEFORE"), required=True,
+        help="k-mer size, hits CSV from the current build, hits CSV from the older build",
+    )
     parser.add_argument("--pair", nargs=2, action="append", metavar=("QUERY", "TARGET"), required=True)
     parser.add_argument("--query-fasta", required=True, help="FASTA with both proteins, for their lengths")
     parser.add_argument("--title", default="")
     parser.add_argument("--output", required=True, help="path without extension; writes .png and .svg")
     args = parser.parse_args()
 
-    after, before = pl.read_csv(args.after), pl.read_csv(args.before)
+    runs = [(int(k), pl.read_csv(after), pl.read_csv(before)) for k, after, before in args.run]
     lengths = read_fasta_lengths(args.query_fasta)
-    n = len(args.pair)
+    panels = [
+        (ksize, pair_rows(after, *pair), pair_rows(before, *pair), pair)
+        for ksize, after, before in runs
+        for pair in args.pair
+    ]
+    bins = pvalue_bins([df for _, rows, old, _ in panels for df in (rows, old)])
+    n = len(panels)
+    height = 4.75 * n + 1.2  # 1.2 in above the panels for the title and legend
     fig, axes = plt.subplots(
-        n, 2, figsize=(11, 4.75 * n), squeeze=False,
+        n, 2, figsize=(11, height), squeeze=False,
         gridspec_kw={"width_ratios": [1, 1.1], "hspace": 0.5, "wspace": 0.3},
     )
     if args.title:
-        fig.suptitle(args.title, fontsize=11, y=0.985)
-    fig.legend(handles=legend_handles(), loc="upper center", bbox_to_anchor=(0.5, 0.905), ncol=2, fontsize=9, frameon=False)
+        fig.suptitle(args.title, fontsize=11, y=1 - 0.15 / height)
+    fig.legend(handles=legend_handles(), loc="upper center", bbox_to_anchor=(0.5, 1 - 0.4 / height), ncol=2, fontsize=9, frameon=False)
 
-    for row, (query, target) in enumerate(args.pair):
-        rows, old = pair_rows(after, query, target), pair_rows(before, query, target)
+    for row, (ksize, rows, old, (query, target)) in enumerate(panels):
         best = rows.sort("region_tail_probability").row(0, named=True)
-        draw_dot_plot(axes[row, 0], rows, best, query, lengths[query], target, lengths[target], old.height)
-        draw_pvalue_histogram(axes[row, 1], rows, old, best)
+        draw_dot_plot(
+            axes[row, 0], rows, best, query, lengths[query], target, lengths[target], old.height, ksize
+        )
+        draw_pvalue_histogram(axes[row, 1], rows, old, best, bins)
         for ax in axes[row]:
             ax.spines[["top", "right"]].set_visible(False)
 
-    fig.subplots_adjust(top=0.82, bottom=0.07, left=0.08, right=0.98)
+    fig.subplots_adjust(top=1 - 1.5 / height, bottom=0.8 / height, left=0.08, right=0.98)
     fig.savefig(f"{args.output}.png", dpi=150)
     fig.savefig(f"{args.output}.svg")
 
