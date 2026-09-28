@@ -544,6 +544,40 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+/// Searching the same index twice writes the same bytes. Candidates are compared in parallel
+/// over a HashSet, so without `sort_results` the rows came out in a new order each run, and
+/// sums over shared k-mers changed in the last digit.
+#[test]
+fn test_cli_search_output_is_reproducible() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let index_path = index_path.to_str().unwrap();
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
+        .args(["--ksize", "12", "--alphabet", "hp_lehninger2"])
+        .assert()
+        .success();
+
+    let search = |name: &str| -> Result<String, Box<dyn std::error::Error>> {
+        let csv = temp_dir.path().join(name);
+        Command::cargo_bin("kmerseek")?
+            .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
+            .args(["--output", csv.to_str().unwrap()])
+            .args(["--ksize", "12", "--alphabet", "hp_lehninger2"])
+            .args(["--min-shared-kmers", "0", "--max-pvalue", "0.7"])
+            .assert()
+            .success();
+        Ok(std::fs::read_to_string(csv)?)
+    };
+    let first = search("run1.csv")?;
+    let second = search("run2.csv")?;
+
+    // Header plus one line per row.
+    assert_eq!(first.lines().count(), CED9_ROWS_HP_K12_MAX_PVALUE_0_7 + 1);
+    assert_eq!(first, second);
+    Ok(())
+}
+
 /// Index the 25-sequence test FASTA at `ksize`/`scaled` in `hp_lehninger2`, search CED9
 /// against it with every result filter open, and return the rows hitting BCL2_HUMAN sorted
 /// by query start. `scaled` is read back from the database, so `search` takes no flag.
