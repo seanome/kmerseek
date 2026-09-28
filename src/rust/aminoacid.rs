@@ -43,25 +43,84 @@ pub fn has_ambiguous_residues(residues: &[u8]) -> bool {
     residues.iter().any(|b| alternatives(*b).is_some())
 }
 
-/// Ceiling on how many ambiguous residues one k-mer may carry before it is dropped rather
-/// than expanded.
+/// Ceiling on how many residues one k-mer may hold that are still ambiguous after encoding,
+/// before it is dropped rather than expanded.
 ///
 /// This bounds memory; it expresses no view about which readings are worth keeping. `2^n`
 /// readings would otherwise grow without bound on pathological input, such as a long run of
-/// `B`. At the default `--ksize 10` the ceiling can never fire, since a 10-mer holds at most
-/// 10. For any k up to 30 the densest window in Swiss-Prot 2026_03 and among UniRef50
-/// 2026_03 representatives holds 9 (P00659 and P01658), so no real sequence is dropped.
-pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 10;
+/// `B`. At the ceiling a k-mer expands to 1_048_576 readings. No real sequence comes near
+/// it: for any k up to 30 the densest window in Swiss-Prot 2026_03 and among UniRef50
+/// 2026_03 representatives holds 9 ambiguous residues (P00659 and P01658), and P00659's
+/// densest window at k=43 holds 12. An earlier ceiling of 10 dropped that window even
+/// under the HP alphabets, where none of its 12 residues is ambiguous once encoded.
+pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 20;
 
-/// Disambiguate one k-mer into every reading its ambiguous residues allow: `D` and `N` for
-/// `B`, `I` and `L` for `J`, and `E` and `Q` for `Z`. A k-mer with no ambiguous residue yields
-/// itself; one carrying `n` of them yields all `2^n` readings.
+/// What one residue encodes to under an alphabet.
+enum Encoded {
+    /// One class symbol: a canonical residue's class, or an ambiguous residue whose two
+    /// readings the alphabet puts in the same class.
+    One(u8),
+    /// Either of two class symbols: an ambiguous residue whose two readings the alphabet
+    /// keeps apart, in the order of [`AMBIGUITY_ALTERNATIVES`].
+    Either([u8; 2]),
+}
+
+fn encode_residue(residue: u8, encode: &impl Fn(u8) -> u8) -> Encoded {
+    match alternatives(residue) {
+        None => Encoded::One(encode(residue)),
+        Some([first, second]) => {
+            let pair = [encode(first), encode(second)];
+            if pair[0] == pair[1] {
+                Encoded::One(pair[0])
+            } else {
+                Encoded::Either(pair)
+            }
+        }
+    }
+}
+
+/// Encode a whole sequence for storing and display. An ambiguous residue is written as its
+/// class where the alphabet merges its two readings (`p` for `B` under every HP alphabet),
+/// and as the ambiguous letter itself where it does not (`B` under sdm12), so the stored
+/// sequence claims no more than the source did.
+pub fn encode_sequence(sequence: &[u8], encode: impl Fn(u8) -> u8) -> Vec<u8> {
+    sequence
+        .iter()
+        .map(|&residue| match encode_residue(residue, &encode) {
+            Encoded::One(symbol) => symbol,
+            Encoded::Either(_) => residue,
+        })
+        .collect()
+}
+
+/// Whether two symbols of sequences encoded by [`encode_sequence`] can stand for the same
+/// residue: the same class, or an ambiguous letter on either side one of whose readings
+/// encodes to the other side's class. Lets a matched region run through an ambiguous
+/// residue, which the k-mer hashes already matched under one of its readings.
+pub fn encoded_residues_agree(query: u8, target: u8, encode: &impl Fn(u8) -> u8) -> bool {
+    let could_be = |ambiguous: u8, symbol: u8| match encode_residue(ambiguous, encode) {
+        Encoded::Either(pair) => pair.contains(&symbol),
+        Encoded::One(_) => false,
+    };
+    query == target || could_be(query, target) || could_be(target, query)
+}
+
+/// Encode one k-mer under an alphabet and disambiguate it into every reading its ambiguous
+/// residues allow: `D` and `N` for `B`, `I` and `L` for `J`, and `E` and `Q` for `Z`.
+/// `encode` maps one residue to its class symbol under the alphabet. The readings come back
+/// encoded, ready to hash.
+///
+/// Whether a residue is ambiguous depends on the alphabet. Under every HP alphabet, Asp and
+/// Asn are both polar, so `B` encodes to `p` either way and is not ambiguous at all: it is
+/// written as `p` and the k-mer yields one reading. Under SDM12 or HSDM17, which give Asp
+/// and Asn separate classes, `B` stays ambiguous and the k-mer yields both readings. A
+/// k-mer with `n` residues still ambiguous after encoding yields all `2^n` readings.
+/// Disambiguating before encoding instead would expand `2^n` readings that all hash the
+/// same, and would count residues toward the ceiling that the alphabet never told apart.
 ///
 /// Indexing every reading keeps a search matching whichever residue the query holds, and
 /// keeps matching from depending on which reading was kept. Picking one would assert a
-/// residue the source never claimed, and which reading is safe depends on the alphabet:
-/// SDM12 and HSDM17 give Asp and Asn separate classes, so under them the readings are
-/// different k-mers.
+/// residue the source never claimed.
 ///
 /// The expansion is affordable because ambiguous residues are rare and stay sparse within a
 /// window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
@@ -72,18 +131,24 @@ pub const MAX_AMBIGUOUS_RESIDUES_PER_KMER: usize = 10;
 /// WHY bytes rather than `&str`: callers hash the result, and hashing reads bytes. Going
 /// through `String` would add a UTF-8 validation per reading and a panic path for input
 /// that validation has already ruled out.
-pub fn disambiguate_kmer(kmer: &[u8]) -> Option<Vec<Vec<u8>>> {
-    let ambiguous: Vec<(usize, [u8; 2])> = kmer
-        .iter()
-        .enumerate()
-        .filter_map(|(position, residue)| alternatives(*residue).map(|pair| (position, pair)))
-        .collect();
+pub fn disambiguate_kmer(kmer: &[u8], encode: impl Fn(u8) -> u8) -> Option<Vec<Vec<u8>>> {
+    let mut encoded = Vec::with_capacity(kmer.len());
+    let mut ambiguous: Vec<(usize, [u8; 2])> = Vec::new();
+    for (position, &residue) in kmer.iter().enumerate() {
+        match encode_residue(residue, &encode) {
+            Encoded::One(symbol) => encoded.push(symbol),
+            Encoded::Either(pair) => {
+                encoded.push(pair[0]);
+                ambiguous.push((position, pair));
+            }
+        }
+    }
 
     if ambiguous.len() > MAX_AMBIGUOUS_RESIDUES_PER_KMER {
         return None;
     }
 
-    let mut readings = vec![kmer.to_vec()];
+    let mut readings = vec![encoded];
     for (position, [first, second]) in ambiguous {
         let mut expanded = Vec::with_capacity(readings.len() * 2);
         for reading in readings {
@@ -218,6 +283,7 @@ impl AminoAcidAmbiguity {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::alphabets::Alphabet;
     use crate::tests::test_fixtures::{TEST_PROTEIN, TEST_PROTEIN_INVALID};
 
     #[test]
@@ -354,15 +420,53 @@ mod tests {
         }
     }
 
-    /// Disambiguation readable as strings; the function itself works in bytes so that
-    /// hashing does not pay for UTF-8 validation.
-    fn readings(kmer: &str) -> Option<Vec<String>> {
+    /// Disambiguation under `encode`, readable as strings; the function itself works in
+    /// bytes so that hashing does not pay for UTF-8 validation.
+    fn readings_under(kmer: &str, encode: impl Fn(u8) -> u8) -> Option<Vec<String>> {
         Some(
-            disambiguate_kmer(kmer.as_bytes())?
+            disambiguate_kmer(kmer.as_bytes(), encode)?
                 .into_iter()
                 .map(|reading| String::from_utf8(reading).expect("input is ASCII"))
                 .collect(),
         )
+    }
+
+    /// Disambiguation under protein20, where every residue is its own class.
+    fn readings(kmer: &str) -> Option<Vec<String>> {
+        readings_under(kmer, |b| b)
+    }
+
+    /// Lehninger's hydrophobic/polar split, as `hash_kmer` applies it: uppercased, because
+    /// sourmash uppercases protein input before hashing.
+    fn lehninger(residue: u8) -> u8 {
+        let table = Alphabet::HpLehninger2.partition().unwrap();
+        table.get(&residue).copied().unwrap_or(residue).to_ascii_uppercase()
+    }
+
+    /// Under an HP alphabet Asp and Asn are both polar, as are Glu and Gln, so B and Z are
+    /// not ambiguous once encoded: the k-mer yields one reading. J stays ambiguous only where
+    /// the alphabet splits Ile from Leu, which no HP alphabet does.
+    #[test]
+    fn test_residue_merged_by_the_alphabet_is_not_ambiguous() {
+        assert_eq!(readings_under("MKBTA", lehninger).unwrap(), vec!["HPPPH"]);
+        assert_eq!(readings_under("MKZTA", lehninger).unwrap(), vec!["HPPPH"]);
+        assert_eq!(readings_under("MKJTA", lehninger).unwrap(), vec!["HPHPH"]);
+        // Twelve ambiguous residues, past the old ceiling of 10, still one reading.
+        assert_eq!(readings_under(&"B".repeat(12), lehninger).unwrap(), vec!["P".repeat(12)]);
+    }
+
+    /// Only the residues an alphabet keeps apart expand. mmseqs12 merges Asp with Asn and
+    /// Glu with Gln but splits Ile from Leu, so of B, Z and J only J doubles the readings.
+    #[test]
+    fn test_only_residues_the_alphabet_splits_expand() {
+        let table = Alphabet::Mmseqs12.partition().unwrap();
+        let mmseqs12 = |b: u8| table.get(&b).copied().unwrap_or(b).to_ascii_uppercase();
+        let one = readings_under("BZJ", mmseqs12).unwrap();
+        assert_eq!(one.len(), 2);
+        assert_eq!(one[0][..2], one[1][..2], "B and Z encode the same in both readings");
+        assert_ne!(one[0].as_bytes()[2], one[1].as_bytes()[2], "J expands to Ile and Leu");
+        assert_eq!(one[0].as_bytes()[2], mmseqs12(b'I'));
+        assert_eq!(one[1].as_bytes()[2], mmseqs12(b'L'));
     }
 
     /// B stands for Asp or Asn, so a k-mer covering one is indexed under both readings.
@@ -424,7 +528,8 @@ mod tests {
     }
 
     /// The ceiling bounds memory on pathological input. A k-mer past it is dropped whole,
-    /// rather than indexed under an arbitrary subset of its readings.
+    /// rather than indexed under an arbitrary subset of its readings. Under protein20 every
+    /// B counts, so a run of 20 is at the ceiling and a run of 21 is past it.
     #[test]
     fn test_kmer_past_the_ceiling_is_dropped() {
         let at_ceiling = "B".repeat(MAX_AMBIGUOUS_RESIDUES_PER_KMER);

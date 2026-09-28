@@ -1,5 +1,7 @@
 # Kmerseek
 
+How kmerseek scores a region and gives it an E-value is explained, with sliders on every quantity, at [seanome.github.io/kmerseek](https://seanome.github.io/kmerseek/) (source in `docs/`).
+
 ## Compiling on Mac
 
 You may need to add these magical `export` commands to make your Python install work:
@@ -45,10 +47,11 @@ drop them:
 kmerseek index -i proteome.fasta --ksize 10 --alphabet hp_lehninger2 --remove-low-complexity
 ```
 
-Two independent checks run per k-mer: the **raw amino-acid** window (any encoding),
-and for the HP-family alphabets the **HP-encoded** window as well. The second catches
-windows that aren't raw homopolymers but still collapse to one symbol -- `LIVMA` is
-five different residues that all encode to `h`.
+A k-mer is dropped when its **encoded** window is a run of one symbol. Under
+`protein20` that is a raw homopolymer. Under a reduced alphabet it also catches windows
+that aren't raw homopolymers but collapse to one class -- `LIVMA` is five different
+residues that all encode to `h` under the Lehninger split, and `EEEDD` encodes to
+`ccccc` under `dayhoff6`.
 
 Indexing reports what was removed, so you can tell whether the flag mattered:
 
@@ -94,6 +97,7 @@ proteome.fasta.hp.k10.scaled1.nolowcomplexity.kmerseek.rocksdb  # --remove-low-c
 ```
 
 Removal is **off by default**; existing indexes and workflows are unaffected.
+
 Note that only *exact* homopolymers are dropped -- a near-homopolymer such as
 `hhhhhhhhhp` is kept.
 
@@ -138,6 +142,44 @@ expectation summed over the same survivors, so the two stay comparable.
 
 Choose N from the shortest match you need to see reliably, not from k. The cap is 10.
 
+## Extending matched regions past the exact seed
+
+A matched region is a maximal run of shared k-mers: one position where the encoded
+query and target disagree ends it. Between remote homologs the HP pattern is conserved
+per position (the copy rate, Cohen's κ, is about 0.45 at 20-30% identity) far better than
+any 23-residue stretch of it is conserved exactly (most such pairs share no exact
+23-mer at all), so an exact run is better read as a seed than as the match.
+
+`--extend-mismatch-penalty C` grows each region outward along the encoded sequences,
+scoring +1 per agreeing position and -C per disagreeing one, and stops when the running
+score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up margin
+(BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
+become one region.
+
+Both walks on the BH1 seed of CED9 against BCL2 (`hp`, k=12, penalty 2, give-up margin
+8). A side keeps residues only up to its best running score. To the left the first two
+classes differ, so the score starts at -4, never rises above 0, and nothing is kept. To
+the right the score climbs to +1 after 7 residues, and the walk stops once it has fallen
+9 below that peak, keeping the 7. `scripts/plot_xdrop_walk.py` draws this from the JSON
+`kmerseek pair` writes.
+
+![The walk on both sides of the BH1 seed: residues, classes, and the running score](docs/images/xdrop_walk_bcl2_ced9_bh1.png)
+
+([SVG version](docs/images/xdrop_walk_bcl2_ced9_bh1.svg))
+
+```bash
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
+    --extend-mismatch-penalty 2 --output hits.csv
+```
+
+What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
+the extended span, `region_length` with them; `region_n_shared_kmers` still counts
+exact shared k-mers (the seeds), so it no longer equals `region_length - ksize + 1`;
+and a new column `region_n_mismatches` says how many positions inside the region
+disagree. The region Poisson score keeps counting exact k-mers against the expectation
+summed over the extended span, so extension can only make a region's score more
+conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
@@ -181,6 +223,132 @@ target's hit spans are still shown, so one heavily-fragmented target can't crowd
 the others) -- use it to tame proteome-scale searches where a gene can have dozens of
 distinct hits. See
 `python scripts/visualize_hits.py --help` for all options.
+
+## Visualizing one pair of sequences
+
+`kmerseek pair` compares one query sequence with one target sequence at a chosen
+alphabet and k-mer size and writes JSON listing every shared k-mer with its position in
+both sequences, plus the matched regions those k-mers chain into (the same regions
+`search` reports). `scripts/visualize_pair.py` draws that JSON as a dot plot and one
+alignment block per run of two or more consecutive shared k-mers:
+
+- In the dot plot each protein is a line with boxes for its domains along its axis, and
+  each domain's span is shaded across the plot, so a run sits in a named cell such as
+  "Bcl-2 x Bcl-2" without reading coordinates. Runs are numbered diagonal segments;
+  lone shared k-mers are dots.
+- Each alignment block, longest run first and numbered to match, is the BLAST layout:
+  query row, identical residues written between the rows, target row, 1-based
+  coordinates at both ends, residue boxes coloured hydrophobic or polar. The header
+  gives the two regions, the length, the identical residues and how many residues are
+  polar (a low-complexity flag; 1 of 14 is an all-hydrophobic run).
+
+Example, human BCL-2 against C. elegans CED-9 at `hp_lehninger2`, k=12, with both
+proteins' Pfam domains. Run 1 is the BH1 motif inside the Bcl-2 domain of both: 5/19
+residues identical, 19/19 the same hydrophobic/polar class.
+
+![Shared k-mers between BCL2_HUMAN and CED9_CAEEL](docs/images/bcl2_vs_ced9_pair_example.png)
+
+([SVG version](docs/images/bcl2_vs_ced9_pair_example.svg))
+
+```bash
+kmerseek pair -q tests/testdata/fasta/bcl2.fasta -t tests/testdata/fasta/ced9.fasta \
+    --alphabet hp --ksize 12 -o bcl2_vs_ced9.json
+
+python scripts/visualize_pair.py --pair bcl2_vs_ced9.json --output-dir pair_png/ \
+    --domains scripts/testdata/bcl2_ced9_pfam_domains.tsv --html
+```
+
+The first record of each FASTA is used unless `--query-name` / `--target-name` names
+another by its header or its first token (`sp|P10415|BCL2_HUMAN`). `--domains` takes
+one or more Pfam-style tables (TSV, CSV or parquet) with a protein column (`accession`,
+`protein` or `name`), `domain_start`/`domain_end` or `start`/`end` (1-based inclusive)
+and a `name`, `pfam_name` or `pfam_id` column; proteins match by full header, first
+token or UniProt accession, so the `*_pfam_domains.parquet` tables built from
+Pfam-A.regions work as they are. `--flank N` shows N residues either side of each run
+and switches the middle line to BLAST's: the letter where identical, `:` where only the
+class agrees. `--html` also writes the pair as a one-row page of the search report
+(same template, the row open): hover a single for its k-mer, click a run's number to
+jump to its alignment, copy the runs as FASTA or the dot plot as SVG. Under the row sit
+both full sequences, coloured by class, each run underlined in the shade of its bar; a
+run hovered in the plot, in its alignment or in the sequences lights up in all three.
+The ruler at the top counts shared k-mers over each query residue (every k-mer covers k
+residues), dark for k-mers of runs with 5 or more identical residues. CED-9 against
+BCL-2 is one dark peak at BH1 out of 27 shared 12-mers. CED-9 against reticulon-3, a
+composition hit, is 100 shared 12-mers in 19 runs spread over a 1032-residue protein
+([examples](https://seanome.github.io/kmerseek/)).
+
+Every lone shared k-mer is also written to the JSON as a region exactly k residues
+long; the figure draws those as singles and gives alignments only to runs.
+
+Identities are counted on the run's own diagonal, with no gaps. An exact run in the
+reduced alphabet can sit a few residues off the true alignment (MCL-1's BH1 run reads 1
+identical residue with BCL-2 on its diagonal, though NWGR is in both), so a low count
+on a run says the run is not the alignment, not that the proteins are unrelated.
+
+`--structures DIR` draws USalign's residue pairs across the dot plot: with USalign or
+TM-align on `PATH` (or `--aligner`), the two proteins' AlphaFold or PDB files in that
+directory (`AF-{accession}-F1-model_v*.cif`, `{accession}.pdb`) are superposed, every
+residue pair USalign reports is drawn as a thin line (solid where USalign marks the pair
+close, dotted otherwise), and each run's header says whether it lies on those pairs. For
+BCL-2 against CED-9, run 1 (BH1) is on them and run 3, 9 residues off run 1's diagonal,
+is 4 residues off; only one of the two can be real, and the structures say which.
+
+## Visualizing a whole search
+
+`scripts/visualize_search.py` turns `kmerseek search` output into one HTML report per
+query. The query is the shared axis: it is drawn once at the top as a line with its
+domains, under a histogram of how many database entries have a run over each residue
+(light for any run, dark for a run with 5 or more identical residues). That histogram
+is the noise map: a low-complexity stretch is covered by unrelated proteins whose
+Ala/Pro/Gly runs match it letter for letter, so a run there is discounted at a glance
+and a run in BH1 is not.
+
+Below it, one row per protein with the numbers in the row (length, runs, longest run,
+identical residues in it, shared k-mers, the ranking statistic) and every run drawn as
+a bar at its query coordinates, shaded by its share of identical residues; overlapping
+runs stack in lanes. Database entries of one gene fold into one row, so a family search
+is not a list of TrEMBL copies of the query. Click a row and the pair view above opens
+underneath it. The page filters rows by name, identical residues, the statistic,
+Swiss-Prot status, fragments and the query domain a run falls in; the Download menu
+gives the rows and runs as TSV, the runs as FASTA, the overview as SVG or PNG and the
+data as JSON.
+
+Example, CED-9 searched against the 25 BCL-2-like proteins in `tests/testdata/fasta`
+at `hp_lehninger2`, k=15, with Pfam domains:
+[docs/examples/ced9_kmerseek_hits_example.html](https://htmlpreview.github.io/?https://github.com/seanome/kmerseek/blob/main/docs/examples/ced9_kmerseek_hits_example.html).
+15 of the 25 share a 15-mer with CED-9. BCL-2's longest run is the BH1 motif, 19
+residues with 5 identical, on the USalign residue pairs; the q-value ranks it 8th,
+behind runs that are longer but polar-rich and off the structure (RTN3: 23 residues,
+2 identical, 14 polar). The q-value scores a run by its length alone. The commands, on files in this repository:
+
+```bash
+kmerseek index -i tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+    --alphabet hp --ksize 15 -o bcl2_25.rocksdb
+kmerseek search -q tests/testdata/fasta/ced9.fasta -t bcl2_25.rocksdb -o results.csv \
+    --alphabet hp --ksize 15
+
+python scripts/visualize_search.py --csv results.csv \
+    --query-fasta tests/testdata/fasta/ced9.fasta \
+    --target-fasta tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+    --output-dir report/ \
+    --domains scripts/testdata/bcl2_25_pfam_domains.tsv scripts/testdata/bcl2_ced9_pfam_domains.tsv
+```
+
+`--structures DIR` adds a TM-score column and USalign's residue pairs to each row's dot
+plot.
+
+Rows are ordered by `region_evalue` when the CSV has it and otherwise by the
+Benjamini-Hochberg corrected region tail probability; the column headers also sort by
+identical residues, run length, run count and shared k-mers, which put
+composition-driven hits (p53, POU4F1) among the family members and show why the
+ranking statistic is the default. The pair view needs every shared k-mer, which the
+CSV does not carry, so the script runs `kmerseek pair` once per row (1.3 s for 40
+rows) on sequences from the two FASTA files; `--target-fasta` is the FASTA the index
+was built from. `--max-rows` caps each query (default 100), `--max-runs-shown` caps the
+alignments per opened row (default 10, longest first), `--solid-identical` sets how
+many identical residues a run needs to count in the histogram's dark area (default 5).
+The page is `scripts/kmerseek_hits_template.html` with its title and data tokens
+filled; everything on it is drawn by the template's own script from that data.
 
 ## Alphabets
 
@@ -347,18 +515,31 @@ Where each k-mer count comes from:
   `hpphp`, `NTAND` and `NBMES` are both `pphpp`. Disambiguating adds none, so it stays
   at 14.
 
-Every ambiguous residue in a k-mer expands, so a k-mer carrying *n* of them becomes 2^*n*
-k-mers. Indexing every reading rather than a chosen subset keeps matching from depending on
-which reading was kept.
+A k-mer is encoded first and disambiguated second, so only the residues the alphabet still
+cannot tell apart expand: a k-mer carrying *n* of them becomes 2^*n* k-mers. Under every HP
+alphabet, `dayhoff6`, `gbmr4`, `gbmr7` and `mmseqs12`, `B` and `Z` are not ambiguous at all
+and cost nothing. Indexing every reading rather than a chosen subset keeps matching from
+depending on which reading was kept. A matched region runs through an ambiguous residue in
+the same way: the stored encoded sequence writes the residue as its class where the alphabet
+merges the two readings and as the letter itself where it does not, and the letter agrees
+with either class it stands for.
+
+Containment, its target-side counterpart and Jaccard count a window once however many
+readings it was sketched under. A true homolog matches one reading per window, so counting
+hashes would count the others as misses: topi pancreatic ribonuclease (P00659, 12 `B` and
+10 `Z` in 124 residues) holds 541 hashes for 115 windows at k=10, and against goat
+ribonuclease, which matches 105 of those windows, its containment could never pass
+115/541. A sketch with no ambiguous residue keeps the containment sourmash reports.
 
 The expansion is affordable because ambiguous residues are rare and stay sparse within any one
 window. Swiss-Prot 2026_03 holds 525 of them, 276 `B` and 249 `Z` with no `J` anywhere,
 across 146 of its 575_748 sequences. The densest window at any k up to 30, in Swiss-Prot and
 among UniRef50 representatives alike, holds 9, so the worst single k-mer expands to 512
 readings, and expansion grows the index by 0.0012% at k=4 and 0.034% at k=30. A k-mer
-carrying more than 10 is dropped, which bounds memory on a pathological input such as a long
-run of `B`. At the default `--ksize 10` that can never happen, and no window in either
-database reaches it at any k up to 30.
+carrying more than 20 residues that are still ambiguous after encoding is dropped, which
+bounds memory on a pathological input such as a long run of `B`. No real window comes near
+it: the densest in Swiss-Prot, topi pancreatic ribonuclease (P00659, 22 ambiguous residues
+in 124), holds 12 at k=43.
 
 `U` (Sec, selenocysteine) and `O` (Pyl, pyrrolysine) are handled differently. They are
 specific residues rather than ambiguities, so each takes its closest canonical analogue,

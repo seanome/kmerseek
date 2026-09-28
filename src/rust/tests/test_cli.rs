@@ -8,7 +8,13 @@ use rstest::rstest;
 
 use crate::alphabets::Alphabet;
 use crate::search::SearchResultCsv;
-use crate::tests::test_fixtures::{TEST_CED9_FASTA, TEST_FASTA_GZ};
+use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
+
+/// Rows `kmerseek search` writes for CED9 against the 25-protein fixture at hp k=12 with
+/// `--max-pvalue 0.7` and every other filter open. The p-value cap drops the pairs not
+/// enriched above chance in this small, BCL2-heavy set. This was 242 before chaining seeds
+/// per diagonal merged the pieces a repeated k-mer used to split.
+const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 218;
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
@@ -460,15 +466,8 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // Verify CSV file is not empty
     let csv_content = std::fs::read_to_string(&output_csv)?;
     assert!(!csv_content.is_empty(), "CSV file should not be empty");
-    // WHY: --max-pvalue 0.7 excludes matches that aren't enriched above chance in this small,
-    // BCL2-heavy fixture database (see comment above). 218 regions plus the header: chaining
-    // seeds per diagonal merges the pieces a repeated k-mer used to split, which is why this
-    // was 243 before.
-    assert!(
-        csv_content.lines().count() == 219,
-        "CSV should have 219 rows, found {} rows",
-        csv_content.lines().count()
-    );
+    // One line per row plus the header (see CED9_ROWS_HP_K12_MAX_PVALUE_0_7).
+    assert_eq!(csv_content.lines().count(), CED9_ROWS_HP_K12_MAX_PVALUE_0_7 + 1);
 
     // Read and verify CSV contents
     // WHY: We deserialize into SearchResultCsv which is the same struct used for CSV output.
@@ -528,6 +527,9 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
             // Verify TF-IDF is meaningful (should not be 0 with multiple signatures)
             assert_relative_eq!(record.query_tfidf, 565.119680433367, epsilon = 1e-5);
+            // Folddisco-style coverage score: IDF sum over the 24 shared k-mers times
+            // 239^-0.5 (BCL2_HUMAN's length). Same value as the compare test in search.rs.
+            assert_relative_eq!(record.coverage_score, 2.361544022707993, epsilon = 1e-5);
         }
     }
 
@@ -762,5 +764,209 @@ fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>>
             .stderr(predicate::str::contains(message));
         assert!(!db.exists(), "--scaled {value} must not leave a database behind");
     }
+    Ok(())
+}
+
+#[test]
+fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let output = temp_dir.path().join("pair.json");
+    let mut cmd = Command::cargo_bin("kmerseek")?;
+    cmd.args([
+        "pair",
+        "--query",
+        TEST_BLC2_FASTA,
+        "--target",
+        TEST_CED9_FASTA,
+        "--ksize",
+        "12",
+        "--alphabet",
+        "hp",
+        "--output",
+        output.to_str().unwrap(),
+    ]);
+    // 13 regions: chaining seeds per diagonal merges two pieces a repeated k-mer used to
+    // split (14 before).
+    cmd.assert().success().stderr(predicate::str::contains(
+        "27 shared 12-mers in 13 matched regions (hp_lehninger2)",
+    ));
+
+    let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&output)?)?;
+    assert_eq!(report["ksize"], 12);
+    assert_eq!(report["moltype"], "hp_lehninger2");
+    assert_eq!(
+        report["query"]["name"].as_str().unwrap().split(' ').next(),
+        Some("sp|P10415|BCL2_HUMAN")
+    );
+    assert_eq!(report["shared_kmers"].as_array().unwrap().len(), 27);
+    // The longest region comes first: BH1, 19 residues.
+    assert_eq!(report["regions"][0]["query_start"], 138);
+    assert_eq!(report["regions"][0]["target_start"], 162);
+    assert_eq!(report["regions"][0]["length"], 19);
+    Ok(())
+}
+
+#[test]
+fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Error>> {
+    let mut cmd = Command::cargo_bin("kmerseek")?;
+    cmd.args([
+        "pair",
+        "--query",
+        TEST_CED9_FASTA,
+        "--query-name",
+        "sp|P41958|CED9_CAEEL",
+        "--target",
+        TEST_BLC2_FASTA,
+        "--ksize",
+        "3",
+    ]);
+    cmd.assert()
+        .success()
+        .stdout(predicate::str::contains("\"moltype\": \"protein20\""))
+        .stdout(predicate::str::contains("\"kmer\": \"APG\""));
+    Ok(())
+}
+
+/// `--extend-mismatch-penalty` grows regions past their exact seeds and reports the
+/// mismatches inside; without it every region is exact and the new column reads 0.
+///
+/// The BH1 match between CED9 and BCL2 (the landmark of
+/// `test_cli_landmark_region_across_scaled`, here in the `hp` alphabet) is an exact
+/// 19-residue run, CED9 162..181 against BCL2 138..157. With a mismatch penalty of 2 and a
+/// give-up margin of 8 the walk runs both ways from the seed, +1 where the two classes agree
+/// and -2 where they differ, and keeps each side up to its best running score. To the left
+/// the first two classes differ, so the score starts at -4, never gets back above 0, and
+/// nothing is kept. To the right the score dips to -2, climbs to +1 after 7 residues, then
+/// falls 9 below that peak and the walk stops, keeping the 7. Below, `|` marks two residues
+/// in the same class and `x` two in different classes; `docs/images/xdrop_walk_bcl2_ced9_bh1.png`
+/// draws the same two walks.
+///
+/// ```text
+///           left walk    seed, exact           right walk
+/// Ced9 pr: …TVGNAQTD  QCPMSYGRLIGLISFGGFV  AAKMMES VELQGQ…
+/// Ced9 hp: …phhphppp  pphhphhphhhhhphhhhh  hhphhpp hphhph
+///           xx|xx|xx  |||||||||||||||||||  x||x||| xxxx|x
+/// BCL2 hp: …hphhpphh  pphhphhphhhhhphhhhh  phpphpp phphhh
+/// BCL2 pr: …ATVVEELF  RDGVNWGRIVAFFEFGGVM  CVESVNR EMSPLV…
+///
+/// running score, reading outward from the seed:
+///   left:  -2 -4 -3 -5 -7 -6 -8 -10                 best 0, keeps 0
+///   right: -2 -1  0 -2 -1  0 +1 -1 -3 -5 -7 -6 -8   best +1 after 7, keeps 7
+/// ```
+///
+/// The region is now 26 residues with 2 mismatches, and still has the 8 shared k-mers of
+/// its seed.
+#[test]
+fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
+    const KSIZE: u32 = 12;
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            target_index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+        ])
+        .assert()
+        .success();
+
+    let run = |extra: &[&str],
+               out: &std::path::Path|
+     -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            target_index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "0.7",
+        ]);
+        cmd.args(extra);
+        cmd.assert().success();
+        let mut reader = csv::Reader::from_path(out)?;
+        Ok(reader.deserialize::<SearchResultCsv>().collect::<Result<Vec<_>, _>>()?)
+    };
+
+    let exact = run(&[], &temp_dir.path().join("exact.csv"))?;
+    let extended = run(
+        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8"],
+        &temp_dir.path().join("extended.csv"),
+    )?;
+
+    // Off: the same rows as test_cli_search_bcl2_ced9, all exact.
+    assert_eq!(exact.len(), CED9_ROWS_HP_K12_MAX_PVALUE_0_7);
+    assert!(exact.iter().all(|r| r.region_n_mismatches == 0));
+    assert!(exact.iter().all(|r| r.region_n_shared_kmers == r.region_length - KSIZE + 1));
+
+    // On: regions only grow or merge, so there are no more rows than before, at least one
+    // region now spans a mismatch, and n_shared never exceeds what the span could hold.
+    assert!(!extended.is_empty());
+    assert!(extended.len() <= exact.len(), "{} vs {}", extended.len(), exact.len());
+    assert!(extended.iter().any(|r| r.region_n_mismatches > 0));
+    for r in &extended {
+        assert!(r.region_length >= KSIZE);
+        assert!(r.region_n_shared_kmers <= r.region_length - KSIZE + 1);
+        assert_eq!(r.region_subseq.len() as u32, r.region_length);
+        assert_eq!(r.target_subseq.len() as u32, r.region_length);
+    }
+
+    // The BH1 landmark before and after extension.
+    let landmark = |rows: &[SearchResultCsv]| -> SearchResultCsv {
+        let found: Vec<_> = rows
+            .iter()
+            .filter(|r| {
+                r.target_name.contains("BCL2_HUMAN")
+                    && r.region_start == 162
+                    && r.target_start == 138
+            })
+            .collect();
+        assert_eq!(found.len(), 1, "{found:?}");
+        found[0].clone()
+    };
+    let seed = landmark(&exact);
+    assert_eq!((seed.region_end, seed.target_end, seed.region_length), (181, 157, 19));
+    assert_eq!(seed.region_subseq, "QCPMSYGRLIGLISFGGFV");
+    assert_eq!(seed.target_subseq, "RDGVNWGRIVAFFEFGGVM");
+    assert_eq!(seed.moltype_seq, "pphhphhphhhhhphhhhh");
+    assert_eq!((seed.region_n_shared_kmers, seed.region_n_mismatches), (8, 0));
+
+    // A negative give-up margin is refused, not silently run.
+    let mut cmd = Command::cargo_bin("kmerseek")?;
+    cmd.args([
+        "search",
+        "--query",
+        TEST_CED9_FASTA,
+        "--target",
+        target_index_path.to_str().unwrap(),
+        "--output",
+        temp_dir.path().join("bad.csv").to_str().unwrap(),
+        "--extend-mismatch-penalty",
+        "2",
+        "--extend-xdrop=-1",
+    ]);
+    cmd.assert().failure().stderr(predicate::str::contains("--extend-xdrop must be 0 or more"));
+
+    let grown = landmark(&extended);
+    assert_eq!((grown.region_end, grown.target_end, grown.region_length), (188, 164, 26));
+    assert_eq!(grown.region_subseq, "QCPMSYGRLIGLISFGGFVAAKMMES");
+    assert_eq!(grown.target_subseq, "RDGVNWGRIVAFFEFGGVMCVESVNR");
+    assert_eq!(grown.moltype_seq, "pphhphhphhhhhphhhhhphpphpp");
+    assert_eq!((grown.region_n_shared_kmers, grown.region_n_mismatches), (8, 2));
     Ok(())
 }
