@@ -443,25 +443,28 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
     (slope, my - slope * mx)
 }
 
-/// Karlin-Altschul K for +1 / -penalty scoring with match probability `a`, counting every
+/// Karlin-Altschul K for +1 / -penalty scoring with match probability `match_prob` (`u`
+/// in the explainer), counting every
 /// high-scoring segment of an ungapped comparison (no seed requirement, no give-up margin).
 ///
 /// When the only positive score is +1 every ascending ladder step of the random walk is
 /// exactly 1, and K has the closed form E[X e^(lambda X)] (1 - e^-lambda), with
 /// E[X e^(lambda X)] = H / lambda (Karlin & Altschul 1990, PNAS 87:2264; this is the
-/// `high == 1` branch of BLAST's BlastKarlinLHtoK). For a = 0.3, penalty 1 it reduces to
+/// `high == 1` branch of BLAST's BlastKarlinLHtoK). For match_prob = 0.3, penalty 1 it
+/// reduces to
 /// the textbook (q - p)^2 / q = 0.2286. The lattice argument needs a whole-number penalty;
 /// any other penalty returns None. None also when no positive lambda exists.
-pub fn karlin_altschul_k_theory(a: f64, penalty: f64) -> Option<f64> {
+pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
     if penalty <= 0.0 || penalty.fract() != 0.0 {
         return None;
     }
-    let lambda = karlin_altschul_lambda(a, penalty);
+    let lambda = karlin_altschul_lambda(match_prob, penalty);
     if lambda <= 0.0 {
         return None;
     }
-    let b = 1.0 - a;
-    let mean_score_tilted = a * lambda.exp() - penalty * b * (-penalty * lambda).exp();
+    let mismatch_prob = 1.0 - match_prob;
+    let mean_score_tilted =
+        match_prob * lambda.exp() - penalty * mismatch_prob * (-penalty * lambda).exp();
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
 }
 
@@ -725,18 +728,19 @@ mod tests {
         assert!((k - (q - p) * (q - p) / q).abs() < 1e-12, "{k}");
     }
 
-    /// Balanced two-class composition (a = 0.5) with penalty 2: the lambda equation
+    /// Balanced two-class composition (u = 0.5) with penalty 2: the lambda equation
     /// 0.5 e^lambda + 0.5 e^-2lambda = 1 becomes y^3 - 2 y^2 + 1 = 0 in y = e^lambda, whose
-    /// root above 1 is the golden ratio phi. Then E[X e^(lambda X)] = a phi - 2 (1 - a) / phi^2
+    /// root above 1 is the golden ratio phi. Then E[X e^(lambda X)] = u phi - 2 (1 - u) / phi^2
     /// = phi / 2 - 1 / phi^2 and 1 - e^-lambda = 1 - 1 / phi; K is their product, 0.1631.
     /// A simulated 4-million-step walk with these steps gave 458 high-scoring segments where
     /// this K predicts 478.
     #[test]
     fn test_k_theory_balanced_hp_at_penalty_two() {
-        let (a, penalty) = (0.5, 2.0);
+        let (match_prob, penalty) = (0.5, 2.0);
         let phi = (1.0 + 5f64.sqrt()) / 2.0;
-        let expected = (a * phi - penalty * (1.0 - a) / (phi * phi)) * (1.0 - 1.0 / phi);
-        let k = karlin_altschul_k_theory(a, penalty).unwrap();
+        let expected =
+            (match_prob * phi - penalty * (1.0 - match_prob) / (phi * phi)) * (1.0 - 1.0 / phi);
+        let k = karlin_altschul_k_theory(match_prob, penalty).unwrap();
         assert!((k - expected).abs() < 1e-12, "{k} vs {expected}");
         assert!((k - 0.1631).abs() < 5e-4, "{k}");
     }
