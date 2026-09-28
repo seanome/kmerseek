@@ -1,6 +1,6 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
+use kmerseek::evalue::{calibrate_index, scoring_from_stored_fits, short_fit_warning, DecoyNull};
 use kmerseek::search::{
     ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_MISMATCH_PENALTY,
     DEFAULT_XDROP,
@@ -185,19 +185,22 @@ enum Commands {
 
         /// Grow each matched region past its exact k-mer run, charging this much per
         /// encoded position where query and target disagree (+1 per agreeing position).
-        /// 0 keeps regions exact, the default. A remote homolog conserves the HP pattern per
-        /// position far better than it conserves any 23-residue stretch of it exactly, so an
-        /// exact run is treated as a seed and extended until the give-up margin ends it
-        /// (see --extend-xdrop).
+        /// A remote homolog conserves the HP pattern per position far better than it
+        /// conserves any 23-residue stretch of it exactly, so an exact run is treated as a
+        /// seed and extended until the give-up margin ends it (see --extend-xdrop).
         /// The region's shared k-mer count and Poisson score still count exact k-mers only;
         /// `region_n_mismatches` reports how many positions inside the region disagree.
-        #[arg(long, default_value = "0.0")]
-        extend_mismatch_penalty: f64,
+        /// Omit it to use the penalty the index's Karlin-Altschul fit was made for (2 unless
+        /// the index was built with another), so every region gets an E-value with no fit
+        /// at search time. An index with no fit keeps regions exact. 0 keeps them exact.
+        #[arg(long)]
+        extend_mismatch_penalty: Option<f64>,
 
         /// The give-up margin (BLAST's X-drop): stop extending once the running score has
-        /// fallen this far below its best.
-        #[arg(long, default_value_t = DEFAULT_XDROP)]
-        extend_xdrop: f64,
+        /// fallen this far below its best. Omit it to use the index fit's, or 8 when
+        /// --extend-mismatch-penalty is given.
+        #[arg(long)]
+        extend_xdrop: Option<f64>,
 
         /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
         /// Optional: without it, the r_database and K fitted when the index was built (for
@@ -381,6 +384,31 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::ReducedHsdm17 => "hsdm17",
             ProteinAlphabet::ReducedUniprot18 => "uniprot18",
         }
+    }
+}
+
+/// The mismatch penalty and give-up margin `kmerseek search` extends with, or None to keep
+/// regions exact. A penalty that is given decides on its own (0 is off); an omitted one
+/// follows the index's stored Karlin-Altschul fit (`scoring_from_stored_fits`).
+fn extension_scoring(
+    penalty: Option<f64>,
+    xdrop: Option<f64>,
+    index: &ProteomeIndex,
+) -> IndexResult<Option<ExtensionScoring>> {
+    if let Some(x) = xdrop.filter(|x| *x < 0.0) {
+        return Err(anyhow::anyhow!(
+            "--extend-xdrop must be 0 or more (got {x}); a negative give-up margin would end \
+             every extension at its first mismatch"
+        )
+        .into());
+    }
+    match penalty {
+        Some(p) if p > 0.0 => Ok(Some(ExtensionScoring {
+            mismatch_penalty: p,
+            xdrop: xdrop.unwrap_or(DEFAULT_XDROP),
+        })),
+        Some(_) => Ok(None),
+        None => Ok(scoring_from_stored_fits(&index.ka_calibrations()?, xdrop)),
     }
 }
 
@@ -614,21 +642,6 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
             eprintln!("  Minimum region score: {}", min_region_score);
-            if extend_mismatch_penalty > 0.0 {
-                if extend_xdrop < 0.0 {
-                    return Err(anyhow::anyhow!(
-                        "--extend-xdrop must be 0 or more (got {extend_xdrop}); a negative \
-                         give-up margin would end every extension at its first mismatch"
-                    )
-                    .into());
-                }
-                eprintln!(
-                    "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
-                    extend_mismatch_penalty, extend_xdrop, chain_max_gap, chain_max_shift
-                );
-            } else {
-                eprintln!("  Seed extension: off (regions are exact runs)");
-            }
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
@@ -652,11 +665,13 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
-            if extend_mismatch_penalty > 0.0 {
-                let scoring = ExtensionScoring {
-                    mismatch_penalty: extend_mismatch_penalty,
-                    xdrop: extend_xdrop,
-                };
+            let scoring =
+                extension_scoring(extend_mismatch_penalty, extend_xdrop, searcher.index())?;
+            if let Some(scoring) = scoring {
+                eprintln!(
+                    "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
+                    scoring.mismatch_penalty, scoring.xdrop, chain_max_gap, chain_max_shift
+                );
                 if let Some(k) = ka_k {
                     if k <= 0.0 || k.is_nan() {
                         return Err(anyhow::anyhow!(
@@ -689,6 +704,8 @@ fn main() -> IndexResult<()> {
                     chain_max_gap,
                     chain_max_shift,
                 }));
+            } else {
+                eprintln!("  Seed extension: off (regions are exact runs)");
             }
 
             // Build query sketches the same way the target index was built.

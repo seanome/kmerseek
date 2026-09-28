@@ -41,7 +41,7 @@ use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::search::{
     karlin_altschul_lambda, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource,
-    ProteinSearcher,
+    ProteinSearcher, DEFAULT_MISMATCH_PENALTY,
 };
 
 /// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
@@ -473,6 +473,24 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
     let mean_score_tilted =
         match_prob * lambda.exp() - penalty * mismatch_prob * (-penalty * lambda).exp();
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
+}
+
+/// The mismatch penalty and give-up margin a search extends with when it is not given
+/// `--extend-mismatch-penalty`: those of a fit stored in the index, so the search needs no
+/// fit of its own. With `xdrop` given, only fits for that give-up margin count. Among the
+/// fits that count, the one at `DEFAULT_MISMATCH_PENALTY` wins, then the first stored.
+/// None when no fit counts, and the search then keeps regions exact.
+pub fn scoring_from_stored_fits(
+    fits: &[KaCalibration],
+    xdrop: Option<f64>,
+) -> Option<ExtensionScoring> {
+    let usable: Vec<ExtensionScoring> =
+        fits.iter().map(|f| f.scoring).filter(|s| xdrop.is_none_or(|x| s.xdrop == x)).collect();
+    usable
+        .iter()
+        .find(|s| s.mismatch_penalty == DEFAULT_MISMATCH_PENALTY)
+        .or(usable.first())
+        .copied()
 }
 
 /// Which sequences are searched to fit r_database and K: the database sequences
@@ -1117,6 +1135,38 @@ mod tests {
         assert_eq!(fit.n_fit_points(), 8);
         assert_eq!(fit.x_range(), (7.5, 11.5));
         assert_eq!(fit.ka_params(), KaParams { k: 0.0115, r_database: 0.806 });
+    }
+
+    fn stored(mismatch_penalty: f64, xdrop: f64) -> KaCalibration {
+        KaCalibration::placeholder(ExtensionScoring { mismatch_penalty, xdrop }, 0.1)
+    }
+
+    #[test]
+    fn test_scoring_from_stored_fits_prefers_the_default_penalty() {
+        let fits = [stored(3.0, 8.0), stored(2.0, 8.0), stored(2.0, 12.0)];
+        assert_eq!(
+            scoring_from_stored_fits(&fits, None),
+            Some(ExtensionScoring { mismatch_penalty: 2.0, xdrop: 8.0 })
+        );
+        assert_eq!(
+            scoring_from_stored_fits(&fits, Some(12.0)),
+            Some(ExtensionScoring { mismatch_penalty: 2.0, xdrop: 12.0 })
+        );
+    }
+
+    #[test]
+    fn test_scoring_from_stored_fits_falls_back_to_the_first_fit() {
+        let fits = [stored(3.0, 8.0), stored(1.0, 8.0)];
+        assert_eq!(
+            scoring_from_stored_fits(&fits, None),
+            Some(ExtensionScoring { mismatch_penalty: 3.0, xdrop: 8.0 })
+        );
+    }
+
+    #[test]
+    fn test_scoring_from_stored_fits_none_without_a_usable_fit() {
+        assert_eq!(scoring_from_stored_fits(&[], None), None);
+        assert_eq!(scoring_from_stored_fits(&[stored(2.0, 8.0)], Some(5.0)), None);
     }
 
     #[test]

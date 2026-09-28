@@ -156,6 +156,11 @@ score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up
 (BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
 become one region.
 
+A search extends by default. `kmerseek index` stores a Karlin-Altschul fit (below) for
+penalty 2 and give-up margin 8, and a search without `--extend-mismatch-penalty` uses the
+penalty and give-up margin of that fit. `--extend-mismatch-penalty 0` keeps regions
+exact, and so does an index built with `--ka-queries 0`, which holds no fit.
+
 Both walks on the BH1 seed of CED9 against BCL2 (`hp`, k=12, penalty 2, give-up margin
 8). A side keeps residues only up to its best running score. To the left the first two
 classes differ, so the score starts at -4, never rises above 0, and nothing is kept. To
@@ -169,7 +174,7 @@ the right the score climbs to +1 after 7 residues, and the walk stops once it ha
 
 ```bash
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
-    --extend-mismatch-penalty 2 --output hits.csv
+    --output hits.csv
 ```
 
 What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
@@ -178,9 +183,10 @@ exact shared k-mers (the seeds), so it no longer equals `region_length - ksize +
 and a new column `region_n_mismatches` says how many positions inside the region
 disagree. The region Poisson score keeps counting exact k-mers against the expectation
 summed over the extended span, so extension can only make a region's score more
-conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
+conservative. With `--extend-mismatch-penalty 0` every region is exact and
+`region_n_mismatches` is 0.
 
-Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+Two more columns come with extension. `region_ka_bits` and `region_evalue` score the
 extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
 statistics (Karlin & Altschul 1990, the statistics behind BLAST):
 
@@ -212,7 +218,7 @@ different-fold hit at E <= 0.01.
 ```bash
 kmerseek index --input proteome.fasta --output proteome.db --ksize 10 --alphabet hp
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
-    --extend-mismatch-penalty 2 --output hits.csv
+    --output hits.csv
 ```
 
 `--chain-max-gap G --chain-max-shift D` chains extended regions that follow each other on
