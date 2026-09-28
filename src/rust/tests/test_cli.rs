@@ -11,9 +11,10 @@ use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
 
 /// Rows `kmerseek search` writes for CED9 against the 25-protein fixture at hp k=12 with
-/// `--max-pvalue 0.7` and every other filter open: 364 pairs unfiltered, 242 once the
-/// p-value cap drops the pairs not enriched above chance in this small, BCL2-heavy set.
-const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 242;
+/// `--max-pvalue 0.7` and every other filter open. The p-value cap drops the pairs not
+/// enriched above chance in this small, BCL2-heavy set. This was 242 before chaining seeds
+/// per diagonal merged the pieces a repeated k-mer used to split.
+const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 218;
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
@@ -322,7 +323,9 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
             assert_eq!(&record?[col], expected);
             rows += 1;
         }
-        assert_eq!(rows, 362, "ced9 against the 25-sequence bcl2 index at k=12");
+        // 330 regions: chaining seeds per diagonal merges the pieces a repeated k-mer used to
+        // split (362 before).
+        assert_eq!(rows, 330, "ced9 against the 25-sequence bcl2 index at k=12");
     }
 
     Ok(())
@@ -782,8 +785,10 @@ fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error
         "--output",
         output.to_str().unwrap(),
     ]);
+    // 13 regions: chaining seeds per diagonal merges two pieces a repeated k-mer used to
+    // split (14 before).
     cmd.assert().success().stderr(predicate::str::contains(
-        "27 shared 12-mers in 14 matched regions (hp_lehninger2)",
+        "27 shared 12-mers in 13 matched regions (hp_lehninger2)",
     ));
 
     let report: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&output)?)?;

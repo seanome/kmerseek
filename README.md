@@ -274,7 +274,7 @@ run hovered in the plot, in its alignment or in the sequences lights up in all t
 The ruler at the top counts shared k-mers over each query residue (every k-mer covers k
 residues), dark for k-mers of runs with 5 or more identical residues. CED-9 against
 BCL-2 is one dark peak at BH1 out of 27 shared 12-mers. CED-9 against reticulon-3, a
-composition hit, is 100 shared 12-mers in 19 runs spread over a 1032-residue protein
+composition hit, is 100 shared 12-mers in 22 runs spread over a 1032-residue protein
 ([examples](https://seanome.github.io/kmerseek/)).
 
 Every lone shared k-mer is also written to the JSON as a region exactly k residues
