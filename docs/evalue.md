@@ -51,22 +51,22 @@ it is cheap. λ_pair converts a raw score into nats for the pair at hand. A nat 
 natural-log unit of chance: a region worth x nats is as rare as e^(−x) between
 unrelated sequences.
 
-- `a`: the chance that two positions drawn at random, one from the query and one from
-  the target, land in the same class. It is the sum over classes of
+- `u` (`match_prob` in the code): the chance that two positions drawn at random, one from
+  the query and one from the target, land in the same class. It is the sum over classes of
   p_query × p_target, computed from this pair's own class frequencies (Schäffer et al.
   2001), not from one database-wide value. A balanced pair in a two-class alphabet has
-  a ≈ 0.5; a pair of mostly hydrophobic sequences has a near 1.
-- `λ_pair`: the positive root of `a·e^λ + (1-a)·e^(-Cλ) = 1` (Karlin & Altschul 1990),
+  u ≈ 0.5; a pair of mostly hydrophobic sequences has u near 1.
+- `λ_pair`: the positive root of `u·e^λ + (1-u)·e^(-Cλ) = 1` (Karlin & Altschul 1990),
   solved by bisection once per pair. A positive root exists only when a random aligned
-  position has a negative expected score, that is when `a < C/(1+C)` (2/3 at C = 2).
+  position has a negative expected score, that is when `u < C/(1+C)` (2/3 at C = 2).
   Above that line, agreeing is what the two compositions do by chance: λ_pair is 0 and no
   run of agreement is significant at any length. The Poisson count saw a membrane helix
   against any other membrane helix as a long exact run; this score does not.
 
-![λ_pair against a at C = 2: the root falls to 0 at a = 2/3](images/karlin_altschul_lambda_vs_a.png)
+![λ_pair against u at C = 2: the root falls to 0 at u = 2/3](images/karlin_altschul_lambda_vs_u.png)
 
 Worked example: BCL2 (human, P10415) against CED9 (worm) in `hp_thomas_dill2`. Both are
-about half hydrophobic, so a = 0.5 and λ_pair = 0.481 nats per point at C = 2. A region
+about half hydrophobic, so u = 0.5 and λ_pair = 0.481 nats per point at C = 2. A region
 with 48 agreeing positions and 4 disagreeing has S = 48 − 2 × 4 = 40, worth
 0.481 × 40 = 19.2 nats under the independent-positions model.
 
