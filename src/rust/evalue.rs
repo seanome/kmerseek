@@ -284,7 +284,7 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
 /// give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides already pulls the
 /// shuffle to 0.94, so hydrophobic runs alone explain a third of the gap. (Measured in
 /// PR #54; the figures land with the docs at the end of the stack that splits it.)
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
     /// in; the fit stops where the counts start to rise above the same queries shuffled,
@@ -299,7 +299,9 @@ pub enum DecoyNull {
     /// neighbouring residues) occurs as often as in the original (Altschul & Erickson 1985;
     /// sampled as a random Eulerian path, Kandel et al. 1996, the uShuffle k = 2 method).
     /// Keeps the rate at which a hydrophobic residue follows a hydrophobic one, and with it
-    /// the lengths of hydrophobic runs. The default reference for `Database`.
+    /// the lengths of hydrophobic runs. The default: the reference a `Database` fit stops
+    /// against, and the null to use when real sequences are not wanted.
+    #[default]
     ShuffledDipeptide,
     /// Each query is a database sequence read back to front. In a hydrophobic/polar
     /// alphabet a helix or a strand reads much the same backwards, so reversed family
@@ -809,5 +811,16 @@ mod tests {
             make_decoy("MKTAYIAK", DecoyNull::Shuffled, &mut SplitMix64::new(1)),
             "YATKIAMK"
         );
+        // BCL2_HUMAN residues 1-20. The same 19 dipeptides in a different order, first and
+        // last residue kept (MA AH HA AG GR RT TG GY YD DN NR RE EI IV VM MK KY YI IH).
+        assert_eq!(
+            make_decoy(
+                "MAHAGRTGYDNREIVMKYIH",
+                DecoyNull::ShuffledDipeptide,
+                &mut SplitMix64::new(1)
+            ),
+            "MKYDNRTGREIVMAGYIHAH"
+        );
+        assert_eq!(DecoyNull::default(), DecoyNull::ShuffledDipeptide);
     }
 }
