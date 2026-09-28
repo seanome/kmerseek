@@ -179,7 +179,7 @@ enum Commands {
         /// stops are made. `shuffled-dipeptide` keeps each pair of neighbouring residues as
         /// often as in the original, so hydrophobic runs survive and only relatives and
         /// periodicity lift the real curve above it; `shuffled` keeps composition only.
-        #[arg(long, value_enum, default_value_t = DecoyNull::ShuffledDipeptide)]
+        #[arg(long, value_enum, default_value_t = DecoyNull::default())]
         ka_reference: DecoyNull,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
