@@ -615,7 +615,7 @@ impl ProteinSearcher {
     pub fn new(index: ProteomeIndex) -> IndexResult<Self> {
         index.finalize()?;
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
-        Ok(Self::from_cache(index, cache))
+        Self::from_cache(index, cache)
     }
 
     /// Load a searcher from a saved index.
@@ -627,13 +627,13 @@ impl ProteinSearcher {
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
         let (targets, kmers) = (cache.target_list.len(), cache.inverted_index.len());
         eprintln!("Loaded search cache: {targets} targets, {kmers} k-mers indexed");
-        Ok(Self::from_cache(index, cache))
+        Self::from_cache(index, cache)
     }
 
-    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
+    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> IndexResult<Self> {
         let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
         let db_n_kmers = stats.kmer_frequencies.values().sum();
-        Self {
+        Ok(Self {
             index,
             stats,
             target_list: cache.target_list,
@@ -642,7 +642,52 @@ impl ProteinSearcher {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
+        })
+    }
+
+    /// The names an index entry is reported under: `name`, then every other entry stored
+    /// with the same sketch (`ProteomeIndex::aliases_of`), which has the same k-mer set.
+    fn entry_names(&self, name: &str, md5: &str) -> IndexResult<Vec<String>> {
+        let mut names = vec![name.to_string()];
+        names.extend(self.index.aliases_of(md5)?);
+        Ok(names)
+    }
+
+    /// One CSV row per matched region of `result`, repeated under every entry name stored
+    /// with the target's sketch. With `query_is_entry` (all-vs-all, where each query is
+    /// itself an entry of this index) the rows are also repeated under every name stored
+    /// with the query's sketch. Entries with the same sketch have the same k-mer set, so
+    /// only the names differ between the repeats.
+    pub fn csv_rows(
+        &self,
+        result: &SearchResult,
+        remove_low_complexity: bool,
+        query_is_entry: bool,
+    ) -> IndexResult<Vec<SearchResultCsv>> {
+        let query_names = if query_is_entry {
+            self.entry_names(&result.query_name, &result.query_md5)?
+        } else {
+            vec![result.query_name.clone()]
+        };
+        let target_names = self.entry_names(&result.target_name, &result.target_md5)?;
+        let mut rows = Vec::with_capacity(
+            query_names.len() * target_names.len() * result.matched_regions.len(),
+        );
+        for query_name in &query_names {
+            for target_name in &target_names {
+                for region in &result.matched_regions {
+                    let mut row = SearchResultCsv::from_result_and_region(
+                        result,
+                        region,
+                        remove_low_complexity,
+                    );
+                    row.query_name = query_name.clone();
+                    row.target_name = target_name.clone();
+                    rows.push(row);
+                }
+            }
         }
+        Ok(rows)
     }
 
     /// Prepare a query for efficient batch searching
@@ -946,11 +991,9 @@ impl ProteinSearcher {
         filters: &SearchFilters,
         total_queries: usize,
     ) -> Option<SearchResult> {
-        // Skip self-matches by comparing MD5 sums
-        // WHY: In all-vs-all searches, we don't want to compare a signature against itself.
-        // MD5 sum is a unique identifier for each signature, so comparing MD5 sums is the
-        // most reliable way to detect self-matches. This is idiomatic Rust - we use early
-        // returns to avoid unnecessary computation when we know the result will be invalid.
+        // A target with the query's own sketch (same md5, so the same k-mer set) says nothing
+        // about the query, whether the query is an index entry (all-vs-all) or a FASTA record
+        // identical to one.
         if query.sketch.signature().md5sum == target.signature().md5sum {
             return None;
         }
@@ -1960,6 +2003,70 @@ mod tests {
     fn bcl2_sketch_k15() -> ProteinSketch {
         let (name, seq) = read_first_fasta_record(TEST_BLC2_FASTA).unwrap();
         ProteinSketch::from_protein_sequence(&name, &seq, 15, 1, "hp_lehninger2").unwrap()
+    }
+
+    /// Two database entries with the same sequence are one sketch in the index and one
+    /// search result; the CSV rows for that result repeat under both names. A query with
+    /// that same sketch never hits it: a target identical to the query says nothing.
+    #[test]
+    fn identical_entries_share_one_result_and_every_csv_row() -> Result<()> {
+        let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let (ced9_name, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(
+            &fasta,
+            format!(">{bcl2_name}\n{bcl2}\n>copy of BCL2\n{bcl2}\n>{ced9_name}\n{ced9}\n"),
+        )?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+
+        // CED-9 as a FASTA query: one result, on the BCL-2 sketch; its own entry is skipped.
+        let query =
+            ProteinSketch::from_protein_sequence("ced9 query", &ced9, 12, 1, "hp_lehninger2")?;
+        let results = searcher.search_one(&query, &SearchFilters::default(), 1);
+        assert_eq!(results.len(), 1);
+        let hit = &results[0];
+        assert_eq!(hit.target_name, bcl2_name);
+        let rows = searcher.csv_rows(hit, false, false)?;
+        assert_eq!(rows.len(), 2 * hit.matched_regions.len());
+        let (originals, copies): (Vec<_>, Vec<_>) =
+            rows.iter().partition(|row| row.target_name == bcl2_name);
+        assert_eq!(copies.len(), originals.len());
+        assert!(copies.iter().all(|row| row.target_name == "copy of BCL2"));
+        assert!(copies.iter().all(|row| row.query_name == "ced9 query"));
+        for (original, copy) in originals.iter().zip(&copies) {
+            assert_eq!(copy.target_md5, original.target_md5);
+            assert_eq!(copy.n_intersecting_hashes, original.n_intersecting_hashes);
+            assert_eq!(copy.region_start, original.region_start);
+            assert_eq!(copy.region_poisson_score, original.region_poisson_score);
+        }
+
+        // BCL-2 as a FASTA query has the same sketch as the two BCL-2 entries: only CED-9.
+        let query =
+            ProteinSketch::from_protein_sequence("bcl2 query", &bcl2, 12, 1, "hp_lehninger2")?;
+        let names: Vec<String> = searcher
+            .search_one(&query, &SearchFilters::default(), 1)
+            .iter()
+            .map(|r| r.target_name.clone())
+            .collect();
+        assert_eq!(names, vec![ced9_name.clone()]);
+
+        // All-vs-all: two results (each entry against the other sketch), and the rows of
+        // the one whose query is the BCL-2 sketch repeat under the query's second name too.
+        let all = searcher.search_all_vs_all(&SearchFilters::default())?;
+        assert_eq!(all.len(), 2);
+        assert!(all.iter().all(|r| r.query_md5 != r.target_md5), "self-hits should be skipped");
+        let from_bcl2 = all.iter().find(|r| r.query_name == bcl2_name).unwrap();
+        let rows = searcher.csv_rows(from_bcl2, false, true)?;
+        assert_eq!(rows.len(), 2 * from_bcl2.matched_regions.len());
+        let mut query_names: Vec<&str> = rows.iter().map(|row| row.query_name.as_str()).collect();
+        query_names.sort_unstable();
+        query_names.dedup();
+        assert_eq!(query_names, vec!["copy of BCL2", bcl2_name.as_str()]);
+        assert!(rows.iter().all(|row| row.target_name == ced9_name));
+        Ok(())
     }
 
     /// Read the first record from a FASTA file and return name and sequence.

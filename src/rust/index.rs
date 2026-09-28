@@ -170,6 +170,13 @@ pub struct SearchCache {
     pub kmer_frequencies: HashMap<u64, usize>,
 }
 
+/// RocksDB key recording `name` as another entry with the sketch `md5`. The `_` after the
+/// md5 keeps the prefix for one sketch from matching a longer md5 (hex has no `_`), and an
+/// empty `name` gives that prefix.
+fn alias_key(md5: &str, name: &str) -> Vec<u8> {
+    format!("alias_{md5}_{name}").into_bytes()
+}
+
 /// Everything the streaming indexer carries between batches. Bounded in size: the
 /// posting buffer is capped, the target tail is at most one chunk, and `seen` is one
 /// u64 per signature.
@@ -884,8 +891,10 @@ impl ProteomeIndex {
     /// Nothing else about the sketch survives the call, which is what keeps indexing
     /// memory flat in the corpus size.
     ///
-    /// A sketch whose key was already written is skipped, so a repeated sequence appears
-    /// once, under the name it was first seen with.
+    /// A sketch whose key was already written is stored once, under the name it was first
+    /// seen with. Each later name gets its own `alias_{md5}_{name}` key, so a sequence seen
+    /// many times costs one small write per copy and search can list the names of a hit
+    /// with one prefix seek (`aliases_of`).
     fn ingest(&self, sketches: Vec<ProteinSketch>, retain: bool) -> IndexResult<()> {
         use rayon::prelude::*;
 
@@ -910,6 +919,8 @@ impl ProteomeIndex {
             })?;
             if !state.seen.insert(key) {
                 state.duplicates_skipped += 1;
+                batch.put(alias_key(&md5, &sketch.signature().name), b"");
+                state.saved = false;
                 continue;
             }
             let idx = u32::try_from(state.next_idx).map_err(|_| IndexError::ValidationError {
@@ -1481,6 +1492,19 @@ impl ProteomeIndex {
             }
         }
         Ok(true)
+    }
+
+    /// The other names stored with the sketch `md5`: entries whose k-mer set the entry
+    /// under `md5` already had. In byte order of the names, not the order they were seen.
+    pub fn aliases_of(&self, md5: &str) -> IndexResult<Vec<String>> {
+        let prefix = alias_key(md5, "");
+        let mut names = Vec::new();
+        for item in self.db.iterator(IteratorMode::From(&prefix, Direction::Forward)) {
+            let (key, _) = item?;
+            let Some(name) = key.strip_prefix(prefix.as_slice()) else { break };
+            names.push(String::from_utf8_lossy(name).into_owned());
+        }
+        Ok(names)
     }
 
     /// Print index statistics
@@ -4108,7 +4132,8 @@ mod tests {
         Ok(())
     }
 
-    /// A sequence seen twice is indexed once, under the name it was first seen with.
+    /// A sequence seen twice is indexed once, under the name it was first seen with; the
+    /// second name is kept as an alias so search can still report it.
     #[test]
     fn test_repeated_sequence_is_indexed_once() -> Result<()> {
         let dir = tempdir()?;
@@ -4128,6 +4153,33 @@ mod tests {
         // 17 5-mers in TEST_PROTEIN and 7 in TEST_KMER, none shared.
         assert_eq!(inverted.len(), 24);
         assert!(inverted.values().all(|targets| targets.len() == 1));
+        assert_eq!(index.aliases_of(&targets[0])?, vec!["second".to_string()]);
+        assert_eq!(index.aliases_of(&targets[1])?, Vec::<String>::new());
+        Ok(())
+    }
+
+    /// Aliases survive closing the index and adding more sequences later: a third copy joins
+    /// the list instead of replacing it.
+    #[test]
+    fn test_aliases_persist_and_accumulate_across_reopen() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("dup.db");
+        let first = dir.path().join("first.fasta");
+        let second = dir.path().join("second.fasta");
+        std::fs::write(&first, format!(">a\n{TEST_PROTEIN}\n>b\n{TEST_PROTEIN}\n"))?;
+        std::fs::write(&second, format!(">c\n{TEST_PROTEIN}\n>d\n{TEST_KMER}\n"))?;
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+            index.process_fasta(&first, 0, 1000)?;
+            index.save_state()?;
+        }
+        let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+        index.load_state()?;
+        index.process_fasta(&second, 0, 1000)?;
+        index.save_state()?;
+        let (targets, _, _) = cache_of(&index)?;
+        assert_eq!(targets.len(), 2);
+        assert_eq!(index.aliases_of(&targets[0])?, vec!["b".to_string(), "c".to_string()]);
         Ok(())
     }
 
