@@ -176,9 +176,9 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         # One shared k-mer (region_n_shared_kmers above), so the IDF sum equals its mean.
         "region_tfidf": 3.2,
         "region_mean_idf": 3.2,
-        # Exact region (no --extend-mismatch-penalty), so nothing inside it disagrees.
+        # Exact region (--extend-mismatch-penalty 0), so nothing inside it disagrees.
         "region_n_mismatches": 0,
-        # Karlin-Altschul bits and E-value need --extend-mismatch-penalty; off here. With
+        # Karlin-Altschul bits and E-value need extension; off here. With
         # no penalty no lambda is solved at all, so region_ka_u and region_ka_lambda are 0
         # and the infinite E-value means "not computed", not "not assessable".
         "region_ka_u": 0.0,
