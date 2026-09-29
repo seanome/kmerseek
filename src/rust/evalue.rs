@@ -40,8 +40,8 @@ use serde::{Deserialize, Serialize};
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::search::{
-    karlin_altschul_lambda, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource,
-    ProteinSearcher,
+    karlin_altschul_lambda, ExtensionScoring, KaCalibrationReport, KaCalibrationSettings, KaParams,
+    KaSource, ProteinSearcher,
 };
 
 /// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
@@ -726,25 +726,33 @@ pub fn calibrate_index(
         "  Closed form at the database's own match probability {:.3}: K {theory_k} (independent positions, no seed, one lambda for every pair)",
         report.match_probability
     );
-    match report.fitted {
+    match &report.fitted {
         Some(fit) => {
             eprintln!("  {}", KaSource::Fitted(Box::new(fit.clone())));
-            if let Some(warning) = short_fit_warning(&fit) {
+            if let Some(warning) = short_fit_warning(fit) {
                 eprintln!("  {warning}");
             }
             if let Some(path) = survival_out {
-                write_survival_csv(path, &fit)?;
+                write_survival_csv(path, fit, &report)?;
                 eprintln!("  Survival curve written to {}", path.display());
             }
-            searcher.index().put_ka_calibration(&fit)?;
+            searcher.index().put_ka_calibration(fit)?;
             eprintln!(
                 "  Stored in the index for --extend-mismatch-penalty {mismatch_penalty} --extend-xdrop {xdrop}"
             );
         }
         None => eprintln!(
-            "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
-             A search will have to fit its own r_database and K (--ka-queries) or be given --ka-k.",
-            report.n_queries, report.n_regions
+            "  {} queries gave {} regions and {} shuffled queries gave {} chance regions, but \
+             fewer than {} score bins above the peak hold {} of each, too few to fit; nothing \
+             stored. Raise --ka-reference-shuffles when the chance regions are what ran out, \
+             --ka-queries when both did. A search will have to fit its own r_database and K \
+             or be given --ka-k.",
+            report.n_queries,
+            report.n_regions,
+            report.n_reference_queries,
+            report.n_reference_regions,
+            MIN_FIT_POINTS,
+            MIN_BIN_COUNT
         ),
     }
     Ok(())
@@ -753,7 +761,11 @@ pub fn calibrate_index(
 /// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
 /// line's count, the reference count, and whether the bin was inside the fit window.
 /// `scripts/plot_ka_survival.py` draws it.
-pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexResult<()> {
+pub fn write_survival_csv(
+    path: &std::path::Path,
+    fit: &KaCalibration,
+    report: &KaCalibrationReport,
+) -> IndexResult<()> {
     let mut w = csv::Writer::from_path(path)?;
     w.write_record([
         "x",
@@ -770,6 +782,8 @@ pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexR
         "mismatch_penalty",
         "xdrop",
         "n_queries",
+        "n_reference_queries",
+        "n_reference_regions",
         "query_residues",
         "database_kmers",
         "bin_width",
@@ -799,6 +813,8 @@ pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexR
             fit.scoring.mismatch_penalty.to_string(),
             fit.scoring.xdrop.to_string(),
             fit.n_queries.to_string(),
+            report.n_reference_queries.to_string(),
+            report.n_reference_regions.to_string(),
             fit.query_residues.to_string(),
             fit.database_kmers.to_string(),
             fit.bin_width.to_string(),

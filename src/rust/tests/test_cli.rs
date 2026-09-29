@@ -1171,7 +1171,10 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
 
     let unfit = temp_dir.path().join("unfit.csv");
     index("1", "database", &unfit)?.success().stderr(predicate::str::contains(
-        "1 queries gave only 420 regions, too few score bins to fit; nothing stored.",
+        "1 queries gave 420 regions and 1 shuffled queries gave 441 chance regions, but \
+         fewer than 4 score bins above the peak hold 30 of each, too few to fit; nothing \
+         stored. Raise --ka-reference-shuffles when the chance regions are what ran out, \
+         --ka-queries when both did.",
     ));
     assert!(!unfit.exists(), "no fit, no curve to write");
 
@@ -1226,6 +1229,8 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "mismatch_penalty",
             "xdrop",
             "n_queries",
+            "n_reference_queries",
+            "n_reference_regions",
             "query_residues",
             "database_kmers",
             "bin_width",
@@ -1260,6 +1265,8 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "2",
             "8",
             "3",
+            "3",
+            "864",
             "762",
             "8340",
             "0.5"
