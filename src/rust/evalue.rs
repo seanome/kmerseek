@@ -3,16 +3,17 @@
 //! the figures.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
-//! unrelated query of m residues and a database of n residues. lambda is solved per pair
-//! from the two class compositions (`search::karlin_altschul_lambda`), so a pair of two
-//! hydrophobic sequences, whose agreement is what their compositions do by chance, gets
-//! lambda 0 and no significance. K, and whether that per-pair lambda has the right scale,
+//! unrelated query of m residues and a database of n residues. lambda is solved per region
+//! from the class composition of the two spans that region covers
+//! (`search::karlin_altschul_lambda`), so a region joining two hydrophobic or two
+//! polar-rich stretches, whose agreement is what those compositions do by chance, gets
+//! lambda 0 and no E-value at all. K, and whether that lambda has the right scale,
 //! can be read off a search: a few hundred sequences are searched against the index and
-//! every region's score in nats, x = lambda_pair S, is binned. Under the model the count
+//! every region's score in nats, x = lambda_region S, is binned. Under the model the count
 //! at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the database residues and
 //! w the bin width, so ln(count) against x is a line of slope -1 and intercept
 //! ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). Minus the fitted slope is
-//! r_database, the factor every pair's lambda is multiplied by at search time; 1 means
+//! r_database, the factor every region's lambda is multiplied by at search time; 1 means
 //! the closed form holds. Related pairs lift the counts at high x; the fit stops below
 //! that, where the real curve starts to rise above the same queries shuffled. The fit
 //! goes to the count at each x, not the count at or above it, because a plateau of
@@ -21,8 +22,8 @@
 //!
 //! Fitting x rather than the raw score S matters on a proteome: Swiss-Prot holds pairs of
 //! membrane and low-complexity proteins whose raw scores run to 60 and beyond with a slope
-//! near 0.1, while ordinary pairs fall at 0.45. One line cannot serve both. In x each pair
-//! is already on its own scale, and those pairs sit at x = 0.
+//! near 0.1, while ordinary pairs fall at 0.45. One line cannot serve both. In x each region
+//! is already on its own scale, and those regions sit at x = 0.
 //!
 //! The sequences searched for a fit are calibration queries. Each one is made from a
 //! database sequence. A decoy is a calibration query changed so that it has no relative
@@ -47,7 +48,7 @@ use crate::search::{
 /// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
 /// at search time by its `scoring`. The seed length and alphabet are the index's.
 ///
-/// The fit is a straight line through ln(regions in each bin of x = lambda_pair S).
+/// The fit is a straight line through ln(regions in each bin of x = lambda_region S).
 /// Minus its slope is `r_database`; its height gives `k` (see `line_through`). Bins are
 /// `bin_width` nats wide, so every field named "score" below is a bin index: bin b covers
 /// x in [b w, (b + 1) w).
@@ -70,14 +71,14 @@ pub struct KaCalibration {
     /// Regions the calibration queries produced, at any score.
     pub n_regions: usize,
     /// Chance that two positions drawn from the sampled database sequences share a class
-    /// (a of the database against itself). For reporting only: the search solves lambda
-    /// per pair.
+    /// (u of the database against itself). For reporting only: the search solves lambda
+    /// per region.
     pub match_probability: f64,
     /// The closed-form lambda at `match_probability`, for reporting next to `r_database`.
     pub lambda_analytic: f64,
-    /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
-    /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
-    /// lambda by this.
+    /// Minus the slope of ln(count) against x = lambda_region S, per nat. 1 means the
+    /// closed-form lambda has the right scale; a search multiplies every region's lambda
+    /// by this.
     pub r_database: f64,
     /// Karlin-Altschul K: the line's height with the query residues, database size and bin
     /// width divided out.
@@ -114,7 +115,7 @@ impl KaCalibration {
         KaParams { k: self.k, r_database: self.r_database }
     }
 
-    /// The fit window in nats of x = lambda_pair S.
+    /// The fit window in nats of x = lambda_region S.
     pub fn x_range(&self) -> (f64, f64) {
         (self.score_lo as f64 * self.bin_width, (self.score_hi + 1) as f64 * self.bin_width)
     }
@@ -159,7 +160,7 @@ impl std::fmt::Display for KaCalibration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {} queries, {} regions; r_database {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
+            "{} {} queries, {} regions; r_database {:.3} per nat of lambda_region S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
             self.n_queries,
             self.null,
             self.n_regions,
@@ -191,7 +192,7 @@ impl std::fmt::Display for KaCalibration {
     }
 }
 
-/// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
+/// Width of one bin of the normalised score x = lambda_region S, in nats. Half a nat is about
 /// one raw score unit at lambda 0.45.
 pub const BIN_WIDTH: f64 = 0.5;
 
@@ -281,11 +282,12 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
         .collect()
 }
 
-/// The bin of x in [0, `BIN_WIDTH`). A pair whose own lambda is near zero scores x =
-/// lambda_pair S near zero however long its region is, so this one bin collects every
-/// region of every such pair and says nothing about how scores decay. It is barred from
-/// being the peak for that reason; see `tail_bins`.
-const DEGENERATE_BIN: i64 = 0;
+/// The bin of x in [0, `BIN_WIDTH`). A region whose own lambda is near zero scores x =
+/// lambda_region S near zero however long it is, and a region past the composition
+/// boundary has lambda 0 and scores x = 0 exactly, so this one bin collects all of them
+/// and says nothing about how scores decay. It is barred from being the peak for that
+/// reason; see `tail_bins`.
+pub(crate) const DEGENERATE_BIN: i64 = 0;
 
 /// The bins above the most populated one, not counting `DEGENERATE_BIN`. Below the peak
 /// sit the bare seeds and the pairs whose lambda is small; the Karlin-Altschul tail is
@@ -758,7 +760,7 @@ pub fn calibrate_index(
     Ok(())
 }
 
-/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
+/// One row per bin of x = lambda_region S: the count of regions at or above it, the fitted
 /// line's count, the reference count, and whether the bin was inside the fit window.
 /// `scripts/plot_ka_survival.py` draws it.
 pub fn write_survival_csv(

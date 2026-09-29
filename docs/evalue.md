@@ -9,8 +9,8 @@ each one comes from, and shows the fit that supplies the two constants. The code
 `src/rust/evalue.rs` and the search side of `src/rust/search.rs`.
 
 ```
-E    = K × m × n × e^(-λ_pair × r_database × S)
-bits = (λ_pair × r_database × S - ln K) / ln 2
+E    = K × m × n × e^(-λ_region × r_database × S)
+bits = (λ_region × r_database × S - ln K) / ln 2
 ```
 
 ## Why regions are extended at all
@@ -43,36 +43,42 @@ The test `test_cli_search_extend_mismatch_penalty` shows one region before and a
 the BH1 match between CED9 and human BCL2 is an exact 19-residue run at k = 12, and with
 C = 2, X = 8 it grows 7 residues to the right across two class flips.
 
-## λ_pair: what one point of score is worth for this pair
+## λ_region: what one point of score is worth for this region
 
 Between two sequences that match by chance at half their positions a point is hard to
 earn; between two membrane proteins that match at two thirds of their positions by luck
-it is cheap. λ_pair converts a raw score into nats for the pair at hand. A nat is the
+it is cheap. λ_region converts a raw score into nats for the region at hand. A nat is the
 natural-log unit of chance: a region worth x nats is as rare as e^(−x) between
 unrelated sequences.
 
-- `u` (`match_prob` in the code): the chance that two positions drawn at random, one from
-  the query and one from the target, land in the same class. It is the sum over classes of
-  p_query × p_target, computed from this pair's own class frequencies (Schäffer et al.
-  2001), not from one database-wide value. A balanced pair in a two-class alphabet has
-  u ≈ 0.5; a pair of mostly hydrophobic sequences has u near 1.
-- `λ_pair`: the positive root of `u·e^λ + (1-u)·e^(-Cλ) = 1` (Karlin & Altschul 1990),
-  solved by bisection once per pair. A positive root exists only when a random aligned
+- `u` (`match_prob` in the code, `region_ka_u` in the output): the chance that two
+  positions drawn at random, one from the query's stretch and one from the target's, land
+  in the same class. It is the sum over classes of p_query × p_target, computed from the
+  class frequencies of the two stretches the region covers (Schäffer et al. 2001 do this
+  per pair), not from the whole proteins and not from one database-wide value. A polar-rich
+  stretch inside an ordinary protein is counted as the polar-rich stretch it is. A balanced
+  pair of stretches in a two-class alphabet has u ≈ 0.5; two mostly hydrophobic stretches
+  have u near 1.
+- `λ_region` (`region_ka_lambda` in the output, after r_database): the positive root of
+  `u·e^λ + (1-u)·e^(-Cλ) = 1` (Karlin & Altschul 1990), solved by bisection once per
+  region. A chain of regions gets one, from the span it covers. A positive root exists only when a random aligned
   position has a negative expected score, that is when `u < C/(1+C)` (2/3 at C = 2).
-  Above that line, agreeing is what the two compositions do by chance: λ_pair is 0 and no
-  run of agreement is significant at any length. The Poisson count saw a membrane helix
+  Above that line, agreeing is what the two compositions do by chance: λ_region is 0, the
+  region is reported with `region_ka_lambda` 0 and an infinite `region_evalue`, and no run
+  of agreement is significant at any length. The Poisson count saw a membrane helix
   against any other membrane helix as a long exact run; this score does not.
 
-![λ_pair against u at C = 2: the root falls to 0 at u = 2/3](images/karlin_altschul_lambda_vs_u.png)
+![λ against u at C = 2: the root falls to 0 at u = 2/3](images/karlin_altschul_lambda_vs_u.png)
 
 Worked example: BCL2 (human, P10415) against CED9 (worm) in `hp_thomas_dill2`. Both are
-about half hydrophobic, so u = 0.5 and λ_pair = 0.481 nats per point at C = 2. A region
+about half hydrophobic, so for a region whose two stretches are too, u = 0.5 and
+λ_region = 0.481 nats per point at C = 2. A region
 with 48 agreeing positions and 4 disagreeing has S = 48 − 2 × 4 = 40, worth
 0.481 × 40 = 19.2 nats under the independent-positions model.
 
 ## r_database and K: two numbers per index, measured when it is built
 
-The λ_pair equation assumes each residue is drawn like a weighted coin flip with no
+The λ_region equation assumes each residue is drawn like a weighted coin flip with no
 memory of the residue before it. Real proteins have memory: a hydrophobic residue is more
 often followed by another (membrane segments, cores), and helices and strands repeat
 with a period. So real sequences may reach a given score more easily than coin flips
@@ -97,8 +103,8 @@ How the fit works:
 1. Take 200 sequences from the database itself (`--ka-queries`, `--ka-seed`) and search
    each against the whole index exactly as a user's query would be searched (C = 2, X = 8,
    every filter off). Hits of a sequence on its own database entry are dropped.
-2. For every region of every pair, compute x = λ_pair × S: the region's raw score in the
-   pair's own units, in nats, so a region at x = 15 is as rare as e^(−15) under the
+2. For every region of every pair, compute x = λ_region × S: the region's raw score in
+   its own units, in nats, so a region at x = 15 is as rare as e^(−15) under the
    independent-positions model.
 3. Count the regions in bins of x half a nat wide and plot ln(count) against x. If the
    model were right the points would fall on a straight line of slope −1, and the line's
@@ -123,8 +129,8 @@ The fit goes to the count in each bin, not the count at or above it, because a p
 of related pairs far up the axis would add a constant to every summed count below it and
 flatten the slope there too. And it fits x rather than the raw score S because Swiss-Prot
 holds pairs of membrane and low-complexity proteins whose raw scores run past 60 while
-ordinary pairs stop near 45; in x each pair is already on its own λ_pair, and the biased
-pairs sit at x = 0, out of the way.
+ordinary pairs stop near 45; in x each region is already on its own λ_region, and the
+biased regions sit at x = 0, out of the way.
 
 ![Region score distributions on SCOPe40, a Swiss-Prot sample and a UniRef50 sample, with the fitted line and the dipeptide-shuffled reference](images/ka_fit_three_databases.png)
 
@@ -243,8 +249,8 @@ domain to carry its label and one gapless run rarely does.
 ## Limits
 
 One r_database and K per index describe a typical query. A query rich in membrane
-segments has a positive expected score against every other membrane protein; its λ_pair
-is 0 (no significance) and the fit puts it at x = 0, but nothing rescues it. Masking long
+segments has a positive expected score against every other membrane protein; the λ_region
+of each region between them is 0 (no significance) and the fit puts it at x = 0, but nothing rescues it. Masking long
 hydrophobic runs (what BLAST's SEG filter does for low-complexity stretches) or a
 per-query fit at search time is a separate change.
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Plot the distribution of the normalised region score x = lambda_pair * S that
+"""Plot the distribution of the normalised region score x = lambda_region * S that
 `kmerseek index --ka-survival-out` wrote, with the fitted Karlin-Altschul line and the bins
 it was read from.
 
@@ -9,7 +9,7 @@ it was read from.
 One column per CSV. Top row: regions in each bin of x, the points the line is fitted to.
 Bottom row: the same regions summed (x at or above the bin). Grey band: the bins used.
 Dotted line: 30 regions, the floor below which a bin is not fitted. The title of each
-column gives r_database (1 means the closed-form per-pair lambda holds) with its
+column gives r_database (1 means the closed-form per-region lambda holds) with its
 standard error over the fitted bins, and K.
 """
 
@@ -88,7 +88,7 @@ def draw_column(axes, path, first_column, args_label=None):
         ax.spines[["top", "right"]].set_visible(False)
     label = args_label or f"{meta['null']} queries"
     axes[0].set_title(f"{label}\nr_database = {lam:.3f} ± {se:.3f}, K = {k:.4f}", fontsize=10, loc="left")
-    axes[1].set_xlabel("x = λ_pair · S (nats)")
+    axes[1].set_xlabel("x = λ_region · S (nats)")
     if first_column:
         axes[0].set_ylabel(f"regions in each bin of x ({width:g} nat)\n(what the line is fitted to)")
         axes[1].set_ylabel("regions with x at or above the bin\n(the same fit, summed)")
@@ -114,7 +114,7 @@ def main():
     fig.legend(handles.values(), handles.keys(), loc="upper center", bbox_to_anchor=(0.5, 0.92),
                ncol=2, frameon=False, fontsize=9)
     title = "r_database is the slope and K the height of ln(regions at x); the fit stops where the real curve rises above the shuffled one"
-    title += "\nS = matches − C × mismatches; λ_pair is the closed-form lambda for the pair's own compositions; ± is the slope's standard error"
+    title += "\nS = matches − C × mismatches; λ_region is the closed-form lambda for the region's own two spans; ± is the slope's standard error"
     if args.subtitle:
         title += "\n" + args.subtitle
     fig.suptitle(title, fontsize=11, x=0.02, ha="left", y=1.0)

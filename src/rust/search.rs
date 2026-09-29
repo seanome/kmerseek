@@ -127,7 +127,7 @@ pub struct ExtensionParams {
     pub chain_max_shift: u32,
 }
 
-/// The two constants of the E-value a search runs with: E = K m n e^(-lambda_pair
+/// The two constants of the E-value a search runs with: E = K m n e^(-lambda_region
 /// r_database S).
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KaParams {
@@ -135,7 +135,7 @@ pub struct KaParams {
     /// depends on the alphabet, the seed length, the penalty, the give-up margin and the
     /// database, so it is fitted on the index in use.
     pub k: f64,
-    /// Factor on every pair's closed-form lambda; 1 keeps the closed form.
+    /// Factor on every region's closed-form lambda; 1 keeps the closed form.
     pub r_database: f64,
 }
 
@@ -205,7 +205,7 @@ pub struct KaCalibrationSettings {
 /// Where the r_database and K in use came from; see `ProteinSearcher::resolve_ka`.
 #[derive(Debug, Clone, PartialEq)]
 pub enum KaSource {
-    /// Given on the command line (`--ka-k`), with the closed-form lambda per pair
+    /// Given on the command line (`--ka-k`), with the closed-form lambda per region
     /// (r_database 1).
     Given,
     /// A fit stored in the index when it was built.
@@ -296,6 +296,32 @@ fn class_composition(encoded: &[u8]) -> ClassComposition {
 /// Probability that two positions drawn from these compositions fall in the same class.
 fn match_probability(p: &ClassComposition, q: &ClassComposition) -> f64 {
     p.iter().zip(q).map(|(a, b)| a * b).sum()
+}
+
+/// The slice of `encoded` a region covers, clamped to the sequence. An out-of-range span
+/// gives an empty slice rather than panicking.
+fn covered_span(encoded: &[u8], start: u32, end: u32) -> &[u8] {
+    let lo = (start as usize).min(encoded.len());
+    let hi = (end as usize).clamp(lo, encoded.len());
+    &encoded[lo..hi]
+}
+
+/// The match probability `u` of one region: the two spans the region covers are counted
+/// on their own, not as part of the proteins they sit in.
+///
+/// This is the whole point of scoring a region rather than a pair. An RS domain
+/// (RNRDRDHKRRHRSRSRSRS...) inside an ordinary protein matches another polar-rich stretch
+/// at three positions in four for free, but the two proteins around it look ordinary, so
+/// the pair's `u` is ordinary and the free matches get scored as evidence. Counted over
+/// the spans themselves, `u` lands past the boundary and `karlin_altschul_lambda` returns
+/// 0: not assessable.
+///
+/// The cost is a noisier `u`. A 40-residue span gives 40 draws per sequence, so the
+/// estimate wobbles where a whole protein's would not, and the wobble runs both ways.
+/// Erring toward the boundary is the safe direction, since it withholds an E-value rather
+/// than inventing one.
+fn region_match_probability(q_span: &[u8], t_span: &[u8]) -> f64 {
+    match_probability(&class_composition(q_span), &class_composition(t_span))
 }
 
 /// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
@@ -428,6 +454,14 @@ pub struct SearchResultCsv {
     /// Encoded positions inside the region where query and target disagree. Zero unless the
     /// search ran with `--extend-mismatch-penalty`.
     pub region_n_mismatches: u32,
+    /// The region's own match probability u (see MatchedRegion::ka_u). 0 without
+    /// `--extend-mismatch-penalty`.
+    pub region_ka_u: f64,
+    /// The region's Karlin-Altschul lambda, nats per unit of score (see
+    /// MatchedRegion::ka_lambda). 0 means the region is not assessable: its own
+    /// composition matches at or past the boundary penalty / (1 + penalty), so
+    /// `region_evalue` is infinity for want of a null, not because the score was poor.
+    pub region_ka_lambda: f64,
     /// Karlin-Altschul bit score of the region (see MatchedRegion::ka_bits). 0 without
     /// `--extend-mismatch-penalty`.
     pub region_ka_bits: f64,
@@ -503,6 +537,8 @@ impl SearchResultCsv {
             region_tfidf: region.tfidf,
             region_mean_idf: region.mean_idf,
             region_n_mismatches: region.n_mismatches,
+            region_ka_u: region.ka_u,
+            region_ka_lambda: region.ka_lambda,
             region_ka_bits: region.ka_bits,
             region_evalue: region.evalue,
             region_n_chained: region.n_chained,
@@ -754,27 +790,46 @@ pub struct MatchedRegion {
     /// rare k-mers and a long run of common ones can be told apart without the length term.
     /// Divides by the same `n_shared` the Poisson test uses. 0.0 without DB context.
     pub mean_idf: f64,
+
+    /// The match probability `u` of this region: how often a query position and a target
+    /// position drawn from the two spans this region covers carry the same class. Counted
+    /// on the spans alone, not on the whole proteins (see `region_match_probability`), so
+    /// a polar-rich stretch inside an ordinary protein is measured as the polar-rich
+    /// stretch it is. For a chain, counted over the chained span. 0.0 without extension.
+    pub ka_u: f64,
+
+    /// This region's Karlin-Altschul lambda, in nats per unit of score, with
+    /// `KaParams::r_database` already applied: the positive root of
+    /// u e^x + (1-u) e^(-penalty x) = 1 at this region's own `ka_u`
+    /// (Karlin & Altschul 1990; composition-based after Schaffer et al. 2001).
+    ///
+    /// 0.0 means the region is not assessable, not that it scored badly. There is no
+    /// positive root once `ka_u` reaches penalty / (1 + penalty), which is what two
+    /// hydrophobic runs or two low-complexity stretches look like: matching is what those
+    /// two compositions do by chance, so no length of agreement is evidence and no
+    /// E-value exists. `ka_bits` is then 0.0 and `evalue` is infinity, the same values
+    /// they take with no extension at all; this field is what tells the two apart.
+    pub ka_lambda: f64,
+
     /// Karlin-Altschul bit score of the region as an ungapped alignment in the encoded
-    /// alphabet: (lambda * S - ln K) / ln 2, where S = matches - penalty * mismatches over the
-    /// region and lambda is the root of sum_ij p_i q_j exp(lambda s_ij) = 1 for THIS pair's
-    /// class compositions (Karlin & Altschul 1990; per-pair composition after Schaffer et
-    /// al. 2001). Zero when the pair's expected score per position is not negative, which is
-    /// what two hydrophobic runs or two low-complexity stretches look like: no positive
-    /// lambda exists, so no length of agreement counts as evidence. That is the property
-    /// that makes this the ranking statistic for extended regions rather than the Poisson
-    /// count, which sees a transmembrane helix against any other as a long exact run.
-    /// Requires an extension penalty (`ExtensionParams`), since the score's mismatch term
-    /// is the penalty; 0.0 otherwise.
+    /// alphabet: (`ka_lambda` * S - ln K) / ln 2, where S = matches - penalty * mismatches
+    /// over the region. 0.0 when the region is not assessable (`ka_lambda` is 0.0), which
+    /// is the property that makes this the ranking statistic for extended regions rather
+    /// than the Poisson count, which sees a transmembrane helix against any other as a
+    /// long exact run. Requires an extension penalty (`ExtensionParams`), since the
+    /// score's mismatch term is the penalty; 0.0 otherwise.
     pub ka_bits: f64,
 
     /// How many extended regions this row is a chain of (see `chain_regions`). 1 for a region
     /// that stands alone, which is every region unless `--chain-max-gap` is set.
     pub n_chained: u32,
 
-    /// E-value for `ka_bits` against the searched database: K * m * n * exp(-lambda * S), with
-    /// m the query length and n the database's residue count (`db_n_kmers` stands in for it).
-    /// K is `KaParams::k`, fitted on the index for the alphabet, penalty and give-up margin
-    /// in use. Infinity without extension or DB context.
+    /// E-value for `ka_bits` against the searched database:
+    /// K * m * n * exp(-`ka_lambda` * S), with m the query length and n the database's
+    /// residue count (`db_n_kmers` stands in for it). K is `KaParams::k`, fitted on the
+    /// index for the alphabet, penalty and give-up margin in use. Infinity without
+    /// extension or DB context, and infinity when the region is not assessable; read
+    /// `ka_lambda` to tell those apart.
     pub evalue: f64,
 }
 
@@ -873,6 +928,8 @@ impl MatchedRegion {
             enrichment: 0.0,
             tfidf: 0.0,
             mean_idf: 0.0,
+            ka_u: 0.0,
+            ka_lambda: 0.0,
             ka_bits: 0.0,
             n_chained: 1,
             evalue: f64::INFINITY,
@@ -929,10 +986,6 @@ pub struct PreparedQuery<'a> {
     /// `freq_target(h)/N`, so a region's TF-IDF is the same O(1) prefix difference (see
     /// `ProteinSearcher::build_idf_prefix`).
     pub idf_prefix: Vec<f64>,
-    /// Class composition of the query's encoded sequence, for the per-pair Karlin-Altschul
-    /// lambda. Built once here rather than once per candidate pair. None when the sketch
-    /// carries no encoded sequence.
-    pub composition: Option<ClassComposition>,
 }
 
 impl SearchStats {
@@ -998,7 +1051,7 @@ impl ProteinSearcher {
         settings: KaCalibrationSettings,
     ) -> IndexResult<KaCalibrationReport> {
         let previous = self.extension;
-        // K = 1 and r_database = 1, so a region's `ka_bits` x ln 2 is lambda_pair S.
+        // K = 1 and r_database = 1, so a region's `ka_bits` x ln 2 is lambda_region S.
         self.extension = Some(ExtensionParams {
             scoring: settings.scoring,
             ka: KaParams { k: 1.0, r_database: 1.0 },
@@ -1114,10 +1167,14 @@ impl ProteinSearcher {
         Ok((queries, match_probability))
     }
 
-    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
+    /// Normalised score x = lambda_region S of every region the calibration queries produce,
     /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
     /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
-    /// exactly lambda_pair S with the closed-form per-pair lambda.
+    /// exactly lambda S with the closed-form lambda of that region's own two spans.
+    ///
+    /// A region whose spans sit past the composition boundary has lambda 0, so `ka_bits`
+    /// is 0 and it lands in `evalue::DEGENERATE_BIN`, which `tail_bins` already bars from
+    /// being the peak. Those regions are counted, not fitted.
     fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
         let filters = SearchFilters {
             threshold: 0.0,
@@ -1282,7 +1339,6 @@ impl ProteinSearcher {
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
             idf_prefix: self.build_idf_prefix(query),
-            composition: query.get_moltype_sequence().map(|enc| class_composition(enc.as_bytes())),
         }
     }
 
@@ -1671,39 +1727,44 @@ impl ProteinSearcher {
             region.mean_idf = region.tfidf / n_shared as f64;
         }
 
-        // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
-        // Only meaningful with a mismatch penalty, which is the score's mismatch term.
+        // Karlin-Altschul bits and E-value per region, each on the class composition of the
+        // two spans that region covers rather than of the two whole proteins. Only
+        // meaningful with a mismatch penalty, which is the score's mismatch term.
         if let Some(params) = self.extension {
-            if let (Some(q_enc), Some(t_enc), Some(q_composition)) = (
-                query.sketch.get_moltype_sequence(),
-                target.get_moltype_sequence(),
-                query.composition.as_ref(),
-            ) {
-                let match_prob =
-                    match_probability(q_composition, &class_composition(t_enc.as_bytes()));
-                let ka_lambda = karlin_altschul_lambda(match_prob, params.scoring.mismatch_penalty)
-                    * params.ka.r_database;
+            if let (Some(q_enc), Some(t_enc)) =
+                (query.sketch.get_moltype_sequence(), target.get_moltype_sequence())
+            {
+                let (q_bytes, t_bytes) = (q_enc.as_bytes(), t_enc.as_bytes());
                 let m = q_enc.len() as f64;
                 let n = self.db_n_kmers as f64;
                 for region in result.matched_regions.iter_mut() {
+                    region.ka_u = region_match_probability(
+                        covered_span(q_bytes, region.start, region.end),
+                        covered_span(t_bytes, region.target_start, region.target_end),
+                    );
+                    region.ka_lambda =
+                        karlin_altschul_lambda(region.ka_u, params.scoring.mismatch_penalty)
+                            * params.ka.r_database;
                     let matches = region.length as f64 - region.n_mismatches as f64;
                     let raw =
                         matches - params.scoring.mismatch_penalty * region.n_mismatches as f64;
-                    if ka_lambda > 0.0 && params.ka.k > 0.0 {
-                        region.ka_bits = params.ka.bits(ka_lambda, raw);
-                        region.evalue = params.ka.evalue(ka_lambda, raw, m, n);
+                    // A lambda of 0 is "not assessable", not "scored badly": the region's own
+                    // composition matches at or past penalty / (1 + penalty), so there is no
+                    // null to be surprised against. Leave the no-evidence values in place.
+                    if region.ka_lambda > 0.0 && params.ka.k > 0.0 {
+                        region.ka_bits = params.ka.bits(region.ka_lambda, raw);
+                        region.evalue = params.ka.evalue(region.ka_lambda, raw, m, n);
                     }
                 }
-                if params.chain_max_gap > 0 && ka_lambda > 0.0 && params.ka.k > 0.0 {
+                if params.chain_max_gap > 0 && params.ka.k > 0.0 {
                     let moltype = query.sketch.moltype().to_string();
                     let pair = ChainContext {
-                        q: q_enc.as_bytes(),
-                        t: t_enc.as_bytes(),
+                        q: q_bytes,
+                        t: t_bytes,
                         q_raw: query.sketch.get_raw_sequence(),
                         t_raw: target.get_raw_sequence(),
                         moltype: &moltype,
                         params,
-                        ka_lambda,
                         m,
                         n_t: t_enc.len() as f64,
                         n_targets: self.stats.total_signatures as f64,
@@ -2604,10 +2665,8 @@ pub struct ChainContext<'a> {
     /// The alphabet `q` and `t` are encoded in, so a chain's recount lets an ambiguous
     /// residue agree with either class it stands for, as the seeds did.
     pub moltype: &'a str,
-    /// Mismatch penalty, K and the chaining caps.
+    /// Mismatch penalty, K, r_database and the chaining caps.
     pub params: ExtensionParams,
-    /// This pair's lambda, r_database applied.
-    pub ka_lambda: f64,
     /// Query length in residues, m.
     pub m: f64,
     /// Target length in residues, n_t.
@@ -2667,12 +2726,18 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
             return;
         }
         let r = chain.len() as u32;
-        let t_sum: f64 = chain.iter().map(|x| pair.ka_lambda * raw_score(x) - ln_kmn).sum();
-        let ln_p = karlin_altschul_sum_ln_p(t_sum, r);
         let first = &chain[0];
         let last = &chain[chain.len() - 1];
         let (qs, qe) = (first.start as usize, last.end as usize);
         let (ts, te) = (first.target_start as usize, last.target_end as usize);
+        // One lambda for the chain, from the composition of the span it covers, so the sum
+        // statistic adds up members measured on one scale. Taken over the chained span
+        // rather than per member because that span is what the row reports, gaps included.
+        let ka_u = region_match_probability(&q[qs..qe], &t[ts..te]);
+        let ka_lambda =
+            karlin_altschul_lambda(ka_u, params.scoring.mismatch_penalty) * params.ka.r_database;
+        let t_sum: f64 = chain.iter().map(|x| ka_lambda * raw_score(x) - ln_kmn).sum();
+        let ln_p = karlin_altschul_sum_ln_p(t_sum, r);
         let mut merged = first.clone();
         merged.end = qe as u32;
         merged.target_end = te as u32;
@@ -2687,11 +2752,21 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         merged.subseq = q_raw[qs..qe].to_string();
         merged.target_subseq = t_raw[ts..te].to_string();
         merged.moltype_seq = String::from_utf8_lossy(&t[ts..te]).into_owned();
-        merged.evalue = ln_p.exp() * pair.n_targets;
-        // Bits on the same scale as a single region, whose bits are (lambda S - ln K) / ln 2.
-        // For one member -ln P = lambda S - ln(K m n_t), so adding ln(m n_t) back puts the
-        // size of the search where a single region has it: in the E-value, not the bits.
-        merged.ka_bits = ((ln_mn - ln_p) / std::f64::consts::LN_2).max(0.0);
+        merged.ka_u = ka_u;
+        merged.ka_lambda = ka_lambda;
+        if ka_lambda > 0.0 {
+            merged.evalue = ln_p.exp() * pair.n_targets;
+            // Bits on the same scale as a single region, whose bits are (lambda S - ln K) /
+            // ln 2. For one member -ln P = lambda S - ln(K m n_t), so adding ln(m n_t) back
+            // puts the size of the search where a single region has it: in the E-value, not
+            // the bits.
+            merged.ka_bits = ((ln_mn - ln_p) / std::f64::consts::LN_2).max(0.0);
+        } else {
+            // The chained span's own composition is past the boundary: not assessable, the
+            // same verdict a single region in that position gets.
+            merged.evalue = f64::INFINITY;
+            merged.ka_bits = 0.0;
+        }
         // The chain's Poisson fields describe the first member only and would mislead; the
         // expectation is re-summed over the span by the caller if it needs it. Keep the
         // strongest member's tail so the pair-level filter sees the evidence it saw before.
@@ -3378,6 +3453,10 @@ mod tests {
     /// diagonal.
     const HP_PATTERN: &str = "hpphhpphphphhppphhhppphhp";
 
+    /// lambda at penalty 9 for u = 0.48 x 0.44 + 0.52 x 0.56, the composition of
+    /// `one_flip_pair`'s two whole sequences.
+    const LAMBDA_ONE_FLIP: f64 = 0.687_334_063_899_844;
+
     /// A protein whose Lehninger HP encoding is `pattern`. h-class residues cycle through
     /// AFILMV and p-class through DEKNQR, so two sketches built from the same pattern share
     /// their encoding but not their raw sequence.
@@ -3488,7 +3567,6 @@ mod tests {
             t_raw: t.get_raw_sequence(),
             moltype: "hp",
             params: strict,
-            ka_lambda: 0.5,
             m: 25.0,
             n_t: 25.0,
             n_targets: 100.0,
@@ -3502,10 +3580,22 @@ mod tests {
         assert_eq!(c.n_mismatches, 1);
         assert_eq!(c.length, 25);
         assert_eq!((c.tfidf, c.mean_idf), (10.0, 1.0));
-        // Two members of 12 and 12 residues at lambda 0.5 against ln(K m n_t) = ln(0.03 x
-        // 625): t = 2 (6 - 2.931) = 6.138, P = e^-t t / 2, E = 100 P, and the bits are
+        // The chain's lambda comes from the composition of the span it covers, here the
+        // whole 25 residues of both sequences: 12 h of 25 against 11 h of 25.
+        assert_relative_eq!(c.ka_u, 0.48 * 0.44 + 0.52 * 0.56, epsilon = 1e-12);
+        let lambda = karlin_altschul_lambda(c.ka_u, strict.scoring.mismatch_penalty);
+        assert_relative_eq!(c.ka_lambda, lambda, epsilon = 1e-12);
+        assert_relative_eq!(lambda, LAMBDA_ONE_FLIP, epsilon = 1e-12);
+        // r_database multiplies that root once. See
+        // test_every_scored_region_lambda_solves_its_equation for the per-region site.
+        let halved = ExtensionParams { ka: KaParams { r_database: 0.5, ..strict.ka }, ..strict };
+        let scaled = chain_regions(ext.clone(), &ChainContext { params: halved, ..pair });
+        assert_relative_eq!(scaled[0].ka_u, c.ka_u, epsilon = 1e-12);
+        assert_relative_eq!(scaled[0].ka_lambda, 0.5 * c.ka_lambda, epsilon = 1e-12);
+        // Two members of 12 and 12 residues at that lambda against ln(K m n_t) = ln(0.03 x
+        // 625): t = 2 (12 lambda - 2.931), P = e^-t t / 2, E = 100 P, and the bits are
         // ln(m n_t) - ln P over ln 2.
-        let t_sum = 2.0 * (0.5 * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
+        let t_sum = 2.0 * (lambda * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
         let p = (-t_sum).exp() * t_sum / 2.0;
         assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
         assert_relative_eq!(
@@ -3542,7 +3632,6 @@ mod tests {
                 t_raw: t.get_raw_sequence(),
                 moltype: "hp",
                 params,
-                ka_lambda: 0.5,
                 m: 25.0,
                 n_t: 24.0,
                 n_targets: 100.0,
@@ -3559,12 +3648,18 @@ mod tests {
         assert_eq!(c.subseq, q.get_raw_sequence().unwrap());
         assert_eq!(c.target_subseq, t.get_raw_sequence().unwrap());
         assert_eq!(c.moltype_seq, te);
+        // One lambda for the chain, from its spans: 12 h of the query's 25 against 11 h of
+        // the target's 24 (the deleted position 9 was an h).
+        assert_relative_eq!(c.ka_u, 0.48 * 11.0 / 24.0 + 0.52 * 13.0 / 24.0, epsilon = 1e-12);
+        let lambda = karlin_altschul_lambda(c.ka_u, params.scoring.mismatch_penalty);
+        assert_relative_eq!(c.ka_lambda, lambda, epsilon = 1e-12);
         // Karlin-Altschul sum statistic for two members: each contributes lambda S - ln(K m
         // n_t) with S its run length (no mismatches), and P(T >= t) = e^-t t / 2 for r = 2.
-        let t_sum = 0.5 * (9.0 + 15.0) - 2.0 * (0.03 * 25.0 * 24.0f64).ln();
+        let t_sum = lambda * (9.0 + 15.0) - 2.0 * (0.03 * 25.0 * 24.0f64).ln();
         let p = (-t_sum).exp() * t_sum / 2.0;
         assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
-        assert_relative_eq!(c.evalue, 0.619_041_406_804_322, epsilon = 1e-12);
+        // lambda 0.689 from the spans, where a fixed 0.5 gave E = 0.62.
+        assert_relative_eq!(c.evalue, 0.011_520_430_809_182_202, epsilon = 1e-12);
         // Bits put the search size back: ln(m n_t) - ln P, in bits.
         assert_relative_eq!(
             c.ka_bits,
@@ -3660,6 +3755,75 @@ mod tests {
         );
     }
 
+    /// Human BNIP3 residues 69-108 and human BNIP3L residues 84-123 (UniProt Q12983 and
+    /// O60238, both in `tests/testdata/index/bcl2_first25_...fasta`). Two ordinary
+    /// apoptosis proteins, each carrying one polar-rich stretch.
+    const BNIP3_POLAR_STRETCH: &str = "RSQTPQDTNRASETDTHSIGEKNSSQSEEDDIERRKEVES";
+    const BNIP3L_POLAR_STRETCH: &str = "QSSSRGSSHCDSPSPQEDGQIMFDVEMHTSRDHSSQSEEE";
+
+    #[test]
+    fn test_region_lambda_is_zero_for_a_polar_stretch_in_an_ordinary_protein() {
+        // Taken from the whole proteins, the compositions are ordinary and every region
+        // between them is scored as if its matches were evidence.
+        let (q_whole, t_whole) = (b"hpphhpphphphhppphhhppphhp", b"hphhpphhpphphhpphhpphhphp");
+        let u_whole = region_match_probability(q_whole, t_whole);
+        assert_relative_eq!(u_whole, 0.4992, epsilon = 1e-12);
+        assert_relative_eq!(
+            karlin_altschul_lambda(u_whole, 2.0),
+            0.483_527_826_833_456_4,
+            epsilon = 1e-12
+        );
+
+        // Taken from the two stretches themselves, 85% and 78% polar, they match at more
+        // than two positions in three by composition alone. At penalty 2 the boundary is
+        // 2/3, there is no positive root, and the region is not assessable.
+        let encode = |name, seq| {
+            let sketch = ProteinSketch::from_protein_sequence(name, seq, 12, 1, "hp").unwrap();
+            sketch.get_moltype_sequence().unwrap().to_string()
+        };
+        let q_enc = encode("bnip3", BNIP3_POLAR_STRETCH);
+        let t_enc = encode("bnip3l", BNIP3L_POLAR_STRETCH);
+        let u_region = region_match_probability(q_enc.as_bytes(), t_enc.as_bytes());
+        assert_relative_eq!(u_region, 0.6925, epsilon = 1e-12);
+        assert_eq!(karlin_altschul_lambda(u_region, 2.0), 0.0);
+    }
+
+    #[test]
+    fn test_covered_span_clamps_to_the_sequence() {
+        let seq = b"hpphhpph";
+        assert_eq!(covered_span(seq, 2, 5), b"phh");
+        assert_eq!(covered_span(seq, 0, 8), seq);
+        // Past the end, and inverted: clamped, not a panic.
+        assert_eq!(covered_span(seq, 6, 99), b"ph");
+        assert_eq!(covered_span(seq, 99, 120), b"");
+        assert_eq!(covered_span(seq, 5, 2), b"");
+    }
+
+    /// `karlin_altschul_lambda` returns the root of u e^L + (1-u) e^(-C L) = 1, and
+    /// nothing else. Asserted at the penalty of the Botryllus sweep (C = 1.63) as well as
+    /// the default 2, because the root has a closed form only at C = 2 and everywhere
+    /// else comes out of the bisection.
+    #[test]
+    fn test_karlin_altschul_lambda_solves_its_defining_equation() {
+        for penalty in [1.0, 1.63, 2.0, 3.0] {
+            let boundary = penalty / (1.0 + penalty);
+            for step in 1..99 {
+                let u = step as f64 / 100.0;
+                let lambda = karlin_altschul_lambda(u, penalty);
+                if u >= boundary {
+                    assert_eq!(lambda, 0.0, "u = {u} is at or past the boundary {boundary}");
+                    continue;
+                }
+                assert!(lambda > 0.0, "u = {u} is below the boundary {boundary}");
+                let lhs = u * lambda.exp() + (1.0 - u) * (-penalty * lambda).exp();
+                assert_relative_eq!(lhs, 1.0, epsilon = 1e-9);
+            }
+        }
+        // The value the Botryllus sweep is read against: half hydrophobic on both spans.
+        assert_relative_eq!(karlin_altschul_lambda(0.5, 1.63), 0.379_054, epsilon = 1e-6);
+        assert_relative_eq!(1.63 / 2.63, 0.619_772, epsilon = 1e-6);
+    }
+
     #[test]
     fn test_class_composition_match_probability() {
         let p = class_composition(b"hhpp");
@@ -3735,7 +3899,6 @@ mod tests {
                 t_raw,
                 moltype: "hp",
                 params,
-                ka_lambda: 0.5,
                 m: 25.0,
                 n_t: 25.0,
                 n_targets: 100.0,
@@ -5203,6 +5366,7 @@ mod tests {
 mod ka_calibration_tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_FASTA_GZ;
+    use approx::assert_relative_eq;
     use tempfile::TempDir;
 
     fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
@@ -5236,17 +5400,25 @@ mod ka_calibration_tests {
         assert_eq!(searcher.extension, None, "calibration restores the extension setting");
         // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
         // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
-        // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
-        // regions, x 7.5 to 11.5 nats.
+        // read off the top 8 bins of x = lambda_region S (half a nat each) with at least 30
+        // regions, x 7.0 to 11.0 nats.
+        //
+        // The same 9,561 regions as when lambda was solved per pair, on a different x axis:
+        // each region is now placed by the composition of its own two spans, so the window
+        // and the line moved (r_database 0.870 -> 0.819, K 0.0178 -> 0.0065). The residual
+        // grew with them, 0.054 -> 0.134 in ln count, which is the size counting noise
+        // alone gives at the 30-region floor (1/sqrt(30) = 0.18): the old curve was smooth
+        // because one lambda per pair put every region of a pair on one scale.
         assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
         assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
-        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
-        assert_eq!(fit.x_range(), (7.5, 11.5));
-        assert!((fit.r_database - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.r_database);
-        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
-        assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
-        // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
-        // closed-form lambda is ln of the golden ratio.
+        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (14, 21, None));
+        assert_eq!(fit.x_range(), (7.0, 11.0));
+        assert!((fit.r_database - 0.819_148_194_939_836).abs() < 1e-12, "{}", fit.r_database);
+        assert!((fit.k - 0.006_512_282_435_710_007_4).abs() < 1e-12, "{}", fit.k);
+        assert!((fit.rms_residual - 0.134_104_578_247_110_86).abs() < 1e-12);
+        // The BCL2 family is half hydrophobic in the Lehninger classes, so the database's
+        // u is 0.5 and the closed-form lambda is ln of the golden ratio. This one stays a
+        // whole-database number: it is reported next to the fit, not used to score.
         assert!((fit.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
         assert!((fit.lambda_analytic - 0.481_208_536_966_019_95).abs() < 1e-12);
         assert_eq!(fit.survival[0].1, 9561);
@@ -5306,6 +5478,64 @@ mod ka_calibration_tests {
         assert_eq!((one.n_reference_queries, four.n_reference_queries), (25, 100));
         // 38_606 / 9_392 = 4.1: four shuffles, four times the chance regions.
         assert_eq!((one.n_reference_regions, four.n_reference_regions), (9392, 38606));
+        Ok(())
+    }
+
+    /// Every region a real search scores carries a lambda that is its own closed-form
+    /// root times `r_database`, and nothing else.
+    ///
+    /// r_database is the fitted slope of the calibration, one number per index: 1.0 keeps
+    /// the closed form, which assumes positions are drawn independently, and the fit
+    /// measures how far the database departs from that. This test pins where it enters,
+    /// so applying it twice, dropping it, or dividing by it fails here rather than
+    /// shifting every E-value in a run by a constant that only shows up when the numbers
+    /// are checked against an independent calculation.
+    #[test]
+    fn test_every_scored_region_lambda_solves_its_equation() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        let penalty = 1.63;
+        let boundary = penalty / (1.0 + penalty);
+        for r_database in [1.0, 0.674_612_114_467_893_2] {
+            searcher.set_extension(Some(ExtensionParams {
+                scoring: ExtensionScoring { mismatch_penalty: penalty, xdrop: 6.52 },
+                ka: KaParams { k: 0.03, r_database },
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            }));
+            // The searcher loads signatures on demand, so the DashMap is empty until the
+            // index reads them back. Sorted by md5 so the five queries are the same ones
+            // every run.
+            searcher.index().load_state()?;
+            let mut entries: Vec<(String, ProteinSketch)> = searcher
+                .index()
+                .get_signatures()
+                .iter()
+                .map(|e| (e.key().clone(), e.value().clone()))
+                .collect();
+            entries.sort_by(|a, b| a.0.cmp(&b.0));
+            let sigs: Vec<ProteinSketch> =
+                entries.into_iter().take(5).map(|(_, sketch)| sketch).collect();
+            let results = searcher.search(&sigs, &SearchFilters::default())?;
+            let (mut scored, mut refused) = (0, 0);
+            for result in &results {
+                for r in &result.matched_regions {
+                    let root = karlin_altschul_lambda(r.ka_u, penalty);
+                    assert_relative_eq!(r.ka_lambda, root * r_database, epsilon = 1e-12);
+                    assert_eq!(r.ka_lambda == 0.0, r.ka_u >= boundary, "{r:?}");
+                    if r.ka_lambda > 0.0 {
+                        let lhs = r.ka_u * root.exp() + (1.0 - r.ka_u) * (-penalty * root).exp();
+                        assert_relative_eq!(lhs, 1.0, epsilon = 1e-9);
+                        assert!(r.evalue.is_finite(), "{r:?}");
+                        scored += 1;
+                    } else {
+                        assert_eq!((r.evalue, r.ka_bits), (f64::INFINITY, 0.0), "{r:?}");
+                        refused += 1;
+                    }
+                }
+            }
+            println!("r_database {r_database}: {scored} scored, {refused} not assessable");
+            assert_eq!((scored, refused), (1109, 335), "at r_database {r_database}");
+        }
         Ok(())
     }
 }

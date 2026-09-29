@@ -402,7 +402,6 @@ mod tests {
             t_raw: bovine.get_raw_sequence(),
             moltype: "sdm12",
             params,
-            ka_lambda: 0.5,
             m: 124.0,
             n_t: 150.0,
             n_targets: 125.0,
