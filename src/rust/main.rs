@@ -234,8 +234,8 @@ enum Commands {
         #[arg(long, value_enum, default_value_t = DecoyNull::default())]
         ka_reference: DecoyNull,
 
-        /// Chain extended regions on one diagonal at most this many residues apart into one
-        /// region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
+        /// Chain colinear extended regions at most this many residues apart on the query
+        /// (and within --chain-max-shift diagonals) into one region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
         /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
         /// every region separate. Used only with --extend-mismatch-penalty.
         #[arg(long, default_value = "0")]

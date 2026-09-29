@@ -218,7 +218,9 @@ both sequences, at most G residues apart on the query and at most D diagonals ap
 net indel of up to D), into one region scored with Karlin & Altschul's (1993) statistic
 for a sum of region scores; `region_n_chained` says how many regions a row is made of. A
 domain that no single gapless run covers becomes one call. Its purpose is region-level
-transfer, where a call has to cover a domain to carry its label.
+transfer, where a call has to cover a domain to carry its label. A chained row's
+`region_evalue` takes the database size as the number of targets times the target's
+length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
 
 ## Visualizing hits
 

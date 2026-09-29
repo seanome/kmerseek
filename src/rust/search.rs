@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use statrs::distribution::{DiscreteCDF, Poisson};
+use statrs::function::factorial::ln_factorial;
 
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
@@ -249,35 +250,8 @@ pub fn karlin_altschul_sum_ln_p(sum_normalised_score: f64, n_segments: u32) -> f
     if t <= 0.0 || r == 0 {
         return 0.0;
     }
-    let r_f = r as f64;
-    let ln_fact = |x: f64| ln_gamma(x + 1.0);
-    (-t + (r_f - 1.0) * t.ln() - ln_fact(r_f) - ln_fact(r_f - 1.0)).min(0.0)
-}
-
-/// ln Gamma, Lanczos approximation; enough for the factorials of small chain lengths.
-fn ln_gamma(x: f64) -> f64 {
-    const G: f64 = 7.0;
-    const C: [f64; 9] = [
-        0.999_999_999_999_809_9,
-        676.520_368_121_885_1,
-        -1_259.139_216_722_402_8,
-        771.323_428_777_653_1,
-        -176.615_029_162_140_6,
-        12.507_343_278_686_905,
-        -0.138_571_095_265_720_12,
-        9.984_369_578_019_572e-6,
-        1.505_632_735_149_311_6e-7,
-    ];
-    if x < 0.5 {
-        return (std::f64::consts::PI / (std::f64::consts::PI * x).sin()).ln() - ln_gamma(1.0 - x);
-    }
-    let x = x - 1.0;
-    let mut a = C[0];
-    let t = x + G + 0.5;
-    for (i, c) in C.iter().enumerate().skip(1) {
-        a += c / (x + i as f64);
-    }
-    0.5 * (2.0 * std::f64::consts::PI).ln() + (x + 0.5) * t.ln() - t + a.ln()
+    let ln_fact = |x: u32| ln_factorial(u64::from(x));
+    (-t + (f64::from(r) - 1.0) * t.ln() - ln_fact(r) - ln_fact(r - 1)).min(0.0)
 }
 
 /// Fraction of an encoded sequence in each class, indexed by the class's byte. Gaps and
@@ -2631,8 +2605,9 @@ pub struct ChainContext<'a> {
     pub n_targets: f64,
 }
 
-/// Chain extended regions that sit on one diagonal within `chain_max_gap` residues of each
-/// other into one region, scored with Karlin-Altschul sum statistics.
+/// Chain colinear extended regions within `chain_max_gap` residues of each other on the
+/// query and `chain_max_shift` diagonals apart into one region, scored with
+/// Karlin-Altschul sum statistics.
 ///
 /// Why. A region is one gapless run and the benchmark's transfer rule labels it only when
 /// it covers half the target domain, so a 200-residue domain needs a single clean
@@ -2647,7 +2622,8 @@ pub struct ChainContext<'a> {
 /// divides it by the summed `n_shared`. Its E-value is the sum P-value times the number
 /// of targets: each member's normalised score is lambda S_i - ln(K m n_t) with n_t the
 /// target length, so for a single region this reduces to the per-region E within the
-/// approximation n = N n_t. Members must be colinear (each starts after the previous one
+/// approximation n = N n_t. So a chained row's `evalue` uses N n_t for the database size
+/// and an unchained row's uses `db_n_kmers`; the two are close but not the same formula. Members must be colinear (each starts after the previous one
 /// ends, on both sequences) and within `chain_max_shift` diagonals of each other, so a
 /// chain tolerates a net indel up to that size between members. With a shift the query
 /// and target spans differ in length; `length` is the query span, `n_mismatches` is the
@@ -2692,7 +2668,11 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         merged.target_end = te as u32;
         merged.length = (qe - qs) as u32;
         merged.n_shared = chain.iter().map(|x| x.n_shared).sum();
-        merged.n_mismatches = if qe - qs == te - ts {
+        // Recount over the span only when every member is on the first member's diagonal.
+        // First and last on one diagonal is not enough: with a middle member shifted, the
+        // zip would compare it one residue off and count its matches as mismatches.
+        let one_diagonal = chain.iter().all(|x| diagonal(x) == diagonal(first));
+        merged.n_mismatches = if one_diagonal {
             q[qs..qe].iter().zip(&t[ts..te]).filter(|&(&a, &b)| !agree(a, b)).count() as u32
         } else {
             chain.iter().map(|x| x.n_mismatches).sum()
@@ -3534,6 +3514,52 @@ mod tests {
     }
 
     #[test]
+    fn test_chain_regions_sums_mismatches_when_a_middle_member_shifts() {
+        // The same pattern on both sides, with regions on diagonals 0, 1 and 0. First and
+        // last share a diagonal, but a recount over the span would compare the middle
+        // member one residue off. Its mismatches are counted on its own diagonal instead.
+        let q = sketch_from_hp_pattern("q", HP_PATTERN);
+        let t = sketch_from_hp_pattern("t", HP_PATTERN);
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let whole = find_matched_regions(&q, &t, &q.intersect(&t));
+        assert_eq!(whole.len(), 1);
+        let shifted_mismatches = HP_PATTERN[9..16]
+            .bytes()
+            .zip(HP_PATTERN[10..17].bytes())
+            .filter(|(a, b)| a != b)
+            .count() as u32;
+        assert_eq!(shifted_mismatches, 4);
+        let region = |start: u32, end: u32, shift: u32, n_mismatches: u32| MatchedRegion {
+            start,
+            end,
+            target_start: start + shift,
+            target_end: end + shift,
+            length: end - start,
+            n_mismatches,
+            ..whole[0].clone()
+        };
+        let members =
+            vec![region(0, 8, 0, 0), region(9, 16, 1, shifted_mismatches), region(18, 25, 0, 0)];
+        let params =
+            ExtensionParams { chain_max_gap: 2, chain_max_shift: 1, ..extension(2.0, 8.0) };
+        let pair = ChainContext {
+            q: qe.as_bytes(),
+            t: te.as_bytes(),
+            q_raw: q.get_raw_sequence(),
+            t_raw: t.get_raw_sequence(),
+            moltype: "hp",
+            params,
+            ka_lambda: 0.5,
+            m: 25.0,
+            n_t: 25.0,
+            n_targets: 100.0,
+        };
+        let chained = chain_regions(members, &pair);
+        assert_eq!(chained.len(), 1, "{chained:?}");
+        assert_eq!((chained[0].n_chained, chained[0].n_mismatches), (3, 4));
+    }
+
+    #[test]
     fn test_chain_regions_spans_a_one_residue_deletion() {
         // Two exact runs on neighbouring diagonals: one alignment with a one-residue indel.
         let (q, t) = one_deletion_pair();
@@ -3589,15 +3615,6 @@ mod tests {
         let same_diagonal = chain(ExtensionParams { chain_max_shift: 0, ..params });
         assert_eq!(same_diagonal.len(), 2);
         assert!(same_diagonal.iter().all(|r| r.n_chained == 1));
-    }
-
-    #[test]
-    fn test_lgamma_reflects_below_one_half() {
-        // Gamma(1/4) = 3.6256... is reached through the reflection formula; Gamma(1/2) =
-        // sqrt(pi) and Gamma(5) = 4! come straight from the series.
-        assert_relative_eq!(ln_gamma(0.25), 3.625_609_908_221_908f64.ln(), epsilon = 1e-10);
-        assert_relative_eq!(ln_gamma(0.5), std::f64::consts::PI.sqrt().ln(), epsilon = 1e-10);
-        assert_relative_eq!(ln_gamma(5.0), 24f64.ln(), epsilon = 1e-10);
     }
 
     /// A searcher over one target, the flipped half of `one_flip_pair`, at hp k=8.
