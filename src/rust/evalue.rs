@@ -502,8 +502,12 @@ pub enum DecoyNull {
     /// neighbouring residues) occurs as often as in the original (Altschul & Erickson 1985;
     /// sampled as a random Eulerian path, Kandel et al. 1996, the uShuffle k = 2 method).
     /// Keeps the rate at which a hydrophobic residue follows a hydrophobic one, and with it
-    /// the lengths of hydrophobic runs. The default: the reference a `Database` fit stops
-    /// against, and the null to use when real sequences are not wanted.
+    /// the lengths of hydrophobic runs. The default reference: the set a `Database` fit
+    /// stops against. Not the default null to fit on: it loses the helix and strand repeat
+    /// that unrelated real proteins share, so a line fitted to it falls too fast and makes
+    /// E-values too small (2 to 4 times on Swiss-Prot at x = 15 to 25), letting unrelated
+    /// hits pass as significant. See "Why the E-values are fitted on real sequences" in
+    /// `docs/evalue.md`.
     #[default]
     ShuffledDipeptide,
     /// Each query is a database sequence read back to front. In a hydrophobic/polar
