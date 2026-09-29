@@ -147,10 +147,18 @@ enum Commands {
         #[arg(long, default_value_t = DEFAULT_XDROP)]
         extend_xdrop: f64,
 
-        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions,
-        /// with the closed-form lambda per pair (r_database 1). Normally left unset: a fit
-        /// on --ka-queries database sequences runs before the search. Used only with
-        /// --extend-mismatch-penalty.
+        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
+        /// Optional: without it, r_database and K are fitted on --ka-queries database
+        /// sequences before the search. With it, no fit runs, and every pair's lambda is
+        /// used as the closed form gives it (r_database 1).
+        ///
+        /// The closed form: with +1 for each position where query and target fall in the
+        /// same class and -C for each where they differ, lambda is the positive root of
+        /// u e^lambda + (1 - u) e^(-C lambda) = 1, where u is the chance that a random
+        /// query position and a random target position fall in the same class, from the
+        /// two sequences' class frequencies (Karlin & Altschul 1990). See
+        /// https://seanome.github.io/kmerseek/karlin_altschul_explainer.html.
+        /// Used only with --extend-mismatch-penalty.
         #[arg(long)]
         ka_k: Option<f64>,
 
@@ -166,19 +174,26 @@ enum Commands {
         #[arg(long, default_value = "1")]
         ka_seed: u64,
 
-        /// What the calibration queries are. `database`: the sequences as they are, with
-        /// the homolog bend cut off. `shuffled`: residues shuffled, the independent-letter
-        /// model, which loses the hydrophobic runs and periodicity real proteins have.
-        /// `shuffled-dipeptide`: shuffled keeping every pair of neighbouring residues as
-        /// often as in the original. `reversed`: read back to front, which in a
-        /// hydrophobic/polar alphabet still matches the forward helices and strands.
+        /// The sequences the line is fitted to. `database` (default): the database
+        /// sequences as they are, so the fit sees the hydrophobic runs and helix
+        /// periodicity real proteins have. Some of them have relatives in the database, and
+        /// the fit stops below the scores those relatives reach (see --ka-reference). The
+        /// other three are decoys, database sequences changed so that they have no relative
+        /// and every region they find is a chance match. `shuffled`: residues shuffled,
+        /// which keeps composition only. `shuffled-dipeptide`: shuffled keeping every pair
+        /// of neighbouring residues as often as in the original, which keeps hydrophobic
+        /// runs. `reversed`: read back to front, which in a hydrophobic/polar alphabet
+        /// still matches forward helices and strands.
         #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
         ka_null: DecoyNull,
 
-        /// For `--ka-null database`: how the reference queries that decide where the fit
-        /// stops are made. `shuffled-dipeptide` keeps each pair of neighbouring residues as
-        /// often as in the original, so hydrophobic runs survive and only relatives and
-        /// periodicity lift the real curve above it; `shuffled` keeps composition only.
+        /// Used only with `--ka-null database`, to decide where the fit stops. The same
+        /// calibration sequences are shuffled this way and searched too. Shuffled sequences
+        /// have no relatives, so the score at which the real sequences' region counts rise
+        /// above the shuffled ones' is where relatives begin, and bins from there up are
+        /// left out of the fit. These sequences only mark that point; the line is not
+        /// fitted to them. `shuffled-dipeptide` (default) keeps hydrophobic runs, so only
+        /// relatives lift the real counts above it; `shuffled` keeps composition only.
         #[arg(long, value_enum, default_value_t = DecoyNull::default())]
         ka_reference: DecoyNull,
 
