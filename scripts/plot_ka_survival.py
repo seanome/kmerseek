@@ -40,12 +40,13 @@ def load(path):
     window = [float(r["x"]) for r in rows if r["in_fit"] == "true"]
     ref_survival = [int(r["reference_n_regions_at_least"]) if r.get("reference_n_regions_at_least") else 0 for r in rows]
     ref_density = [ref_survival[i] - (ref_survival[i + 1] if i + 1 < len(ref_survival) else 0) for i in range(len(ref_survival))]
-    lam, k = float(meta["r_database"]), float(meta["k"])
-    residues, kmers = float(meta["query_residues"]), float(meta["database_kmers"])
+    lam = float(meta["r_database"])
     per_bin = 1 - math.exp(-lam * width)
-    ln_intercept = math.log(k * residues * kmers * per_bin)
-    fit_density = [math.exp(ln_intercept - lam * s) for s in scores]
-    fit_survival = [d / per_bin for d in fit_density]
+    # The fitted line comes from kmerseek's CSV, not recomputed here. Per bin it is the
+    # survival line times per_bin; its intercept is read back from the first row.
+    fit_survival = [float(r["fitted_n_regions_at_least"]) for r in rows]
+    fit_density = [f * per_bin for f in fit_survival]
+    ln_intercept = math.log(fit_density[0]) + lam * scores[0]
     return meta, scores, survival, density, window, fit_density, fit_survival, ln_intercept, ref_density, ref_survival, width
 
 
@@ -81,8 +82,9 @@ def draw_column(axes, path, first_column, args_label=None):
         keep = [i for i in range(len(scores)) if scores[i] <= xmax]
         ax.plot([scores[i] for i in keep], [fitted[i] for i in keep], "-", color=FITTED, lw=1.8,
                 label="fitted line: its slope, sign flipped, is r_database; K from its height")
-        ax.axhline(MIN_BIN_COUNT, color=FLOOR, ls=":", lw=1,
-                   label=f"{MIN_BIN_COUNT} regions: bins below this are not fitted")
+        if ax is axes[0]:  # the floor is on regions in one bin, not on the summed counts
+            ax.axhline(MIN_BIN_COUNT, color=FLOOR, ls=":", lw=1,
+                       label=f"{MIN_BIN_COUNT} regions: bins below this are not fitted")
         ax.set_yscale("log")
         ax.set_ylim(0.5, max(observed) * 3)
         ax.spines[["top", "right"]].set_visible(False)
