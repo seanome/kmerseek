@@ -1003,13 +1003,15 @@ impl ProteinSearcher {
         let mut rng = SplitMix64::new(seed);
         let picks = rng.sample_indices(md5s.len(), n_queries.max(COMPOSITION_SAMPLE));
         let mut queries = Vec::with_capacity(n_queries);
-        let mut class_counts: HashMap<u8, f64> = HashMap::new();
+        // A fixed-order array, not a HashMap: summing a map's values in its random order
+        // could change the last bit of the match probability from run to run.
+        let mut class_counts = [0u64; 256];
         for idx in picks {
             let md5 = md5s[idx].clone();
             let Some(target) = self.target_sketch(&md5)? else { continue };
             if let Some(encoded) = target.get_moltype_sequence() {
                 for b in encoded.bytes() {
-                    *class_counts.entry(b).or_insert(0.0) += 1.0;
+                    class_counts[b as usize] += 1;
                 }
             }
             if queries.len() < n_queries {
@@ -1018,8 +1020,9 @@ impl ProteinSearcher {
                 }
             }
         }
-        let total: f64 = class_counts.values().sum::<f64>().max(1.0);
-        let match_probability = class_counts.values().map(|c| (c / total).powi(2)).sum();
+        let total = class_counts.iter().sum::<u64>().max(1) as f64;
+        let composition: ClassComposition = std::array::from_fn(|i| class_counts[i] as f64 / total);
+        let match_probability = match_probability(&composition, &composition);
         Ok((queries, match_probability))
     }
 
@@ -1109,6 +1112,14 @@ impl ProteinSearcher {
         let report = self.calibrate_ka(settings)?;
         match report.fitted {
             Some(fit) => Ok((fit.ka_params(), KaSource::Fitted(Box::new(fit)))),
+            // decoy_from_target needs a stored raw sequence, so no queries at all means the
+            // index has none to build them from, and more --ka-queries cannot help.
+            None if report.n_queries == 0 => Err(anyhow::anyhow!(
+                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
+                 margin {xdrop}: the index stores no raw sequences to build calibration \
+                 queries from, so no fit can be made on it. Pass --ka-k."
+            )
+            .into()),
             None => Err(anyhow::anyhow!(
                 "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
                  margin {xdrop}: {} calibration queries gave {} regions, fewer than the \
