@@ -41,7 +41,8 @@ def usable_bins(bins, reference_bins, min_count):
     `fit_scores_with_reference`). Returns (score, count, reference count or None)."""
     if not bins:
         return []
-    peak = max(range(len(bins)), key=lambda i: (bins[i][1], -i))
+    # The last of tied bins, as Iterator::max_by_key returns in `tail_bins`.
+    peak = max(range(len(bins)), key=lambda i: (bins[i][1], i))
     reference = dict(map(tuple, reference_bins))
     out = []
     for score, count in bins[peak + 1 :]:
@@ -340,7 +341,7 @@ def plot_too_few_bins_test(record):
     )
     ax = axes[0][0]
     draw_counts(ax, record, case)
-    peak = max(case["bins"], key=lambda b: b[1])
+    peak = max(reversed(case["bins"]), key=lambda b: b[1])  # last of tied bins
     ax.annotate(
         "most populated bin:\nit and all below are left out",
         xy=peak,

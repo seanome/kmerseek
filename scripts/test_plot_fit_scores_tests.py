@@ -12,6 +12,12 @@ def test_usable_bins_skip_the_peak_and_small_bins():
     assert usable_bins(bins, [], 30) == [(13, 60, None), (14, 40, None), (15, 31, None)]
 
 
+def test_usable_bins_start_after_the_last_of_tied_peaks():
+    # tail_bins in evalue.rs uses Iterator::max_by_key, which returns the last of tied bins.
+    bins = [[12, 100], [13, 100], [14, 60], [15, 40]]
+    assert usable_bins(bins, [], 30) == [(14, 60, None), (15, 40, None)]
+
+
 def test_usable_bins_need_the_reference_bin_too():
     bins = [[12, 100], [13, 60], [14, 40], [15, 31]]
     reference = [[12, 100], [13, 45], [14, 29]]
