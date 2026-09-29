@@ -1944,18 +1944,20 @@ pub fn find_matched_regions(
 /// how many positions the best-scoring extension covers. The score starts at 0 on the seed
 /// edge, so a side whose score never rises above 0 keeps nothing, however far the walk went
 /// before giving up. `extend_regions` calls this once per side; `docs/images/xdrop_walk_bcl2_ced9_bh1.png`
-/// shows both walks on one seed.
+/// shows both walks on one seed. `agree` is `residues_agree`, so an ambiguous residue scores
+/// +1 against either class it stands for, as it did when the seed k-mers were hashed.
 fn xdrop_walk(
     q: &[u8],
     t: &[u8],
     positions: impl Iterator<Item = (usize, usize)>,
     params: ExtensionParams,
+    agree: &impl Fn(u8, u8) -> bool,
 ) -> usize {
     let mut score = 0.0;
     let mut best = 0.0;
     let mut best_len = 0;
     for (n, (qi, ti)) in positions.enumerate() {
-        score += if q[qi] == t[ti] { 1.0 } else { -params.scoring.mismatch_penalty };
+        score += if agree(q[qi], t[ti]) { 1.0 } else { -params.scoring.mismatch_penalty };
         if score > best {
             best = score;
             best_len = n + 1;
@@ -1971,7 +1973,8 @@ fn xdrop_walk(
 ///
 /// `n_shared` is carried from the seeds (summed on merge) and never recomputed from the
 /// extended length, so the Poisson test keeps counting shared k-mers rather than residues.
-/// `n_mismatches` is recounted over the final span. Regions come back sorted by query start.
+/// `n_mismatches` is recounted over the final span, with an ambiguous residue agreeing with
+/// either class it stands for. Regions come back sorted by query start.
 ///
 /// Both sketches must carry encoded and raw sequences; without them the regions are returned
 /// unchanged, which is also what `find_matched_regions` does in that case.
@@ -1993,6 +1996,7 @@ pub fn extend_regions(
         return regions;
     };
     let (q, t) = (q_enc.as_bytes(), t_enc.as_bytes());
+    let agree = residues_agree(&query_sketch.moltype().to_string());
 
     // Extend every seed on its own diagonal.
     let mut extended: Vec<MatchedRegion> = regions
@@ -2000,8 +2004,8 @@ pub fn extend_regions(
         .map(|mut r| {
             let (qs, qe) = (r.start as usize, r.end as usize);
             let (ts, te) = (r.target_start as usize, r.target_end as usize);
-            let right = xdrop_walk(q, t, (qe..q.len()).zip(te..t.len()), params);
-            let left = xdrop_walk(q, t, (0..qs).rev().zip((0..ts).rev()), params);
+            let right = xdrop_walk(q, t, (qe..q.len()).zip(te..t.len()), params, &agree);
+            let left = xdrop_walk(q, t, (0..qs).rev().zip((0..ts).rev()), params, &agree);
             r.start = (qs - left) as u32;
             r.end = (qe + right) as u32;
             r.target_start = (ts - left) as u32;
@@ -2033,7 +2037,8 @@ pub fn extend_regions(
         let (qs, qe) = (r.start as usize, r.end as usize);
         let (ts, te) = (r.target_start as usize, r.target_end as usize);
         r.length = (qe - qs) as u32;
-        r.n_mismatches = q[qs..qe].iter().zip(&t[ts..te]).filter(|(a, b)| a != b).count() as u32;
+        r.n_mismatches =
+            q[qs..qe].iter().zip(&t[ts..te]).filter(|&(&a, &b)| !agree(a, b)).count() as u32;
         r.subseq = q_raw[qs..qe].to_string();
         r.target_subseq = t_raw[ts..te].to_string();
         r.moltype_seq = t_enc[ts..te].to_string();

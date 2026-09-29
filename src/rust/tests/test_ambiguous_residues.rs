@@ -24,7 +24,8 @@ mod tests {
     use crate::alphabets::Alphabet;
     use crate::index::ProteomeIndex;
     use crate::search::{
-        calculate_similarity, ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE,
+        calculate_similarity, extend_regions, find_matched_regions, ExtensionParams,
+        ExtensionScoring, ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE,
     };
     use crate::sketch::ProteinSketch;
 
@@ -371,6 +372,34 @@ mod tests {
         let bovine = shared_with(&results, "RNAS1_BOVIN");
         assert_eq!(region_spans(bovine), vec![(19, 124)]);
         assert_eq!(bovine.matched_regions[0].n_shared, 63);
+        Ok(())
+    }
+
+    /// Extension scores an ambiguous residue the way the seeds did: as agreeing with the
+    /// target when one of its readings does. Under sdm12 at k=12, topi against bovine RNase A
+    /// seeds four exact regions, broken at the three real mismatches sdm12 can see (residues
+    /// 19, 37 and 103; S/T at residue 3 is one class). Extension crosses each of them, so
+    /// the four become one region over the whole mature chain, bovine 26-150, and its
+    /// mismatch count is those three residues. The 22 B and Z inside it are not mismatches.
+    #[test]
+    fn test_extension_counts_an_ambiguous_residue_as_agreeing() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 12, 1, "sdm12")?;
+        let bovine = ProteinSketch::from_protein_sequence("bovine", BOVINE_RNASE, 12, 1, "sdm12")?;
+        let seeds = find_matched_regions(&topi, &bovine, &topi.intersect(&bovine));
+        assert_eq!(seeds.len(), 4);
+
+        let extended = extend_regions(
+            seeds,
+            &topi,
+            &bovine,
+            ExtensionParams { scoring: ExtensionScoring::default() },
+        );
+        let spans: Vec<_> = extended
+            .iter()
+            .map(|r| (r.start, r.end, r.target_start, r.target_end, r.n_mismatches))
+            .collect();
+        println!("{spans:?}");
+        assert_eq!(spans, vec![(0, 124, 26, 150, 3)]);
         Ok(())
     }
 
