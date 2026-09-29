@@ -213,7 +213,7 @@ enum Commands {
         /// Optional: without it, the r_database and K fitted when the index was built (for
         /// its penalty and give-up margin) are used, or, for another penalty or give-up
         /// margin, a fit on --ka-queries database sequences runs before the search. With
-        /// it, no fit is read or run, and every pair's lambda is used as the closed form
+        /// it, no fit is read or run, and every region's lambda is used as the closed form
         /// gives it (r_database 1).
         ///
         /// The closed form: with +1 for each position where query and target fall in the

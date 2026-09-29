@@ -24,9 +24,9 @@ mod tests {
     use crate::alphabets::Alphabet;
     use crate::index::ProteomeIndex;
     use crate::search::{
-        calculate_similarity, chain_regions, extend_regions, find_matched_regions, ChainContext,
-        ExtensionParams, ExtensionScoring, KaParams, ProteinSearcher, SearchFilters, SearchResult,
-        DEFAULT_BATCH_SIZE,
+        calculate_similarity, chain_regions, extend_regions, find_matched_regions, with_own_lambda,
+        ChainContext, ExtensionParams, ExtensionScoring, KaParams, ProteinSearcher, SearchFilters,
+        SearchResult, DEFAULT_BATCH_SIZE,
     };
     use crate::sketch::ProteinSketch;
 
@@ -393,7 +393,8 @@ mod tests {
             chain_max_shift: 0,
         };
         let seeds = find_matched_regions(&topi, &bovine, &topi.intersect(&bovine));
-        let extended = extend_regions(seeds, &topi, &bovine, params);
+        let extended =
+            with_own_lambda(extend_regions(seeds, &topi, &bovine, params), &topi, &bovine, params);
         assert_eq!(extended.len(), 4);
         let pair = ChainContext {
             q: topi.get_moltype_sequence().unwrap().as_bytes(),
@@ -402,7 +403,6 @@ mod tests {
             t_raw: bovine.get_raw_sequence(),
             moltype: "sdm12",
             params,
-            ka_lambda: 0.5,
             m: 124.0,
             n_t: 150.0,
             n_targets: 125.0,
