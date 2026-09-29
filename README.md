@@ -190,7 +190,10 @@ E    = K × m × n × e^(-λS)
 bits = (λS - ln K) / ln 2
 ```
 
-`m` is the query length and `n` the number of k-mers in the database. `λ` is solved
+`m` is the query's length in the encoded alphabet. `n` is the number of distinct sketched
+k-mers in each target, summed over the targets (`db_n_kmers`, about residues / scaled).
+`K` takes up the scaled factor, so a `K` measured at one `--scaled` does not carry over to
+another. `λ` is solved
 per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
 `u` that a random position from each falls in the same class gives λ as the positive
 root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,

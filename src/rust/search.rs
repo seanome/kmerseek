@@ -618,17 +618,18 @@ pub struct MatchedRegion {
     /// class compositions (Karlin & Altschul 1990; per-pair composition after Schaffer et
     /// al. 2001). Zero when the pair's expected score per position is not negative, which is
     /// what two hydrophobic runs or two low-complexity stretches look like: no positive
-    /// lambda exists, so no length of agreement counts as evidence. That is the property
-    /// that makes this the ranking statistic for extended regions rather than the Poisson
-    /// count, which sees a transmembrane helix against any other as a long exact run.
-    /// Requires an extension penalty (`ExtensionParams`), since the score's mismatch term
+    /// lambda exists, so no length of agreement counts as evidence. The Poisson count has no
+    /// such floor: it sees a transmembrane helix against any other as a long exact run.
+    /// Reported only; regions are still ranked and filtered by `poisson_score`. Requires an extension penalty (`ExtensionParams`), since the score's mismatch term
     /// is the penalty; 0.0 otherwise.
     pub ka_bits: f64,
 
     /// E-value for `ka_bits` against the searched database: K * m * n * exp(-lambda * S), with
-    /// m the query length and n the database's residue count (`db_n_kmers` stands in for it).
-    /// K is `KaParams::k`, which has to be calibrated on decoys for the alphabet and penalty
-    /// in use. Infinity without extension or DB context.
+    /// m the query's encoded length and n = `db_n_kmers`, the number of distinct sketched
+    /// hashes per target summed over targets (about residues / scaled). K is `KaParams::k`,
+    /// which has to be calibrated on decoys for the alphabet, penalty and `--scaled` in use:
+    /// K absorbs the scaled factor, so a K measured at one `--scaled` does not carry to
+    /// another. Infinity without extension or DB context.
     pub evalue: f64,
 }
 

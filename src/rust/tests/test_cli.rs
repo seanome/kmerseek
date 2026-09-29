@@ -896,7 +896,8 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 /// chance two random positions agree is u = 0.510714 x 0.610879 + 0.489286 x 0.389121 =
 /// 0.502376, and the positive root of u e^x + (1 - u) e^(-2x) = 1 is lambda = 0.474339.
 /// bits = (lambda S - ln K) / ln 2 = (9.48678 + 3.50656) / 0.693147 = 18.7454, and
-/// E = K m n e^(-lambda S) with m = 280 query residues and n = 8340 database k-mers is
+/// E = K m n e^(-lambda S) with m = 280 query residues and n = 8340 (`db_n_kmers`: distinct
+/// sketched k-mers per target, summed over targets) is
 /// 0.03 x 280 x 8340 x e^(-9.48678) = 5.31363.
 #[test]
 fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
