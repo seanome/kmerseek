@@ -93,6 +93,28 @@ pub struct ExtensionScoring {
     pub xdrop: f64,
 }
 
+impl ExtensionScoring {
+    /// Checks the two values the way both `kmerseek index` and `kmerseek search` need: the
+    /// penalty must be above 0 (at 0 no lambda exists and nothing can be fitted), and the
+    /// give-up margin must be 0 or more (a negative one ends every extension at its first
+    /// mismatch). NaN fails both.
+    pub fn new(mismatch_penalty: f64, xdrop: f64) -> Result<Self, String> {
+        if !(mismatch_penalty.is_finite() && mismatch_penalty > 0.0) {
+            return Err(format!(
+                "--extend-mismatch-penalty must be above 0 (got {mismatch_penalty}); at 0 an \
+                 agreeing run has no Karlin-Altschul lambda"
+            ));
+        }
+        if xdrop.is_nan() || xdrop < 0.0 {
+            return Err(format!(
+                "--extend-xdrop must be 0 or more (got {xdrop}); a negative give-up margin \
+                 would end every extension at its first mismatch"
+            ));
+        }
+        Ok(Self { mismatch_penalty, xdrop })
+    }
+}
+
 impl Default for ExtensionScoring {
     fn default() -> Self {
         Self { mismatch_penalty: DEFAULT_MISMATCH_PENALTY, xdrop: DEFAULT_XDROP }

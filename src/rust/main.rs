@@ -393,6 +393,16 @@ fn main() -> IndexResult<()> {
             eprintln!("Indexing FASTA file: {}", input.display());
 
             // Fail on a bad value here, before any database is created.
+            let scoring = if ka_queries > 0 {
+                Some(ExtensionScoring::new(extend_mismatch_penalty, extend_xdrop).map_err(
+                    |message| IndexError::ConfigurationError {
+                        field: "extend_mismatch_penalty / extend_xdrop".to_string(),
+                        message,
+                    },
+                )?)
+            } else {
+                None
+            };
             let scaled = Scaled::new(scaled)
                 .map_err(|message| IndexError::ConfigurationError {
                     field: "scaled".to_string(),
@@ -491,12 +501,9 @@ fn main() -> IndexResult<()> {
                 // Save the index state for loading
                 index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
-                if ka_queries > 0 {
+                if let Some(scoring) = scoring {
                     let settings = KaCalibrationSettings {
-                        scoring: ExtensionScoring {
-                            mismatch_penalty: extend_mismatch_penalty,
-                            xdrop: extend_xdrop,
-                        },
+                        scoring,
                         null: ka_null,
                         reference: ka_reference,
                         n_queries: ka_queries,
@@ -594,14 +601,16 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
             eprintln!("  Minimum region score: {}", min_region_score);
+            // Extension is off at the default penalty of 0, so only a positive one is checked.
+            let scoring = if extend_mismatch_penalty > 0.0 {
+                Some(
+                    ExtensionScoring::new(extend_mismatch_penalty, extend_xdrop)
+                        .map_err(|message| anyhow::anyhow!(message))?,
+                )
+            } else {
+                None
+            };
             if extend_mismatch_penalty > 0.0 {
-                if extend_xdrop < 0.0 {
-                    return Err(anyhow::anyhow!(
-                        "--extend-xdrop must be 0 or more (got {extend_xdrop}); a negative \
-                         give-up margin would end every extension at its first mismatch"
-                    )
-                    .into());
-                }
                 eprintln!(
                     "  Seed extension: mismatch penalty {}, give-up margin {}",
                     extend_mismatch_penalty, extend_xdrop
@@ -632,11 +641,7 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
-            if extend_mismatch_penalty > 0.0 {
-                let scoring = ExtensionScoring {
-                    mismatch_penalty: extend_mismatch_penalty,
-                    xdrop: extend_xdrop,
-                };
+            if let Some(scoring) = scoring {
                 if let Some(k) = ka_k {
                     if k <= 0.0 || k.is_nan() {
                         return Err(anyhow::anyhow!(

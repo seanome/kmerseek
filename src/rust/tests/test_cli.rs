@@ -1097,6 +1097,37 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     Ok(())
 }
 
+/// `kmerseek index` refuses a penalty or give-up margin that no search could use, before it
+/// creates the database, with the same wording `kmerseek search` uses.
+#[test]
+fn test_cli_index_refuses_bad_extension_scoring() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    for (flag, message) in [
+        ("--extend-xdrop=-1", "--extend-xdrop must be 0 or more (got -1)"),
+        ("--extend-mismatch-penalty=0", "--extend-mismatch-penalty must be above 0 (got 0)"),
+    ] {
+        Command::cargo_bin("kmerseek")?
+            .args([
+                "index",
+                "--input",
+                TEST_FASTA_GZ,
+                "--output",
+                index_path.to_str().unwrap(),
+                "--ksize",
+                "12",
+                "--alphabet",
+                "hp",
+                flag,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert!(!index_path.exists());
+    }
+    Ok(())
+}
+
 /// `kmerseek index` fits r_database and K for its penalty and give-up margin and stores
 /// them; `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty
 /// that was never fitted when `--ka-queries 0` forbids fitting one now, and fits one
