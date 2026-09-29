@@ -17,9 +17,16 @@
 //! relatives far up the axis adds a constant to every survival count below it and would
 //! flatten the slope.
 //!
+//! The sequences searched for a fit are calibration queries. Each one is made from a
+//! database sequence. A decoy is a calibration query changed so that it has no relative
+//! in the database: its residues shuffled, or read back to front. Every region a decoy
+//! finds is a chance match, so counting a decoy's regions at each score measures how often
+//! chance alone reaches that score, which is what K and r_database describe. `DecoyNull`
+//! says which kind of query is used.
+//!
 //! This module holds the fit itself, on scores already scaled so that one bin is one
-//! integer step, the record of a fit (`KaCalibration`), and the decoys a fit is read
-//! against. `ProteinSearcher::calibrate_ka` produces the scores and the record.
+//! integer step, the record of a fit (`KaCalibration`), and the code that makes decoys.
+//! `ProteinSearcher::calibrate_ka` produces the scores and the record.
 
 use serde::{Deserialize, Serialize};
 
@@ -430,7 +437,11 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
     (slope, my - slope * mx)
 }
 
-/// Which sequences are searched to fit r_database and K.
+/// Which sequences are searched to fit r_database and K: the database sequences
+/// themselves (`Database`), or decoys made from them (`Shuffled`, `ShuffledDipeptide`,
+/// `Reversed`). A decoy keeps some of a real protein's make-up, such as its composition
+/// or how often a hydrophobic residue follows another, and loses its relatives in the
+/// database, so the regions it finds are chance matches.
 ///
 /// What each choice keeps and loses: on SCOPe40 domains the three scrambled nulls agree
 /// (r_database 1.04) and real domains give 0.95; on full-length proteins real sequences
