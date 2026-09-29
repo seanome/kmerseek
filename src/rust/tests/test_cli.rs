@@ -1213,7 +1213,8 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
 ) -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let index = |n_queries: &str, null: &str, survival: &std::path::Path| {
-        let out = temp_dir.path().join(format!("index_{n_queries}_{null}.db"));
+        let stem = survival.file_stem().unwrap().to_str().unwrap();
+        let out = temp_dir.path().join(format!("index_{n_queries}_{null}_{stem}.db"));
         let mut cmd = Command::cargo_bin("kmerseek")?;
         cmd.args([
             "index",
@@ -1274,6 +1275,19 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             survival.display()
         )));
 
+    // A survival path that cannot be written fails the run, but only after the fit is
+    // stored, and the error names the path.
+    let unwritable = temp_dir.path().join("missing_dir").join("s.csv");
+    index("3", "database", &unwritable)?
+        .failure()
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
+        ))
+        .stderr(predicate::str::contains(format!(
+            "could not write --ka-survival-out {}",
+            unwritable.display()
+        )));
+
     let mut reader = csv::Reader::from_path(&survival)?;
     assert_eq!(
         reader.headers()?.iter().collect::<Vec<_>>(),
@@ -1305,12 +1319,13 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
     assert_eq!(&rows[0][4], "false");
     let in_fit: Vec<&str> = rows.iter().filter(|r| &r[4] == "true").map(|r| &r[0]).collect();
     assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500"]);
-    // Lowest bin: 903 regions, the fitted line far above at 1955.245 (the seed floor bends
+    // Lowest bin: 903 regions, the fitted line far above at 1955.2 (the seed floor bends
     // the curve there), 864 in the shuffled-dipeptide reference.
-    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("903", "1955.245", "864"));
-    // The top bin is one region, below the fitted line's resolution, and the reference
-    // never got there.
-    assert_eq!((&rows[61][1], &rows[61][2], &rows[61][3]), ("1", "0.000", ""));
+    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("903", "1955.2449556084264", "864"));
+    // The top bin is one region, far above the fitted line's 4e-7, and the reference never
+    // got there. The line is written at full precision so its tail can be plotted on a
+    // log axis.
+    assert_eq!((&rows[61][1], &rows[61][2], &rows[61][3]), ("1", "0.00000041235460000641815", ""));
     // Fit constants repeat on every row.
     let constants = |r: &csv::StringRecord| r.iter().skip(5).map(str::to_owned).collect::<Vec<_>>();
     assert!(rows.iter().all(|r| constants(r) == constants(&rows[0])));

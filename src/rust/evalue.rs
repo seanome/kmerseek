@@ -696,14 +696,17 @@ pub fn calibrate_index(
             if let Some(warning) = short_fit_warning(&fit) {
                 eprintln!("  {warning}");
             }
-            if let Some(path) = survival_out {
-                write_survival_csv(path, &fit)?;
-                eprintln!("  Survival curve written to {}", path.display());
-            }
+            // Store before writing the CSV, so a bad output path cannot throw away the fit.
             searcher.index().put_ka_calibration(&fit)?;
             eprintln!(
                 "  Stored in the index for --extend-mismatch-penalty {mismatch_penalty} --extend-xdrop {xdrop}"
             );
+            if let Some(path) = survival_out {
+                write_survival_csv(path, &fit).map_err(|e| {
+                    anyhow::anyhow!("could not write --ka-survival-out {}: {e}", path.display())
+                })?;
+                eprintln!("  Survival curve written to {}", path.display());
+            }
         }
         None => eprintln!(
             "  {} queries gave only {} regions, too few score bins to fit; nothing stored. \
@@ -751,7 +754,9 @@ pub fn write_survival_csv(path: &std::path::Path, fit: &KaCalibration) -> IndexR
         w.write_record([
             format!("{x:.3}"),
             count.to_string(),
-            format!("{fitted:.3}"),
+            // Full precision: the tail of the line is far below 0.001 and is plotted on a
+            // log axis.
+            fitted.to_string(),
             reference.get(&bin).map_or(String::new(), |r| r.to_string()),
             (fit.score_lo <= bin && bin <= fit.score_hi).to_string(),
             fit.r_database.to_string(),
