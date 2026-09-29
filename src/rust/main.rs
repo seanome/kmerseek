@@ -241,8 +241,8 @@ enum Commands {
         #[arg(long, default_value = "0")]
         chain_max_gap: u32,
 
-        /// Largest diagonal shift (net indel) between chained regions. 0 chains only along
-        /// one diagonal. Used with --chain-max-gap.
+        /// Largest diagonal shift (net indel) of any chained region from the chain's first
+        /// region. 0 chains only along one diagonal. Used with --chain-max-gap.
         #[arg(long, default_value = "0")]
         chain_max_shift: u32,
 

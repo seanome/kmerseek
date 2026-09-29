@@ -144,8 +144,8 @@ pub struct ExtensionParams {
     /// region scored with Karlin-Altschul sum statistics. 0 leaves every region on its own.
     /// See `chain_regions`.
     pub chain_max_gap: u32,
-    /// How far apart in diagonal two chained regions may sit, i.e. the largest net indel a
-    /// chain tolerates between members. 0 chains only on one diagonal.
+    /// How far in diagonal any chained region may sit from the chain's first region, i.e.
+    /// the largest net indel a chain tolerates. 0 chains only on one diagonal.
     pub chain_max_shift: u32,
 }
 
@@ -2623,9 +2623,14 @@ pub struct ChainContext<'a> {
 /// of targets: each member's normalised score is lambda S_i - ln(K m n_t) with n_t the
 /// target length, so for a single region this reduces to the per-region E within the
 /// approximation n = N n_t. So a chained row's `evalue` uses N n_t for the database size
-/// and an unchained row's uses `db_n_kmers`; the two are close but not the same formula. Members must be colinear (each starts after the previous one
-/// ends, on both sequences) and within `chain_max_shift` diagonals of each other, so a
-/// chain tolerates a net indel up to that size between members. With a shift the query
+/// and an unchained row's uses `db_n_kmers`; the two are close but not the same formula.
+///
+/// Members must each have a positive normalised score: the sum statistic assumes it, and
+/// a member at or below 0 lowers the sum, which would give the chain a worse E-value than
+/// its strongest member alone. Such a region stays its own row and closes the open chain.
+/// Members must be colinear (each starts after the previous one ends, on both sequences)
+/// and within `chain_max_shift` diagonals of the first member, so a chain's net indel is
+/// at most that size. With a shift the query
 /// and target spans differ in length; `length` is the query span, `n_mismatches` is the
 /// members' sum (the gaps are not scored either way) and the sum statistic is what
 /// carries the evidence.
@@ -2639,8 +2644,13 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
     let (q, t, params) = (pair.q, pair.t, pair.params);
     let agree = residues_agree(pair.moltype);
     let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
+    // A member's raw score, counted over its own span with an ambiguous residue agreeing
+    // with either class it stands for, as the chain's recount below does. The region's
+    // stored n_mismatches cannot be used: extend_regions counts B, J and Z as mismatches.
     let raw_score = |r: &MatchedRegion| {
-        (r.length - r.n_mismatches) as f64 - params.scoring.mismatch_penalty * r.n_mismatches as f64
+        let (qs, qe, ts) = (r.start as usize, r.end as usize, r.target_start as usize);
+        let mismatches = q[qs..qe].iter().zip(&t[ts..]).filter(|&(&a, &b)| !agree(a, b)).count();
+        (qe - qs - mismatches) as f64 - params.scoring.mismatch_penalty * mismatches as f64
     };
     let mut sorted = regions;
     sorted.sort_by_key(|r| (r.start, r.target_start));
@@ -2649,15 +2659,17 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
     let mut chain: Vec<MatchedRegion> = Vec::new();
     let ln_mn = (pair.m * pair.n_t).ln();
     let ln_kmn = params.ka.k.ln() + ln_mn;
-    // Called only with a member in the chain: inside the loop after `chain.last()` found
-    // one, and after the loop, which pushed at least the last region.
+    // lambda S_i - ln(K m n_t): a member's score in nats less the size of the search.
+    let normalised = |r: &MatchedRegion| pair.ka_lambda * raw_score(r) - ln_kmn;
+    // Called only with a member in the chain: every call site checks the chain is not
+    // empty first.
     let flush = |chain: &mut Vec<MatchedRegion>, out: &mut Vec<MatchedRegion>| {
         if chain.len() == 1 {
             out.push(chain.pop().unwrap());
             return;
         }
         let r = chain.len() as u32;
-        let t_sum: f64 = chain.iter().map(|x| pair.ka_lambda * raw_score(x) - ln_kmn).sum();
+        let t_sum: f64 = chain.iter().map(normalised).sum();
         let ln_p = karlin_altschul_sum_ln_p(t_sum, r);
         let first = &chain[0];
         let last = &chain[chain.len() - 1];
@@ -2700,24 +2712,34 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         out.push(merged);
         chain.clear();
     };
-    // Greedy colinear chaining in query order: a region joins the open chain when it
-    // starts after the chain's last member on both sequences, within the gap cap on the
-    // query, and within the diagonal band. Anything else closes the chain. Greedy, not
-    // optimal: two interleaved chains on far-apart diagonals would be split at each
-    // alternation, which is the conservative outcome.
+    // Greedy colinear chaining in query order: a region joins the open chain when its
+    // normalised score is positive, it starts after the chain's last member on both
+    // sequences, within the gap cap on the query, and within `chain_max_shift` diagonals
+    // of the chain's first member. Anything else closes the chain. Greedy, not optimal:
+    // two interleaved chains on far-apart diagonals would be split at each alternation,
+    // which is the conservative outcome.
     for r in sorted {
+        if normalised(&r) <= 0.0 {
+            if !chain.is_empty() {
+                flush(&mut chain, &mut out);
+            }
+            out.push(r);
+            continue;
+        }
         if let Some(last) = chain.last() {
             let colinear = r.start >= last.end && r.target_start >= last.target_end;
             let gap_ok = colinear && r.start - last.end <= params.chain_max_gap;
-            let shift_ok =
-                (diagonal(last) - diagonal(&r)).unsigned_abs() <= params.chain_max_shift as u64;
+            let shift_ok = (diagonal(&chain[0]) - diagonal(&r)).unsigned_abs()
+                <= params.chain_max_shift as u64;
             if !(gap_ok && shift_ok) {
                 flush(&mut chain, &mut out);
             }
         }
         chain.push(r);
     }
-    flush(&mut chain, &mut out);
+    if !chain.is_empty() {
+        flush(&mut chain, &mut out);
+    }
     out.sort_by_key(|r| r.start);
     out
 }
@@ -3513,35 +3535,31 @@ mod tests {
         assert!(kept.iter().all(|r| r.n_chained == 1));
     }
 
-    #[test]
-    fn test_chain_regions_sums_mismatches_when_a_middle_member_shifts() {
-        // The same pattern on both sides, with regions on diagonals 0, 1 and 0. First and
-        // last share a diagonal, but a recount over the span would compare the middle
-        // member one residue off. Its mismatches are counted on its own diagonal instead.
+    /// Chain `members` of `q` against `t`, both built from HP patterns, as `compare` would
+    /// with lambda 2, K 0.1 and m = n_t = 25, so ln(K m n_t) = 4.135 and an exact run of 3
+    /// or more residues has a positive normalised score. Each member is (query start,
+    /// query end, target start, mismatches).
+    fn chain_hp(
+        t_pattern: &str,
+        members: &[(u32, u32, u32, u32)],
+        params: ExtensionParams,
+    ) -> Vec<MatchedRegion> {
         let q = sketch_from_hp_pattern("q", HP_PATTERN);
-        let t = sketch_from_hp_pattern("t", HP_PATTERN);
+        let t = sketch_from_hp_pattern("t", t_pattern);
+        let base = find_matched_regions(&q, &q, &q.intersect(&q)).remove(0);
+        let regions = members
+            .iter()
+            .map(|&(start, end, target_start, n_mismatches)| MatchedRegion {
+                start,
+                end,
+                target_start,
+                target_end: target_start + (end - start),
+                length: end - start,
+                n_mismatches,
+                ..base.clone()
+            })
+            .collect();
         let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
-        let whole = find_matched_regions(&q, &t, &q.intersect(&t));
-        assert_eq!(whole.len(), 1);
-        let shifted_mismatches = HP_PATTERN[9..16]
-            .bytes()
-            .zip(HP_PATTERN[10..17].bytes())
-            .filter(|(a, b)| a != b)
-            .count() as u32;
-        assert_eq!(shifted_mismatches, 4);
-        let region = |start: u32, end: u32, shift: u32, n_mismatches: u32| MatchedRegion {
-            start,
-            end,
-            target_start: start + shift,
-            target_end: end + shift,
-            length: end - start,
-            n_mismatches,
-            ..whole[0].clone()
-        };
-        let members =
-            vec![region(0, 8, 0, 0), region(9, 16, 1, shifted_mismatches), region(18, 25, 0, 0)];
-        let params =
-            ExtensionParams { chain_max_gap: 2, chain_max_shift: 1, ..extension(2.0, 8.0) };
         let pair = ChainContext {
             q: qe.as_bytes(),
             t: te.as_bytes(),
@@ -3549,14 +3567,62 @@ mod tests {
             t_raw: t.get_raw_sequence(),
             moltype: "hp",
             params,
-            ka_lambda: 0.5,
+            ka_lambda: 2.0,
             m: 25.0,
             n_t: 25.0,
             n_targets: 100.0,
         };
-        let chained = chain_regions(members, &pair);
+        chain_regions(regions, &pair)
+    }
+
+    #[test]
+    fn test_chain_regions_sums_mismatches_when_a_middle_member_shifts() {
+        // Position 8 deleted from the target and a p inserted at 15: exact runs on
+        // diagonals 0, -1 and 0. First and last share a diagonal, but a recount over the
+        // span would compare the middle run one residue off and count mismatches that
+        // are not there. The members' own counts, all 0, are summed instead.
+        let t = format!("{}{}p{}", &HP_PATTERN[..8], &HP_PATTERN[9..16], &HP_PATTERN[16..]);
+        let params =
+            ExtensionParams { chain_max_gap: 2, chain_max_shift: 1, ..extension(2.0, 8.0) };
+        let chained = chain_hp(&t, &[(0, 8, 0, 0), (9, 16, 8, 0), (16, 25, 16, 0)], params);
         assert_eq!(chained.len(), 1, "{chained:?}");
-        assert_eq!((chained[0].n_chained, chained[0].n_mismatches), (3, 4));
+        assert_eq!((chained[0].n_chained, chained[0].n_mismatches), (3, 0));
+    }
+
+    #[test]
+    fn test_chain_regions_leaves_out_a_member_with_no_score() {
+        // Two exact runs on one diagonal, 12 and 2 residues. The short one scores
+        // 2 x 2 - 4.135 < 0, so adding it would lower the chain's sum below the long run's
+        // score alone. It stays its own row and the long run keeps its own E-value.
+        let params = ExtensionParams { chain_max_gap: 5, ..extension(2.0, 8.0) };
+        let out = chain_hp(HP_PATTERN, &[(0, 12, 0, 0), (14, 16, 14, 0)], params);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out.iter().all(|r| r.n_chained == 1));
+        assert_eq!(((out[0].start, out[0].end), (out[1].start, out[1].end)), ((0, 12), (14, 16)));
+    }
+
+    #[test]
+    fn test_chain_regions_caps_the_net_shift_from_the_first_member() {
+        // Positions 6, 12 and 18 deleted from the target: exact runs on diagonals 0, -1,
+        // -2 and -3, one residue apart on the query. Each step is one diagonal, but at
+        // --chain-max-shift 1 a chain may not drift more than one diagonal from its first
+        // member, so the four runs make two chains of two.
+        let t = format!(
+            "{}{}{}{}",
+            &HP_PATTERN[..6],
+            &HP_PATTERN[7..12],
+            &HP_PATTERN[13..18],
+            &HP_PATTERN[19..]
+        );
+        let params =
+            ExtensionParams { chain_max_gap: 2, chain_max_shift: 1, ..extension(2.0, 8.0) };
+        let members = [(0, 6, 0, 0), (7, 12, 6, 0), (13, 18, 11, 0), (19, 25, 16, 0)];
+        let out = chain_hp(&t, &members, params);
+        let spans: Vec<_> = out
+            .iter()
+            .map(|r| (r.start, r.end, r.target_start, r.target_end, r.n_chained))
+            .collect();
+        assert_eq!(spans, [(0, 12, 0, 11, 2), (13, 25, 11, 22, 2)]);
     }
 
     #[test]
