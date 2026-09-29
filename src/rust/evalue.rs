@@ -27,10 +27,10 @@ pub const MIN_BIN_COUNT: u64 = 30;
 
 /// The fit uses at most this many score bins, the highest ones below the related pairs,
 /// so the slope is read as close to the scores that decide a hit as those pairs allow.
-pub const FIT_WINDOW: i64 = 8;
+pub const FIT_WINDOW: usize = 8;
 
 /// Fewest bins a fit is accepted on.
-pub const MIN_FIT_POINTS: i64 = 4;
+pub const MIN_FIT_POINTS: usize = 4;
 
 /// A bin whose ln count sits more than this many units of counting noise (one unit is
 /// 1 / sqrt(count)) above the line fitted to the bins below it is where related pairs
@@ -160,10 +160,10 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
     let usable: Vec<(i64, u64)> =
         tail_bins(&bin_counts(scores)).into_iter().filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
-    if (usable.len() as i64) < MIN_FIT_POINTS {
+    if usable.len() < MIN_FIT_POINTS {
         return None;
     }
-    let mut accepted = MIN_FIT_POINTS as usize;
+    let mut accepted = MIN_FIT_POINTS;
     let mut bend_score = None;
     while accepted < usable.len() {
         let (slope, intercept) = line_through(&usable[..accepted]);
@@ -175,7 +175,7 @@ pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
         }
         accepted += 1;
     }
-    let window = &usable[accepted.saturating_sub(FIT_WINDOW as usize)..accepted];
+    let window = &usable[accepted.saturating_sub(FIT_WINDOW)..accepted];
     let (slope, ln_intercept) = line_through(window);
     if slope >= 0.0 {
         return None;
@@ -220,7 +220,7 @@ pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<Sc
             (c >= MIN_BIN_COUNT && r >= MIN_BIN_COUNT).then_some((s, c, r))
         })
         .collect();
-    if (usable.len() as i64) < MIN_FIT_POINTS {
+    if usable.len() < MIN_FIT_POINTS {
         return None;
     }
     let ratio = |&(s, c, r): &(i64, u64, u64)| (s as f64, (c as f64).ln() - (r as f64).ln());
@@ -238,12 +238,11 @@ pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<Sc
         }
         accepted += 1;
     }
-    let window: Vec<(i64, u64)> = usable[accepted.saturating_sub(FIT_WINDOW as usize)..accepted]
+    let window: Vec<(i64, u64)> = usable[accepted.saturating_sub(FIT_WINDOW)..accepted]
         .iter()
         .map(|&(s, c, _)| (s, c))
         .collect();
-    let reference_window: Vec<(i64, u64)> = usable
-        [accepted.saturating_sub(FIT_WINDOW as usize)..accepted]
+    let reference_window: Vec<(i64, u64)> = usable[accepted.saturating_sub(FIT_WINDOW)..accepted]
         .iter()
         .map(|&(s, _, r)| (s, r))
         .collect();
@@ -498,6 +497,16 @@ mod tests {
         assert_eq!(
             bin_counts(&[12.0, 12.0, 13.0, 15.5, 15.0]),
             vec![(12, 2), (13, 1), (14, 0), (15, 2)]
+        );
+    }
+
+    /// Two bins tie for the most regions: the tail starts after the last of them, which is
+    /// what `usable_bins` in scripts/plot_fit_scores_tests.py assumes.
+    #[test]
+    fn test_tail_bins_start_after_the_last_of_tied_peaks() {
+        assert_eq!(
+            tail_bins(&[(12, 100), (13, 100), (14, 60), (15, 40)]),
+            vec![(14, 60), (15, 40)]
         );
     }
 
