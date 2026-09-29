@@ -282,8 +282,7 @@ fn line_through_f64(points: &[(f64, f64)]) -> (f64, f64) {
 /// What each choice keeps and loses: on SCOPe40 domains the three scrambled nulls agree
 /// (r_database 1.04) and real domains give 0.95; on full-length proteins real sequences
 /// give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides already pulls the
-/// shuffle to 0.94, so hydrophobic runs alone explain a third of the gap. (Measured in
-/// PR #54; the figures land with the docs at the end of the stack that splits it.)
+/// shuffle to 0.94, so hydrophobic runs alone explain a third of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
