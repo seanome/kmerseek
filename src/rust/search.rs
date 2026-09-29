@@ -1657,11 +1657,13 @@ impl ProteinSearcher {
                     }
                 }
                 if params.chain_max_gap > 0 && ka_lambda > 0.0 && params.ka.k > 0.0 {
+                    let moltype = query.sketch.moltype().to_string();
                     let pair = ChainContext {
                         q: q_enc.as_bytes(),
                         t: t_enc.as_bytes(),
                         q_raw: query.sketch.get_raw_sequence(),
                         t_raw: target.get_raw_sequence(),
+                        moltype: &moltype,
                         params,
                         ka_lambda,
                         m,
@@ -2561,6 +2563,9 @@ pub struct ChainContext<'a> {
     pub q_raw: Option<&'a str>,
     /// The target's raw residues, for the chain's `target_subseq`.
     pub t_raw: Option<&'a str>,
+    /// The alphabet `q` and `t` are encoded in, so a chain's recount lets an ambiguous
+    /// residue agree with either class it stands for, as the seeds did.
+    pub moltype: &'a str,
     /// Mismatch penalty, K and the chaining caps.
     pub params: ExtensionParams,
     /// This pair's lambda, r_database applied.
@@ -2586,7 +2591,8 @@ pub struct ChainContext<'a> {
 /// The chain spans from the first region's start to the last region's end on both
 /// sequences; `n_shared` is summed, `n_mismatches` is recounted over the whole span (the
 /// gap's disagreements included, so the span is honest about what it contains),
-/// `n_chained` is the number of members. Its E-value is the sum P-value times the number
+/// `n_chained` is the number of members. `tfidf` is summed over the members and `mean_idf`
+/// divides it by the summed `n_shared`. Its E-value is the sum P-value times the number
 /// of targets: each member's normalised score is lambda S_i - ln(K m n_t) with n_t the
 /// target length, so for a single region this reduces to the per-region E within the
 /// approximation n = N n_t. Members must be colinear (each starts after the previous one
@@ -2603,6 +2609,7 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         return regions;
     };
     let (q, t, params) = (pair.q, pair.t, pair.params);
+    let agree = residues_agree(pair.moltype);
     let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
     let raw_score = |r: &MatchedRegion| {
         (r.length - r.n_mismatches) as f64 - params.scoring.mismatch_penalty * r.n_mismatches as f64
@@ -2634,7 +2641,7 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         merged.length = (qe - qs) as u32;
         merged.n_shared = chain.iter().map(|x| x.n_shared).sum();
         merged.n_mismatches = if qe - qs == te - ts {
-            q[qs..qe].iter().zip(&t[ts..te]).filter(|(a, b)| a != b).count() as u32
+            q[qs..qe].iter().zip(&t[ts..te]).filter(|&(&a, &b)| !agree(a, b)).count() as u32
         } else {
             chain.iter().map(|x| x.n_mismatches).sum()
         };
@@ -2654,6 +2661,10 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         merged.tail_probability = chain.iter().map(|x| x.tail_probability).fold(1.0, f64::min);
         merged.expected_shared_kmers = chain.iter().map(|x| x.expected_shared_kmers).sum();
         merged.enrichment = fold_enrichment(merged.n_shared, merged.expected_shared_kmers);
+        // TF-IDF sums over the members' shared windows, like n_shared; the windows in the
+        // gaps between members are not shared and add nothing.
+        merged.tfidf = chain.iter().map(|x| x.tfidf).sum();
+        merged.mean_idf = merged.tfidf / merged.n_shared as f64;
         out.push(merged);
         chain.clear();
     };
@@ -3427,14 +3438,17 @@ mod tests {
             chain_max_gap: 5,
             chain_max_shift: 0,
         };
-        let ext = extend_regions(exact.clone(), &q, &t, strict);
+        let mut ext = extend_regions(exact.clone(), &q, &t, strict);
         assert_eq!(ext.len(), 2);
+        // compare() sets each region's TF-IDF before chaining; the chain adds them up.
+        (ext[0].tfidf, ext[1].tfidf) = (4.0, 6.0);
         let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
         let pair = ChainContext {
             q: qe.as_bytes(),
             t: te.as_bytes(),
             q_raw: q.get_raw_sequence(),
             t_raw: t.get_raw_sequence(),
+            moltype: "hp",
             params: strict,
             ka_lambda: 0.5,
             m: 25.0,
@@ -3449,6 +3463,7 @@ mod tests {
         assert_eq!(c.n_shared, 10);
         assert_eq!(c.n_mismatches, 1);
         assert_eq!(c.length, 25);
+        assert_eq!((c.tfidf, c.mean_idf), (10.0, 1.0));
         // Two members of 12 and 12 residues at lambda 0.5 against ln(K m n_t) = ln(0.03 x
         // 625): t = 2 (6 - 2.931) = 6.138, P = e^-t t / 2, E = 100 P, and the bits are
         // ln(m n_t) - ln P over ln 2.
@@ -3487,6 +3502,7 @@ mod tests {
                 t: te.as_bytes(),
                 q_raw: q.get_raw_sequence(),
                 t_raw: t.get_raw_sequence(),
+                moltype: "hp",
                 params,
                 ka_lambda: 0.5,
                 m: 25.0,
@@ -3679,6 +3695,7 @@ mod tests {
                 t: te.as_bytes(),
                 q_raw,
                 t_raw,
+                moltype: "hp",
                 params,
                 ka_lambda: 0.5,
                 m: 25.0,
