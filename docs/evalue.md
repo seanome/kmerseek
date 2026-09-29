@@ -134,6 +134,13 @@ summed. Grey band: the 8 bins used. Dotted line: 30 regions, below which a bin i
 fitted. ± is the standard error of r_database. Drawn by `scripts/plot_ka_survival.py` from
 the curves under `images/ka_fit_curves/`, which `kmerseek index --ka-survival-out` writes.
 
+```bash
+python scripts/plot_ka_survival.py docs/images/ka_fit_curves/{scope40,swissprot_sample15000,uniref50_sample15000}_database.csv \
+    -o docs/images/ka_fit_three_databases.png \
+    --labels "SCOPe40 (15,177 domains)" "Swiss-Prot, 15,000 of 575,748 sequences" "UniRef50, 15,000 of 38.8 M sequences" \
+    --subtitle "hp_thomas_dill2 k = 12, C = 2, X = 8, 200 database queries each"
+```
+
 | database | sequences | residues | r_database | K | bins fitted (x, nats) | relatives begin at |
 |---|---|---|---|---|---|---|
 | SCOPe40 | 15,177 | 2.8 M | 0.947 ± 0.015 | 0.0227 | 13.5 to 17.5 | not reached |
@@ -187,6 +194,36 @@ two-class alphabet, so reversed proteins still match their forward paralogs. Tha
 | keeps | everything real | composition and run lengths | composition | composition, runs, periodicity |
 | loses | nothing; related pairs are cut off where the curve rises above the reference | periodicity | runs and periodicity | which residue sits where; in a two-class alphabet the pattern of a helix or strand survives reversal |
 | use it for | the E-values | the reference the `database` fit stops against | checking that the code reproduces the theory | checking the leak on your data |
+
+### Why the E-values are fitted on real sequences
+
+A fit on shuffled sequences would make kmerseek too permissive: it would call unrelated
+proteins significant. The bins the `database` fit uses lie below the score where relatives
+begin, so the regions in them come from unrelated real proteins. Those proteins share
+hydrophobic runs and the repeat of a helix or a strand, so they produce more high-scoring
+regions than shuffled copies of themselves do. A line fitted to shuffled copies falls
+faster (r_database 0.942 instead of 0.865 on the Swiss-Prot sample), predicts fewer chance
+regions than unrelated real proteins actually give, and so reports every hit with an
+E-value that is too small.
+
+![E-value against region score for fits on real, dipeptide-shuffled and shuffled Swiss-Prot sequences](images/evalue_by_null_swissprot.png)
+
+E = K × m × n × e^(−r_database × x) for a 200-residue query against all of Swiss-Prot
+(n = 210 M residues), with r_database and K fitted on the 15,000-sequence sample three
+ways. Drawn by `scripts/plot_evalue_by_null.py`.
+
+| region score x | E, `database` fit | E, `shuffled-dipeptide` fit | how much smaller |
+|---|---|---|---|
+| 15 | 1,745 | 878 | 2.0 × |
+| 20 | 23 | 7.9 | 2.9 × |
+| 25 | 0.30 | 0.071 | 4.3 × |
+
+The gap grows with the score, so it is widest where hits are called. At a cutoff of
+E = 0.01, the dipeptide-shuffled fit lets through regions from x = 27.1; the `database`
+fit gives a region at x = 27.1 an E-value of 0.050, five times the cutoff, and needs
+x = 28.9 to reach 0.01. A plain shuffle is further off still (x = 26.1). This is why
+`shuffled-dipeptide` is the default reference, the set that decides where the fit stops,
+and not the default `--ka-null`.
 
 ## Chaining: `--chain-max-gap`, `--chain-max-shift`
 
