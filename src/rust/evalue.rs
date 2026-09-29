@@ -619,7 +619,7 @@ fn last_edges(out: &[Vec<u8>; 256], root: u8, rng: &mut SplitMix64) -> [u8; 256]
 /// `FIT_WINDOW`: the slope is then read from the seed end of the curve, where the seed
 /// requirement still shapes it. None for a fit with the full window.
 pub fn short_fit_warning(fit: &KaCalibration) -> Option<String> {
-    (fit.n_fit_points() < FIT_WINDOW).then(|| {
+    (fit.n_fit_points() < FIT_WINDOW as i64).then(|| {
         format!(
             "WARNING: the fit has only {} bins (x {:.1}..{:.1}) below the relatives at x {}. \
              Related sequences are dense in this database; the slope is read close to the \
