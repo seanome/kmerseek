@@ -707,6 +707,23 @@ pub struct ProteinSearcher {
     extension: Option<ExtensionParams>,
 }
 
+/// Puts results in one fixed order, so the same search writes the same CSV on every run.
+///
+/// Candidates are compared in parallel over a `HashSet`, so they arrive in a different order
+/// each time. Results go by containment (highest first), then query md5, then target md5.
+/// Each result's regions go by query start, then target start, then the two ends.
+pub fn sort_results(results: &mut [SearchResult]) {
+    for result in results.iter_mut() {
+        result.matched_regions.sort_by_key(|r| (r.start, r.target_start, r.end, r.target_end));
+    }
+    results.sort_by(|a, b| {
+        b.containment
+            .total_cmp(&a.containment)
+            .then_with(|| a.query_md5.cmp(&b.query_md5))
+            .then_with(|| a.target_md5.cmp(&b.target_md5))
+    });
+}
+
 impl ProteinSearcher {
     /// Extend every matched region past its exact seed with these parameters. Off by default.
     pub fn set_extension(&mut self, params: Option<ExtensionParams>) {
@@ -849,7 +866,7 @@ impl ProteinSearcher {
     ///   allocated into the returned `Vec` (see `SearchFilters`)
     ///
     /// # Returns
-    /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    /// Vector of SearchResult containing all similarity metrics, in `sort_results` order
     #[must_use = "search results should be used to process query matches"]
     pub fn search(
         &self,
@@ -885,11 +902,8 @@ impl ProteinSearcher {
 
         progress.finish_with_message("Search complete");
 
-        // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
-        sorted_results.sort_by(|a, b| {
-            b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sort_results(&mut sorted_results);
 
         Ok(sorted_results)
     }
@@ -932,7 +946,7 @@ impl ProteinSearcher {
         //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
         //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
         let sigs = self.index.get_signatures();
-        candidate_set
+        let mut results: Vec<SearchResult> = candidate_set
             .par_iter()
             .filter_map(|&idx| {
                 let md5 = &self.target_list[idx as usize];
@@ -953,7 +967,9 @@ impl ProteinSearcher {
                 self.sig_cache.insert(md5.clone(), target);
                 result
             })
-            .collect()
+            .collect();
+        sort_results(&mut results);
+        results
     }
 
     /// Perform all-vs-all search without cloning signatures
@@ -969,7 +985,7 @@ impl ProteinSearcher {
     /// returned `Vec` (see `SearchFilters`).
     ///
     /// # Returns
-    /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    /// Vector of SearchResult containing all similarity metrics, in `sort_results` order
     #[must_use = "search results should be used to process query matches"]
     pub fn search_all_vs_all(&self, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
         // Collect all signatures as owned ProteinSketch values to use as queries.
@@ -1020,11 +1036,8 @@ impl ProteinSearcher {
 
         progress.finish_with_message("Search complete");
 
-        // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
-        sorted_results.sort_by(|a, b| {
-            b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sort_results(&mut sorted_results);
 
         Ok(sorted_results)
     }
@@ -1107,9 +1120,14 @@ impl ProteinSearcher {
         let query_poisson_pvalue =
             poisson_survival(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
+        // Floating-point addition is not associative, so summing in HashSet order changes the
+        // last digit from run to run. Every per-hash sum below walks this sorted copy instead.
+        let mut shared_hashes: Vec<u64> = intersection.iter().copied().collect();
+        shared_hashes.sort_unstable();
+
         // Calculate database-specific overlap metrics
-        let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&intersection);
-        let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&intersection);
+        let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&shared_hashes);
+        let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&shared_hashes);
 
         // Build the similarity result using the pre-computed intersection and mins sets
         let mut result = calculate_similarity_from_precomputed(
@@ -1184,7 +1202,7 @@ impl ProteinSearcher {
         let joint_kmer_freq = if let Some(qfreqs) = &self.query_kmer_frequencies {
             let total_q = self.total_queries as f64;
             let total_t = self.stats.total_signatures as f64;
-            intersection
+            shared_hashes
                 .iter()
                 .map(|&h| {
                     let fq = qfreqs.get(&h).copied().unwrap_or(0) as f64 / total_q;
@@ -1198,7 +1216,7 @@ impl ProteinSearcher {
         };
 
         result.query_tfidf = query.tfidf;
-        result.coverage_score = self.calculate_coverage_score(&intersection, target);
+        result.coverage_score = self.calculate_coverage_score(&shared_hashes, target);
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.query_expected_shared_kmers = query_expected_shared_kmers;
@@ -1241,8 +1259,8 @@ impl ProteinSearcher {
 
     /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
     /// Higher values = matched k-mers are more common in the target DB (less discriminative).
-    /// Range: [0, 1].
-    pub fn calculate_mean_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
+    /// Range: [0, 1]. Pass the hashes sorted so the sum is the same on every run.
+    pub fn calculate_mean_matched_kmer_freq(&self, intersection: &[u64]) -> f64 {
         if intersection.is_empty() {
             return 0.0;
         }
@@ -1274,7 +1292,7 @@ impl ProteinSearcher {
     /// `alpha = COVERAGE_LENGTH_EXPONENT` and L the target length in residues. See
     /// `SearchResult::coverage_score`. A hash the database has never seen contributes 0,
     /// matching `calculate_tfidf`.
-    fn calculate_coverage_score(&self, intersection: &HashSet<u64>, target: &ProteinSketch) -> f64 {
+    fn calculate_coverage_score(&self, intersection: &[u64], target: &ProteinSketch) -> f64 {
         let Some(target_length) = target.get_raw_sequence().map(str::len) else {
             return 0.0;
         };
@@ -1285,7 +1303,7 @@ impl ProteinSearcher {
         idf_sum * (target_length as f64).powf(-COVERAGE_LENGTH_EXPONENT)
     }
 
-    fn calculate_sum_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
+    fn calculate_sum_matched_kmer_freq(&self, intersection: &[u64]) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
         intersection
             .iter()
@@ -3390,8 +3408,8 @@ mod tests {
         approx::assert_relative_eq!(bcl2_result.query_tfidf, 565.119680433367, epsilon = 1e-9);
         // Coverage score: the 24 shared k-mers' IDF sums to 36.51 (mean 1.52, so a typical
         // shared k-mer sits in about 5 of the 25 targets), times 239^-0.5 for BCL2_HUMAN's
-        // 239 residues. Same HashMap-order caveat as query_tfidf above.
-        approx::assert_relative_eq!(bcl2_result.coverage_score, 2.361544022707993, epsilon = 1e-9);
+        // 239 residues. Exact, since the IDF values are summed in sorted-hash order.
+        assert_eq!(bcl2_result.coverage_score, 2.3615440227079945);
 
         assert!(
             bcl2_result.mean_matched_kmer_freq > 0.0,
