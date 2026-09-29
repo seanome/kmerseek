@@ -81,8 +81,8 @@ would, and the E-value needs two corrections that the closed form cannot give:
 - `r_database`: the factor by which real sequences in this database change the value of a
   point. 1.00 means the equation is right as it stands. 0.947 (SCOPe40) means one point is
   worth 5% fewer nats than the equation says: the BCL2/CED9 region above is worth
-  0.481 × 0.947 × 40 = 18.2 nats and its E-value is e^(19.2 − 18.2) = 2.7× larger than
-  under independence. 0.85 (Swiss-Prot) makes it 16.4 nats and the E-value 7.5× larger.
+  0.481 × 0.947 × 40 = 18.2 nats and its E-value is e^(19.2 − 18.2) = 2.8× larger than
+  under independence. 0.85 (Swiss-Prot) makes it 16.4 nats and the E-value 18× larger.
 - `K`: the fraction of the m × n cells of the comparison that can start a region. Cells
   next to each other on one diagonal belong to the same run of agreement, and a region only
   exists where an exact seed matched, so K is well under 1: 0.023 on SCOPe40, 0.016 to
@@ -183,8 +183,9 @@ r_database by null and database (1.00 = the closed form is right as it stands):
 On SCOPe40 the three scrambled nulls agree with each other and give 1.04: the closed form
 holds for scrambled domains, which checks the fitting code. Real domains give 0.95. On
 Swiss-Prot a plain shuffle still gives 1.0, but keeping neighbouring pairs already pulls
-the value to 0.94: hydrophobic runs alone account for a third of the gap between
-scrambled and real. Reversed sequences give the same value as real ones and their curve
+the value to 0.94: hydrophobic runs alone account for about half of the gap between
+scrambled and real ((1.015 − 0.942) / (1.015 − 0.865) = 0.49). On the UniRef50 sample a
+plain shuffle already gives 0.86, so there the two shuffles differ little. Reversed sequences give the same value as real ones and their curve
 bends upward from x = 14: a helix or a strand reads nearly the same backwards in a
 two-class alphabet, so reversed proteins still match their forward paralogs. That is why
 `reversed` is a check and not a null to fit on in this alphabet.

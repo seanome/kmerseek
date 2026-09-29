@@ -484,9 +484,9 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
 /// `docs/evalue.md` and drawn in `docs/images/ka_fit_grid_nulls_by_database.png` (every
 /// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
 /// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
-/// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on full-length
-/// proteins real sequences give 0.83 to 0.87, a plain shuffle 1.0, and keeping dipeptides
-/// already pulls the shuffle to 0.94, so hydrophobic runs alone explain a third of the gap.
+/// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on the Swiss-Prot
+/// sample real sequences give 0.87, a plain shuffle 1.0, and keeping dipeptides already
+/// pulls the shuffle to 0.94, so hydrophobic runs alone explain about half of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
