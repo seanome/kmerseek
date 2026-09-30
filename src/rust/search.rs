@@ -1655,7 +1655,13 @@ impl ProteinSearcher {
         // Rescope the same Poisson test to each matched region individually, so a tight local
         // match doesn't get diluted by the whole protein's k-mer count.
         let ksize = query.sketch.protein_ksize() as usize;
-        let window_idf = self.shared_window_idf(query.sketch, target, &intersection);
+        // Listing the shared windows costs (query copies × target copies) per repeated
+        // k-mer, so skip it when there is no region to score.
+        let window_idf = if result.matched_regions.is_empty() {
+            HashMap::new()
+        } else {
+            self.shared_window_idf(query.sketch, target, &intersection)
+        };
         for region in result.matched_regions.iter_mut() {
             // lambda: for each query k-mer positioned inside this region, how many target
             // signatures contain that k-mer's hash, divided by the total number of target
