@@ -890,11 +890,21 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 ///
 /// The region is now 26 residues with 2 mismatches, and still has the 8 shared k-mers of
 /// its seed.
+///
+/// Its Karlin-Altschul score with `--ka-k 0.03`: S = 24 matches - 2 x 2 mismatches = 20.
+/// CED9 is 143/280 hydrophobic in the Lehninger classes and BCL2_HUMAN 146/239, so the
+/// chance two random positions agree is u = 0.510714 x 0.610879 + 0.489286 x 0.389121 =
+/// 0.502376, and the positive root of u e^x + (1 - u) e^(-2x) = 1 is lambda = 0.474339.
+/// bits = (lambda S - ln K) / ln 2 = (9.48678 + 3.50656) / 0.693147 = 18.7454, and
+/// E = K m n e^(-lambda S) with m = 280 query residues and n = 8340 (`db_n_kmers`: distinct
+/// sketched k-mers per target, summed over targets) is
+/// 0.03 x 280 x 8340 x e^(-9.48678) = 5.31363.
 #[test]
 fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
     const KSIZE: u32 = 12;
     let temp_dir = tempdir()?;
     let target_index_path = temp_dir.path().join("target_index.db");
+    // Every search below passes --ka-k, so the index's own fit would never be read.
     Command::cargo_bin("kmerseek")?
         .args([
             "index",
@@ -906,6 +916,8 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
             "12",
             "--alphabet",
             "hp",
+            "--ka-queries",
+            "0",
         ])
         .assert()
         .success();
@@ -939,7 +951,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
 
     let exact = run(&[], &temp_dir.path().join("exact.csv"))?;
     let extended = run(
-        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8"],
+        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8", "--ka-k", "0.03"],
         &temp_dir.path().join("extended.csv"),
     )?;
 
@@ -1002,5 +1014,337 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     assert_eq!(grown.target_subseq, "RDGVNWGRIVAFFEFGGVMCVESVNR");
     assert_eq!(grown.moltype_seq, "pphhphhphhhhhphhhhhphpphpp");
     assert_eq!((grown.region_n_shared_kmers, grown.region_n_mismatches), (8, 2));
+    assert_eq!(grown.db_n_kmers, 8340);
+    assert_relative_eq!(grown.region_ka_bits, 18.745416480655074, epsilon = 1e-9);
+    assert_relative_eq!(grown.region_evalue, 5.313631588881071, epsilon = 1e-9);
+    // Without extension there is no score: 0 bits, E infinite.
+    assert_eq!((seed.region_ka_bits, seed.region_evalue), (0.0, f64::INFINITY));
+    Ok(())
+}
+
+/// Without `--ka-k` and with no fit stored in the index (`kmerseek index --ka-queries 0`),
+/// `kmerseek search` fits r_database and K on the target index's own sequences before
+/// searching: the 25 BCL2-family proteins of the fixture at hp k=12, against a
+/// shuffled-dipeptide reference. `--ka-k` overrides the fit, and `--ka-queries 0` refuses
+/// to search without one rather than guess.
+#[test]
+fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "0",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains("Skipping the Karlin-Altschul fit (--ka-queries 0)"));
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            let mut cmd = Command::cargo_bin("kmerseek")?;
+            cmd.args([
+                "search",
+                "--query",
+                TEST_CED9_FASTA,
+                "--target",
+                index_path.to_str().unwrap(),
+                "--output",
+                temp_dir.path().join("out.csv").to_str().unwrap(),
+            ]);
+            cmd.args(extra);
+            Ok(cmd.assert())
+        };
+
+    // 200 queries asked for, 25 in the index: all of them, 9838 regions, the line read
+    // off x 7.5..11.5 nats below the relatives.
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: K 0.0115, r_database 0.806 (fitted now: 25 database queries, 9838 \
+         regions; r_database 0.806 per nat of lambda_pair S (1 = closed form holds; closed \
+         form 0.481 at the database's match probability 0.500), K 0.0115, fit on x \
+         7.5..11.5, rms 0.086; shuffled-dipeptide reference slope 0.760 over the same bins",
+    ));
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0300, r_database 1.000 (--ka-k, closed-form lambda)",
+        ),
+    );
+    // A K of zero would silently print no bits and infinite E-values.
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-k must be positive"));
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.failure().stderr(
+        predicate::str::contains("no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8"),
+    );
+    // Shuffled queries have no relatives, so no reference is searched and none is reported.
+    search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0768, r_database 0.913 (fitted now: 25 shuffled queries, \
+             9570 regions; r_database 0.913 per nat of lambda_pair S (1 = closed form holds; \
+             closed form 0.609 at the database's match probability 0.500), K 0.0768, fit on \
+             x 8.5..12.5, rms 0.156)\n",
+        ),
+    );
+    Ok(())
+}
+
+/// `kmerseek index` refuses a penalty or give-up margin that no search could use, before it
+/// creates the database, with the same wording `kmerseek search` uses.
+#[test]
+fn test_cli_index_refuses_bad_extension_scoring() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    for (flag, message) in [
+        ("--extend-xdrop=-1", "--extend-xdrop must be 0 or more (got -1)"),
+        ("--extend-mismatch-penalty=0", "--extend-mismatch-penalty must be above 0 (got 0)"),
+    ] {
+        Command::cargo_bin("kmerseek")?
+            .args([
+                "index",
+                "--input",
+                TEST_FASTA_GZ,
+                "--output",
+                index_path.to_str().unwrap(),
+                "--ksize",
+                "12",
+                "--alphabet",
+                "hp",
+                flag,
+            ])
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+        assert!(!index_path.exists());
+    }
+    Ok(())
+}
+
+/// `kmerseek index` fits r_database and K for its penalty and give-up margin and stores
+/// them; `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty
+/// that was never fitted when `--ka-queries 0` forbids fitting one now, and fits one
+/// otherwise.
+#[test]
+fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+        ])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting r_database and K on 25 database sequences (mismatch penalty 2, give-up \
+             margin 8); the fit stops where their counts rise above the same sequences \
+             shuffled-dipeptide",
+        ))
+        .stderr(predicate::str::contains(
+            "Closed form at the database's own match probability 0.500: K 0.1631",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 25 database queries, 9838 regions; r_database 0.806 per nat of lambda_pair S \
+             (1 = closed form holds; closed form 0.481 at the database's match probability \
+             0.500), K 0.0115, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
+             slope 0.760 over the same bins",
+        ))
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
+        ));
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            let mut cmd = Command::cargo_bin("kmerseek")?;
+            cmd.args([
+                "search",
+                "--query",
+                TEST_CED9_FASTA,
+                "--target",
+                index_path.to_str().unwrap(),
+                "--output",
+                temp_dir.path().join("out.csv").to_str().unwrap(),
+            ]);
+            cmd.args(extra);
+            Ok(cmd.assert())
+        };
+
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: K 0.0115, r_database 0.806 (stored in the index: 25 database queries, 9838 regions",
+    ));
+    search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.0300, r_database 1.000 (--ka-k, closed-form lambda)",
+        ),
+    );
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.failure().stderr(
+        predicate::str::contains("no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8"),
+    );
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: K 0.1264, r_database 0.962 (fitted now: 25 database queries, 9854 regions; r_database 0.962",
+        ),
+    );
+    Ok(())
+}
+
+/// One calibration query gives too few score bins to fit, so nothing is stored; three
+/// give a fit that leans on the seed end of the curve, which the index step says out
+/// loud and writes out as a survival curve.
+#[test]
+fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index = |n_queries: &str, null: &str, survival: &std::path::Path| {
+        let stem = survival.file_stem().unwrap().to_str().unwrap();
+        let out = temp_dir.path().join(format!("index_{n_queries}_{null}_{stem}.db"));
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            out.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            n_queries,
+            "--ka-null",
+            null,
+            "--ka-survival-out",
+            survival.to_str().unwrap(),
+        ]);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+
+    let unfit = temp_dir.path().join("unfit.csv");
+    index("1", "database", &unfit)?.success().stderr(predicate::str::contains(
+        "1 queries gave only 420 regions, too few score bins to fit; nothing stored.",
+    ));
+    assert!(!unfit.exists(), "no fit, no curve to write");
+
+    // Shuffled queries have no relatives, so no reference is searched and none is announced.
+    index("3", "shuffled", &temp_dir.path().join("shuffled.csv"))?
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting r_database and K on 3 shuffled sequences (mismatch penalty 2, give-up margin 8)...",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 3 shuffled queries, 789 regions; r_database 0.896 per nat of lambda_pair S",
+        ))
+        .stderr(predicate::str::contains("K 0.0191, fit on x 6.5..8.5, rms 0.070\n"));
+
+    let survival = temp_dir.path().join("survival.csv");
+    index("3", "database", &survival)?
+        .success()
+        .stderr(predicate::str::contains(
+            "Fitting r_database and K on 3 database sequences (mismatch penalty 2, give-up \
+             margin 8); the fit stops where their counts rise above the same sequences \
+             shuffled-dipeptide...",
+        ))
+        .stderr(predicate::str::contains(
+            "fitted now: 3 database queries, 903 regions; r_database 0.730 per nat of lambda_pair S \
+             (1 = closed form holds; closed form 0.481 at the database's match probability \
+             0.500), K 0.0082, fit on x 6.0..9.0, rms 0.184; shuffled-dipeptide reference \
+             slope 0.712 over the same bins",
+        ))
+        .stderr(predicate::str::contains(
+            "WARNING: the fit has only 6 bins (x 6.0..9.0) below the relatives at x none.",
+        ))
+        .stderr(predicate::str::contains(format!(
+            "Survival curve written to {}",
+            survival.display()
+        )));
+
+    // A survival path that cannot be written fails the run, but only after the fit is
+    // stored, and the error names the path.
+    let unwritable = temp_dir.path().join("missing_dir").join("s.csv");
+    index("3", "database", &unwritable)?
+        .failure()
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
+        ))
+        .stderr(predicate::str::contains(format!(
+            "could not write --ka-survival-out {}",
+            unwritable.display()
+        )));
+
+    let mut reader = csv::Reader::from_path(&survival)?;
+    assert_eq!(
+        reader.headers()?.iter().collect::<Vec<_>>(),
+        [
+            "x",
+            "n_regions_at_least",
+            "fitted_n_regions_at_least",
+            "reference_n_regions_at_least",
+            "in_fit",
+            "r_database",
+            "k",
+            "lambda_analytic",
+            "match_probability",
+            "null",
+            "reference",
+            "mismatch_penalty",
+            "xdrop",
+            "n_queries",
+            "query_residues",
+            "database_kmers",
+            "bin_width",
+        ]
+    );
+    let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
+    assert_eq!(rows.len(), 62, "one row per half-nat bin of x from 4.5 to 35");
+    assert_eq!((&rows[0][0], &rows[61][0]), ("4.500", "35.000"));
+    // The lowest bin holds every region (903 seeds and up); the fit window is x 6.0..9.0.
+    assert_eq!(&rows[0][1], "903");
+    assert_eq!(&rows[0][4], "false");
+    let in_fit: Vec<&str> = rows.iter().filter(|r| &r[4] == "true").map(|r| &r[0]).collect();
+    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500"]);
+    // Lowest bin: 903 regions, the fitted line far above at 1955.2 (the seed floor bends
+    // the curve there), 864 in the shuffled-dipeptide reference.
+    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("903", "1955.2449556084264", "864"));
+    // The top bin is one region, far above the fitted line's 4e-7, and the reference never
+    // got there. The line is written at full precision so its tail can be plotted on a
+    // log axis.
+    assert_eq!((&rows[61][1], &rows[61][2], &rows[61][3]), ("1", "0.00000041235460000641815", ""));
+    // Fit constants repeat on every row.
+    let constants = |r: &csv::StringRecord| r.iter().skip(5).map(str::to_owned).collect::<Vec<_>>();
+    assert!(rows.iter().all(|r| constants(r) == constants(&rows[0])));
+    assert_eq!(
+        constants(&rows[0]),
+        [
+            "0.7304804242524211",
+            "0.008235243224364983",
+            "0.48120853696601995",
+            "0.5000011360087127",
+            "database",
+            "shuffled-dipeptide",
+            "2",
+            "8",
+            "3",
+            "762",
+            "8340",
+            "0.5"
+        ]
+    );
     Ok(())
 }
