@@ -422,7 +422,7 @@ fn extension_scoring(
     xdrop: Option<f64>,
     index: &ProteomeIndex,
 ) -> IndexResult<Option<ExtensionScoring>> {
-    if let Some(x) = xdrop.filter(|x| *x < 0.0) {
+    if let Some(x) = xdrop.filter(|x| x.is_nan() || *x < 0.0) {
         return Err(anyhow::anyhow!(
             "--extend-xdrop must be 0 or more (got {x}); a negative give-up margin would end \
              every extension at its first mismatch"
@@ -430,10 +430,10 @@ fn extension_scoring(
         .into());
     }
     match penalty {
-        Some(p) if p > 0.0 => Ok(Some(ExtensionScoring {
-            mismatch_penalty: p,
-            xdrop: xdrop.unwrap_or(DEFAULT_XDROP),
-        })),
+        // `new` rejects an infinite penalty, which `p > 0.0` lets through.
+        Some(p) if p > 0.0 => ExtensionScoring::new(p, xdrop.unwrap_or(DEFAULT_XDROP))
+            .map(Some)
+            .map_err(|message| anyhow::anyhow!(message).into()),
         Some(_) => Ok(None),
         // A give-up margin with no stored fit for it still asks for extension: extend at the
         // default penalty, and let the search fit K for it.

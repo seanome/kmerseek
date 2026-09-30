@@ -435,6 +435,45 @@ fn search_stderr_with_ka_queries(
     Ok(String::from_utf8(search.get_output().stderr.clone())?)
 }
 
+/// An infinite mismatch penalty or a NaN give-up margin stops the search with the reason,
+/// whether or not the penalty is given.
+#[test]
+fn test_cli_search_rejects_an_infinite_penalty_or_nan_margin(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let index_path = index_path.to_str().unwrap();
+    let common = ["--ksize", "12", "--alphabet", "hp_lehninger2"];
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
+        .args(common)
+        .args(["--ka-queries", "0"])
+        .assert()
+        .success();
+    let cases: [(&[&str], &str); 3] = [
+        (
+            &["--extend-mismatch-penalty", "inf"],
+            "--extend-mismatch-penalty must be above 0 (got inf)",
+        ),
+        (&["--extend-xdrop", "nan"], "--extend-xdrop must be 0 or more (got NaN)"),
+        (
+            &["--extend-mismatch-penalty", "2", "--extend-xdrop", "nan"],
+            "--extend-xdrop must be 0 or more (got NaN)",
+        ),
+    ];
+    for (args, message) in cases {
+        Command::cargo_bin("kmerseek")?
+            .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
+            .args(["--output", temp_dir.path().join("hits.csv").to_str().unwrap()])
+            .args(common)
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+    }
+    Ok(())
+}
+
 /// Without `--extend-mismatch-penalty`, a search against an index that holds a
 /// Karlin-Altschul fit extends with the penalty and give-up margin the fit was made for
 /// (the index defaults, 2 and 8) and takes r_database and K from it, fitting nothing.
