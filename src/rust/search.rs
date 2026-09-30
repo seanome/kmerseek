@@ -2651,8 +2651,9 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
     let agree = residues_agree(pair.moltype);
     let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
     // A member's raw score, counted over its own span with an ambiguous residue agreeing
-    // with either class it stands for, as the chain's recount below does. The region's
-    // stored n_mismatches cannot be used: extend_regions counts B, J and Z as mismatches.
+    // with either class it stands for, as the chain's recount below does. Counted here
+    // rather than read from n_mismatches so that every member is scored by this one rule,
+    // whichever function built it.
     let raw_score = |r: &MatchedRegion| {
         let (qs, qe, ts) = (r.start as usize, r.end as usize, r.target_start as usize);
         let mismatches = q[qs..qe].iter().zip(&t[ts..]).filter(|&(&a, &b)| !agree(a, b)).count();
@@ -3482,6 +3483,22 @@ mod tests {
             epsilon = 1e-9
         );
         assert_eq!(karlin_altschul_sum_p(2000.0, 2), 0.0, "P itself underflows there");
+    }
+
+    /// B stands for D or N. Under sdm12 D and N are separate classes, so B agrees with
+    /// both. Walking BBB against DDN with penalty 1 and give-up margin 2 keeps all three
+    /// positions when B agrees with either reading, and none when only equal bytes agree.
+    #[test]
+    fn test_xdrop_walk_counts_an_ambiguous_residue_as_agreeing() {
+        let q = crate::hash_functions::encode_by_alphabet("BBB", "sdm12").unwrap();
+        let t = crate::hash_functions::encode_by_alphabet("DDN", "sdm12").unwrap();
+        let params = extension(1.0, 2.0);
+        let walk = |agree: &dyn Fn(u8, u8) -> bool| {
+            xdrop_walk(q.as_bytes(), t.as_bytes(), (0..3).zip(0..3), params, &agree)
+        };
+        println!("{q} {t}");
+        assert_eq!(walk(&residues_agree("sdm12")), 3);
+        assert_eq!(walk(&|a, b| a == b), 0);
     }
 
     #[test]
