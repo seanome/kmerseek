@@ -2807,6 +2807,16 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
             karlin_altschul_lambda(ka_u, params.scoring.mismatch_penalty) * params.ka.r_database;
         let t_sum: f64 = chain.iter().map(|x| ka_lambda * raw_score(x) - ln_kmn).sum();
         let ln_p = karlin_altschul_sum_ln_p(t_sum, r);
+        // The span's lambda can be far below a member's own, for example when a gap or a
+        // biased member tips the span's composition. A chain that is weaker evidence than
+        // its best member would hide that member, so leave the members as they were.
+        let chain_evalue =
+            if ka_lambda > 0.0 { ln_p.exp() * pair.n_targets } else { f64::INFINITY };
+        let best_member = chain.iter().map(|x| x.evalue).fold(f64::INFINITY, f64::min);
+        if chain_evalue > best_member {
+            out.append(chain);
+            return;
+        }
         let mut merged = first.clone();
         merged.end = qe as u32;
         merged.target_end = te as u32;
@@ -2828,7 +2838,7 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         merged.ka_u = ka_u;
         merged.ka_lambda = ka_lambda;
         if ka_lambda > 0.0 {
-            merged.evalue = ln_p.exp() * pair.n_targets;
+            merged.evalue = chain_evalue;
             // Bits on the same scale as a single region, whose bits are (lambda S - ln K) /
             // ln 2. For one member -ln P = lambda S - ln(K m n_t), so adding ln(m n_t) back
             // puts the size of the search where a single region has it: in the E-value, not
@@ -3731,6 +3741,98 @@ mod tests {
             n_targets: 100.0,
         };
         chain_regions(regions, &pair)
+    }
+
+    /// Members of `pattern` against itself, each scored on its own spans as `compare` does:
+    /// its own lambda, and its E-value at K 0.03, m = n = the pattern's length. Each member
+    /// is (query start, query end).
+    fn scored_members(
+        pattern: &str,
+        members: &[(u32, u32)],
+        params: ExtensionParams,
+    ) -> (ProteinSketch, Vec<MatchedRegion>) {
+        let q = sketch_from_hp_pattern("q", pattern);
+        let base = find_matched_regions(&q, &q, &q.intersect(&q)).remove(0);
+        let regions = members
+            .iter()
+            .map(|&(start, end)| MatchedRegion {
+                start,
+                end,
+                target_start: start,
+                target_end: end,
+                length: end - start,
+                n_mismatches: 0,
+                ..base.clone()
+            })
+            .collect();
+        let mut regions = with_own_lambda(regions, &q, &q, params);
+        let n = pattern.len() as f64;
+        for r in regions.iter_mut().filter(|r| r.ka_lambda > 0.0) {
+            r.evalue = params.ka.evalue(r.ka_lambda, r.length as f64, n, n);
+        }
+        (q, regions)
+    }
+
+    fn chain_self(
+        q: &ProteinSketch,
+        regions: Vec<MatchedRegion>,
+        params: ExtensionParams,
+    ) -> Vec<MatchedRegion> {
+        let qe = q.get_moltype_sequence().unwrap();
+        let n = qe.len() as f64;
+        let pair = ChainContext {
+            q: qe.as_bytes(),
+            t: qe.as_bytes(),
+            q_raw: q.get_raw_sequence(),
+            t_raw: q.get_raw_sequence(),
+            moltype: "hp",
+            params,
+            m: n,
+            n_t: n,
+            n_targets: 1.0,
+        };
+        chain_regions(regions, &pair)
+    }
+
+    #[test]
+    fn test_chain_regions_leaves_a_region_with_no_lambda_out() {
+        // A run of 30 h has u = 1 and no lambda; the balanced run 4 residues after it has
+        // its own E-value. Chained, the span would be 30 h of 58 with a far smaller lambda
+        // and would replace the balanced run with a weaker row. The h run never joins.
+        let pattern = format!("{}pppp{}", "h".repeat(30), "hpphhpphphph".repeat(2));
+        let params = ExtensionParams {
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 5,
+            ..extension(2.0, 8.0)
+        };
+        let (q, members) = scored_members(&pattern, &[(0, 30), (34, 58)], params);
+        assert_eq!(members[0].ka_lambda, 0.0);
+        let balanced = members[1].evalue;
+        let chained = chain_self(&q, members, params);
+        let rows: Vec<_> = chained.iter().map(|r| (r.start, r.end, r.n_chained)).collect();
+        assert_eq!(rows, [(0, 30, 1), (34, 58, 1)]);
+        assert_eq!(chained[1].evalue, balanced);
+    }
+
+    #[test]
+    fn test_chain_regions_keeps_members_when_the_chain_is_weaker() {
+        // Two balanced runs 2 residues apart. With a member already at E = 1e-30, no chain
+        // of this span can beat it, so the members come back as they were.
+        let pattern = "hpphhpphphphpphpphhpphphphpph";
+        let params = ExtensionParams {
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 5,
+            ..extension(2.0, 8.0)
+        };
+        let (q, mut members) = scored_members(pattern, &[(0, 12), (14, 26)], params);
+        assert!(members.iter().all(|r| r.ka_lambda > 0.0), "{members:?}");
+        let together = chain_self(&q, members.clone(), params);
+        assert_eq!(together.len(), 1, "without the strong member they chain: {together:?}");
+        members[1].evalue = 1e-30;
+        let apart = chain_self(&q, members, params);
+        let rows: Vec<_> = apart.iter().map(|r| (r.start, r.end, r.n_chained, r.evalue)).collect();
+        assert_eq!(rows[1], (14, 26, 1, 1e-30));
+        assert_eq!(rows.len(), 2);
     }
 
     #[test]
