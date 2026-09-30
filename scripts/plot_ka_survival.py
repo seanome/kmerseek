@@ -30,6 +30,14 @@ FLOOR = "#111111"
 MIN_BIN_COUNT = 30
 
 
+def reference_shuffles(meta):
+    """How many shuffles each reference query had: 1 for a CSV written before the flag."""
+    n_queries, n_reference = meta.get("n_queries"), meta.get("n_reference_queries")
+    if not n_queries or not n_reference or int(n_reference) == 0:
+        return 1
+    return int(n_reference) / int(n_queries)
+
+
 def load(path):
     rows = list(csv.DictReader(open(path)))
     meta = rows[0]
@@ -38,7 +46,10 @@ def load(path):
     survival = [int(r["n_regions_at_least"]) for r in rows]
     density = [survival[i] - (survival[i + 1] if i + 1 < len(survival) else 0) for i in range(len(survival))]
     window = [float(r["x"]) for r in rows if r["in_fit"] == "true"]
-    ref_survival = [int(r["reference_n_regions_at_least"]) if r.get("reference_n_regions_at_least") else 0 for r in rows]
+    # With --ka-reference-shuffles N the reference searched N times as many queries, so
+    # its counts are divided by N to sit on the same scale as the real curve.
+    shuffles = reference_shuffles(meta)
+    ref_survival = [int(r["reference_n_regions_at_least"]) / shuffles if r.get("reference_n_regions_at_least") else 0 for r in rows]
     ref_density = [ref_survival[i] - (ref_survival[i + 1] if i + 1 < len(ref_survival) else 0) for i in range(len(ref_survival))]
     lam = float(meta["r_database"])
     per_bin = 1 - math.exp(-lam * width)

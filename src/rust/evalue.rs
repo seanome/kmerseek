@@ -281,23 +281,21 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
         .collect()
 }
 
-/// The bin of x in [0, `BIN_WIDTH`). A pair whose own lambda is near zero scores x =
-/// lambda_pair S near zero however long its region is, so this one bin collects every
-/// region of every such pair and says nothing about how scores decay. It is barred from
-/// being the peak for that reason; see `tail_bins`.
+/// The bin of x in [0, `BIN_WIDTH`). It collects every region that has no score: a pair
+/// with no positive lambda leaves `ka_bits` at 0, and a negative score is rounded up to
+/// 0. Pairs whose lambda is small but positive land here too, since x = lambda_pair S
+/// stays near zero however long the region is. None of these say how scores decay, so
+/// this bin is barred from being the peak; see `tail_bins`.
 const DEGENERATE_BIN: i64 = 0;
 
 /// The bins above the most populated one, not counting `DEGENERATE_BIN`. Below the peak
 /// sit the bare seeds and the pairs whose lambda is small; the Karlin-Altschul tail is
 /// what comes after it.
 ///
-/// Barring bin 0 from the peak matters because it is often the tallest bin: in the 0.4
-/// dark-set store (140 indexes, 2026-09-22) it held 2% to 99% of all regions and was the
-/// mode for 24 of them. Taken as the peak it puts the whole rising flank of the real peak
-/// into the fit, and the line is then read off bins that are climbing rather than
-/// decaying: on those 140 curves that refused 12 fits outright (the window's slope came
-/// out positive) and left 4 more fitted on a window far up the flattened tail. Barring it
-/// recovers all 12 and loses none.
+/// Bin 0 is often the tallest bin. Taken as the peak, it puts the whole rising side of
+/// the real peak into the fit, and the line is then read off bins that are climbing
+/// rather than falling: the slope can come out positive, and the fit is refused, or the
+/// window lands far up the flattened tail.
 fn tail_bins(bins: &[(i64, u64)]) -> Vec<(i64, u64)> {
     let peak = bins
         .iter()
@@ -344,8 +342,8 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 /// Fit ln(regions with score S) against S, stopping below the related pairs.
 ///
 /// Bins with fewer than `MIN_BIN_COUNT` regions are ignored, and so is everything up to and
-/// including the most populated bin: below it sit the bare seeds and the pairs whose
-/// lambda is small. Starting from the next `MIN_FIT_POINTS` bins, the line is extended one
+/// including the most populated bin other than `DEGENERATE_BIN`: below it sit the bare
+/// seeds and the pairs whose lambda is small. Starting from the next `MIN_FIT_POINTS` bins, the line is extended one
 /// bin at a time upward and a bin joins
 /// while its ln count is within `BEND_SIGMAS / sqrt(count) + BEND_SLACK` above the line
 /// fitted so far (below it is fine: the seed requirement makes the true curve concave).
@@ -1160,7 +1158,7 @@ mod tests {
     }
 
     /// A chance curve whose scores decay by e^-0.9 per bin from a peak at bin 5, with a
-    /// spike at bin 0 (every pair whose own lambda is near zero) and, in the real curve
+    /// spike at bin 0 (every region with no score) and, in the real curve
     /// only, homologs from bin 12 on. The fit reads the decay it was built with, 0.9, off
     /// the bins just after the real peak. Taking bin 0 as the peak instead puts bins 2 to
     /// 9 in the window -- the rising flank and the peak itself -- and returns 0.17, which

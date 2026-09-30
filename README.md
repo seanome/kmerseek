@@ -256,8 +256,11 @@ where λ = ln(1 / Pr(same)) and K = 1 − Pr(same). K is the chance that the pos
 a run disagrees, so each run is counted once, where it starts. `m` is the query length.
 `n` is the database's residue count, which the index does not store, so it is estimated
 as `scaled × db_n_kmers + (ksize − 1) × db_n_targets`. That comes out low by k-mers that
-repeat within a target and k-mers removed as low-complexity, which makes the E-value
-slightly too small.
+repeat within a target and k-mers removed as low-complexity, and the run E-value comes out
+low by the same fraction. How low depends on how often k-mers repeat, so on the alphabet
+and k. On the 25 BCL-2-like test proteins (9,288 residues) the estimate is 0.99 of the
+real count at `hp` k=15, 0.93 at k=12 and 0.47 at k=8, and 1.00 at `protein` k=5. With few
+classes and a short k, the run E-value can be half what it should be.
 
 When Pr(same) is above 0.99, both sequences are made almost entirely of one class. There
 1 − Pr(same) is close to 0 and would make every run look significant. The factor is
