@@ -882,17 +882,9 @@ mod tests {
     use approx::assert_relative_eq;
     use serde_json::{json, Value};
 
-    /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
-    /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,
-    /// so e^lambda = q / p, and K = E[X e^(lambda X)] (1 - e^-lambda) when the only positive
-    /// step is +1. Written out: E[X e^(lambda X)] = p (q/p) - q (p/q) = q - p and
-    /// 1 - e^-lambda = 1 - p/q, so K = (q - p)(q - p) / q. Ewens & Grant, Statistical
-    /// Methods in Bioinformatics (2nd ed., 2005), reach the same (q - p)^2 / q for this walk
-    /// in their BLAST chapter.
-    /// E_run = (1 - pr_same) m n pr_same^L, worked by hand. The first two are the handoff's
-    /// simulated settings (300-residue query, 3,000 residues of targets): two equal classes
-    /// at L = 16 is 0.5 x 900,000 / 2^16, and four equal classes at L = 8 is
-    /// 0.75 x 900,000 / 4^8.
+    /// E_run = (1 - pr_same) m n pr_same^L, worked by hand. The first two use a 300-residue
+    /// query against 3,000 residues of targets: two equal classes at L = 16 is
+    /// 0.5 x 900,000 / 2^16, and four equal classes at L = 8 is 0.75 x 900,000 / 4^8.
     #[test]
     fn test_run_evalue_by_hand() {
         assert_eq!(run_evalue(0.5, 16, 300.0, 3000.0), 6.866_455_078_125);
@@ -917,6 +909,13 @@ mod tests {
         );
     }
 
+    /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
+    /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,
+    /// so e^lambda = q / p, and K = E[X e^(lambda X)] (1 - e^-lambda) when the only positive
+    /// step is +1. Written out: E[X e^(lambda X)] = p (q/p) - q (p/q) = q - p and
+    /// 1 - e^-lambda = 1 - p/q, so K = (q - p)(q - p) / q. Ewens & Grant, Statistical
+    /// Methods in Bioinformatics (2nd ed., 2005), reach the same (q - p)^2 / q for this walk
+    /// in their BLAST chapter.
     #[test]
     fn test_k_theory_matches_the_plus_minus_one_random_walk() {
         let (p, q) = (0.3, 0.7);
