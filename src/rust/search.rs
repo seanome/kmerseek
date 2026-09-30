@@ -1107,7 +1107,8 @@ pub struct ProteinSearcher {
     /// a sequence of L residues has L - k + 1 k-mers, and a sketch keeps 1 in `scaled` of
     /// them. `db_n_kmers` counts a k-mer once per target however often it occurs there, and
     /// leaves out k-mers removed as low-complexity, so this comes out low by those. A low n
-    /// makes every run E-value smaller by the same fraction.
+    /// makes every run E-value smaller by the same fraction: on the 25-protein test set,
+    /// 0.99 of the real count at hp k=15 but 0.47 at hp k=8.
     db_n_residues: f64,
     /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
     extension: Option<ExtensionParams>,
