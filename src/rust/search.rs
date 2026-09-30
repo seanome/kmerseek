@@ -1372,13 +1372,14 @@ impl ProteinSearcher {
             Some(fit) => Ok((Some(fit.ka_params()), KaSource::Fitted(Box::new(fit)))),
             // decoy_from_target needs a stored raw sequence, so no queries at all means the
             // index has none to build them from, and more --ka-queries cannot help.
-            None if report.n_queries == 0 => Ok((
-                None,
-                KaSource::Unfitted(format!(
-                    "mismatch penalty {mismatch_penalty}, give-up margin {xdrop}: the index \
-                     stores no raw sequences to build calibration queries from"
-                )),
-            )),
+            // Extension needs the raw sequences too, so a search that went on would extend
+            // nothing; stop here and say why.
+            None if report.n_queries == 0 => Err(anyhow::anyhow!(
+                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
+                 margin {xdrop}: the index stores no raw sequences to build calibration \
+                 queries from, so no fit can be made on it. Pass --ka-k."
+            )
+            .into()),
             None => {
                 let reason = format!(
                     "mismatch penalty {mismatch_penalty}, give-up margin {xdrop}: {} \
@@ -5739,6 +5740,27 @@ mod ka_calibration_tests {
         let index = ProteomeIndex::new(&index_path, 12, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
         Ok((temp_dir, ProteinSearcher::new(index)?))
+    }
+
+    /// An index built without raw sequences has nothing to make calibration queries from,
+    /// and nothing to extend either, so asking for a fit stops the search with the reason.
+    #[test]
+    fn test_resolve_ka_refuses_an_index_without_raw_sequences() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("index"), 12, 1, "hp_lehninger2", false)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        let err = searcher.resolve_ka(None, shuffled_settings(2.0, 25)).unwrap_err();
+        println!("{err}");
+        assert_eq!(
+            err.to_string(),
+            "Anyhow error: no Karlin-Altschul fit for mismatch penalty 2, give-up margin 8: the \
+             index stores \
+             no raw sequences to build calibration queries from, so no fit can be made on it. \
+             Pass --ka-k."
+        );
+        Ok(())
     }
 
     /// The fit is reproducible from the seed, is stored under its scoring and found again
