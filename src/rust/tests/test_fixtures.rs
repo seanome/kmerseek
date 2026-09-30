@@ -2,6 +2,11 @@ pub const TEST_FASTA_GZ: &str =
     "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
 pub const TEST_CED9_FASTA: &str = "tests/testdata/fasta/ced9.fasta";
 pub const TEST_BLC2_FASTA: &str = "tests/testdata/fasta/bcl2.fasta";
+/// The 25 BCL-2-like proteins of TEST_FASTA_GZ, each shuffled 20 times with its 2-mer
+/// (dipeptide) counts kept, so a decoy has the composition of a real protein and nothing
+/// else in common with any query. `python shuffle_fasta_2mer.py <TEST_FASTA_GZ> -n 20 --seed 1`.
+pub const TEST_DECOYS_2MER_GZ: &str =
+    "tests/testdata/fasta/bcl2_25_shuffled_2mer_20x_seed1.fasta.gz";
 pub const TEST_FASTA_ZST: &str = "tests/testdata/fasta/test_compression.fasta.zst";
 
 pub const TEST_FASTA_CONTENT: &str =
