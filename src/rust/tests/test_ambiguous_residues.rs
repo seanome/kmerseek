@@ -24,8 +24,9 @@ mod tests {
     use crate::alphabets::Alphabet;
     use crate::index::ProteomeIndex;
     use crate::search::{
-        calculate_similarity, extend_regions, find_matched_regions, ExtensionParams,
-        ExtensionScoring, ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE,
+        calculate_similarity, chain_regions, extend_regions, find_matched_regions, ChainContext,
+        ExtensionParams, ExtensionScoring, KaParams, ProteinSearcher, SearchFilters, SearchResult,
+        DEFAULT_BATCH_SIZE,
     };
     use crate::sketch::ProteinSketch;
 
@@ -392,7 +393,12 @@ mod tests {
             seeds,
             &topi,
             &bovine,
-            ExtensionParams { scoring: ExtensionScoring::default() },
+            ExtensionParams {
+                scoring: ExtensionScoring::default(),
+                ka: KaParams { k: 0.03, r_database: 1.0 },
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            },
         );
         let spans: Vec<_> = extended
             .iter()
@@ -400,6 +406,47 @@ mod tests {
             .collect();
         println!("{spans:?}");
         assert_eq!(spans, vec![(0, 124, 26, 150, 3)]);
+        Ok(())
+    }
+
+    /// A chain recounts mismatches over its whole span with an ambiguous residue agreeing
+    /// with either class it stands for. Under sdm12 at k=12, topi against bovine RNase A
+    /// seeds four regions broken at residues 19, 37 and 103, the real mismatches sdm12 can
+    /// see. A mismatch penalty of 9 stops extension at each of them; chaining joins the four
+    /// into one region over the mature chain, bovine 26-150, with those 3 mismatches. The
+    /// 22 B and Z inside it are not mismatches.
+    #[test]
+    fn test_chain_counts_an_ambiguous_residue_as_agreeing() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 12, 1, "sdm12")?;
+        let bovine = ProteinSketch::from_protein_sequence("bovine", BOVINE_RNASE, 12, 1, "sdm12")?;
+        let params = ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 5,
+            chain_max_shift: 0,
+        };
+        let seeds = find_matched_regions(&topi, &bovine, &topi.intersect(&bovine));
+        let extended = extend_regions(seeds, &topi, &bovine, params);
+        assert_eq!(extended.len(), 4);
+        let pair = ChainContext {
+            q: topi.get_moltype_sequence().unwrap().as_bytes(),
+            t: bovine.get_moltype_sequence().unwrap().as_bytes(),
+            q_raw: topi.get_raw_sequence(),
+            t_raw: bovine.get_raw_sequence(),
+            moltype: "sdm12",
+            params,
+            ka_lambda: 0.5,
+            m: 124.0,
+            n_t: 150.0,
+            n_targets: 125.0,
+        };
+        let chained = chain_regions(extended, &pair);
+        let spans: Vec<_> = chained
+            .iter()
+            .map(|r| (r.start, r.end, r.target_start, r.target_end, r.n_chained, r.n_mismatches))
+            .collect();
+        println!("{spans:?}");
+        assert_eq!(spans, vec![(0, 124, 26, 150, 4, 3)]);
         Ok(())
     }
 

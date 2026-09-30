@@ -180,6 +180,54 @@ disagree. The region Poisson score keeps counting exact k-mers against the expec
 summed over the extended span, so extension can only make a region's score more
 conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
+Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
+statistics (Karlin & Altschul 1990, the statistics behind BLAST):
+
+```
+S    = matches - C × mismatches
+E    = K × m × n × e^(-λS)
+bits = (λS - ln K) / ln 2
+```
+
+`m` is the query's length in the encoded alphabet. `n` is the number of distinct sketched
+k-mers in each target, summed over the targets (`db_n_kmers`, about residues / scaled).
+`K` takes up the scaled factor, so a `K` measured at one `--scaled` does not carry over to
+another. `λ` is solved
+per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
+`u` that a random position from each falls in the same class gives λ as the positive
+root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,
+which is what two hydrophobic runs look like, and the region gets 0 bits and no
+significance: agreement is what those two compositions do by default. `K` is the
+fraction of the m × n cells that can start a region. It depends on the alphabet, the
+seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
+it on the index itself (`--ka-queries`, 200 by default): it searches that many of the
+index's own sequences against it, and reads K and a correction to λ, `r_database`, off
+the straight line that ln(regions at score S) makes against S below the related pairs.
+A search with the penalty and give-up margin the index was fitted for reads the fit
+back; with another pair it fits its own before searching, or takes `--ka-k`.
+[docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
+On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+`region_poisson_score` raised the share of same-superfamily relatives found before the
+first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
+different-fold hit at E <= 0.01.
+
+```bash
+kmerseek index --input proteome.fasta --output proteome.db --ksize 10 --alphabet hp
+kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
+    --extend-mismatch-penalty 2 --output hits.csv
+```
+
+`--chain-max-gap G --chain-max-shift D` chains extended regions that follow each other on
+both sequences, at most G residues apart on the query and at most D diagonals apart (a
+net indel of up to D), into one region scored with Karlin & Altschul's (1993) statistic
+for a sum of region scores; `region_n_chained` says how many regions a row is made of. A
+domain that no single gapless run covers becomes one call. On SCOPe40 domains it changes
+ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
+transfer, where a call has to cover a domain to carry its label. A chained row's
+`region_evalue` takes the database size as the number of targets times the target's
+length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
