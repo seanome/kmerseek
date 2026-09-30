@@ -29,7 +29,7 @@ REAL_ROW = [
     "count regions in\neach 0.5-nat bin of x",
 ]
 REFERENCE_ROW = [
-    "the same 200,\nshuffled keeping\ndipeptides\n(--ka-reference)",
+    "the same 200,\nshuffled keeping\ndipeptides\n(--ka-reference),\ncounts divided by\n--ka-reference-shuffles",
     "search each one\nagainst the index",
     "score every region:\nx = λ_pair × S",
     "count regions in\neach bin of x",
@@ -70,7 +70,12 @@ def load(path):
 
     meta = rows[0]
     window = [float(r["x"]) for r in rows if r["in_fit"] == "true"]
-    return x, per_bin("n_regions_at_least"), per_bin("reference_n_regions_at_least"), window, meta
+    # With --ka-reference-shuffles N the reference searched N times as many queries;
+    # divide its counts by N so the two curves share a scale.
+    n_queries, n_reference = meta.get("n_queries"), meta.get("n_reference_queries")
+    shuffles = int(n_reference) / int(n_queries) if n_queries and n_reference and int(n_reference) else 1
+    reference = [c / shuffles for c in per_bin("reference_n_regions_at_least")]
+    return x, per_bin("n_regions_at_least"), reference, window, meta
 
 
 def draw_fit(ax, path):
