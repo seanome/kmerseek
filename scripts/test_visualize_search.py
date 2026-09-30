@@ -80,6 +80,12 @@ def test_rank_proteins_orders_by_statistic_and_caps(rows):
     assert vs.rank_proteins(rows, max_rows=5)[4][0] == ranked[4][0]
 
 
+def test_rank_proteins_ignores_csv_row_order(rows):
+    _, rows = rows
+    ranked = vs.rank_proteins(rows, max_rows=100)
+    assert vs.rank_proteins(rows[::-1], max_rows=100) == ranked
+
+
 def test_coverage_counts_entries_per_query_residue(rows):
     _, rows = rows
     cov = vs.coverage(rows, query_length=280, ksize=12, solid_identical=5)

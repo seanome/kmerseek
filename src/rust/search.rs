@@ -9,9 +9,14 @@ use rayon::prelude::*;
 use serde::{Deserialize, Serialize};
 
 use statrs::distribution::{DiscreteCDF, Poisson};
+use statrs::function::factorial::ln_factorial;
 
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
+use crate::evalue::{
+    fit_scores, fit_scores_with_reference, make_decoy, DecoyNull, KaCalibration, SplitMix64,
+    BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
+};
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
 use crate::significance;
@@ -69,7 +74,8 @@ impl Default for SearchFilters {
 }
 
 /// Score subtracted per encoded position where query and target disagree, unless
-/// `--extend-mismatch-penalty` sets another. Every benchmark uses 2.
+/// `--extend-mismatch-penalty` sets another. Every benchmark and every fitted constant in
+/// `docs/evalue.md` uses 2.
 pub const DEFAULT_MISMATCH_PENALTY: f64 = 2.0;
 
 /// The give-up margin unless `--extend-xdrop` sets another. With a penalty of 2, four
@@ -77,7 +83,9 @@ pub const DEFAULT_MISMATCH_PENALTY: f64 = 2.0;
 pub const DEFAULT_XDROP: f64 = 8.0;
 
 /// The two numbers that decide how a region grows past its seed and what its score is.
-#[derive(Debug, Clone, Copy, PartialEq)]
+/// Together with the alphabet and seed length they fix the E-value's constants, so a
+/// fit (`KaCalibration`) is keyed by them.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct ExtensionScoring {
     /// Score subtracted per disagreeing encoded position; each agreeing position adds 1.
     /// Must be positive.
@@ -87,13 +95,36 @@ pub struct ExtensionScoring {
     pub xdrop: f64,
 }
 
+impl ExtensionScoring {
+    /// Checks the two values the way both `kmerseek index` and `kmerseek search` need: the
+    /// penalty must be above 0 (at 0 no lambda exists and nothing can be fitted), and the
+    /// give-up margin must be 0 or more (a negative one ends every extension at its first
+    /// mismatch). NaN fails both.
+    pub fn new(mismatch_penalty: f64, xdrop: f64) -> Result<Self, String> {
+        if !(mismatch_penalty.is_finite() && mismatch_penalty > 0.0) {
+            return Err(format!(
+                "--extend-mismatch-penalty must be above 0 (got {mismatch_penalty}); at 0 an \
+                 agreeing run has no Karlin-Altschul lambda"
+            ));
+        }
+        if xdrop.is_nan() || xdrop < 0.0 {
+            return Err(format!(
+                "--extend-xdrop must be 0 or more (got {xdrop}); a negative give-up margin \
+                 would end every extension at its first mismatch"
+            ));
+        }
+        Ok(Self { mismatch_penalty, xdrop })
+    }
+}
+
 impl Default for ExtensionScoring {
     fn default() -> Self {
         Self { mismatch_penalty: DEFAULT_MISMATCH_PENALTY, xdrop: DEFAULT_XDROP }
     }
 }
 
-/// How far past its exact seed a matched region may grow, and at what cost per mismatch.
+/// How far past its exact seed a matched region may grow, at what cost per mismatch, and
+/// how the grown region is scored.
 ///
 /// A region from `find_matched_regions` is a maximal exact run in the encoded alphabet: one
 /// class flip ends it. Between remote homologs the HP pattern is conserved per column far
@@ -107,6 +138,187 @@ impl Default for ExtensionScoring {
 pub struct ExtensionParams {
     /// Mismatch penalty and give-up margin.
     pub scoring: ExtensionScoring,
+    /// K and r_database for the E-value: from the fit stored in the index for this
+    /// `scoring`, a fit run before the search, or `--ka-k` (`ProteinSearcher::resolve_ka`).
+    pub ka: KaParams,
+    /// Chain colinear regions at most this many residues apart (on the query) into one
+    /// region scored with Karlin-Altschul sum statistics. 0 leaves every region on its own.
+    /// See `chain_regions`.
+    pub chain_max_gap: u32,
+    /// How far in diagonal any chained region may sit from the chain's first region, i.e.
+    /// the largest net indel a chain tolerates. 0 chains only on one diagonal.
+    pub chain_max_shift: u32,
+}
+
+/// The two constants of the E-value a search runs with: E = K m n e^(-lambda_pair
+/// r_database S).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KaParams {
+    /// Karlin-Altschul K, the fraction of the m x n cells that can start a region. It
+    /// depends on the alphabet, the seed length, the penalty, the give-up margin and the
+    /// database, so it is fitted on the index in use.
+    pub k: f64,
+    /// Factor on every pair's closed-form lambda; 1 keeps the closed form.
+    pub r_database: f64,
+}
+
+impl KaParams {
+    /// Bit score of raw score `score` at this pair's `lambda`: (lambda S - ln K) / ln 2,
+    /// floored at 0.
+    pub fn bits(&self, lambda: f64, score: f64) -> f64 {
+        ((lambda * score - self.k.ln()) / std::f64::consts::LN_2).max(0.0)
+    }
+
+    /// E-value of raw score `score` at this pair's `lambda`, for a query of `m` residues
+    /// against a database of `n`: K m n e^(-lambda S).
+    pub fn evalue(&self, lambda: f64, score: f64, m: f64, n: f64) -> f64 {
+        self.k * m * n * (-lambda * score).exp()
+    }
+}
+
+/// Targets whose encoded sequences give the database's match probability during a fit.
+const COMPOSITION_SAMPLE: usize = 200;
+
+/// What `ProteinSearcher::calibrate_ka` found.
+#[derive(Debug, Clone, PartialEq)]
+pub struct KaCalibrationReport {
+    /// The fit, or None when the calibration queries gave too few regions to fit on.
+    pub fitted: Option<KaCalibration>,
+    /// Chance that two positions drawn from the sampled database sequences share a class:
+    /// the `match_prob` (`u` in the explainer) of the database against itself.
+    pub match_probability: f64,
+    /// Calibration queries searched.
+    pub n_queries: usize,
+    /// Regions those queries produced, at any score.
+    pub n_regions: usize,
+}
+
+/// What a calibration run is asked for; see `ProteinSearcher::calibrate_ka`.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct KaCalibrationSettings {
+    /// Mismatch penalty and give-up margin to fit for.
+    pub scoring: ExtensionScoring,
+    /// What the calibration queries are.
+    pub null: DecoyNull,
+    /// For `DecoyNull::Database`: what the reference queries, which decide where the fit
+    /// stops, are.
+    pub reference: DecoyNull,
+    /// How many database sequences to search.
+    pub n_queries: usize,
+    /// Seed of the sampler that picks them.
+    pub seed: u64,
+}
+
+/// Where the r_database and K in use came from; see `ProteinSearcher::resolve_ka`.
+#[derive(Debug, Clone, PartialEq)]
+pub enum KaSource {
+    /// Given on the command line (`--ka-k`), with the closed-form lambda per pair
+    /// (r_database 1).
+    Given,
+    /// A fit stored in the index when it was built.
+    Index(Box<KaCalibration>),
+    /// A fit run just now, before the search.
+    Fitted(Box<KaCalibration>),
+}
+
+impl Display for KaSource {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        match self {
+            KaSource::Given => write!(f, "--ka-k, closed-form lambda"),
+            KaSource::Index(fit) => write!(f, "stored in the index: {fit}"),
+            KaSource::Fitted(fit) => write!(f, "fitted now: {fit}"),
+        }
+    }
+}
+
+/// Chance that `n_segments` chained regions between an unrelated pair add up to at least
+/// `sum_normalised_score` (Karlin & Altschul 1993, PNAS 90:5873, equation 5 with the sum
+/// statistic's tail):
+///
+/// P(T_r >= t) ~ e^-t t^(r-1) / (r! (r-1)!), with r the number of regions and t the sum.
+///
+/// Each region's normalised score is lambda S_i - ln(K m n): its raw score in nats (the
+/// natural-log unit of chance), less the size of the search. The approximation needs each
+/// of them positive and the sum well above 0; a non-positive sum returns 1.
+pub fn karlin_altschul_sum_p(sum_normalised_score: f64, n_segments: u32) -> f64 {
+    karlin_altschul_sum_ln_p(sum_normalised_score, n_segments).exp()
+}
+
+/// ln of `karlin_altschul_sum_p`, at most 0. The log form is what `chain_regions` keeps:
+/// a long chain's P underflows to 0 in `f64`, and its bits are read off ln P directly.
+pub fn karlin_altschul_sum_ln_p(sum_normalised_score: f64, n_segments: u32) -> f64 {
+    let (t, r) = (sum_normalised_score, n_segments);
+    if t <= 0.0 || r == 0 {
+        return 0.0;
+    }
+    let ln_fact = |x: u32| ln_factorial(u64::from(x));
+    (-t + (f64::from(r) - 1.0) * t.ln() - ln_fact(r) - ln_fact(r - 1)).min(0.0)
+}
+
+/// Fraction of an encoded sequence in each class, indexed by the class's byte. Gaps and
+/// unknowns count too, since a match against them is also a match in the run. An array,
+/// not a map: `compare` needs the target's composition once per candidate pair, and 256
+/// floats on the stack cost nothing to build or drop.
+pub type ClassComposition = [f64; 256];
+
+fn class_composition(encoded: &[u8]) -> ClassComposition {
+    let mut counts = [0.0f64; 256];
+    for &b in encoded {
+        counts[b as usize] += 1.0;
+    }
+    let n = encoded.len().max(1) as f64;
+    for c in counts.iter_mut() {
+        *c /= n;
+    }
+    counts
+}
+
+/// Probability that two positions drawn from these compositions fall in the same class.
+fn match_probability(p: &ClassComposition, q: &ClassComposition) -> f64 {
+    p.iter().zip(q).map(|(a, b)| a * b).sum()
+}
+
+/// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
+/// falls in the same class with probability `match_prob`: the positive root of
+/// match_prob e^x + (1 - match_prob) e^(-penalty x) = 1. The explainer
+/// (<https://seanome.github.io/kmerseek/karlin_altschul_explainer.html>) calls `match_prob`
+/// `u`.
+///
+/// A positive root exists only when the expected score match_prob - penalty (1 - match_prob)
+/// is negative, i.e. match_prob < penalty / (1 + penalty). Above that, agreement is what
+/// these two compositions do by default and no run of it is surprising: returns 0.
+///
+/// The root is found by bisection between 0 and an upper bound. The left side is convex,
+/// equals 1 at x = 0 and falls from there, so it crosses 1 exactly once above 0. The upper
+/// bound starts at 1 and doubles until the left side is above 1 there, which puts the root
+/// between 0 and it; e^x overflows by x = 1024, so that takes at most ten doublings.
+pub fn karlin_altschul_lambda(match_prob: f64, penalty: f64) -> f64 {
+    let mismatch_prob = 1.0 - match_prob;
+    if match_prob <= 0.0 || match_prob.is_nan() || match_prob - penalty * mismatch_prob >= 0.0 {
+        return 0.0;
+    }
+    let f = |x: f64| match_prob * x.exp() + mismatch_prob * (-penalty * x).exp();
+    let mut upper = 1.0;
+    while f(upper) <= 1.0 {
+        upper *= 2.0;
+    }
+    let mut lower = 0.0;
+    for _ in 0..80 {
+        let mid = 0.5 * (lower + upper);
+        if f(mid) > 1.0 {
+            upper = mid;
+        } else {
+            lower = mid;
+        }
+    }
+    let root = 0.5 * (lower + upper);
+    // At the boundary match_prob = penalty / (1 + penalty) the root is 0 up to rounding; a
+    // lambda of 1e-8 would make every E-value ~ K m n, which is the same "no evidence" answer.
+    if root < 1e-6 {
+        0.0
+    } else {
+        root
+    }
 }
 
 impl SearchFilters {
@@ -196,6 +408,13 @@ pub struct SearchResultCsv {
     /// Encoded positions inside the region where query and target disagree. Zero unless the
     /// search ran with `--extend-mismatch-penalty`.
     pub region_n_mismatches: u32,
+    /// Karlin-Altschul bit score of the region (see MatchedRegion::ka_bits). 0 without
+    /// `--extend-mismatch-penalty`.
+    pub region_ka_bits: f64,
+    /// E-value of the region against the searched database (see MatchedRegion::evalue).
+    pub region_evalue: f64,
+    /// Number of extended regions chained into this row (see MatchedRegion::n_chained).
+    pub region_n_chained: u32,
 }
 
 impl SearchResultCsv {
@@ -264,6 +483,9 @@ impl SearchResultCsv {
             region_tfidf: region.tfidf,
             region_mean_idf: region.mean_idf,
             region_n_mismatches: region.n_mismatches,
+            region_ka_bits: region.ka_bits,
+            region_evalue: region.evalue,
+            region_n_chained: region.n_chained,
         }
     }
 }
@@ -516,6 +738,29 @@ pub struct MatchedRegion {
     /// rare k-mers and a long run of common ones can be told apart without the length term.
     /// Divides by the same `n_shared` the Poisson test uses. 0.0 without DB context.
     pub mean_idf: f64,
+    /// Karlin-Altschul bit score of the region as an ungapped alignment in the encoded
+    /// alphabet: (lambda * S - ln K) / ln 2, where S = matches - penalty * mismatches over the
+    /// region and lambda is the root of sum_ij p_i q_j exp(lambda s_ij) = 1 for THIS pair's
+    /// class compositions (Karlin & Altschul 1990; per-pair composition after Schaffer et
+    /// al. 2001). Zero when the pair's expected score per position is not negative, which is
+    /// what two hydrophobic runs or two low-complexity stretches look like: no positive
+    /// lambda exists, so no length of agreement counts as evidence. The Poisson count has no
+    /// such floor: it sees a transmembrane helix against any other as a long exact run.
+    /// Reported only; regions are still ranked and filtered by `poisson_score`. Requires an extension penalty (`ExtensionParams`), since the score's mismatch term
+    /// is the penalty; 0.0 otherwise.
+    pub ka_bits: f64,
+
+    /// How many extended regions this row is a chain of (see `chain_regions`). 1 for a region
+    /// that stands alone, which is every region unless `--chain-max-gap` is set.
+    pub n_chained: u32,
+
+    /// E-value for `ka_bits` against the searched database: K * m * n * exp(-lambda * S), with
+    /// m the query's encoded length and n = `db_n_kmers`, the number of distinct sketched
+    /// hashes per target summed over targets (about residues / scaled). K is `KaParams::k`,
+    /// fitted on the index for the alphabet, penalty, give-up margin and `--scaled` in use:
+    /// K absorbs the scaled factor, so a K measured at one `--scaled` does not carry to
+    /// another. Infinity without extension or DB context.
+    pub evalue: f64,
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -626,6 +871,9 @@ impl MatchedRegion {
             enrichment: 0.0,
             tfidf: 0.0,
             mean_idf: 0.0,
+            ka_bits: 0.0,
+            n_chained: 1,
+            evalue: f64::INFINITY,
         }
     }
 }
@@ -675,6 +923,10 @@ pub struct PreparedQuery<'a> {
     /// rescanning every one of the query's k-mers per region per target (see
     /// `ProteinSearcher::build_position_prefix`).
     pub position_prefix: Vec<f64>,
+    /// Class composition of the query's encoded sequence, for the per-pair Karlin-Altschul
+    /// lambda. Built once here rather than once per candidate pair. None when the sketch
+    /// carries no encoded sequence.
+    pub composition: Option<ClassComposition>,
 }
 
 impl SearchStats {
@@ -720,10 +972,250 @@ pub struct ProteinSearcher {
     extension: Option<ExtensionParams>,
 }
 
+/// Puts results in one fixed order, so the same search writes the same CSV on every run.
+///
+/// Candidates are compared in parallel over a `HashSet`, so they arrive in a different order
+/// each time. Results go by containment (highest first), then query md5, then target md5.
+/// Each result's regions go by query start, then target start, then the two ends.
+pub fn sort_results(results: &mut [SearchResult]) {
+    for result in results.iter_mut() {
+        result.matched_regions.sort_by_key(|r| (r.start, r.target_start, r.end, r.target_end));
+    }
+    results.sort_by(|a, b| {
+        b.containment
+            .total_cmp(&a.containment)
+            .then_with(|| a.query_md5.cmp(&b.query_md5))
+            .then_with(|| a.target_md5.cmp(&b.target_md5))
+    });
+}
+
 impl ProteinSearcher {
     /// Extend every matched region past its exact seed with these parameters. Off by default.
     pub fn set_extension(&mut self, params: Option<ExtensionParams>) {
         self.extension = params;
+    }
+
+    /// Fit r_database and K of this index for one mismatch penalty and give-up margin by searching
+    /// `n_queries` calibration queries built from the index's own sequences (`DecoyNull`)
+    /// and reading the slope and intercept off ln(regions with score S) against S
+    /// (`fit_scores`), the related pairs cut off.
+    ///
+    /// Filters are wide open (one shared k-mer, no p-value cap) so the curve holds every
+    /// region the procedure can produce; a filter a search adds only removes regions and
+    /// makes its E-values conservative. A query's hits on its own database entry are left
+    /// out. The searcher's extension setting is restored afterwards.
+    pub fn calibrate_ka(
+        &mut self,
+        settings: KaCalibrationSettings,
+    ) -> IndexResult<KaCalibrationReport> {
+        let previous = self.extension;
+        // K = 1 and r_database = 1, so a region's `ka_bits` x ln 2 is lambda_pair S.
+        self.extension = Some(ExtensionParams {
+            scoring: settings.scoring,
+            ka: KaParams { k: 1.0, r_database: 1.0 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        });
+        let report = self.run_calibration(settings);
+        self.extension = previous;
+        report
+    }
+
+    fn run_calibration(&self, settings: KaCalibrationSettings) -> IndexResult<KaCalibrationReport> {
+        let KaCalibrationSettings { scoring, null, reference, n_queries, seed } = settings;
+        let (queries, match_probability) = self.calibration_queries(null, n_queries, seed)?;
+        let scores = self.calibration_scores(&queries);
+        // For the database null the fit stops where the counts rise above the same queries
+        // shuffled (`reference`).
+        let fit = if null == DecoyNull::Database {
+            let (shuffled, _) = self.calibration_queries(reference, n_queries, seed)?;
+            let reference_scores = self.calibration_scores(&shuffled);
+            fit_scores_with_reference(&scores, &reference_scores)
+        } else {
+            fit_scores(&scores)
+        };
+        let n_queries = queries.len();
+        let query_residues: u64 =
+            queries.iter().map(|(_, q)| q.get_raw_sequence().map_or(0, |r| r.len() as u64)).sum();
+        let database_kmers = self.db_n_kmers as u64;
+        let lambda_analytic = karlin_altschul_lambda(match_probability, scoring.mismatch_penalty);
+        let fitted = fit.map(|fit| KaCalibration {
+            scoring,
+            null,
+            seed,
+            n_queries,
+            query_residues,
+            database_kmers,
+            n_regions: scores.len(),
+            match_probability,
+            lambda_analytic,
+            // The fit ran on x / BIN_WIDTH, so its slope per bin is r_database x width.
+            r_database: fit.lambda / BIN_WIDTH,
+            // ln(regions in the bin at x) = ln(K L N (1 - e^(-r_database w))) - r_database x,
+            // and r_database w is the fit's slope per bin.
+            k: fit.ln_intercept.exp()
+                / (query_residues as f64 * database_kmers as f64 * (1.0 - (-fit.lambda).exp())),
+            bin_width: BIN_WIDTH,
+            score_lo: fit.score_lo,
+            score_hi: fit.score_hi,
+            bend_score: fit.bend_score,
+            rms_residual: fit.rms_residual,
+            survival: fit.survival,
+            reference_survival: fit.reference_survival,
+            reference_lambda: fit.reference_lambda,
+            reference: (null == DecoyNull::Database).then_some(reference),
+        });
+        Ok(KaCalibrationReport { fitted, match_probability, n_queries, n_regions: scores.len() })
+    }
+
+    /// The calibration queries, each with the md5 of the database entry it came from, and
+    /// the database's match probability read off at least `COMPOSITION_SAMPLE` targets.
+    ///
+    /// `target_list` comes out of a DashMap, whose order changes from run to run, so the
+    /// sample is drawn from the md5s in sorted order to make the fit reproducible.
+    fn calibration_queries(
+        &self,
+        null: DecoyNull,
+        n_queries: usize,
+        seed: u64,
+    ) -> IndexResult<(Vec<(String, ProteinSketch)>, f64)> {
+        let mut md5s: Vec<&String> = self.target_list.iter().collect();
+        md5s.sort_unstable();
+        let mut rng = SplitMix64::new(seed);
+        let picks = rng.sample_indices(md5s.len(), n_queries.max(COMPOSITION_SAMPLE));
+        let mut queries = Vec::with_capacity(n_queries);
+        // A fixed-order array, not a HashMap: summing a map's values in its random order
+        // could change the last bit of the match probability from run to run.
+        let mut class_counts = [0u64; 256];
+        for idx in picks {
+            let md5 = md5s[idx].clone();
+            let Some(target) = self.target_sketch(&md5)? else { continue };
+            if let Some(encoded) = target.get_moltype_sequence() {
+                for b in encoded.bytes() {
+                    class_counts[b as usize] += 1;
+                }
+            }
+            if queries.len() < n_queries {
+                if let Some(query) = self.decoy_from_target(&target, null, &mut rng)? {
+                    queries.push((md5, query));
+                }
+            }
+        }
+        let total = class_counts.iter().sum::<u64>().max(1) as f64;
+        let composition: ClassComposition = std::array::from_fn(|i| class_counts[i] as f64 / total);
+        let match_probability = match_probability(&composition, &composition);
+        Ok((queries, match_probability))
+    }
+
+    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
+    /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
+    /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
+    /// exactly lambda_pair S with the closed-form per-pair lambda.
+    fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
+        let filters = SearchFilters {
+            threshold: 0.0,
+            min_shared_kmers: 1,
+            max_query_pvalue: f64::INFINITY,
+            min_region_score: f64::NEG_INFINITY,
+        };
+        queries
+            .par_iter()
+            .flat_map_iter(|(source_md5, query)| {
+                self.search_one(query, &filters, queries.len())
+                    .into_iter()
+                    .filter(|r| &r.target_md5 != source_md5)
+                    .flat_map(|r| {
+                        r.matched_regions
+                            .into_iter()
+                            .map(|region| region.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH)
+                    })
+                    .collect::<Vec<f64>>()
+            })
+            .collect()
+    }
+
+    /// The calibration query for one target, built the way a search query would be, or
+    /// None when the index did not store raw sequences.
+    fn decoy_from_target(
+        &self,
+        target: &ProteinSketch,
+        null: DecoyNull,
+        rng: &mut SplitMix64,
+    ) -> IndexResult<Option<ProteinSketch>> {
+        let Some(raw) = target.get_raw_sequence() else { return Ok(None) };
+        let decoy_seq = make_decoy(raw, null, rng);
+        let mut decoy = ProteinSketch::new(
+            &format!("{null}_{}", target.signature().name),
+            self.index.ksize(),
+            self.index.scaled(),
+            self.index.moltype(),
+        )?;
+        decoy.set_remove_low_complexity(self.index.remove_low_complexity());
+        decoy.add_protein(&decoy_seq, true)?;
+        Ok(Some(decoy))
+    }
+
+    /// A target by md5 from memory, the search cache, or RocksDB, cached for later searches.
+    fn target_sketch(&self, md5: &str) -> IndexResult<Option<ProteinSketch>> {
+        if let Some(entry) = self.index.get_signatures().get(md5) {
+            return Ok(Some(entry.value().clone()));
+        }
+        if let Some(entry) = self.sig_cache.get(md5) {
+            return Ok(Some(entry.value().clone()));
+        }
+        let Some(target) = self.index.get_signature_by_md5(md5)? else { return Ok(None) };
+        self.sig_cache.insert(md5.to_string(), target.clone());
+        Ok(Some(target))
+    }
+
+    /// The r_database and K a search should use for `settings.scoring`, and where they
+    /// came from, in order of preference: `explicit` (`--ka-k`, with the closed-form
+    /// lambda); a fit stored in the index for this scoring, whatever null it used; a fresh
+    /// fit on `settings.n_queries` calibration queries if that is nonzero. Otherwise an
+    /// error: an E-value without a fit for its own index is not printed.
+    pub fn resolve_ka(
+        &mut self,
+        explicit: Option<f64>,
+        settings: KaCalibrationSettings,
+    ) -> IndexResult<(KaParams, KaSource)> {
+        if let Some(k) = explicit {
+            return Ok((KaParams { k, r_database: 1.0 }, KaSource::Given));
+        }
+        if let Some(stored) = self.index.ka_calibration(settings.scoring)? {
+            return Ok((stored.ka_params(), KaSource::Index(Box::new(stored))));
+        }
+        let ExtensionScoring { mismatch_penalty, xdrop } = settings.scoring;
+        if settings.n_queries == 0 {
+            return Err(anyhow::anyhow!(
+                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
+                 margin {xdrop}, and --ka-queries 0 forbids fitting one now. Rebuild the \
+                 index with that penalty and give-up margin, search with --ka-queries set, or \
+                 pass --ka-k."
+            )
+            .into());
+        }
+        let report = self.calibrate_ka(settings)?;
+        match report.fitted {
+            Some(fit) => Ok((fit.ka_params(), KaSource::Fitted(Box::new(fit)))),
+            // decoy_from_target needs a stored raw sequence, so no queries at all means the
+            // index has none to build them from, and more --ka-queries cannot help.
+            None if report.n_queries == 0 => Err(anyhow::anyhow!(
+                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
+                 margin {xdrop}: the index stores no raw sequences to build calibration \
+                 queries from, so no fit can be made on it. Pass --ka-k."
+            )
+            .into()),
+            None => Err(anyhow::anyhow!(
+                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
+                 margin {xdrop}: {} calibration queries gave {} regions, fewer than the \
+                 {MIN_FIT_POINTS} score bins of {MIN_BIN_COUNT} regions the fit needs. Rebuild \
+                 the index with --ka-queries set higher, search with --ka-queries, or pass \
+                 --ka-k.",
+                report.n_queries,
+                report.n_regions,
+            )
+            .into()),
+        }
     }
 
     /// Create a searcher over an index built in this process.
@@ -790,6 +1282,7 @@ impl ProteinSearcher {
             ),
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
+            composition: query.get_moltype_sequence().map(|enc| class_composition(enc.as_bytes())),
         }
     }
 
@@ -872,7 +1365,7 @@ impl ProteinSearcher {
     ///   allocated into the returned `Vec` (see `SearchFilters`)
     ///
     /// # Returns
-    /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    /// Vector of SearchResult containing all similarity metrics, in `sort_results` order
     #[must_use = "search results should be used to process query matches"]
     pub fn search(
         &self,
@@ -908,11 +1401,8 @@ impl ProteinSearcher {
 
         progress.finish_with_message("Search complete");
 
-        // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
-        sorted_results.sort_by(|a, b| {
-            b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sort_results(&mut sorted_results);
 
         Ok(sorted_results)
     }
@@ -955,7 +1445,7 @@ impl ProteinSearcher {
         //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
         //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
         let sigs = self.index.get_signatures();
-        candidate_set
+        let mut results: Vec<SearchResult> = candidate_set
             .par_iter()
             .filter_map(|&idx| {
                 let md5 = &self.target_list[idx as usize];
@@ -976,7 +1466,9 @@ impl ProteinSearcher {
                 self.sig_cache.insert(md5.clone(), target);
                 result
             })
-            .collect()
+            .collect();
+        sort_results(&mut results);
+        results
     }
 
     /// Perform all-vs-all search without cloning signatures
@@ -992,7 +1484,7 @@ impl ProteinSearcher {
     /// returned `Vec` (see `SearchFilters`).
     ///
     /// # Returns
-    /// Vector of SearchResult containing all similarity metrics, sorted by containment score
+    /// Vector of SearchResult containing all similarity metrics, in `sort_results` order
     #[must_use = "search results should be used to process query matches"]
     pub fn search_all_vs_all(&self, filters: &SearchFilters) -> Result<Vec<SearchResult>> {
         // Collect all signatures as owned ProteinSketch values to use as queries.
@@ -1043,11 +1535,8 @@ impl ProteinSearcher {
 
         progress.finish_with_message("Search complete");
 
-        // Sort by containment score (descending) - this is the primary ranking metric
         let mut sorted_results = all_results;
-        sorted_results.sort_by(|a, b| {
-            b.containment.partial_cmp(&a.containment).unwrap_or(std::cmp::Ordering::Equal)
-        });
+        sort_results(&mut sorted_results);
 
         Ok(sorted_results)
     }
@@ -1130,9 +1619,14 @@ impl ProteinSearcher {
         let query_poisson_pvalue =
             poisson_survival(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
+        // Floating-point addition is not associative, so summing in HashSet order changes the
+        // last digit from run to run. Every per-hash sum below walks this sorted copy instead.
+        let mut shared_hashes: Vec<u64> = intersection.iter().copied().collect();
+        shared_hashes.sort_unstable();
+
         // Calculate database-specific overlap metrics
-        let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&intersection);
-        let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&intersection);
+        let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&shared_hashes);
+        let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&shared_hashes);
 
         // Build the similarity result using the pre-computed intersection and mins sets
         let mut result = calculate_similarity_from_precomputed(
@@ -1190,6 +1684,49 @@ impl ProteinSearcher {
             region.mean_idf = region.tfidf / n_shared as f64;
         }
 
+        // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
+        // Only meaningful with a mismatch penalty, which is the score's mismatch term.
+        if let Some(params) = self.extension {
+            if let (Some(q_enc), Some(t_enc), Some(q_composition)) = (
+                query.sketch.get_moltype_sequence(),
+                target.get_moltype_sequence(),
+                query.composition.as_ref(),
+            ) {
+                let match_prob =
+                    match_probability(q_composition, &class_composition(t_enc.as_bytes()));
+                let ka_lambda = karlin_altschul_lambda(match_prob, params.scoring.mismatch_penalty)
+                    * params.ka.r_database;
+                let m = q_enc.len() as f64;
+                let n = self.db_n_kmers as f64;
+                for region in result.matched_regions.iter_mut() {
+                    let matches = region.length as f64 - region.n_mismatches as f64;
+                    let raw =
+                        matches - params.scoring.mismatch_penalty * region.n_mismatches as f64;
+                    if ka_lambda > 0.0 && params.ka.k > 0.0 {
+                        region.ka_bits = params.ka.bits(ka_lambda, raw);
+                        region.evalue = params.ka.evalue(ka_lambda, raw, m, n);
+                    }
+                }
+                if params.chain_max_gap > 0 && ka_lambda > 0.0 && params.ka.k > 0.0 {
+                    let moltype = query.sketch.moltype().to_string();
+                    let pair = ChainContext {
+                        q: q_enc.as_bytes(),
+                        t: t_enc.as_bytes(),
+                        q_raw: query.sketch.get_raw_sequence(),
+                        t_raw: target.get_raw_sequence(),
+                        moltype: &moltype,
+                        params,
+                        ka_lambda,
+                        m,
+                        n_t: t_enc.len() as f64,
+                        n_targets: self.stats.total_signatures as f64,
+                    };
+                    result.matched_regions =
+                        chain_regions(std::mem::take(&mut result.matched_regions), &pair);
+                }
+            }
+        }
+
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
         // one.
@@ -1208,7 +1745,7 @@ impl ProteinSearcher {
         let joint_kmer_freq = if let Some(qfreqs) = &self.query_kmer_frequencies {
             let total_q = self.total_queries as f64;
             let total_t = self.stats.total_signatures as f64;
-            intersection
+            shared_hashes
                 .iter()
                 .map(|&h| {
                     let fq = qfreqs.get(&h).copied().unwrap_or(0) as f64 / total_q;
@@ -1222,7 +1759,7 @@ impl ProteinSearcher {
         };
 
         result.query_tfidf = query.tfidf;
-        result.coverage_score = self.calculate_coverage_score(&intersection, target);
+        result.coverage_score = self.calculate_coverage_score(&shared_hashes, target);
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.query_expected_shared_kmers = query_expected_shared_kmers;
@@ -1265,8 +1802,8 @@ impl ProteinSearcher {
 
     /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
     /// Higher values = matched k-mers are more common in the target DB (less discriminative).
-    /// Range: [0, 1].
-    pub fn calculate_mean_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
+    /// Range: [0, 1]. Pass the hashes sorted so the sum is the same on every run.
+    pub fn calculate_mean_matched_kmer_freq(&self, intersection: &[u64]) -> f64 {
         if intersection.is_empty() {
             return 0.0;
         }
@@ -1298,7 +1835,7 @@ impl ProteinSearcher {
     /// `alpha = COVERAGE_LENGTH_EXPONENT` and L the target length in residues. See
     /// `SearchResult::coverage_score`. A hash the database has never seen contributes 0,
     /// matching `calculate_tfidf`.
-    fn calculate_coverage_score(&self, intersection: &HashSet<u64>, target: &ProteinSketch) -> f64 {
+    fn calculate_coverage_score(&self, intersection: &[u64], target: &ProteinSketch) -> f64 {
         let Some(target_length) = target.get_raw_sequence().map(str::len) else {
             return 0.0;
         };
@@ -1309,7 +1846,7 @@ impl ProteinSearcher {
         idf_sum * (target_length as f64).powf(-COVERAGE_LENGTH_EXPONENT)
     }
 
-    fn calculate_sum_matched_kmer_freq(&self, intersection: &HashSet<u64>) -> f64 {
+    fn calculate_sum_matched_kmer_freq(&self, intersection: &[u64]) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
         intersection
             .iter()
@@ -2066,6 +2603,172 @@ pub fn extend_regions(
     merged
 }
 
+/// The pair `chain_regions` works on: its sequences, the extension settings, and the
+/// numbers the sum statistic needs, built once per pair in `ProteinSearcher::compare`.
+pub struct ChainContext<'a> {
+    /// The query's encoded sequence.
+    pub q: &'a [u8],
+    /// The target's encoded sequence.
+    pub t: &'a [u8],
+    /// The query's raw residues, for the chain's `subseq`. None leaves regions unchained.
+    pub q_raw: Option<&'a str>,
+    /// The target's raw residues, for the chain's `target_subseq`.
+    pub t_raw: Option<&'a str>,
+    /// The alphabet `q` and `t` are encoded in, so a chain's recount lets an ambiguous
+    /// residue agree with either class it stands for, as the seeds did.
+    pub moltype: &'a str,
+    /// Mismatch penalty, K and the chaining caps.
+    pub params: ExtensionParams,
+    /// This pair's lambda, r_database applied.
+    pub ka_lambda: f64,
+    /// Query length in residues, m.
+    pub m: f64,
+    /// Target length in residues, n_t.
+    pub n_t: f64,
+    /// Number of targets in the database, N: the sum P-value times N is the chain's
+    /// E-value.
+    pub n_targets: f64,
+}
+
+/// Chain colinear extended regions within `chain_max_gap` residues of each other on the
+/// query and `chain_max_shift` diagonals apart into one region, scored with
+/// Karlin-Altschul sum statistics.
+///
+/// Why. A region is one gapless run and the benchmark's transfer rule labels it only when
+/// it covers half the target domain, so a 200-residue domain needs a single clean
+/// 100-residue run: the exact-match ceiling in a different coat. Two runs on one diagonal
+/// separated by a stretch the give-up margin would not cross are one alignment with a bad patch in
+/// it, and Karlin & Altschul 1993 give the statistic for the sum of their scores.
+///
+/// The chain spans from the first region's start to the last region's end on both
+/// sequences; `n_shared` is summed, `n_mismatches` is recounted over the whole span (the
+/// gap's disagreements included, so the span is honest about what it contains),
+/// `n_chained` is the number of members. `tfidf` is summed over the members and `mean_idf`
+/// divides it by the summed `n_shared`. Its E-value is the sum P-value times the number
+/// of targets: each member's normalised score is lambda S_i - ln(K m n_t) with n_t the
+/// target length, so for a single region this reduces to the per-region E within the
+/// approximation n = N n_t. So a chained row's `evalue` uses N n_t for the database size
+/// and an unchained row's uses `db_n_kmers`; the two are close but not the same formula.
+///
+/// Members must each have a positive normalised score: the sum statistic assumes it, and
+/// a member at or below 0 lowers the sum, which would give the chain a worse E-value than
+/// its strongest member alone. Such a region stays its own row and closes the open chain.
+/// Members must be colinear (each starts after the previous one ends, on both sequences)
+/// and within `chain_max_shift` diagonals of the first member, so a chain's net indel is
+/// at most that size. With a shift the query
+/// and target spans differ in length; `length` is the query span, `n_mismatches` is the
+/// members' sum (the gaps are not scored either way) and the sum statistic is what
+/// carries the evidence.
+pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Vec<MatchedRegion> {
+    if regions.len() < 2 {
+        return regions;
+    }
+    let (Some(q_raw), Some(t_raw)) = (pair.q_raw, pair.t_raw) else {
+        return regions;
+    };
+    let (q, t, params) = (pair.q, pair.t, pair.params);
+    let agree = residues_agree(pair.moltype);
+    let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
+    // A member's raw score, counted over its own span with an ambiguous residue agreeing
+    // with either class it stands for, as the chain's recount below does. The region's
+    // stored n_mismatches cannot be used: extend_regions counts B, J and Z as mismatches.
+    let raw_score = |r: &MatchedRegion| {
+        let (qs, qe, ts) = (r.start as usize, r.end as usize, r.target_start as usize);
+        let mismatches = q[qs..qe].iter().zip(&t[ts..]).filter(|&(&a, &b)| !agree(a, b)).count();
+        (qe - qs - mismatches) as f64 - params.scoring.mismatch_penalty * mismatches as f64
+    };
+    let mut sorted = regions;
+    sorted.sort_by_key(|r| (r.start, r.target_start));
+
+    let mut out: Vec<MatchedRegion> = Vec::with_capacity(sorted.len());
+    let mut chain: Vec<MatchedRegion> = Vec::new();
+    let ln_mn = (pair.m * pair.n_t).ln();
+    let ln_kmn = params.ka.k.ln() + ln_mn;
+    // lambda S_i - ln(K m n_t): a member's score in nats less the size of the search.
+    let normalised = |r: &MatchedRegion| pair.ka_lambda * raw_score(r) - ln_kmn;
+    // Called only with a member in the chain: every call site checks the chain is not
+    // empty first.
+    let flush = |chain: &mut Vec<MatchedRegion>, out: &mut Vec<MatchedRegion>| {
+        if chain.len() == 1 {
+            out.push(chain.pop().unwrap());
+            return;
+        }
+        let r = chain.len() as u32;
+        let t_sum: f64 = chain.iter().map(normalised).sum();
+        let ln_p = karlin_altschul_sum_ln_p(t_sum, r);
+        let first = &chain[0];
+        let last = &chain[chain.len() - 1];
+        let (qs, qe) = (first.start as usize, last.end as usize);
+        let (ts, te) = (first.target_start as usize, last.target_end as usize);
+        let mut merged = first.clone();
+        merged.end = qe as u32;
+        merged.target_end = te as u32;
+        merged.length = (qe - qs) as u32;
+        merged.n_shared = chain.iter().map(|x| x.n_shared).sum();
+        // Recount over the span only when every member is on the first member's diagonal.
+        // First and last on one diagonal is not enough: with a middle member shifted, the
+        // zip would compare it one residue off and count its matches as mismatches.
+        let one_diagonal = chain.iter().all(|x| diagonal(x) == diagonal(first));
+        merged.n_mismatches = if one_diagonal {
+            q[qs..qe].iter().zip(&t[ts..te]).filter(|&(&a, &b)| !agree(a, b)).count() as u32
+        } else {
+            chain.iter().map(|x| x.n_mismatches).sum()
+        };
+        merged.n_chained = r;
+        merged.subseq = q_raw[qs..qe].to_string();
+        merged.target_subseq = t_raw[ts..te].to_string();
+        merged.moltype_seq = String::from_utf8_lossy(&t[ts..te]).into_owned();
+        merged.evalue = ln_p.exp() * pair.n_targets;
+        // Bits on the same scale as a single region, whose bits are (lambda S - ln K) / ln 2.
+        // For one member -ln P = lambda S - ln(K m n_t), so adding ln(m n_t) back puts the
+        // size of the search where a single region has it: in the E-value, not the bits.
+        merged.ka_bits = ((ln_mn - ln_p) / std::f64::consts::LN_2).max(0.0);
+        // The chain's Poisson fields describe the first member only and would mislead; the
+        // expectation is re-summed over the span by the caller if it needs it. Keep the
+        // strongest member's tail so the pair-level filter sees the evidence it saw before.
+        merged.poisson_score = chain.iter().map(|x| x.poisson_score).fold(0.0, f64::max);
+        merged.tail_probability = chain.iter().map(|x| x.tail_probability).fold(1.0, f64::min);
+        merged.expected_shared_kmers = chain.iter().map(|x| x.expected_shared_kmers).sum();
+        merged.enrichment = fold_enrichment(merged.n_shared, merged.expected_shared_kmers);
+        // TF-IDF sums over the members' shared windows, like n_shared; the windows in the
+        // gaps between members are not shared and add nothing.
+        merged.tfidf = chain.iter().map(|x| x.tfidf).sum();
+        merged.mean_idf = merged.tfidf / merged.n_shared as f64;
+        out.push(merged);
+        chain.clear();
+    };
+    // Greedy colinear chaining in query order: a region joins the open chain when its
+    // normalised score is positive, it starts after the chain's last member on both
+    // sequences, within the gap cap on the query, and within `chain_max_shift` diagonals
+    // of the chain's first member. Anything else closes the chain. Greedy, not optimal:
+    // two interleaved chains on far-apart diagonals would be split at each alternation,
+    // which is the conservative outcome.
+    for r in sorted {
+        if normalised(&r) <= 0.0 {
+            if !chain.is_empty() {
+                flush(&mut chain, &mut out);
+            }
+            out.push(r);
+            continue;
+        }
+        if let Some(last) = chain.last() {
+            let colinear = r.start >= last.end && r.target_start >= last.target_end;
+            let gap_ok = colinear && r.start - last.end <= params.chain_max_gap;
+            let shift_ok = (diagonal(&chain[0]) - diagonal(&r)).unsigned_abs()
+                <= params.chain_max_shift as u64;
+            if !(gap_ok && shift_ok) {
+                flush(&mut chain, &mut out);
+            }
+        }
+        chain.push(r);
+    }
+    if !chain.is_empty() {
+        flush(&mut chain, &mut out);
+    }
+    out.sort_by_key(|r| r.start);
+    out
+}
+
 impl ProteinSearcher {
     // Note: find_signature_by_name and get_stored_encoded_sequence were removed as they were unused.
     // If needed in the future, they can be re-added.
@@ -2711,8 +3414,9 @@ mod tests {
         Ok(())
     }
 
-    /// The HP pattern behind `one_flip_pair`: 25 positions with no repeated 8-mer, so at
-    /// k=8 the only shared k-mers between two copies sit on one diagonal.
+    /// The HP pattern behind `one_flip_pair` and `one_deletion_pair`: 25 positions with no
+    /// repeated 8-mer, so at k=8 the only shared k-mers between two copies sit on one
+    /// diagonal.
     const HP_PATTERN: &str = "hpphhpphphphhppphhhppphhp";
 
     /// A protein whose Lehninger HP encoding is `pattern`. h-class residues cycle through
@@ -2746,14 +3450,343 @@ mod tests {
         (sketch_from_hp_pattern("q", HP_PATTERN), sketch_from_hp_pattern("t", &flipped))
     }
 
-    /// Where a region sits and what it counts; the fields `extend_regions` promises to
-    /// leave alone when it has nothing to work with.
+    /// Where a region sits and what it counts; the fields `extend_regions` and
+    /// `chain_regions` promise to leave alone when they have nothing to work with.
     fn region_span(r: &MatchedRegion) -> (u32, u32, u32, u32, u32, u32) {
         (r.start, r.end, r.target_start, r.target_end, r.n_shared, r.n_mismatches)
     }
 
+    /// The same pattern against itself with position 9 deleted from the target, so the
+    /// exact runs are 0..9 on the main diagonal and 10..25 one diagonal over (target
+    /// 9..24): one alignment with a one-residue indel in it. Position 9 is the one
+    /// deletion that leaves no other shared 8-mer and lets neither run cross the gap.
+    fn one_deletion_pair() -> (ProteinSketch, ProteinSketch) {
+        let deleted = format!("{}{}", &HP_PATTERN[..9], &HP_PATTERN[10..]);
+        (sketch_from_hp_pattern("q", HP_PATTERN), sketch_from_hp_pattern("t", &deleted))
+    }
+
     fn extension(mismatch_penalty: f64, xdrop: f64) -> ExtensionParams {
-        ExtensionParams { scoring: ExtensionScoring { mismatch_penalty, xdrop } }
+        ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty, xdrop },
+            ka: KaParams { k: 0.1, r_database: 1.0 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        }
+    }
+
+    #[test]
+    fn test_karlin_altschul_sum_p() {
+        // r = 1 is the plain exponential tail.
+        assert_relative_eq!(karlin_altschul_sum_p(3.0, 1), (-3.0f64).exp(), epsilon = 1e-12);
+        // r = 2: e^-t t / (2! 1!).
+        assert_relative_eq!(
+            karlin_altschul_sum_p(4.0, 2),
+            (-4.0f64).exp() * 4.0 / 2.0,
+            epsilon = 1e-12
+        );
+        assert_eq!(karlin_altschul_sum_p(0.0, 2), 1.0);
+        assert_eq!(karlin_altschul_sum_p(-1.0, 1), 1.0);
+        assert!(karlin_altschul_sum_p(50.0, 3) < karlin_altschul_sum_p(20.0, 3));
+        // The log form is what a chain keeps: it neither underflows nor exceeds 0.
+        assert_relative_eq!(karlin_altschul_sum_ln_p(3.0, 1), -3.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            karlin_altschul_sum_ln_p(0.5, 2),
+            -0.5 + 0.5f64.ln() - 2f64.ln(),
+            epsilon = 1e-12
+        );
+        assert!(karlin_altschul_sum_ln_p(0.001, 1) <= 0.0);
+        assert_relative_eq!(
+            karlin_altschul_sum_ln_p(2000.0, 2),
+            -2000.0 + 2000f64.ln() - 2f64.ln(),
+            epsilon = 1e-9
+        );
+        assert_eq!(karlin_altschul_sum_p(2000.0, 2), 0.0, "P itself underflows there");
+    }
+
+    #[test]
+    fn test_chain_regions_joins_one_diagonal_within_gap() {
+        // Two exact seeds on one diagonal with a bad patch between them that a strict
+        // extension will not cross; chaining joins them, a gap cap below the patch does not.
+        let (q, t) = one_flip_pair();
+        let intersection = q.intersect(&t);
+        let exact = find_matched_regions(&q, &t, &intersection);
+        assert_eq!(exact.len(), 2);
+        let strict = ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 5,
+            chain_max_shift: 0,
+        };
+        let mut ext = extend_regions(exact.clone(), &q, &t, strict);
+        assert_eq!(ext.len(), 2);
+        // compare() sets each region's TF-IDF before chaining; the chain adds them up.
+        (ext[0].tfidf, ext[1].tfidf) = (4.0, 6.0);
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let pair = ChainContext {
+            q: qe.as_bytes(),
+            t: te.as_bytes(),
+            q_raw: q.get_raw_sequence(),
+            t_raw: t.get_raw_sequence(),
+            moltype: "hp",
+            params: strict,
+            ka_lambda: 0.5,
+            m: 25.0,
+            n_t: 25.0,
+            n_targets: 100.0,
+        };
+        let chained = chain_regions(ext.clone(), &pair);
+        assert_eq!(chained.len(), 1, "{chained:?}");
+        let c = &chained[0];
+        assert_eq!((c.start, c.end, c.target_start, c.target_end), (0, 25, 0, 25));
+        assert_eq!(c.n_chained, 2);
+        assert_eq!(c.n_shared, 10);
+        assert_eq!(c.n_mismatches, 1);
+        assert_eq!(c.length, 25);
+        assert_eq!((c.tfidf, c.mean_idf), (10.0, 1.0));
+        // Two members of 12 and 12 residues at lambda 0.5 against ln(K m n_t) = ln(0.03 x
+        // 625): t = 2 (6 - 2.931) = 6.138, P = e^-t t / 2, E = 100 P, and the bits are
+        // ln(m n_t) - ln P over ln 2.
+        let t_sum = 2.0 * (0.5 * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
+        let p = (-t_sum).exp() * t_sum / 2.0;
+        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            c.ka_bits,
+            (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
+            epsilon = 1e-12
+        );
+        let tight = ChainContext { params: ExtensionParams { chain_max_gap: 0, ..strict }, ..pair };
+        let kept = chain_regions(ext.clone(), &tight);
+        assert_eq!(kept.len(), 2);
+        assert!(kept.iter().all(|r| r.n_chained == 1));
+    }
+
+    /// Chain `members` of `q` against `t`, both built from HP patterns, as `compare` would
+    /// with lambda 2, K 0.1 and m = n_t = 25, so ln(K m n_t) = 4.135 and an exact run of 3
+    /// or more residues has a positive normalised score. Each member is (query start,
+    /// query end, target start, mismatches).
+    fn chain_hp(
+        t_pattern: &str,
+        members: &[(u32, u32, u32, u32)],
+        params: ExtensionParams,
+    ) -> Vec<MatchedRegion> {
+        let q = sketch_from_hp_pattern("q", HP_PATTERN);
+        let t = sketch_from_hp_pattern("t", t_pattern);
+        let base = find_matched_regions(&q, &q, &q.intersect(&q)).remove(0);
+        let regions = members
+            .iter()
+            .map(|&(start, end, target_start, n_mismatches)| MatchedRegion {
+                start,
+                end,
+                target_start,
+                target_end: target_start + (end - start),
+                length: end - start,
+                n_mismatches,
+                ..base.clone()
+            })
+            .collect();
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let pair = ChainContext {
+            q: qe.as_bytes(),
+            t: te.as_bytes(),
+            q_raw: q.get_raw_sequence(),
+            t_raw: t.get_raw_sequence(),
+            moltype: "hp",
+            params,
+            ka_lambda: 2.0,
+            m: 25.0,
+            n_t: 25.0,
+            n_targets: 100.0,
+        };
+        chain_regions(regions, &pair)
+    }
+
+    #[test]
+    fn test_chain_regions_sums_mismatches_when_a_middle_member_shifts() {
+        // Position 8 deleted from the target and a p inserted at 15: exact runs on
+        // diagonals 0, -1 and 0. First and last share a diagonal, but a recount over the
+        // span would compare the middle run one residue off and count mismatches that
+        // are not there. The members' own counts, all 0, are summed instead.
+        let t = format!("{}{}p{}", &HP_PATTERN[..8], &HP_PATTERN[9..16], &HP_PATTERN[16..]);
+        let params =
+            ExtensionParams { chain_max_gap: 2, chain_max_shift: 1, ..extension(2.0, 8.0) };
+        let chained = chain_hp(&t, &[(0, 8, 0, 0), (9, 16, 8, 0), (16, 25, 16, 0)], params);
+        assert_eq!(chained.len(), 1, "{chained:?}");
+        assert_eq!((chained[0].n_chained, chained[0].n_mismatches), (3, 0));
+    }
+
+    #[test]
+    fn test_chain_regions_leaves_out_a_member_with_no_score() {
+        // Two exact runs on one diagonal, 12 and 2 residues. The short one scores
+        // 2 x 2 - 4.135 < 0, so adding it would lower the chain's sum below the long run's
+        // score alone. It stays its own row and the long run keeps its own E-value.
+        let params = ExtensionParams { chain_max_gap: 5, ..extension(2.0, 8.0) };
+        let out = chain_hp(HP_PATTERN, &[(0, 12, 0, 0), (14, 16, 14, 0)], params);
+        assert_eq!(out.len(), 2, "{out:?}");
+        assert!(out.iter().all(|r| r.n_chained == 1));
+        assert_eq!(((out[0].start, out[0].end), (out[1].start, out[1].end)), ((0, 12), (14, 16)));
+    }
+
+    #[test]
+    fn test_chain_regions_caps_the_net_shift_from_the_first_member() {
+        // Positions 6, 12 and 18 deleted from the target: exact runs on diagonals 0, -1,
+        // -2 and -3, one residue apart on the query. Each step is one diagonal, but at
+        // --chain-max-shift 1 a chain may not drift more than one diagonal from its first
+        // member, so the four runs make two chains of two.
+        let t = format!(
+            "{}{}{}{}",
+            &HP_PATTERN[..6],
+            &HP_PATTERN[7..12],
+            &HP_PATTERN[13..18],
+            &HP_PATTERN[19..]
+        );
+        let params =
+            ExtensionParams { chain_max_gap: 2, chain_max_shift: 1, ..extension(2.0, 8.0) };
+        let members = [(0, 6, 0, 0), (7, 12, 6, 0), (13, 18, 11, 0), (19, 25, 16, 0)];
+        let out = chain_hp(&t, &members, params);
+        let spans: Vec<_> = out
+            .iter()
+            .map(|r| (r.start, r.end, r.target_start, r.target_end, r.n_chained))
+            .collect();
+        assert_eq!(spans, [(0, 12, 0, 11, 2), (13, 25, 11, 22, 2)]);
+    }
+
+    #[test]
+    fn test_chain_regions_spans_a_one_residue_deletion() {
+        // Two exact runs on neighbouring diagonals: one alignment with a one-residue indel.
+        let (q, t) = one_deletion_pair();
+        let exact = find_matched_regions(&q, &t, &q.intersect(&t));
+        assert_eq!(exact.len(), 2, "{exact:?}");
+        assert_eq!(region_span(&exact[0]), (0, 9, 0, 9, 2, 0));
+        assert_eq!(region_span(&exact[1]), (10, 25, 9, 24, 8, 0));
+        let params = ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 5,
+            chain_max_shift: 1,
+        };
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let chain = |params: ExtensionParams| {
+            let pair = ChainContext {
+                q: qe.as_bytes(),
+                t: te.as_bytes(),
+                q_raw: q.get_raw_sequence(),
+                t_raw: t.get_raw_sequence(),
+                moltype: "hp",
+                params,
+                ka_lambda: 0.5,
+                m: 25.0,
+                n_t: 24.0,
+                n_targets: 100.0,
+            };
+            chain_regions(exact.clone(), &pair)
+        };
+        let chained = chain(params);
+        assert_eq!(chained.len(), 1, "{chained:?}");
+        let c = &chained[0];
+        // The query span is one residue longer than the target span, so the mismatches are
+        // the members' own, summed: none. The raw spans run to each sequence's own end.
+        assert_eq!(region_span(c), (0, 25, 0, 24, 10, 0));
+        assert_eq!((c.n_chained, c.length), (2, 25));
+        assert_eq!(c.subseq, q.get_raw_sequence().unwrap());
+        assert_eq!(c.target_subseq, t.get_raw_sequence().unwrap());
+        assert_eq!(c.moltype_seq, te);
+        // Karlin-Altschul sum statistic for two members: each contributes lambda S - ln(K m
+        // n_t) with S its run length (no mismatches), and P(T >= t) = e^-t t / 2 for r = 2.
+        let t_sum = 0.5 * (9.0 + 15.0) - 2.0 * (0.03 * 25.0 * 24.0f64).ln();
+        let p = (-t_sum).exp() * t_sum / 2.0;
+        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(c.evalue, 0.619_041_406_804_322, epsilon = 1e-12);
+        // Bits put the search size back: ln(m n_t) - ln P, in bits.
+        assert_relative_eq!(
+            c.ka_bits,
+            ((25.0 * 24.0f64).ln() - p.ln()) / std::f64::consts::LN_2,
+            epsilon = 1e-12
+        );
+        // Held to one diagonal, the two runs stay apart.
+        let same_diagonal = chain(ExtensionParams { chain_max_shift: 0, ..params });
+        assert_eq!(same_diagonal.len(), 2);
+        assert!(same_diagonal.iter().all(|r| r.n_chained == 1));
+    }
+
+    /// A searcher over one target, the flipped half of `one_flip_pair`, at hp k=8.
+    fn searcher_on_flipped_target(dir: &TempDir) -> Result<ProteinSearcher> {
+        let (_, t) = one_flip_pair();
+        let fasta = dir.path().join("target.fasta");
+        std::fs::write(&fasta, format!(">t\n{}\n", t.get_raw_sequence().unwrap()))?;
+        let index = ProteomeIndex::new(dir.path().join("index"), 8, 1, "hp", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        Ok(ProteinSearcher::new(index)?)
+    }
+
+    #[test]
+    fn test_search_chains_regions_when_asked() -> Result<()> {
+        // Through the searcher: a penalty the give-up margin cannot absorb keeps the two seeds
+        // apart, and chaining joins them into one region with the sum statistic's E-value.
+        let dir = TempDir::new()?;
+        let mut searcher = searcher_on_flipped_target(&dir)?;
+        let (q, _) = one_flip_pair();
+        let strict = ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        };
+        searcher.set_extension(Some(strict));
+        let apart = searcher.search(std::slice::from_ref(&q), &SearchFilters::default())?;
+        assert_eq!(apart.len(), 1);
+        let spans: Vec<_> = apart[0].matched_regions.iter().map(region_span).collect();
+        assert_eq!(spans, vec![(0, 12, 0, 12, 5, 0), (13, 25, 13, 25, 5, 0)]);
+        assert!(apart[0].matched_regions.iter().all(|r| r.n_chained == 1));
+
+        searcher.set_extension(Some(ExtensionParams { chain_max_gap: 5, ..strict }));
+        let chained = searcher.search(std::slice::from_ref(&q), &SearchFilters::default())?;
+        assert_eq!(chained.len(), 1);
+        let regions = &chained[0].matched_regions;
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let c = &regions[0];
+        assert_eq!(region_span(c), (0, 25, 0, 25, 10, 1));
+        assert_eq!((c.n_chained, c.length), (2, 25));
+        // The query is 12 h and 13 p, the target 11 h and 14 p, so a = (12*11 + 13*14)/625;
+        // both members score 12 against ln(K m n_t) = ln(0.03 * 25 * 25); one target.
+        let lambda = karlin_altschul_lambda(314.0 / 625.0, 9.0);
+        let t_sum = 2.0 * (lambda * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
+        let p = (-t_sum).exp() * t_sum / 2.0;
+        assert_relative_eq!(c.evalue, p, epsilon = 1e-12);
+        assert_relative_eq!(c.evalue, 0.000_128_092_796_225_336_54, epsilon = 1e-12);
+        assert_relative_eq!(
+            c.ka_bits,
+            (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
+            epsilon = 1e-12
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_karlin_altschul_lambda() {
+        // u e^x + (1-u) e^(-2x) = 1 at u = 0.5: with y = e^x this is y^3 - 2y^2 + 1 = 0,
+        // whose root above 1 is the golden ratio, so x = ln(golden ratio).
+        let lam = karlin_altschul_lambda(0.5, 2.0);
+        assert_relative_eq!(lam, ((1.0 + 5f64.sqrt()) / 2.0).ln(), epsilon = 1e-9);
+        // No positive root once agreement is expected: u >= penalty / (1 + penalty).
+        assert_eq!(karlin_altschul_lambda(2.0 / 3.0, 2.0), 0.0);
+        assert_eq!(karlin_altschul_lambda(0.9, 2.0), 0.0);
+        // Rarer agreement, larger lambda.
+        assert!(karlin_altschul_lambda(0.3, 2.0) > lam);
+        // The root satisfies the equation for a 20-letter-like composition too.
+        let match_prob = 0.06;
+        let l = karlin_altschul_lambda(match_prob, 1.0);
+        assert_relative_eq!(
+            match_prob * l.exp() + (1.0 - match_prob) * (-l).exp(),
+            1.0,
+            epsilon = 1e-9
+        );
+    }
+
+    #[test]
+    fn test_class_composition_match_probability() {
+        let p = class_composition(b"hhpp");
+        let q = class_composition(b"hhhp");
+        assert_relative_eq!(match_probability(&p, &q), 0.5 * 0.75 + 0.5 * 0.25, epsilon = 1e-12);
     }
 
     #[test]
@@ -2795,9 +3828,9 @@ mod tests {
     }
 
     #[test]
-    fn test_extend_regions_leaves_regions_alone_without_sequences() {
+    fn test_extend_and_chain_leave_regions_alone_without_sequences() {
         // A sketch built without stored sequences has nothing to walk along, so the seeds
-        // come back as they were.
+        // come back as they were. One region alone has nothing to chain with either.
         let (q, t) = one_flip_pair();
         let exact = find_matched_regions(&q, &t, &q.intersect(&t));
         assert_eq!(exact.len(), 2);
@@ -2813,6 +3846,29 @@ mod tests {
         let spans: Vec<_> = exact.iter().map(region_span).collect();
         let unextended = extend_regions(exact.clone(), &bq, &bt, extension(2.0, 8.0));
         assert_eq!(unextended.iter().map(region_span).collect::<Vec<_>>(), spans);
+        let params = ExtensionParams { chain_max_gap: 5, ..extension(2.0, 8.0) };
+        let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
+        let chain = |regions: Vec<MatchedRegion>, raw: Option<(&str, &str)>| {
+            let (q_raw, t_raw) = raw.map_or((None, None), |(a, b)| (Some(a), Some(b)));
+            let pair = ChainContext {
+                q: qe.as_bytes(),
+                t: te.as_bytes(),
+                q_raw,
+                t_raw,
+                moltype: "hp",
+                params,
+                ka_lambda: 0.5,
+                m: 25.0,
+                n_t: 25.0,
+                n_targets: 100.0,
+            };
+            chain_regions(regions, &pair)
+        };
+        let unchained = chain(exact.clone(), None);
+        assert_eq!(unchained.iter().map(region_span).collect::<Vec<_>>(), spans);
+        let raw = Some((q.get_raw_sequence().unwrap(), t.get_raw_sequence().unwrap()));
+        let alone = chain(exact[..1].to_vec(), raw);
+        assert_eq!(alone.iter().map(region_span).collect::<Vec<_>>(), spans[..1]);
     }
 
     #[test]
@@ -3414,8 +4470,8 @@ mod tests {
         approx::assert_relative_eq!(bcl2_result.query_tfidf, 565.119680433367, epsilon = 1e-9);
         // Coverage score: the 24 shared k-mers' IDF sums to 36.51 (mean 1.52, so a typical
         // shared k-mer sits in about 5 of the 25 targets), times 239^-0.5 for BCL2_HUMAN's
-        // 239 residues. Same HashMap-order caveat as query_tfidf above.
-        approx::assert_relative_eq!(bcl2_result.coverage_score, 2.361544022707993, epsilon = 1e-9);
+        // 239 residues. Exact, since the IDF values are summed in sorted-hash order.
+        assert_eq!(bcl2_result.coverage_score, 2.3615440227079945);
 
         assert!(
             bcl2_result.mean_matched_kmer_freq > 0.0,
@@ -4259,6 +5315,87 @@ mod tests {
             "query scope alone should keep this diffuse whole-protein match"
         );
 
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod ka_calibration_tests {
+    use super::*;
+    use crate::tests::test_fixtures::TEST_FASTA_GZ;
+    use tempfile::TempDir;
+
+    fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
+        KaCalibrationSettings {
+            scoring: ExtensionScoring { mismatch_penalty, xdrop: DEFAULT_XDROP },
+            null: DecoyNull::Shuffled,
+            reference: DecoyNull::Shuffled,
+            n_queries,
+            seed: 1,
+        }
+    }
+
+    fn searcher_on_first25() -> Result<(TempDir, ProteinSearcher)> {
+        let temp_dir = TempDir::new()?;
+        let index_path = temp_dir.path().join("index");
+        let index = ProteomeIndex::new(&index_path, 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        Ok((temp_dir, ProteinSearcher::new(index)?))
+    }
+
+    /// The fit is reproducible from the seed, is stored under its scoring and found again
+    /// by `resolve_ka`, which otherwise runs it when asked and refuses when not allowed
+    /// to, and `--ka-k` wins over it.
+    #[test]
+    fn test_calibrate_ka_on_first25_is_stored_and_reused() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        let report = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;
+        let fit =
+            report.fitted.clone().expect("25 shuffled BCL2 queries give thousands of regions");
+        assert_eq!(searcher.extension, None, "calibration restores the extension setting");
+        // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
+        // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
+        // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
+        // regions, x 7.5 to 11.5 nats.
+        assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
+        assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
+        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
+        assert_eq!(fit.x_range(), (7.5, 11.5));
+        assert!((fit.r_database - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.r_database);
+        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
+        assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
+        // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
+        // closed-form lambda is ln of the golden ratio.
+        assert!((fit.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
+        assert!((fit.lambda_analytic - 0.481_208_536_966_019_95).abs() < 1e-12);
+        assert_eq!(fit.survival[0].1, 9561);
+
+        // Same seed, same fit.
+        let again = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;
+        assert_eq!(again, report);
+
+        let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 25))?;
+        assert_eq!(params, fit.ka_params());
+        assert_eq!(source, KaSource::Fitted(Box::new(fit.clone())));
+
+        searcher.index().put_ka_calibration(&fit)?;
+        let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 0))?;
+        assert_eq!(params, fit.ka_params());
+        assert_eq!(source, KaSource::Index(Box::new(fit.clone())));
+
+        let (params, source) = searcher.resolve_ka(Some(0.03), shuffled_settings(2.0, 0))?;
+        assert_eq!((params, source), (KaParams { k: 0.03, r_database: 1.0 }, KaSource::Given));
+
+        // No stored fit for penalty 3, no queries allowed and no K given: refused, not
+        // guessed.
+        let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();
+        assert!(
+            err.to_string().contains(
+                "no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8, and \
+                 --ka-queries 0 forbids fitting one now"
+            ),
+            "{err}"
+        );
         Ok(())
     }
 }

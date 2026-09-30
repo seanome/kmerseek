@@ -1,6 +1,10 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::search::{ExtensionParams, ExtensionScoring, DEFAULT_XDROP};
+use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
+use kmerseek::search::{
+    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_MISMATCH_PENALTY,
+    DEFAULT_XDROP,
+};
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
 use std::path::{Path, PathBuf};
@@ -67,6 +71,57 @@ enum Commands {
         /// time, so you do not repeat it when searching.
         #[arg(long, default_value = "false")]
         remove_low_complexity: bool,
+
+        /// Fit the r_database and K that `kmerseek search` uses for E-values, for this
+        /// mismatch penalty (the `--extend-mismatch-penalty` a search will pass). They
+        /// depend on the alphabet, the seed length, the penalty, the give-up margin and the
+        /// database, so they are fitted here, on this index, and stored in it. A search
+        /// with a different penalty or give-up margin refits on the fly.
+        #[arg(long, default_value_t = DEFAULT_MISMATCH_PENALTY)]
+        extend_mismatch_penalty: f64,
+
+        /// The give-up margin (`--extend-xdrop`) the fit assumes.
+        #[arg(long, default_value_t = DEFAULT_XDROP)]
+        extend_xdrop: f64,
+
+        /// How many database sequences to search against the index to fit r_database and
+        /// K. ln(regions at score S) is a straight line in S; minus its slope is r_database
+        /// and its height gives K. Related pairs bend it upward, and the fit stops below
+        /// them. 0 skips the fit, and a search then has to fit its own or be given --ka-k.
+        #[arg(long, default_value = "200")]
+        ka_queries: usize,
+
+        /// Seed for picking the calibration sequences, so the fit is reproducible.
+        #[arg(long, default_value = "1")]
+        ka_seed: u64,
+
+        /// The sequences the line is fitted to. `database` (default): the database
+        /// sequences as they are, so the fit sees the hydrophobic runs and helix
+        /// periodicity real proteins have. Some of them have relatives in the database, and
+        /// the fit stops below the scores those relatives reach (see --ka-reference). The
+        /// other three are decoys, database sequences changed so that they have no relative
+        /// and every region they find is a chance match. `shuffled`: residues shuffled,
+        /// which keeps composition only. `shuffled-dipeptide`: shuffled keeping every pair
+        /// of neighbouring residues as often as in the original, which keeps hydrophobic
+        /// runs. `reversed`: read back to front, which in a hydrophobic/polar alphabet
+        /// still matches forward helices and strands.
+        #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
+        ka_null: DecoyNull,
+
+        /// Used only with `--ka-null database`, to decide where the fit stops. The same
+        /// calibration sequences are shuffled this way and searched too. Shuffled sequences
+        /// have no relatives, so the score at which the real sequences' region counts rise
+        /// above the shuffled ones' is where relatives begin, and bins from there up are
+        /// left out of the fit. These sequences only mark that point; the line is not
+        /// fitted to them. `shuffled-dipeptide` (default) keeps hydrophobic runs, so only
+        /// relatives lift the real counts above it; `shuffled` keeps composition only.
+        #[arg(long, value_enum, default_value_t = DecoyNull::default())]
+        ka_reference: DecoyNull,
+
+        /// Write the survival curve the fit was read from (score, regions with score >= it,
+        /// and the fit) to this CSV, for plotting with scripts/plot_ka_survival.py.
+        #[arg(long, value_name = "PATH")]
+        ka_survival_out: Option<PathBuf>,
     },
     /// Search query sequences against a protein database
     Search {
@@ -143,6 +198,53 @@ enum Commands {
         /// fallen this far below its best.
         #[arg(long, default_value_t = DEFAULT_XDROP)]
         extend_xdrop: f64,
+
+        /// Karlin-Altschul K for `region_evalue` and `region_ka_bits` on extended regions.
+        /// Optional: without it, the r_database and K fitted when the index was built (for
+        /// its penalty and give-up margin) are used, or, for another penalty or give-up
+        /// margin, a fit on --ka-queries database sequences runs before the search. With
+        /// it, no fit is read or run, and every pair's lambda is used as the closed form
+        /// gives it (r_database 1).
+        ///
+        /// The closed form: with +1 for each position where query and target fall in the
+        /// same class and -C for each where they differ, lambda is the positive root of
+        /// u e^lambda + (1 - u) e^(-C lambda) = 1, where u is the chance that a random
+        /// query position and a random target position fall in the same class, from the
+        /// two sequences' class frequencies (Karlin & Altschul 1990). See
+        /// https://seanome.github.io/kmerseek/karlin_altschul_explainer.html.
+        /// Used only with --extend-mismatch-penalty.
+        #[arg(long)]
+        ka_k: Option<f64>,
+
+        /// Calibration queries to fit r_database and K on when the index has no fit for
+        /// this penalty and give-up margin and --ka-k is unset. 0 refuses to search without
+        /// a fit.
+        #[arg(long, default_value = "200")]
+        ka_queries: usize,
+
+        /// Seed for picking the calibration sequences, so the fit is reproducible.
+        #[arg(long, default_value = "1")]
+        ka_seed: u64,
+
+        /// What the calibration queries are when a fit runs here; see `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
+        ka_null: DecoyNull,
+
+        /// The reference for `--ka-null database` when a fit runs here; see `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::default())]
+        ka_reference: DecoyNull,
+
+        /// Chain colinear extended regions at most this many residues apart on the query
+        /// (and within --chain-max-shift diagonals) into one region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
+        /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
+        /// every region separate. Used only with --extend-mismatch-penalty.
+        #[arg(long, default_value = "0")]
+        chain_max_gap: u32,
+
+        /// Largest diagonal shift (net indel) of any chained region from the chain's first
+        /// region. 0 chains only along one diagonal. Used with --chain-max-gap.
+        #[arg(long, default_value = "0")]
+        chain_max_shift: u32,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
@@ -298,10 +400,27 @@ fn main() -> IndexResult<()> {
             kmer_stats_out,
             stats_only,
             remove_low_complexity,
+            extend_mismatch_penalty,
+            extend_xdrop,
+            ka_queries,
+            ka_seed,
+            ka_null,
+            ka_reference,
+            ka_survival_out,
         } => {
             eprintln!("Indexing FASTA file: {}", input.display());
 
             // Fail on a bad value here, before any database is created.
+            let scoring = if ka_queries > 0 {
+                Some(ExtensionScoring::new(extend_mismatch_penalty, extend_xdrop).map_err(
+                    |message| IndexError::ConfigurationError {
+                        field: "extend_mismatch_penalty / extend_xdrop".to_string(),
+                        message,
+                    },
+                )?)
+            } else {
+                None
+            };
             let scaled = Scaled::new(scaled)
                 .map_err(|message| IndexError::ConfigurationError {
                     field: "scaled".to_string(),
@@ -400,6 +519,22 @@ fn main() -> IndexResult<()> {
                 // Save the index state for loading
                 index.save_state_with_kmer_stats(kmer_stats_out.as_deref())?;
 
+                if let Some(scoring) = scoring {
+                    let settings = KaCalibrationSettings {
+                        scoring,
+                        null: ka_null,
+                        reference: ka_reference,
+                        n_queries: ka_queries,
+                        seed: ka_seed,
+                    };
+                    calibrate_index(index, settings, ka_survival_out.as_deref())?;
+                } else {
+                    eprintln!(
+                        "Skipping the Karlin-Altschul fit (--ka-queries 0); a search will \
+                         have to fit r_database and K itself or be given --ka-k."
+                    );
+                }
+
                 eprintln!("Indexing completed successfully!");
                 eprintln!("Database saved to: {}", output_path.display());
             }
@@ -418,6 +553,13 @@ fn main() -> IndexResult<()> {
             remove_low_complexity: remove_low_complexity_arg,
             extend_mismatch_penalty,
             extend_xdrop,
+            ka_k,
+            ka_queries,
+            ka_seed,
+            ka_null,
+            ka_reference,
+            chain_max_gap,
+            chain_max_shift,
             verbose,
             query_is_index,
             batch_size,
@@ -479,17 +621,19 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
             eprintln!("  Minimum region score: {}", min_region_score);
+            // Extension is off at the default penalty of 0, so only a positive one is checked.
+            let scoring = if extend_mismatch_penalty > 0.0 {
+                Some(
+                    ExtensionScoring::new(extend_mismatch_penalty, extend_xdrop)
+                        .map_err(|message| anyhow::anyhow!(message))?,
+                )
+            } else {
+                None
+            };
             if extend_mismatch_penalty > 0.0 {
-                if extend_xdrop < 0.0 {
-                    return Err(anyhow::anyhow!(
-                        "--extend-xdrop must be 0 or more (got {extend_xdrop}); a negative \
-                         give-up margin would end every extension at its first mismatch"
-                    )
-                    .into());
-                }
                 eprintln!(
-                    "  Seed extension: mismatch penalty {}, give-up margin {}",
-                    extend_mismatch_penalty, extend_xdrop
+                    "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
+                    extend_mismatch_penalty, extend_xdrop, chain_max_gap, chain_max_shift
                 );
             } else {
                 eprintln!("  Seed extension: off (regions are exact runs)");
@@ -517,12 +661,38 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
-            if extend_mismatch_penalty > 0.0 {
+            if let Some(scoring) = scoring {
+                if let Some(k) = ka_k {
+                    if k <= 0.0 || k.is_nan() {
+                        return Err(anyhow::anyhow!(
+                            "--ka-k must be positive (got {k}); K is the fraction of the m x n \
+                             cells that can start a region"
+                        )
+                        .into());
+                    }
+                }
+                let settings = KaCalibrationSettings {
+                    scoring,
+                    null: ka_null,
+                    reference: ka_reference,
+                    n_queries: ka_queries,
+                    seed: ka_seed,
+                };
+                let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
+                eprintln!(
+                    "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
+                    ka.k, ka.r_database
+                );
+                if let KaSource::Index(fit) | KaSource::Fitted(fit) = &source {
+                    if let Some(warning) = short_fit_warning(fit) {
+                        eprintln!("  {warning}");
+                    }
+                }
                 searcher.set_extension(Some(ExtensionParams {
-                    scoring: ExtensionScoring {
-                        mismatch_penalty: extend_mismatch_penalty,
-                        xdrop: extend_xdrop,
-                    },
+                    scoring,
+                    ka,
+                    chain_max_gap,
+                    chain_max_shift,
                 }));
             }
 
