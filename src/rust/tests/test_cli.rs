@@ -1085,9 +1085,18 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.success().stderr(
         predicate::str::contains(
             "Karlin-Altschul: no fit (the index has none for mismatch penalty 3, give-up margin \
-             8, and --ka-queries 0 forbids fitting one now); regions are extended",
+             8, and --ka-queries 0 forbids fitting one now); regions are extended but not \
+             chained",
         ),
     );
+    // A fit that is tried and fails: one query gives too few regions in the tail.
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "1", "--chain-max-gap", "20"])?
+        .success()
+        .stderr(predicate::str::contains(
+            "Karlin-Altschul: no fit (mismatch penalty 3, give-up margin 8: 1 calibration \
+             queries gave 421 regions, but fewer than 4 score bins held 30 regions each); \
+             regions are extended but not chained",
+        ));
     // Shuffled queries have no relatives, so no reference is searched and none is reported.
     search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
         predicate::str::contains(

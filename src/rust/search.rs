@@ -250,8 +250,8 @@ impl Display for KaSource {
             KaSource::Fitted(fit) => write!(f, "fitted now: {fit}"),
             KaSource::Unfitted(reason) => write!(
                 f,
-                "no fit ({reason}); regions are extended, region_ka_bits and \
-                 region_ka_evalue are left empty, and region_evalue is region_run_evalue"
+                "no fit ({reason}); regions are extended but not chained, region_ka_bits \
+                 and region_ka_evalue are left empty, and region_evalue is region_run_evalue"
             ),
         }
     }
@@ -1381,8 +1381,8 @@ impl ProteinSearcher {
             None => {
                 let reason = format!(
                     "mismatch penalty {mismatch_penalty}, give-up margin {xdrop}: {} \
-                     calibration queries gave {} regions, fewer than the {MIN_FIT_POINTS} \
-                     score bins of {MIN_BIN_COUNT} regions the fit needs",
+                     calibration queries gave {} regions, but fewer than {MIN_FIT_POINTS} score \
+                     bins held {MIN_BIN_COUNT} regions each",
                     report.n_queries, report.n_regions,
                 );
                 Ok((None, KaSource::Unfitted(reason)))
