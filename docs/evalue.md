@@ -132,6 +132,11 @@ holds pairs of membrane and low-complexity proteins whose raw scores run past 60
 ordinary pairs stop near 45; in x each region is already on its own λ_region, and the
 biased regions sit at x = 0, out of the way.
 
+The fits in the figure and the two tables below were measured with λ taken from the
+two whole proteins, before each region got its own λ_region, and have not been rerun.
+Expect r_database and K to move: on the 25-protein test set, the per-region λ moves
+r_database from 0.806 to 0.871 and K from 0.0115 to 0.0082.
+
 ![Region score distributions on SCOPe40, a Swiss-Prot sample and a UniRef50 sample, with the fitted line and the dipeptide-shuffled reference](images/ka_fit_three_databases.png)
 
 Top row: regions in each half-nat bin of x, the points the line is fitted to; grey
@@ -173,6 +178,8 @@ of scrambled sequence. The scrambled kinds check the fitting code and show what 
 of sequence structure does to the constants.
 
 ![Every null against every database](images/ka_fit_grid_nulls_by_database.png)
+
+This figure, like the one above, was drawn before each region got its own λ.
 
 Rows: what the 200 calibration queries are. Columns: the databases. Each null has two
 rows, regions per bin (what is fitted) and the same regions summed.

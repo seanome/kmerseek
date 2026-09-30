@@ -194,7 +194,8 @@ bits = (λS - ln K) / ln 2
 k-mers in each target, summed over the targets (`db_n_kmers`, about residues / scaled).
 `K` takes up the scaled factor, so a `K` measured at one `--scaled` does not carry over to
 another. `λ` is solved
-per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
+per region from the class compositions of the two stretches the region covers (after
+Schäffer et al. 2001, who use the whole sequences): the chance
 `u` that a random position from each falls in the same class gives λ as the positive
 root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,
 which is what two hydrophobic runs look like, and the region gets 0 bits and no
@@ -210,7 +211,8 @@ back; with another pair it fits its own before searching, or takes `--ka-k`.
 On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
-different-fold hit at E <= 0.01.
+different-fold hit at E <= 0.01. That run took λ from the two whole proteins, before each
+region got its own, and has not been repeated since.
 
 ```bash
 kmerseek index --input proteome.fasta --output proteome.db --ksize 10 --alphabet hp
