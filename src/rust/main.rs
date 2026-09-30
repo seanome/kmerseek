@@ -211,7 +211,8 @@ enum Commands {
 
         /// The give-up margin (BLAST's X-drop): stop extending once the running score has
         /// fallen this far below its best. Omit it to use the index fit's, or 8 when
-        /// --extend-mismatch-penalty is given.
+        /// --extend-mismatch-penalty is given. Given alone, it extends at the penalty of the
+        /// index's fit for this margin, or at 2 when the index has none.
         #[arg(long)]
         extend_xdrop: Option<f64>,
 
@@ -434,7 +435,11 @@ fn extension_scoring(
             xdrop: xdrop.unwrap_or(DEFAULT_XDROP),
         })),
         Some(_) => Ok(None),
-        None => Ok(scoring_from_stored_fits(&index.ka_calibrations()?, xdrop)),
+        // A give-up margin with no stored fit for it still asks for extension: extend at the
+        // default penalty, and let the search fit K for it.
+        None => Ok(scoring_from_stored_fits(&index.ka_calibrations()?, xdrop).or_else(|| {
+            xdrop.map(|x| ExtensionScoring { mismatch_penalty: DEFAULT_MISMATCH_PENALTY, xdrop: x })
+        })),
     }
 }
 
