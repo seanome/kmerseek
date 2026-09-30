@@ -5338,6 +5338,7 @@ mod tests {
 mod ka_calibration_tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_FASTA_GZ;
+    use approx::assert_relative_eq;
     use tempfile::TempDir;
 
     fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
@@ -5441,6 +5442,17 @@ mod ka_calibration_tests {
         assert_eq!((one.n_reference_queries, four.n_reference_queries), (25, 100));
         // 38_606 / 9_392 = 4.1: four shuffles, four times the chance regions.
         assert_eq!((one.n_reference_regions, four.n_reference_regions), (9392, 38606));
+        // The fit itself moves: more chance regions shrink each bin's noise allowance, so the
+        // stop where the real curve rises above the chance curve fires at a different bin.
+        let fit = |r: &KaCalibrationReport| {
+            let f = r.fitted.as_ref().unwrap();
+            (f.r_database, f.k)
+        };
+        let ((r1, k1), (r4, k4)) = (fit(&one), fit(&four));
+        assert_relative_eq!(r1, 0.8055981514319699, epsilon = 1e-12);
+        assert_relative_eq!(k1, 0.011522349930672795, epsilon = 1e-12);
+        assert_relative_eq!(r4, 0.8464263063538485, epsilon = 1e-12);
+        assert_relative_eq!(k4, 0.015400688613533853, epsilon = 1e-12);
         Ok(())
     }
 }

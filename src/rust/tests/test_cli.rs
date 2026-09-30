@@ -1244,6 +1244,14 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
          --ka-queries when both did.",
     ));
     assert!(!unfit.exists(), "no fit, no curve to write");
+    // The shuffled null searches no reference, so the message does not point at
+    // --ka-reference-shuffles.
+    index("1", "shuffled", &temp_dir.path().join("unfit_shuffled.csv"))?.success().stderr(
+        predicate::str::contains(
+            "1 queries gave 376 regions, but fewer than 4 score bins above the peak hold 30 of \
+             them, too few to fit; nothing stored. Raise --ka-queries.",
+        ),
+    );
 
     // Shuffled queries have no relatives, so no reference is searched and none is announced.
     index("3", "shuffled", &temp_dir.path().join("shuffled.csv"))?

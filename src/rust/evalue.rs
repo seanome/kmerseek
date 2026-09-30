@@ -743,21 +743,30 @@ pub fn calibrate_index(
                 eprintln!("  Survival curve written to {}", path.display());
             }
         }
-        None => eprintln!(
-            "  {} queries gave {} regions and {} shuffled queries gave {} chance regions, but \
-             fewer than {} score bins above the peak hold {} of each, too few to fit; nothing \
-             stored. Raise --ka-reference-shuffles when the chance regions are what ran out, \
-             --ka-queries when both did. A search will have to fit its own r_database and K \
-             or be given --ka-k.",
-            report.n_queries,
-            report.n_regions,
-            report.n_reference_queries,
-            report.n_reference_regions,
-            MIN_FIT_POINTS,
-            MIN_BIN_COUNT
-        ),
+        None => eprintln!("  {}", refused_fit_message(&report)),
     }
     Ok(())
+}
+
+/// Why no fit was stored, and which flag to raise. Only the `database` null searches
+/// shuffled reference queries, so only it can run out of chance regions.
+fn refused_fit_message(report: &KaCalibrationReport) -> String {
+    let tail = "A search will have to fit its own r_database and K or be given --ka-k.";
+    if report.n_reference_queries == 0 {
+        return format!(
+            "{} queries gave {} regions, but fewer than {MIN_FIT_POINTS} score bins above the \
+             peak hold {MIN_BIN_COUNT} of them, too few to fit; nothing stored. Raise \
+             --ka-queries. {tail}",
+            report.n_queries, report.n_regions
+        );
+    }
+    format!(
+        "{} queries gave {} regions and {} shuffled queries gave {} chance regions, but fewer \
+         than {MIN_FIT_POINTS} score bins above the peak hold {MIN_BIN_COUNT} of each, too few \
+         to fit; nothing stored. Raise --ka-reference-shuffles when the chance regions are \
+         what ran out, --ka-queries when both did. {tail}",
+        report.n_queries, report.n_regions, report.n_reference_queries, report.n_reference_regions
+    )
 }
 
 /// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
