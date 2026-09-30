@@ -448,6 +448,14 @@ fn test_cli_search_extends_by_default_with_the_index_fit() -> Result<(), Box<dyn
         "{stderr}"
     );
     assert!(stderr.contains("(stored in the index: "), "{stderr}");
+    // A give-up margin the index has no fit for still extends, at penalty 2, and fits K now.
+    let stderr = search_stderr_with_ka_queries("200", &["--extend-xdrop", "12"])?;
+    assert!(
+        stderr
+            .contains("Seed extension: mismatch penalty 2, give-up margin 12, chain gap 0 shift 0"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("(fitted now: "), "{stderr}");
     Ok(())
 }
 
