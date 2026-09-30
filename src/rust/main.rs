@@ -262,7 +262,8 @@ enum Commands {
         /// Chain colinear extended regions at most this many residues apart on the query
         /// (and within --chain-max-shift diagonals) into one region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
         /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
-        /// every region separate. Used only with --extend-mismatch-penalty.
+        /// every region separate. Used only with --extend-mismatch-penalty, and only when
+        /// there is a Karlin-Altschul fit or --ka-k: the chain score needs K.
         #[arg(long, default_value = "0")]
         chain_max_gap: u32,
 

@@ -250,8 +250,8 @@ impl Display for KaSource {
             KaSource::Fitted(fit) => write!(f, "fitted now: {fit}"),
             KaSource::Unfitted(reason) => write!(
                 f,
-                "no fit ({reason}); regions are extended, region_ka_bits and \
-                 region_ka_evalue are left empty, and region_evalue is region_run_evalue"
+                "no fit ({reason}); regions are extended but not chained, region_ka_bits \
+                 and region_ka_evalue are left empty, and region_evalue is region_run_evalue"
             ),
         }
     }
