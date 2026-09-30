@@ -1298,8 +1298,11 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     let (mismatches, ka_evalue, source) =
         (col("region_n_mismatches"), col("region_ka_evalue"), col("region_evalue_source"));
     let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
-    assert!(!rows.is_empty());
-    assert!(rows.iter().any(|r| r[mismatches].parse::<u32>().unwrap() > 0), "no region extended");
+    // CED-9 against the 25 proteins at hp k=12: 330 regions, 71 of them extended across at
+    // least one mismatch.
+    assert_eq!(rows.len(), 330);
+    let extended = rows.iter().filter(|r| r[mismatches].parse::<u32>().unwrap() > 0).count();
+    assert_eq!(extended, 71);
     assert!(rows.iter().all(|r| r[ka_evalue].is_empty()));
     assert!(rows.iter().all(|r| r[source].starts_with("run")));
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(

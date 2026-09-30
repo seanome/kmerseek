@@ -1117,7 +1117,8 @@ pub struct ProteinSearcher {
     /// a sequence of L residues has L - k + 1 k-mers, and a sketch keeps 1 in `scaled` of
     /// them. `db_n_kmers` counts a k-mer once per target however often it occurs there, and
     /// leaves out k-mers removed as low-complexity, so this comes out low by those. A low n
-    /// makes every run E-value smaller by the same fraction.
+    /// makes every run E-value smaller by the same fraction: on the 25-protein test set,
+    /// 0.99 of the real count at hp k=15 but 0.47 at hp k=8.
     db_n_residues: f64,
     /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
     extension: Option<ExtensionParams>,
@@ -1371,13 +1372,14 @@ impl ProteinSearcher {
             Some(fit) => Ok((Some(fit.ka_params()), KaSource::Fitted(Box::new(fit)))),
             // decoy_from_target needs a stored raw sequence, so no queries at all means the
             // index has none to build them from, and more --ka-queries cannot help.
-            None if report.n_queries == 0 => Ok((
-                None,
-                KaSource::Unfitted(format!(
-                    "mismatch penalty {mismatch_penalty}, give-up margin {xdrop}: the index \
-                     stores no raw sequences to build calibration queries from"
-                )),
-            )),
+            // Extension needs the raw sequences too, so a search that went on would extend
+            // nothing; stop here and say why.
+            None if report.n_queries == 0 => Err(anyhow::anyhow!(
+                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
+                 margin {xdrop}: the index stores no raw sequences to build calibration \
+                 queries from, so no fit can be made on it. Pass --ka-k."
+            )
+            .into()),
             None => {
                 let reason = format!(
                     "mismatch penalty {mismatch_penalty}, give-up margin {xdrop}: {} \
@@ -2923,6 +2925,10 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
         // strongest member's tail so the pair-level filter sees the evidence it saw before.
         merged.poisson_score = chain.iter().map(|x| x.poisson_score).fold(0.0, f64::max);
         merged.tail_probability = chain.iter().map(|x| x.tail_probability).fold(1.0, f64::min);
+        // Tail probability times the same search size for every member, so the smallest
+        // member E-value goes with the smallest tail.
+        merged.poisson_evalue =
+            chain.iter().map(|x| x.poisson_evalue).fold(f64::INFINITY, f64::min);
         merged.expected_shared_kmers = chain.iter().map(|x| x.expected_shared_kmers).sum();
         merged.enrichment = fold_enrichment(merged.n_shared, merged.expected_shared_kmers);
         // TF-IDF sums over the members' shared windows, like n_shared; the windows in the
@@ -3718,8 +3724,10 @@ mod tests {
         };
         let mut ext = extend_regions(exact.clone(), &q, &t, strict);
         assert_eq!(ext.len(), 2);
-        // compare() sets each region's TF-IDF before chaining; the chain adds them up.
+        // compare() sets each region's TF-IDF and Poisson E-value before chaining; the
+        // chain adds up the TF-IDF and keeps the smallest E-value.
         (ext[0].tfidf, ext[1].tfidf) = (4.0, 6.0);
+        (ext[0].poisson_evalue, ext[1].poisson_evalue) = (4855.2, 24.66);
         let (qe, te) = (q.get_moltype_sequence().unwrap(), t.get_moltype_sequence().unwrap());
         let pair = ChainContext {
             q: qe.as_bytes(),
@@ -3743,6 +3751,7 @@ mod tests {
         assert_eq!(c.n_mismatches, 1);
         assert_eq!(c.length, 25);
         assert_eq!((c.tfidf, c.mean_idf), (10.0, 1.0));
+        assert_eq!(c.poisson_evalue, 24.66);
         // Two members of 12 and 12 residues at lambda 0.5 against ln(K m n_t) = ln(0.03 x
         // 625): t = 2 (6 - 2.931) = 6.138, P = e^-t t / 2, E = 100 P, and the bits are
         // ln(m n_t) - ln P over ln 2.
@@ -5731,6 +5740,27 @@ mod ka_calibration_tests {
         let index = ProteomeIndex::new(&index_path, 12, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
         Ok((temp_dir, ProteinSearcher::new(index)?))
+    }
+
+    /// An index built without raw sequences has nothing to make calibration queries from,
+    /// and nothing to extend either, so asking for a fit stops the search with the reason.
+    #[test]
+    fn test_resolve_ka_refuses_an_index_without_raw_sequences() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("index"), 12, 1, "hp_lehninger2", false)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        let err = searcher.resolve_ka(None, shuffled_settings(2.0, 25)).unwrap_err();
+        println!("{err}");
+        assert_eq!(
+            err.to_string(),
+            "Anyhow error: no Karlin-Altschul fit for mismatch penalty 2, give-up margin 8: the \
+             index stores \
+             no raw sequences to build calibration queries from, so no fit can be made on it. \
+             Pass --ka-k."
+        );
+        Ok(())
     }
 
     /// The fit is reproducible from the seed, is stored under its scoring and found again
