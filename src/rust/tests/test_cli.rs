@@ -293,6 +293,10 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
         let mut search_cmd = Command::cargo_bin("kmerseek")?;
         search_cmd.args([
             "search",
+            // Exact runs: the index holds a Karlin-Altschul fit, so an omitted penalty
+            // would extend.
+            "--extend-mismatch-penalty",
+            "0",
             "--query",
             TEST_CED9_FASTA,
             "--target",
@@ -404,6 +408,110 @@ fn test_cli_index_missing_required_args() -> Result<(), Box<dyn std::error::Erro
     Ok(())
 }
 
+/// Indexes bcl2_first25 at k = 12 in hp_lehninger2 with `--ka-queries n` and searches CED9
+/// against it with `search_args` added, returning the search's stderr.
+fn search_stderr_with_ka_queries(
+    ka_queries: &str,
+    search_args: &[&str],
+) -> Result<String, Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let index_path = index_path.to_str().unwrap();
+    let common = ["--ksize", "12", "--alphabet", "hp_lehninger2"];
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
+        .args(common)
+        .args(["--ka-queries", ka_queries])
+        .assert()
+        .success();
+    let output_csv = temp_dir.path().join("hits.csv");
+    let search = Command::cargo_bin("kmerseek")?
+        .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
+        .args(["--output", output_csv.to_str().unwrap()])
+        .args(common)
+        .args(search_args)
+        .assert()
+        .success();
+    Ok(String::from_utf8(search.get_output().stderr.clone())?)
+}
+
+/// An infinite mismatch penalty or a NaN give-up margin stops the search with the reason,
+/// whether or not the penalty is given.
+#[test]
+fn test_cli_search_rejects_an_infinite_penalty_or_nan_margin(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let index_path = index_path.to_str().unwrap();
+    let common = ["--ksize", "12", "--alphabet", "hp_lehninger2"];
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
+        .args(common)
+        .args(["--ka-queries", "0"])
+        .assert()
+        .success();
+    let cases: [(&[&str], &str); 3] = [
+        (
+            &["--extend-mismatch-penalty", "inf"],
+            "--extend-mismatch-penalty must be above 0 (got inf)",
+        ),
+        (&["--extend-xdrop", "nan"], "--extend-xdrop must be 0 or more (got NaN)"),
+        (
+            &["--extend-mismatch-penalty", "2", "--extend-xdrop", "nan"],
+            "--extend-xdrop must be 0 or more (got NaN)",
+        ),
+    ];
+    for (args, message) in cases {
+        Command::cargo_bin("kmerseek")?
+            .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
+            .args(["--output", temp_dir.path().join("hits.csv").to_str().unwrap()])
+            .args(common)
+            .args(args)
+            .assert()
+            .failure()
+            .stderr(predicate::str::contains(message));
+    }
+    Ok(())
+}
+
+/// Without `--extend-mismatch-penalty`, a search against an index that holds a
+/// Karlin-Altschul fit extends with the penalty and give-up margin the fit was made for
+/// (the index defaults, 2 and 8) and takes r_database and K from it, fitting nothing.
+#[test]
+fn test_cli_search_extends_by_default_with_the_index_fit() -> Result<(), Box<dyn std::error::Error>>
+{
+    let stderr = search_stderr_with_ka_queries("200", &[])?;
+    assert!(
+        stderr
+            .contains("Seed extension: mismatch penalty 2, give-up margin 8, chain gap 0 shift 0"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("(stored in the index: "), "{stderr}");
+    // A give-up margin the index has no fit for still extends, at penalty 2, and fits K now.
+    let stderr = search_stderr_with_ka_queries("200", &["--extend-xdrop", "12"])?;
+    assert!(
+        stderr
+            .contains("Seed extension: mismatch penalty 2, give-up margin 12, chain gap 0 shift 0"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("(fitted now: "), "{stderr}");
+    Ok(())
+}
+
+/// `--extend-mismatch-penalty 0` keeps regions exact against an index with a fit, and an
+/// index built with `--ka-queries 0` holds no fit, so an omitted penalty keeps them exact.
+#[test]
+fn test_cli_search_exact_with_penalty_zero_or_no_index_fit(
+) -> Result<(), Box<dyn std::error::Error>> {
+    let off = "Seed extension: off (regions are exact runs)";
+    let stderr = search_stderr_with_ka_queries("200", &["--extend-mismatch-penalty", "0"])?;
+    assert!(stderr.contains(off), "{stderr}");
+    let stderr = search_stderr_with_ka_queries("0", &[])?;
+    assert!(stderr.contains(off), "{stderr}");
+    assert!(!stderr.contains("Karlin-Altschul"), "{stderr}");
+    Ok(())
+}
+
 #[test]
 fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
@@ -442,6 +550,10 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // p-value filter outright.
     search_cmd.args([
         "search",
+        // Exact runs: the index holds a Karlin-Altschul fit, so an omitted penalty
+        // would extend.
+        "--extend-mismatch-penalty",
+        "0",
         "--query",
         TEST_CED9_FASTA,
         "--target",
@@ -575,8 +687,9 @@ fn test_cli_search_output_is_reproducible() -> Result<(), Box<dyn std::error::Er
     let first = search("run1.csv")?;
     let second = search("run2.csv")?;
 
-    // Header plus one line per row.
-    assert_eq!(first.lines().count(), CED9_ROWS_HP_K12_MAX_PVALUE_0_7 + 1);
+    // Header plus one line per row. The index holds a fit, so the search extends by
+    // default: 217 rows, where the exact search gives 218.
+    assert_eq!(first.lines().count(), 217 + 1);
     assert_eq!(first, second);
     Ok(())
 }
@@ -612,6 +725,10 @@ fn index_and_search_bcl2(
     Command::cargo_bin("kmerseek")?
         .args([
             "search",
+            // Exact runs: the index holds a Karlin-Altschul fit, so an omitted penalty
+            // would extend.
+            "--extend-mismatch-penalty",
+            "0",
             "--query",
             TEST_CED9_FASTA,
             "--target",

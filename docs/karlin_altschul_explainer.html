@@ -304,7 +304,7 @@ window.MathJax = {
   <ul class="defs tight">
     <li>matches: positions where query and target carry the same class; each adds 1.</li>
     <li>mismatches: positions where the classes differ; each subtracts \(C\).</li>
-    <li id="def-C">\(C\), the mismatch penalty (<code>--extend-mismatch-penalty</code>): 2 on this page. The default 0 turns extension off; part 2 asks which \(C\) is best.</li>
+    <li id="def-C">\(C\), the mismatch penalty (<code>--extend-mismatch-penalty</code>): 2 on this page, and 2 by default. 0 turns extension off; part 2 asks which \(C\) is best.</li>
     <li id="def-X">\(X\), the give-up margin (<code>--extend-xdrop</code>; BLAST calls the rule the X-drop): the walk stops once the score is \(X\) below its best. 8.</li>
     <li>\(k\), the seed length: a region is found only through an exact shared k-mer. 12.</li>
   </ul>
@@ -634,7 +634,7 @@ window.MathJax = {
     <li>\(a\): what kmerseek's code and CSV columns call \(\Pr(\text{match} \mid \text{unrelated})\).</li>
     <li>\(b\): in Figure 6, the intercept of the fitted line, \(\ln(K\,L_{\text{queries}}\,N_{\text{database}}\,w_{\text{bin}})\); Equation (7c) turns it into \(K\).</li>
     <li>bits: the same evidence as \(E\) on BLAST's bit scale, \(((\lambda_{\text{pair}} \cdot r_{\text{database}} \cdot S) - \ln K)/\ln 2\); larger is better.</li>
-    <li>\(C\): mismatch penalty, <code>--extend-mismatch-penalty</code>. Default 0 (extension off); every number on this page uses 2. Part 2 asks which \(C\) is best.</li>
+    <li>\(C\): mismatch penalty, <code>--extend-mismatch-penalty</code>. Default 2 (0 turns extension off); every number on this page uses 2. Part 2 asks which \(C\) is best.</li>
     <li>\(c(x)\): regions per half-nat bin at \(x\); \(c_{\text{real}}\) from the real queries, \(c_{\text{reference}}\) from the same queries shuffled.</li>
     <li>\(E\): expected number of chance regions scoring at least \(S\) between an unrelated query of length \(m\) and a database of \(n\) residues, Equation (6a). Smaller is better.</li>
     <li>\(f_{\text{query}}(c)\), \(f_{\text{target}}(c)\): the share of class \(c\) in the query, in the target, counted from that sequence; for two classes these are \(h\) and \(p\).</li>

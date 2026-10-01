@@ -1,6 +1,6 @@
 # How a region gets an E-value
 
-`kmerseek search --extend-mismatch-penalty C` scores every extended region the way BLAST
+`kmerseek search` scores every extended region the way BLAST
 scores an ungapped alignment, and reports the result in two CSV columns: `region_ka_evalue`,
 the number of regions at least this good expected between an unrelated query and the
 whole database (smaller is better), and `region_ka_bits`, the same evidence on BLAST's
@@ -34,8 +34,9 @@ it has seen. It stops when the score has fallen X below that best, then cuts the
 back to where the best was. Seeds on one diagonal whose walks meet are merged.
 
 - `S = matches - C × mismatches`: the raw score of the region.
-- `C`: the mismatch penalty, `--extend-mismatch-penalty`. Default 0, which turns
-  extension and this score off. The benchmarks and the fitted constants use C = 2.
+- `C`: the mismatch penalty, `--extend-mismatch-penalty`. When it is not given, the
+  penalty the index's fit was made for, 2 unless the index was built with another; 0
+  turns extension and this score off. The benchmarks and the fitted constants use C = 2.
 - `X`: the give-up margin (BLAST's X-drop), `--extend-xdrop`, default 8. With C = 2,
   four disagreeing positions in a row cost 8 and end the walk.
 - `m`: query length in residues.
