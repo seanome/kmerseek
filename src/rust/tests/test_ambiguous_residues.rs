@@ -376,6 +376,20 @@ mod tests {
         Ok(())
     }
 
+    /// Topi RNase against itself is one exact run over its whole length. Each window holding
+    /// a B or Z is sketched under every reading, and both copies hold every reading, so a
+    /// (query, target) position is listed once per shared reading; counted twice, it would
+    /// break the run where the ambiguous residue sits.
+    #[test]
+    fn test_an_ambiguous_residue_shared_with_itself_does_not_break_a_run() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 10, 1, "protein20")?;
+        let regions = find_matched_regions(&topi, &topi, &topi.intersect(&topi));
+        let spans: Vec<_> = regions.iter().map(|r| (r.start, r.end, r.target_start)).collect();
+        println!("{spans:?}");
+        assert_eq!(spans, vec![(0, TOPI_RNASE.len() as u32, 0)]);
+        Ok(())
+    }
+
     /// A chain recounts mismatches over its whole span with an ambiguous residue agreeing
     /// with either class it stands for. Under sdm12 at k=12, topi against bovine RNase A
     /// seeds four regions broken at residues 19, 37 and 103, the real mismatches sdm12 can
