@@ -1082,9 +1082,21 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0"])?
         .failure()
         .stderr(predicate::str::contains("--ka-k must be positive"));
-    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.failure().stderr(
-        predicate::str::contains("no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8"),
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: no fit (the index has none for mismatch penalty 3, give-up margin \
+             8, and --ka-queries 0 forbids fitting one now); regions are extended but not \
+             chained",
+        ),
     );
+    // A fit that is tried and fails: one query gives too few regions in the tail.
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "1", "--chain-max-gap", "20"])?
+        .success()
+        .stderr(predicate::str::contains(
+            "Karlin-Altschul: no fit (mismatch penalty 3, give-up margin 8: 1 calibration \
+             queries gave 421 regions, but fewer than 4 score bins held 30 regions each); \
+             regions are extended but not chained",
+        ));
     // Shuffled queries have no relatives, so no reference is searched and none is reported.
     search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
         predicate::str::contains(
@@ -1129,9 +1141,9 @@ fn test_cli_index_refuses_bad_extension_scoring() -> Result<(), Box<dyn std::err
 }
 
 /// `kmerseek index` fits r_database and K for its penalty and give-up margin and stores
-/// them; `kmerseek search` reads them back, lets `--ka-k` override them, refuses a penalty
-/// that was never fitted when `--ka-queries 0` forbids fitting one now, and fits one
-/// otherwise.
+/// them; `kmerseek search` reads them back, lets `--ka-k` override them, extends without a
+/// Karlin-Altschul E-value for a penalty that was never fitted when `--ka-queries 0`
+/// forbids fitting one now, and fits one otherwise.
 #[test]
 fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
@@ -1194,9 +1206,27 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "Karlin-Altschul: K 0.0300, r_database 1.000 (--ka-k, closed-form lambda)",
         ),
     );
-    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.failure().stderr(
-        predicate::str::contains("no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8"),
+    search(&["--extend-mismatch-penalty", "3", "--ka-queries", "0"])?.success().stderr(
+        predicate::str::contains(
+            "Karlin-Altschul: no fit (the index has none for mismatch penalty 3, give-up margin \
+             8, and --ka-queries 0 forbids fitting one now); regions are extended",
+        ),
     );
+    // Without a fit the regions are still extended, but carry no Karlin-Altschul E-value:
+    // every region_evalue is the run E-value.
+    let mut reader = csv::Reader::from_path(temp_dir.path().join("out.csv"))?;
+    let header = reader.headers()?.clone();
+    let col = |name: &str| header.iter().position(|h| h == name).unwrap();
+    let (mismatches, ka_evalue, source) =
+        (col("region_n_mismatches"), col("region_ka_evalue"), col("region_evalue_source"));
+    let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
+    // CED-9 against the 25 proteins at hp k=12: 330 regions, 71 of them extended across at
+    // least one mismatch.
+    assert_eq!(rows.len(), 330);
+    let extended = rows.iter().filter(|r| r[mismatches].parse::<u32>().unwrap() > 0).count();
+    assert_eq!(extended, 71);
+    assert!(rows.iter().all(|r| r[ka_evalue].is_empty()));
+    assert!(rows.iter().all(|r| r[source].starts_with("run")));
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
             "Karlin-Altschul: K 0.1264, r_database 0.962 (fitted now: 25 database queries, 9854 regions; r_database 0.962",

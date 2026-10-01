@@ -87,7 +87,8 @@ enum Commands {
         /// How many database sequences to search against the index to fit r_database and
         /// K. ln(regions at score S) is a straight line in S; minus its slope is r_database
         /// and its height gives K. Related pairs bend it upward, and the fit stops below
-        /// them. 0 skips the fit, and a search then has to fit its own or be given --ka-k.
+        /// them. 0 skips the fit; a search then fits its own, is given --ka-k, or extends
+        /// without a Karlin-Altschul E-value.
         #[arg(long, default_value = "200")]
         ka_queries: usize,
 
@@ -230,8 +231,9 @@ enum Commands {
         ka_k: Option<f64>,
 
         /// Calibration queries to fit r_database and K on when the index has no fit for
-        /// this penalty and give-up margin and --ka-k is unset. 0 refuses to search without
-        /// a fit.
+        /// this penalty and give-up margin and --ka-k is unset. With 0, or when the fit is
+        /// refused, regions are still extended but get no region_ka_bits or
+        /// region_ka_evalue, and region_evalue is region_run_evalue.
         #[arg(long, default_value = "200")]
         ka_queries: usize,
 
@@ -260,7 +262,8 @@ enum Commands {
         /// Chain colinear extended regions at most this many residues apart on the query
         /// (and within --chain-max-shift diagonals) into one region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
         /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
-        /// every region separate. Used only with --extend-mismatch-penalty.
+        /// every region separate. Used only with --extend-mismatch-penalty, and only when
+        /// there is a Karlin-Altschul fit or --ka-k: the chain score needs K.
         #[arg(long, default_value = "0")]
         chain_max_gap: u32,
 
@@ -706,10 +709,13 @@ fn main() -> IndexResult<()> {
                     seed: ka_seed,
                 };
                 let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
-                eprintln!(
-                    "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
-                    ka.k, ka.r_database
-                );
+                match ka {
+                    Some(ka) => eprintln!(
+                        "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
+                        ka.k, ka.r_database
+                    ),
+                    None => eprintln!("  Karlin-Altschul: {source}"),
+                }
                 if let KaSource::Index(fit) | KaSource::Fitted(fit) = &source {
                     if let Some(warning) = short_fit_warning(fit) {
                         eprintln!("  {warning}");
