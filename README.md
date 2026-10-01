@@ -249,6 +249,7 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 | `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
 | `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
 | `region_run_evalue` | (1 − Pr(same)) × m × n × Pr(same)^L | all |
+| `region_run_evalue_midp` | `region_run_evalue` × (1 + Pr(same)) / 2, the mid-p run E-value (below) | all |
 | `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
 | `region_poisson_evalue` | `region_tail_probability` × `region_search_space` × `db_n_targets` | all |
 | `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
@@ -278,20 +279,43 @@ the formula predicts 200.7; at `gbmr4`, 60 runs of 17 or more against 60.4 (test
 `region_run_evalue_matches_runs_between_random_sequences`).
 
 Real proteins are not random, so the E-values were also measured on decoys. The 25
-BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
-search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
-protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value gives about 25
-query-target pairs with a best region at E <= 1 (one per query), and 250 at E <= 10:
+BCL-2-like test proteins were searched against 500 decoys, exact search. Each decoy is one
+of the proteins shuffled with its dipeptide counts kept, 20 per protein
+(`shuffle_fasta_2mer.py --seed 1`).
 
-| k | E <= | `region_run_evalue` | `region_poisson_evalue` | calibrated |
-|---|---|---|---|---|
-| 15 | 1 | 6 | 2995 | 25 |
-| 15 | 10 | 165 | 4165 | 250 |
-| 12 | 1 | 6 | 2351 | 25 |
-| 12 | 10 | 175 | 4858 | 250 |
+A query's own 20 shuffles are left out of the count. A shuffle that keeps every adjacent
+residue pair keeps short exact stretches of its source: at `protein20` k=5 a query and its
+own shuffles share 708 runs of 5 or more where the run model predicts 135. A real database
+holds no shuffle of the query. On the other 480 decoys a calibrated E-value gives about 24
+query-target pairs with a best region at E <= 1 (one per query) and 240 at E <= 10:
 
-The run E-value calls fewer decoy pairs than a calibrated one would. The Poisson E-value
-calls 94 to 120 times too many at E <= 1. The two reasons are documented on
+| alphabet | k | E <= | `region_run_evalue` | `region_run_evalue_midp` | calibrated |
+|---|---|---|---|---|---|
+| `hp_lehninger2` | 15 | 1 | 6 | 14 | 24 |
+| `hp_lehninger2` | 15 | 10 | 160 | 210 | 240 |
+| `hp_lehninger2` | 12 | 1 | 6 | 16 | 24 |
+| `hp_lehninger2` | 12 | 10 | 169 | 229 | 240 |
+| `gbmr4` | 10 | 1 | 31 | 40 | 24 |
+| `gbmr4` | 10 | 10 | 185 | 254 | 240 |
+| `protein20` | 5 | 1 | 7 | 20 | 24 |
+| `protein20` | 5 | 10 | 87 | 127 | 240 |
+
+The run E-value lets through fewer decoy pairs than a calibrated one would, most of all at
+`protein20`. Run lengths are whole numbers, and one more agreeing position multiplies the
+run E-value by Pr(same). So the runs that pass E <= 10 have E-values anywhere from
+10 × Pr(same) to 10: from 5 at `hp_lehninger2` (Pr(same) about 0.5), from 0.6 at
+`protein20` (about 0.06). The mid-p run E-value (Lancaster 1961) averages the expected
+counts of runs of at least L and of more than L, which puts the cut halfway along one step.
+It is closer to calibrated in every row at E <= 10 and lets through too many at `gbmr4`
+E <= 1. It is reported beside `region_run_evalue` and is never `region_evalue`. Neither
+replaces measuring the cut on decoys of your own database.
+
+The run model itself counts chance runs well: at `hp_lehninger2` k=15, 23,595 runs of 15
+or more between queries and other proteins' shuffles against 23,009 predicted. At `gbmr4`
+the decoys hold 12% to 15% more long runs than predicted (`scripts/run_evalue_decoys.py`).
+
+The Poisson E-value calls far too many: on all 500 decoys at `hp_lehninger2`, 2,995 pairs at
+E <= 1 at k=15 where 25 would be calibrated. The two reasons are documented on
 `MatchedRegion::poisson_score`: the k-mers in a run overlap, and the run's length is both
 what defines the region and what the test measures. Rank by it; do not read it as an
 expected count. The tests `region_run_evalue_on_2mer_shuffled_decoys` and
