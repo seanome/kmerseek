@@ -1,0 +1,4 @@
+# Jekyll turns each .md file in docs/ into an .html page wrapped in _layouts/default.html.
+# The hand-written .html pages have no front matter, so Jekyll copies them unchanged.
+title: kmerseek docs
+theme: null
