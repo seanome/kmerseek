@@ -281,11 +281,30 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
         .collect()
 }
 
-/// The bins above the most populated one. Below the peak sit the bare seeds and the pairs
-/// whose lambda is small; the Karlin-Altschul tail is what comes after it.
+/// The bin of x in [0, `BIN_WIDTH`). It collects every region that has no score: a pair
+/// with no positive lambda leaves `ka_bits` at 0, and a negative score is rounded up to
+/// 0. Pairs whose lambda is small but positive land here too, since x = lambda_pair S
+/// stays near zero however long the region is. None of these say how scores decay, so
+/// this bin is barred from being the peak; see `tail_bins`.
+const DEGENERATE_BIN: i64 = 0;
+
+/// The bins above the most populated one, not counting `DEGENERATE_BIN`. Below the peak
+/// sit the bare seeds and the pairs whose lambda is small; the Karlin-Altschul tail is
+/// what comes after it.
+///
+/// Bin 0 is often the tallest bin. Taken as the peak, it puts the whole rising side of
+/// the real peak into the fit, and the line is then read off bins that are climbing
+/// rather than falling: the slope can come out positive, and the fit is refused, or the
+/// window lands far up the flattened tail.
 fn tail_bins(bins: &[(i64, u64)]) -> Vec<(i64, u64)> {
-    match bins.iter().enumerate().max_by_key(|(_, b)| b.1) {
-        Some((peak, _)) => bins[peak + 1..].to_vec(),
+    let peak = bins
+        .iter()
+        .enumerate()
+        .filter(|(_, b)| b.0 != DEGENERATE_BIN)
+        .max_by_key(|(_, b)| b.1)
+        .map(|(i, _)| i);
+    match peak {
+        Some(peak) => bins[peak + 1..].to_vec(),
         None => Vec::new(),
     }
 }
@@ -323,8 +342,8 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 /// Fit ln(regions with score S) against S, stopping below the related pairs.
 ///
 /// Bins with fewer than `MIN_BIN_COUNT` regions are ignored, and so is everything up to and
-/// including the most populated bin: below it sit the bare seeds and the pairs whose
-/// lambda is small. Starting from the next `MIN_FIT_POINTS` bins, the line is extended one
+/// including the most populated bin other than `DEGENERATE_BIN`: below it sit the bare
+/// seeds and the pairs whose lambda is small. Starting from the next `MIN_FIT_POINTS` bins, the line is extended one
 /// bin at a time upward and a bin joins
 /// while its ln count is within `BEND_SIGMAS / sqrt(count) + BEND_SLACK` above the line
 /// fitted so far (below it is fine: the seed requirement makes the true curve concave).
@@ -1045,6 +1064,37 @@ mod tests {
                 ),
             ],
         );
+    }
+
+    /// A chance curve whose scores decay by e^-0.9 per bin from a peak at bin 5, with a
+    /// spike at bin 0 (every region with no score) and, in the real curve
+    /// only, homologs from bin 12 on. The fit reads the decay it was built with, 0.9, off
+    /// the bins just after the real peak. Taking bin 0 as the peak instead puts bins 2 to
+    /// 9 in the window -- the rising flank and the peak itself -- and returns 0.17, which
+    /// is not the decay rate of anything.
+    #[test]
+    fn test_fit_ignores_the_zero_bin_when_it_is_the_tallest() {
+        let (mut real, mut reference) = (Vec::new(), Vec::new());
+        for b in 0..=20i64 {
+            let chance = if b == DEGENERATE_BIN {
+                5_000
+            } else {
+                (2_000.0 * (-0.9 * (b - 5).abs() as f64).exp()).round() as usize
+            };
+            let homologs = if b >= 12 {
+                (900.0 * (-0.15 * (b - 12) as f64).exp()).round() as usize
+            } else {
+                0
+            };
+            reference.extend(std::iter::repeat_n(b as f64, chance));
+            real.extend(std::iter::repeat_n(b as f64, chance + homologs));
+        }
+        let fit = fit_scores_with_reference(&real, &reference).unwrap();
+        assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (6, 9, None), "{fit:?}");
+        assert!((fit.lambda - 0.9).abs() < 0.01, "{}", fit.lambda);
+
+        // The spike alone is not a curve: nothing above it to fit, and no panic.
+        assert_eq!(fit_scores(&vec![0.25; 5_000]), None);
     }
 
     /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.
