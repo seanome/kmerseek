@@ -1,0 +1,82 @@
+# Nature-family figure style (Nature Biotechnology). Source: Nature Research figure guide,
+# research-figure-guide.nature.com, read 2026-10-02. Use with plt.style.use(path).
+# Sizes are for the figure at its printed size: make the figure 89 or 183 mm wide, never
+# shrink a bigger one afterwards.
+
+# Fonts: Arial, then Helvetica. Liberation Sans has Arial's letter widths (for Linux / Sherlock).
+font.family:        sans-serif
+font.sans-serif:    Arial, Helvetica, Liberation Sans, DejaVu Sans
+font.monospace:     Courier New, Courier, Liberation Mono, DejaVu Sans Mono
+mathtext.fontset:   custom
+mathtext.rm:        Arial
+mathtext.it:        Arial:italic
+mathtext.bf:        Arial:bold
+mathtext.default:   regular
+
+# Text 5-7 pt (Nature). Axis labels 7, ticks and legend 6, nothing below 5.
+font.size:          7
+axes.labelsize:     7
+axes.titlesize:     7
+axes.titleweight:   normal
+xtick.labelsize:    6
+ytick.labelsize:    6
+legend.fontsize:    6
+legend.title_fontsize: 6
+figure.titlesize:   7
+
+# Text stays text in the file (editable, embedded TrueType 42), not outlines.
+pdf.fonttype:       42
+ps.fonttype:        42
+svg.fonttype:       none
+
+# Lines. Nature gives no number; these are the common 0.5 pt axes / 1 pt data choice.
+axes.linewidth:     0.5
+lines.linewidth:    1.0
+lines.markersize:   3
+patch.linewidth:    0.5
+xtick.major.width:  0.5
+ytick.major.width:  0.5
+xtick.minor.width:  0.4
+ytick.minor.width:  0.4
+xtick.major.size:   2.5
+ytick.major.size:   2.5
+xtick.minor.size:   1.5
+ytick.minor.size:   1.5
+xtick.major.pad:    2
+ytick.major.pad:    2
+xtick.direction:    out
+ytick.direction:    out
+grid.linewidth:     0.3
+grid.color:         d9d9d9
+errorbar.capsize:   1.5
+
+# Open axes: left and bottom only, black.
+axes.spines.top:    False
+axes.spines.right:  False
+axes.edgecolor:     black
+axes.labelcolor:    black
+xtick.color:        black
+ytick.color:        black
+text.color:         black
+axes.labelpad:      2
+axes.grid:          False
+axes.axisbelow:     True
+
+# Okabe-Ito palette, the one Nature's guide lists (black moved last).
+axes.prop_cycle:    cycler('color', ['0072B2', 'D55E00', '009E73', 'CC79A7', 'E69F00', '56B4E9', 'F0E442', '000000'])
+image.cmap:         viridis
+
+legend.frameon:     False
+legend.borderaxespad: 0.3
+legend.handlelength: 1.2
+legend.handletextpad: 0.4
+legend.columnspacing: 1.0
+legend.labelspacing: 0.3
+
+figure.dpi:         200
+savefig.dpi:        450
+savefig.bbox:       tight
+savefig.pad_inches: 0.02
+savefig.transparent: False
+figure.facecolor:   white
+axes.facecolor:     white
