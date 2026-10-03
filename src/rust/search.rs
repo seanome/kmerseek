@@ -191,6 +191,11 @@ pub struct KaCalibrationReport {
     pub n_queries: usize,
     /// Regions those queries produced, at any score.
     pub n_regions: usize,
+    /// Reference queries searched and the regions they produced: `n_queries` x
+    /// `reference_shuffles` shuffles of the same sequences, and the chance curve the fit
+    /// is read against. Zero under a null that has no reference.
+    pub n_reference_queries: usize,
+    pub n_reference_regions: usize,
 }
 
 /// What a calibration run is asked for; see `ProteinSearcher::calibrate_ka`.
@@ -203,6 +208,17 @@ pub struct KaCalibrationSettings {
     /// For `DecoyNull::Database`: what the reference queries, which decide where the fit
     /// stops, are.
     pub reference: DecoyNull,
+    /// For `DecoyNull::Database`: how many times each reference query is shuffled. The
+    /// reference only has to hold `MIN_BIN_COUNT` regions per score bin for that bin to
+    /// be usable, and above about 40 bits per seed (k x log2 classes) a chance k-mer
+    /// match is rare enough that one shuffle per query does not reach it however many
+    /// queries are searched: in the 0.4 dark-set store 21 of 140 indexes refused their
+    /// fit with 6 to 2_655 chance regions in total, protein20 at k >= 9 and uniprot18 at
+    /// k >= 10 among them, against a median 1.7M for the indexes that fitted. Shuffling
+    /// each query n times multiplies the chance curve by n and leaves the real curve
+    /// alone; the fit reads a ratio whose baseline is a fitted line, so the constant
+    /// ln n it adds is absorbed by that line's intercept. 1 is the old behaviour.
+    pub reference_shuffles: usize,
     /// How many database sequences to search.
     pub n_queries: usize,
     /// Seed of the sampler that picks them.
@@ -1022,17 +1038,23 @@ impl ProteinSearcher {
     }
 
     fn run_calibration(&self, settings: KaCalibrationSettings) -> IndexResult<KaCalibrationReport> {
-        let KaCalibrationSettings { scoring, null, reference, n_queries, seed } = settings;
-        let (queries, match_probability) = self.calibration_queries(null, n_queries, seed)?;
+        let KaCalibrationSettings { scoring, null, reference, reference_shuffles, n_queries, seed } =
+            settings;
+        let (queries, match_probability) = self.calibration_queries(null, n_queries, 1, seed)?;
         let scores = self.calibration_scores(&queries);
         // For the database null the fit stops where the counts rise above the same queries
-        // shuffled (`reference`).
-        let fit = if null == DecoyNull::Database {
-            let (shuffled, _) = self.calibration_queries(reference, n_queries, seed)?;
+        // shuffled (`reference`), each of them `reference_shuffles` times.
+        let (fit, n_reference_queries, n_reference_regions) = if null == DecoyNull::Database {
+            let (shuffled, _) =
+                self.calibration_queries(reference, n_queries, reference_shuffles, seed)?;
             let reference_scores = self.calibration_scores(&shuffled);
-            fit_scores_with_reference(&scores, &reference_scores)
+            (
+                fit_scores_with_reference(&scores, &reference_scores),
+                shuffled.len(),
+                reference_scores.len(),
+            )
         } else {
-            fit_scores(&scores)
+            (fit_scores(&scores), 0, 0)
         };
         let n_queries = queries.len();
         let query_residues: u64 =
@@ -1065,7 +1087,14 @@ impl ProteinSearcher {
             reference_lambda: fit.reference_lambda,
             reference: (null == DecoyNull::Database).then_some(reference),
         });
-        Ok(KaCalibrationReport { fitted, match_probability, n_queries, n_regions: scores.len() })
+        Ok(KaCalibrationReport {
+            fitted,
+            match_probability,
+            n_queries,
+            n_regions: scores.len(),
+            n_reference_queries,
+            n_reference_regions,
+        })
     }
 
     /// The calibration queries, each with the md5 of the database entry it came from, and
@@ -1073,17 +1102,22 @@ impl ProteinSearcher {
     ///
     /// `target_list` comes out of a DashMap, whose order changes from run to run, so the
     /// sample is drawn from the md5s in sorted order to make the fit reproducible.
+    /// `repeats` decoys are made from each sequence picked, not one, so the reference
+    /// curve can be filled in without searching a different part of the database than the
+    /// real curve did: the same sequences, shuffled `repeats` times over.
     fn calibration_queries(
         &self,
         null: DecoyNull,
         n_queries: usize,
+        repeats: usize,
         seed: u64,
     ) -> IndexResult<(Vec<(String, ProteinSketch)>, f64)> {
         let mut md5s: Vec<&String> = self.target_list.iter().collect();
         md5s.sort_unstable();
         let mut rng = SplitMix64::new(seed);
         let picks = rng.sample_indices(md5s.len(), n_queries.max(COMPOSITION_SAMPLE));
-        let mut queries = Vec::with_capacity(n_queries);
+        let wanted = n_queries.saturating_mul(repeats.max(1));
+        let mut queries = Vec::with_capacity(wanted);
         // A fixed-order array, not a HashMap: summing a map's values in its random order
         // could change the last bit of the match probability from run to run.
         let mut class_counts = [0u64; 256];
@@ -1095,9 +1129,12 @@ impl ProteinSearcher {
                     class_counts[b as usize] += 1;
                 }
             }
-            if queries.len() < n_queries {
+            for _ in 0..repeats.max(1) {
+                if queries.len() >= wanted {
+                    break;
+                }
                 if let Some(query) = self.decoy_from_target(&target, null, &mut rng)? {
-                    queries.push((md5, query));
+                    queries.push((md5.clone(), query));
                 }
             }
         }
@@ -5329,6 +5366,7 @@ mod tests {
 mod ka_calibration_tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_FASTA_GZ;
+    use approx::assert_relative_eq;
     use tempfile::TempDir;
 
     fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
@@ -5336,6 +5374,7 @@ mod ka_calibration_tests {
             scoring: ExtensionScoring { mismatch_penalty, xdrop: DEFAULT_XDROP },
             null: DecoyNull::Shuffled,
             reference: DecoyNull::Shuffled,
+            reference_shuffles: 1,
             n_queries,
             seed: 1,
         }
@@ -5402,6 +5441,46 @@ mod ka_calibration_tests {
             ),
             "{err}"
         );
+        Ok(())
+    }
+
+    /// Shuffling each reference query several times multiplies the chance curve and
+    /// leaves the real one alone, which is what lets a starved fit reach the 30 regions a
+    /// score bin needs. Under the database null with 25 queries: four shuffles give four
+    /// times the reference queries and about four times the chance regions, while the
+    /// real side is identical to the one shuffle run.
+    #[test]
+    fn test_reference_shuffles_multiply_only_the_chance_curve() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        let settings = |shuffles| KaCalibrationSettings {
+            scoring: ExtensionScoring { mismatch_penalty: 2.0, xdrop: DEFAULT_XDROP },
+            null: DecoyNull::Database,
+            reference: DecoyNull::ShuffledDipeptide,
+            reference_shuffles: shuffles,
+            n_queries: 25,
+            seed: 1,
+        };
+        let one = searcher.calibrate_ka(settings(1))?;
+        let four = searcher.calibrate_ka(settings(4))?;
+        println!("{one:?}\n{four:?}");
+        let survival = |r: &KaCalibrationReport| r.fitted.as_ref().unwrap().survival.clone();
+        assert_eq!((one.n_queries, four.n_queries), (25, 25), "the real side is untouched");
+        assert_eq!((one.n_regions, four.n_regions), (9838, 9838));
+        assert_eq!(survival(&one), survival(&four));
+        assert_eq!((one.n_reference_queries, four.n_reference_queries), (25, 100));
+        // 38_606 / 9_392 = 4.1: four shuffles, four times the chance regions.
+        assert_eq!((one.n_reference_regions, four.n_reference_regions), (9392, 38606));
+        // The fit itself moves: more chance regions shrink each bin's noise allowance, so the
+        // stop where the real curve rises above the chance curve fires at a different bin.
+        let fit = |r: &KaCalibrationReport| {
+            let f = r.fitted.as_ref().unwrap();
+            (f.r_database, f.k)
+        };
+        let ((r1, k1), (r4, k4)) = (fit(&one), fit(&four));
+        assert_relative_eq!(r1, 0.8055981514319699, epsilon = 1e-12);
+        assert_relative_eq!(k1, 0.011522349930672795, epsilon = 1e-12);
+        assert_relative_eq!(r4, 0.8464263063538485, epsilon = 1e-12);
+        assert_relative_eq!(k4, 0.015400688613533853, epsilon = 1e-12);
         Ok(())
     }
 }
