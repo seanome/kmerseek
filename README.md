@@ -180,7 +180,7 @@ disagree. The region Poisson score keeps counting exact k-mers against the expec
 summed over the extended span, so extension can only make a region's score more
 conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
 
-Two more columns come with the flag. `region_ka_bits` and `region_evalue` score the
+Two more columns come with the flag. `region_ka_bits` and `region_ka_evalue` score the
 extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
 statistics (Karlin & Altschul 1990, the statistics behind BLAST):
 
@@ -197,8 +197,9 @@ another. `λ` is solved
 per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
 `u` that a random position from each falls in the same class gives λ as the positive
 root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,
-which is what two hydrophobic runs look like, and the region gets 0 bits and no
-significance: agreement is what those two compositions do by default. `K` is the
+which is what two hydrophobic runs look like, and the region gets 0 bits and an empty
+`region_ka_evalue`: agreement is what those two compositions do by default. Its
+`region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
 seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
 it on the index itself (`--ka-queries`, 200 by default): it searches that many of the
@@ -207,7 +208,7 @@ the straight line that ln(regions at score S) makes against S below the related 
 A search with the penalty and give-up margin the index was fitted for reads the fit
 back; with another pair it fits its own before searching, or takes `--ka-k`.
 [docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
-On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
+On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_ka_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
 first different-fold hit from 0.0012 to 0.066 (the exact k=23 arm: 0.0029), with no
 different-fold hit at E <= 0.01.
@@ -225,8 +226,44 @@ for a sum of region scores; `region_n_chained` says how many regions a row is ma
 domain that no single gapless run covers becomes one call. On SCOPe40 domains it changes
 ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
 transfer, where a call has to cover a domain to carry its label. A chained row's
-`region_evalue` takes the database size as the number of targets times the target's
+`region_ka_evalue` takes the database size as the number of targets times the target's
 length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
+
+## E-values in the CSV
+
+Every row is one matched region, and every row gets an E-value. It is the number of
+regions at least this good that an unrelated query would turn up in the whole database. Rank
+and filter by `region_evalue`. A value that could not be computed is an empty field,
+never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
+
+| column | what it is | on which rows |
+|---|---|---|
+| `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
+| `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
+| `region_run_evalue` | (1 − Pr(same)) × m × n × Pr(same)^L | all |
+| `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
+| `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
+| `region_evalue_source` | `ka`, `run`, or `run_upper_bound` (below) | all |
+
+`region_evalue` is never the smaller of the two E-values. Picking the better of two tests
+makes a region look more significant than either test says.
+
+The run E-value is the Karlin-Altschul E-value for +1 per match with no mismatch allowed,
+where λ = ln(1 / Pr(same)) and K = 1 − Pr(same). K is the chance that the position before
+a run disagrees, so each run is counted once, where it starts. Counting shared k-mers
+instead would count a run of L positions L − k + 1 times, since overlapping k-mers share
+k − 1 positions and are not independent. `m` is the query length.
+`n` is the database's residue count, which the index does not store, so it is estimated
+as `scaled × db_n_kmers + (ksize − 1) × db_n_targets`. That comes out low by k-mers that
+repeat within a target and k-mers removed as low-complexity, and the run E-value comes out
+low by the same fraction. How low depends on how often k-mers repeat, so on the alphabet
+and k. On the 25 BCL-2-like test proteins (9,288 residues) the estimate is 0.99 of the
+real count at `hp` k=15, 0.93 at k=12 and 0.47 at k=8, and 1.00 at `protein` k=5. With few
+classes and a short k, the run E-value can be half what it should be.
+
+When Pr(same) is above 0.99, both sequences are made almost entirely of one class. There
+1 − Pr(same) is close to 0 and would make every run look significant. The factor is
+dropped, the value is an upper bound, and `region_evalue_source` says `run_upper_bound`.
 
 ## Visualizing hits
 
