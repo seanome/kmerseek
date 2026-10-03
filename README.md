@@ -265,6 +265,27 @@ When Pr(same) is above 0.99, both sequences are made almost entirely of one clas
 1 − Pr(same) is close to 0 and would make every run look significant. The factor is
 dropped, the value is an upper bound, and `region_evalue_source` says `run_upper_bound`.
 
+On sequences whose letters are drawn independently, the formula predicts how many runs
+an exact search reports. At `hp_lehninger2` the search finds 225 runs of 20 or more where
+the formula predicts 200.7; at `gbmr4`, 50 runs of 17 or more against 61.4, both within
+3 standard deviations (test `region_run_evalue_matches_runs_between_random_sequences`).
+
+Real proteins are not random, so the run E-value was also measured on decoys. The 25
+BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
+search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
+protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value gives about 25
+query-target pairs with a best region at E <= 1 (one per query), and 250 at E <= 10:
+
+| k | E <= | `region_run_evalue` | calibrated |
+|---|---|---|---|
+| 15 | 1 | 6 | 25 |
+| 15 | 10 | 165 | 250 |
+| 12 | 1 | 6 | 25 |
+| 12 | 10 | 175 | 250 |
+
+The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
+errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit
