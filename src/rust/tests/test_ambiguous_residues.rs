@@ -19,6 +19,7 @@
 mod tests {
     use anyhow::Result;
     use approx::assert_relative_eq;
+    use std::path::Path;
     use tempfile::TempDir;
 
     use crate::alphabets::Alphabet;
@@ -233,20 +234,41 @@ mod tests {
         moltype: &str,
         ksize: u32,
     ) -> Result<(ProteinSketch, Vec<SearchResult>)> {
+        let (queries, results) =
+            search_query_file(temp_dir, Path::new(RNAS1_DAMKO_FASTA), moltype, ksize)?;
+        Ok((queries.into_iter().next().unwrap(), results))
+    }
+
+    /// Index the 125 ribonucleases and search them with the one protein in `query_fasta`.
+    fn search_one_query(
+        temp_dir: &TempDir,
+        query_fasta: &Path,
+        moltype: &str,
+        ksize: u32,
+    ) -> Result<Vec<SearchResult>> {
+        Ok(search_query_file(temp_dir, query_fasta, moltype, ksize)?.1)
+    }
+
+    fn search_query_file(
+        temp_dir: &TempDir,
+        query_fasta: &Path,
+        moltype: &str,
+        ksize: u32,
+    ) -> Result<(Vec<ProteinSketch>, Vec<SearchResult>)> {
         let targets = ProteomeIndex::new(temp_dir.path().join("targets"), ksize, 1, moltype, true)?;
         targets.process_fasta(RIBONUCLEASES_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(targets)?;
 
         let query_index =
             ProteomeIndex::new(temp_dir.path().join("query"), ksize, 1, moltype, true)?;
-        query_index.process_fasta(RNAS1_DAMKO_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.process_fasta(query_fasta, 0, DEFAULT_BATCH_SIZE)?;
         query_index.load_state()?;
         let queries: Vec<_> =
             query_index.get_signatures().iter().map(|entry| entry.value().clone()).collect();
         assert_eq!(queries.len(), 1, "{moltype}: the query file holds one protein");
 
         let results = searcher.search(&queries, &SearchFilters::default())?;
-        Ok((queries.into_iter().next().unwrap(), results))
+        Ok((queries, results))
     }
 
     fn shared_with<'a>(results: &'a [SearchResult], entry_name: &str) -> &'a SearchResult {
@@ -373,6 +395,40 @@ mod tests {
         let bovine = shared_with(&results, "RNAS1_BOVIN");
         assert_eq!(region_spans(bovine), vec![(19, 124)]);
         assert_eq!(bovine.matched_regions[0].n_shared, 63);
+        Ok(())
+    }
+
+    /// A region's TF-IDF counts each shared window once, with the IDF of the reading the
+    /// target holds. Under protein20 at k=10, topi and bovine RNase A share one region over
+    /// residues 38-102, 56 windows, every one of them covering a B or Z. Goat RNase is topi
+    /// with every B and Z resolved to the residue bovine holds, so the same region from goat
+    /// holds exactly the k-mers topi matched bovine with, and the two TF-IDFs are equal.
+    /// Adding the IDF of every reading instead gave topi 1512.11, 27.0 per window
+    /// (`docs/images/region_mean_idf_readings.png`).
+    #[test]
+    fn test_region_tfidf_counts_the_reading_the_target_holds() -> Result<()> {
+        let region_over_38_102 = |hit: &SearchResult| {
+            hit.matched_regions
+                .iter()
+                .find(|r| (r.start, r.end) == (37, 102))
+                .cloned()
+                .unwrap_or_else(|| panic!("no region 37-102 in {:?}", region_spans(hit)))
+        };
+        let temp_dir = TempDir::new()?;
+        let (_, results) = search_topi(&temp_dir, "protein20", 10)?;
+        let topi = region_over_38_102(shared_with(&results, "RNAS1_BOVIN"));
+
+        let temp_dir = TempDir::new()?;
+        let goat_query = temp_dir.path().join("goat.fasta");
+        std::fs::write(&goat_query, format!(">goat\n{GOAT_RNASE}\n"))?;
+        let results = search_one_query(&temp_dir, &goat_query, "protein20", 10)?;
+        let goat = region_over_38_102(shared_with(&results, "RNAS1_BOVIN"));
+
+        println!("topi {} {} goat {} {}", topi.tfidf, topi.mean_idf, goat.tfidf, goat.mean_idf);
+        assert_eq!(topi.n_shared, 56);
+        assert_relative_eq!(topi.tfidf, goat.tfidf, epsilon = 1e-9);
+        assert_relative_eq!(topi.tfidf, 188.4702672915833, epsilon = 1e-9);
+        assert_relative_eq!(topi.mean_idf, topi.tfidf / 56.0, epsilon = 1e-12);
         Ok(())
     }
 
