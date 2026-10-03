@@ -2,9 +2,8 @@
 
 Instructions for any coding agent working in this repo (Claude Code, Codex, Cursor,
 Copilot, or a person). Each folder holds one skill: a `SKILL.md` with a `name` and a
-`description` saying when to use it, plus any reference files or scripts it needs. The
-format follows the open Agent Skills layout, so tools that read `.agents/skills/` pick
-them up directly; for any other tool, point it at the `SKILL.md` by path.
+`description` saying when to use it, plus any reference files or scripts it needs. Before a
+task, open the `SKILL.md` that matches it, or point your agent at that file by path.
 
 | Skill | Use it when |
 |---|---|

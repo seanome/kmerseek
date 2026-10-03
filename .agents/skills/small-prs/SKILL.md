@@ -92,7 +92,8 @@ before the PR is called done:
 2. **A figure of the actual case**: the real residues, positions and k-mers of the pair
    whose value changed, before and after, drawn with a small script committed under
    `scripts/` and the image under `docs/images/`. Run the `clear-figures` checklist.
-3. **A PR comment** (banner first line) with the figure embedded from a
+3. **A PR comment** (opening with the agent note shown in `rustacean-review`, step 2 of
+   "Record the review on the PR") with the figure embedded from a
    `raw.githubusercontent.com/<owner>/<repo>/<sha>/...` link, the before/after rows as a
    `text` block, the aligned residues with match counts, and the arithmetic (14 − 2 + 1 = 13).
 4. **One line in the PR description** naming each test whose expected value changed and

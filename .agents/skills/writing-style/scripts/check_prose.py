@@ -16,7 +16,7 @@ from pathlib import Path
 
 CUT_WORDS = ["deliberately", "honest", "honestly", "manufacture", "manufactures", "simply",
              "actually", "exactly", "precisely", "truly", "delineate", "delineation",
-             "the former", "the latter", "genuinely", "legible", "vacuous", "orthogonal",
+             "the former", "the latter", "genuinely", "legible", "vacuous",
              "interpolated", "really", "cleanly", "outright", "decisively", "remotely",
              "comfortably", "worth noting", "it is worth", "note that", "importantly"]
 
@@ -54,7 +54,7 @@ def sentences(block: str):
         s = s.strip(" .")
         words = s.split()
         # A run of bare numbers and dots is a table that escaped the tag filter.
-        if len(words) >= 4 and sum(w in (".", "..") for w in words) < 3:
+        if words and sum(w in (".", "..") for w in words) < 3:
             yield s
 
 
