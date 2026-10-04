@@ -268,6 +268,10 @@ procedure for changed expected values (run both builds, draw the case, post it o
 - Tests cover every alphabet and every pair, not a sample or a sliding pair (#43, #56). Build
   the list from the alphabet registry and assert its length.
 - Any alphabet shown names its hydrophobic and polar residues, since they differ (#58).
+- Amino acids listed in a test, constant or table are in a standard order: alphabetical by
+  one-letter code (`ACDEFGHIKLMNPQRSTVWY`), or grouped by the alphabet's classes with the
+  grouping named. Never an ad hoc order. "It's not even alphabetical or like grouped by
+  anything ... can you pick a normal order?" (#112, added 2026-10-04).
 - A new behaviour comes with the case that shows why it matters, e.g. "examples where the
   whole protein passes but the region doesn't" (#38), and says how it changes downstream
   numbers such as the region score and E-value (#57).
