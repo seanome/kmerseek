@@ -398,6 +398,39 @@ mod tests {
         Ok(())
     }
 
+    /// Extension scores an ambiguous residue the way the seeds did: as agreeing with the
+    /// target when one of its readings does. Under sdm12 at k=12, topi against bovine RNase A
+    /// seeds four exact regions, broken at the three real mismatches sdm12 can see (residues
+    /// 19, 37 and 103; S/T at residue 3 is one class). Extension crosses each of them, so
+    /// the four become one region over the whole mature chain, bovine 26-150, and its
+    /// mismatch count is those three residues. The 22 B and Z inside it are not mismatches.
+    #[test]
+    fn test_extension_counts_an_ambiguous_residue_as_agreeing() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 12, 1, "sdm12")?;
+        let bovine = ProteinSketch::from_protein_sequence("bovine", BOVINE_RNASE, 12, 1, "sdm12")?;
+        let seeds = find_matched_regions(&topi, &bovine, &topi.intersect(&bovine));
+        assert_eq!(seeds.len(), 4);
+
+        let extended = extend_regions(
+            seeds,
+            &topi,
+            &bovine,
+            ExtensionParams {
+                scoring: ExtensionScoring::default(),
+                ka: KaParams { k: 0.03, r_database: 1.0 },
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            },
+        );
+        let spans: Vec<_> = extended
+            .iter()
+            .map(|r| (r.start, r.end, r.target_start, r.target_end, r.n_mismatches))
+            .collect();
+        println!("{spans:?}");
+        assert_eq!(spans, vec![(0, 124, 26, 150, 3)]);
+        Ok(())
+    }
+
     /// A region's TF-IDF counts each shared window once, with the IDF of the reading the
     /// target holds. Under protein20 at k=10, topi and bovine RNase A share one region over
     /// residues 38-102, 56 windows, every one of them covering a B or Z. Goat RNase is topi
