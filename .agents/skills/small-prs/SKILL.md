@@ -41,6 +41,11 @@ more simply. A reviewer may reject a PR for size alone.
   own PR, so a later refactor is checked against them.
 - Plan the split before writing the code, not after.
 - Do not break the build between stacked PRs: every PR in the stack must pass on its own.
+- No PR in a stack adds a value that a later PR in the stack corrects. Put the fix in the
+  PR that adds the value. Splitting is for size, not for shipping a known-wrong number
+  first. "I don't understand why we need to introduce a bad metric and then fix it in a
+  separate PR" (kmerseek PR 112, where a Poisson E-value that overcounts overlapping
+  k-mers was added, to be replaced later; added 2026-10-04).
 - If it truly cannot be small (rare), ask the reviewer in advance and expect a long review.
 
 ## PR descriptions and commit messages
