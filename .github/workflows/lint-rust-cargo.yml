@@ -29,3 +29,15 @@ jobs:
 
       - name: Check clippy
         run: cargo clippy --all -- --deny warnings
+
+      # A parameter named `_name` tells rustc not to warn that it is never used, so neither
+      # rustc nor clippy reports it. calculate_expected_shared_kmers took the target as
+      # `_target_sketch` for nine months and ignored it, which put titin first for every
+      # query (PR 136). A function takes only what it uses: drop the parameter instead.
+      # Matches `(_name:`, `, _name:` and a parameter on its own line; a bare `_` is allowed.
+      - name: No function parameter silenced with a leading underscore
+        run: |
+          if grep -rnE '(\(|,)[[:space:]]*_[a-z][a-z0-9_]*[[:space:]]*:[^:]|^[[:space:]]+_[a-z][a-z0-9_]*[[:space:]]*:[[:space:]]*[&A-Za-z(]' src/rust; then
+            echo "Unused parameters above: remove them, or use them." >&2
+            exit 1
+          fi
