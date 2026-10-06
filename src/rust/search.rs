@@ -5341,6 +5341,30 @@ mod tests {
         Ok(())
     }
 
+    /// With no proteins indexed there is no mean protein size to scale by (0 / 0), so the
+    /// expected count is 0.0 rather than NaN, and the p-value reads it as no evidence.
+    #[test]
+    fn test_empty_database_expects_no_shared_kmers() -> Result<()> {
+        let ksize = 5;
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
+        let searcher = ProteinSearcher::new(index)?;
+        assert_eq!(searcher.stats.total_signatures, 0);
+        assert_eq!(searcher.db_n_kmers, 0);
+        // BCL2_HUMAN (P10415) residues 1-32.
+        let sketch = ProteinSketch::from_protein_sequence(
+            "bcl2",
+            "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDA",
+            ksize,
+            1,
+            "protein20",
+        )?;
+        let expected = searcher.calculate_expected_shared_kmers(&sketch, 28);
+        assert_eq!(expected, 0.0);
+        assert_eq!(poisson_survival(3, expected), 1.0);
+        Ok(())
+    }
+
     /// A region whose expectation is zero must not produce NaN or infinity downstream. This is
     /// the pairing the guards in poisson_survival/fold_enrichment exist for.
     #[test]
