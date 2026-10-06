@@ -225,11 +225,12 @@ pub struct ProteomeIndex {
     #[allow(dead_code)]
     stats: ProteomeIndexKmerStats,
 
-    // Add moltype field for serialization so don't have to read signatures to find it
+    // Molecule type of every signature, e.g. "protein" or "hp". Saved in
+    // ProteomeIndexMetadata, so a loaded index knows it without reading a signature.
     moltype: String,
 
-    // Add ksize field for serialization so don't have to read signatures to find it
-    // Sourmash branchwater uses u32 for ksize so we will, too
+    // k-mer size in residues. Saved in ProteomeIndexMetadata. u32 to match sourmash
+    // branchwater.
     ksize: u32,
 
     // Add minhash_ksize field for serialization
@@ -238,7 +239,8 @@ pub struct ProteomeIndex {
     #[allow(dead_code)]
     minhash_ksize: u32,
 
-    // Add scaled field for serialization
+    // FracMinHash scaled value: a k-mer is kept when its hash is below max_hash / scaled.
+    // Saved in ProteomeIndexMetadata.
     scaled: u32,
 
     // Configuration for raw sequence storage
