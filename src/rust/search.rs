@@ -780,10 +780,32 @@ pub struct MatchedRegion {
     pub evalue: f64,
 }
 
-/// Σ over `shares` of 1 - (1 - f)^`size_ratio`: the expected number of k-mers a query shares
-/// by chance with a target `size_ratio` times the mean protein's size, where each f is the
-/// share of database proteins holding one query k-mer. See
-/// `ProteinSearcher::calculate_expected_shared_kmers`.
+/// Expected number of k-mers a query shares by chance with an unrelated target:
+///
+/// ```text
+/// E = Σ over query k-mers h of  1 - (1 - f(h))^r
+///
+/// f(h)  share of database proteins that hold h          (one entry of `shares`)
+/// r     target's k-mers / mean k-mers per database protein   (`size_ratio`)
+/// ```
+///
+/// Each term is the chance that the target holds h. Summing chances gives the expected
+/// count without assuming the k-mers are independent (linearity of expectation).
+///
+/// Where the term comes from. Model an unrelated protein with m distinct k-mers as m
+/// independent draws, each equal to h with probability q(h); it holds h with probability
+/// 1 - (1 - q)^m. The index stores f(h), not q(h), so q(h) is set so that a protein of mean
+/// size m̄ holds h with probability f(h): 1 - (1 - q)^m̄ = f, so 1 - q = (1 - f)^(1/m̄).
+/// For the target, m = m_t: 1 - (1 - f)^(m_t/m̄) = 1 - (1 - f)^r.
+///
+/// At r = 1 the term is f(h), the value before target size was used. For a rare k-mer it
+/// is about r * f(h): twice the size, twice the chance. It never passes 1, where r * f(h)
+/// would (f = 0.05, r = 48: 2.4 against 0.91).
+///
+/// Approximate in two ways: repeated stretches make a protein's k-mers cluster, and fitting
+/// q(h) at the mean size underestimates it slightly for common k-mers, because f(h) is
+/// really an average over proteins of every size. On the human proteome the observed /
+/// expected count stays between 0.81 and 1.07 across target lengths (PR 136).
 fn expected_shared_kmers(shares: impl Iterator<Item = f64>, size_ratio: f64) -> f64 {
     // ln_1p and exp_m1 keep a rare k-mer's precision: 1 - f rounds to 1 for f below about
     // 1e-16, and then (1 - f)^r would give exactly 0.
