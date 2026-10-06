@@ -29,3 +29,21 @@ jobs:
 
       - name: Check clippy
         run: cargo clippy --all -- --deny warnings
+
+      # rustc warns on dead code and unused items, and clippy above turns warnings into
+      # errors, so an allow attribute is the only way unused code survives. Test modules
+      # (#[cfg(test)] followed by a `mod name {` block, closed by a `}` in column 0) are
+      # skipped: test fixtures may hold fields that only some tests read.
+      - name: No dead_code or unused lint silenced outside test modules
+        run: |
+          if awk '
+            FNR == 1 { in_test = 0; cfg_test = 0 }
+            in_test { if ($0 ~ /^}$/) in_test = 0; next }
+            cfg_test && /^(pub(\(crate\))? )?mod [a-z0-9_]+ \{/ { in_test = 1; cfg_test = 0; next }
+            { cfg_test = ($0 ~ /^#\[cfg\(test\)\]/) }
+            /#!?\[(allow|expect)\(([^)]*[ ,])?(dead_code|unused)/ { print FILENAME ":" FNR ": " $0; found = 1 }
+            END { exit !found }
+          ' $(find src/rust -name '*.rs'); then
+            echo "Code kept only by an allow attribute above: remove it, or use it." >&2
+            exit 1
+          fi
