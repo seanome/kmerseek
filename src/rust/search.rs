@@ -783,10 +783,11 @@ pub struct MatchedRegion {
 /// Expected number of k-mers a query shares by chance with an unrelated target:
 ///
 /// ```text
-/// E = Σ over query k-mers h of  1 - (1 - f(h))^r
+/// μ = Σ over query k-mers h of  1 - (1 - f(h))^r
 ///
 /// f(h)  share of database proteins that hold h          (one entry of `shares`)
 /// r     target's k-mers / mean k-mers per database protein   (`size_ratio`)
+/// μ     the mean of the Poisson that gives the whole-protein p-value (not an E-value)
 /// ```
 ///
 /// Each term is the chance that the target holds h. Summing chances gives the expected
@@ -1967,12 +1968,12 @@ impl ProteinSearcher {
     /// ```text
     /// f(h) = freq_target(h) / N             share of database proteins holding h
     /// r    = target_n_hashes / mean_hashes  target size relative to the mean protein
-    /// E    = Σ over query k-mers h of  1 - (1 - f(h))^r
+    /// μ    = Σ over query k-mers h of  1 - (1 - f(h))^r   the Poisson mean, not an E-value
     /// ```
     ///
     /// `mean_hashes` is `db_n_kmers / N`: the sum of freq_target over every hash counts each
     /// (protein, k-mer) pair once, so it is the database's total k-mers per protein. A
-    /// protein of mean size has r = 1 and E = Σ f(h). A longer target holds more k-mers and
+    /// protein of mean size has r = 1 and μ = Σ f(h). A longer target holds more k-mers and
     /// so shares more with any query by chance. Without r, titin (TTN, 35_991 residues, with
     /// r = 48.6 at hp_lehninger2 k=17) ranked first by fold enrichment and by p-value among the
     /// human proteins hit by Ced-9 and by P66. The power, rather than
