@@ -75,8 +75,24 @@ def shared_legend(fig, ncol=None, **kw):
 
 
 def save(fig, path_stem, formats=("pdf", "svg", "png")):
-    """Vector PDF/SVG for the journal, 450 dpi PNG for notebooks and slides."""
+    """Vector PDF/SVG for the journal, 450 dpi PNG for notebooks and slides.
+
+    The PNG is stored as 8-bit with a 256-colour palette, which keeps flat-colour figures
+    a fraction of the size of a full-colour PNG.
+    """
     path_stem = Path(path_stem)
     path_stem.parent.mkdir(parents=True, exist_ok=True)
     for ext in formats:
-        fig.savefig(path_stem.with_suffix(f".{ext}"))
+        path = path_stem.with_suffix(f".{ext}")
+        fig.savefig(path)
+        if ext == "png":
+            to_256_colours(path)
+
+
+def to_256_colours(path):
+    """Rewrite a PNG in place as 8-bit with a palette of at most 256 colours."""
+    from PIL import Image
+
+    with Image.open(path) as image:
+        palette = image.convert("RGB").quantize(colors=256, dither=Image.Dither.NONE)
+    palette.save(path, optimize=True)
