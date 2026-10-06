@@ -12,9 +12,10 @@ use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_G
 
 /// Rows `kmerseek search` writes for CED9 against the 25-protein fixture at hp k=12 with
 /// `--max-pvalue 0.7` and every other filter open. The p-value cap drops the pairs not
-/// enriched above chance in this small, BCL2-heavy set. This was 242 before chaining seeds
-/// per diagonal merged the pieces a repeated k-mer used to split.
-const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 218;
+/// enriched above chance in this small, BCL2-heavy set. The long non-BCL2 proteins ASPP2
+/// (1_128 residues, p = 0.97) and FBX10 (956, p = 0.85) are among those dropped: their size
+/// alone explains the k-mers they share with CED9.
+const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 188;
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
@@ -436,10 +437,9 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
     // n_intersecting_hashes/containment/etc. assertions below). The search command's default
     // p-value cutoff (0.05) doesn't work here: this fixture database is only 25 sequences, all
     // BCL2-family, so most k-mers are common across the DB and expected_shared_kmers is
-    // inflated - the real poisson_pvalue for BCL2_HUMAN vs CED9 is 0.636 (n_intersecting_hashes
-    // 24 vs expected_shared_kmers 25.4, i.e. at-or-below chance in this curated set). p < 0.7
-    // is loose enough to keep that match on this specific database without disabling the
-    // p-value filter outright.
+    // high - the real poisson_pvalue for BCL2_HUMAN vs CED9 is 0.070 (n_intersecting_hashes
+    // 24 vs expected_shared_kmers 17.2 for a target of BCL2's 239 residues). p < 0.7 keeps
+    // that match on this specific database without disabling the p-value filter outright.
     search_cmd.args([
         "search",
         "--query",
