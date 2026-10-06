@@ -31,9 +31,8 @@ jobs:
         run: cargo clippy --all -- --deny warnings
 
       # A parameter named `_name` tells rustc not to warn that it is never used, so neither
-      # rustc nor clippy reports it. calculate_expected_shared_kmers took the target as
-      # `_target_sketch` for nine months and ignored it, which put titin first for every
-      # query (PR 136). A function takes only what it uses: drop the parameter instead.
+      # rustc nor clippy reports it. A function that ignores an input it takes looks as if
+      # it depends on that input, and nothing flags the mistake. Drop the parameter instead.
       # Matches `(_name:`, `, _name:` and a parameter on its own line; a bare `_` is allowed.
       - name: No function parameter silenced with a leading underscore
         run: |

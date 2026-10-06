@@ -12,10 +12,9 @@ use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_G
 
 /// Rows `kmerseek search` writes for CED9 against the 25-protein fixture at hp k=12 with
 /// `--max-pvalue 0.7` and every other filter open. The p-value cap drops the pairs not
-/// enriched above chance in this small, BCL2-heavy set. This was 242 before chaining seeds
-/// per diagonal merged the pieces a repeated k-mer used to split, and 218 before the expected
-/// shared count scaled with the target's size: the long non-BCL2 proteins ASPP2 (1_128
-/// residues) and FBX10 (956) went from p = 0 to p = 0.97 and 0.85.
+/// enriched above chance in this small, BCL2-heavy set. The long non-BCL2 proteins ASPP2
+/// (1_128 residues, p = 0.97) and FBX10 (956, p = 0.85) are among those dropped: their size
+/// alone explains the k-mers they share with CED9.
 const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 188;
 
 #[test]

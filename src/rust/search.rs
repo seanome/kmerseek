@@ -798,14 +798,16 @@ pub struct MatchedRegion {
 /// size m̄ holds h with probability f(h): 1 - (1 - q)^m̄ = f, so 1 - q = (1 - f)^(1/m̄).
 /// For the target, m = m_t: 1 - (1 - f)^(m_t/m̄) = 1 - (1 - f)^r.
 ///
-/// At r = 1 the term is f(h), the value before target size was used. For a rare k-mer it
+/// At r = 1 the term is f(h). For a rare k-mer it
 /// is about r * f(h): twice the size, twice the chance. It never passes 1, where r * f(h)
 /// would (f = 0.05, r = 48: 2.4 against 0.91).
 ///
 /// Approximate in two ways: repeated stretches make a protein's k-mers cluster, and fitting
 /// q(h) at the mean size underestimates it slightly for common k-mers, because f(h) is
 /// really an average over proteins of every size. On the human proteome the observed /
-/// expected count stays between 0.81 and 1.07 across target lengths (PR 136).
+/// expected count stays between 0.81 and 1.07 across target lengths, where with f(h) alone
+/// it climbs from 0.21 to 2.82:
+/// `docs/images/expected_vs_observed_by_length_ced9_p66_human.png`.
 fn expected_shared_kmers(shares: impl Iterator<Item = f64>, size_ratio: f64) -> f64 {
     // ln_1p and exp_m1 keep a rare k-mer's precision: 1 - f rounds to 1 for f below about
     // 1e-16, and then (1 - f)^r would give exactly 0.
@@ -856,8 +858,9 @@ fn fold_enrichment(observed: u32, expected: f64) -> f64 {
 /// total number of target signatures. Note there is no division by the region's length here:
 /// each term in the sum is already a per-k-mer database frequency, and the sum has one term per
 /// k-mer position inside the region. This is `ProteinSearcher::calculate_expected_shared_kmers`
-/// for a target of mean size, restricted to k-mer positions inside the region instead of the
-/// whole query. It does not yet scale with the target's size.
+/// for a target of mean size (r = 1), restricted to k-mer positions inside the region instead
+/// of the whole query. It does not scale with the target's size, unlike the whole-query count:
+/// see issue 139 in seanome/kmerseek.
 ///
 /// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to the
 /// region only if it fits entirely inside. That is what makes the count equal
@@ -1970,19 +1973,21 @@ impl ProteinSearcher {
     /// `mean_hashes` is `db_n_kmers / N`: the sum of freq_target over every hash counts each
     /// (protein, k-mer) pair once, so it is the database's total k-mers per protein. A
     /// protein of mean size has r = 1 and E = Σ f(h). A longer target holds more k-mers and
-    /// so shares more with any query by chance. Without r, titin (TTN, 35_991 residues, 63
-    /// times the mean human protein) ranked first by fold enrichment and by p-value among the
-    /// human proteins hit by Ced-9 and by P66 (hp_lehninger2, k=17). The power, rather than
+    /// so shares more with any query by chance. Without r, titin (TTN, 35_991 residues, with
+    /// r = 48.6 at hp_lehninger2 k=17) ranked first by fold enrichment and by p-value among the
+    /// human proteins hit by Ced-9 and by P66. The power, rather than
     /// f(h) * r, keeps each term a probability when f(h) * r would pass 1.
     ///
-    /// 0.0 when the database is empty, which `poisson_survival` reads as no evidence.
+    /// 0.0 when the database or the target is empty, which `poisson_survival` reads as no
+    /// evidence. The target check is needed, not only tidy: a k-mer in every protein has
+    /// f(h) = 1, and at r = 0 its term is 0 * ln(0) = NaN.
     pub fn calculate_expected_shared_kmers(
         &self,
         query_sketch: &ProteinSketch,
         target_n_hashes: usize,
     ) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
-        if total_signatures == 0.0 || self.db_n_kmers == 0 {
+        if total_signatures == 0.0 || self.db_n_kmers == 0 || target_n_hashes == 0 {
             return 0.0;
         }
         let mean_hashes = self.db_n_kmers as f64 / total_signatures;
@@ -2870,7 +2875,9 @@ impl ProteinSearcher {
 mod tests {
     use super::*;
     use crate::sketch::ProteinSketch;
-    use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
+    use crate::tests::test_fixtures::{
+        BCL2_1_32, BCL2_1_32_KMERS_K5, TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ,
+    };
     use approx::assert_relative_eq;
     use needletail::parse_fastx_file;
     use rstest::{fixture, rstest};
@@ -5316,8 +5323,35 @@ mod tests {
         );
     }
 
+    /// A target with no k-mers shares none by chance. Without the guard, a k-mer in every
+    /// protein (here the single protein of a one-protein database, f = 1/1) gives
+    /// 0 * ln(0) = NaN.
+    #[test]
+    fn test_empty_target_expects_no_shared_kmers() -> Result<()> {
+        let ksize = 5;
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
+        let sig = index.create_protein_signature(BCL2_1_32, "bcl2")?;
+        index.store_signatures(vec![sig])?;
+        let searcher = ProteinSearcher::new(index)?;
+        assert_eq!(searcher.stats.total_signatures, 1);
+        let sketch =
+            ProteinSketch::from_protein_sequence("bcl2", BCL2_1_32, ksize, 1, "protein20")?;
+        assert_eq!(searcher.calculate_expected_shared_kmers(&sketch, 0), 0.0);
+        Ok(())
+    }
+
     /// On a real index, a larger target is expected to share more k-mers with the same query,
     /// so the same observed count is less surprising against it.
+    ///
+    /// The fixture holds 25 proteins and 9_167 (protein, k-mer) pairs at protein20 k=5, so the
+    /// mean protein has 9_167 / 25 = 366.68 k-mers. Targets of 91 and 1_466 k-mers have
+    /// r = 0.248 and r = 3.998. The query's 28 k-mers are held 30 times across the 25
+    /// proteins, so the shares f(h) sum to 30 / 25 = 1.2, the count at r = 1. The small
+    /// target's count, 0.303, is close to 0.248 * 1.2 = 0.298, as it should be when most f(h)
+    /// are small. The large target's, 4.482, is below 3.998 * 1.2 = 4.798 because the common
+    /// k-mers' terms are capped below 1. The exact values below are what the code returns;
+    /// the arithmetic above is the check on them.
     #[test]
     fn test_larger_target_expects_more_shared_kmers() -> Result<()> {
         let ksize = 5;
@@ -5325,19 +5359,32 @@ mod tests {
         let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
         let searcher = ProteinSearcher::new(index)?;
-        // BCL2_HUMAN (P10415) residues 1-32.
-        let sketch = ProteinSketch::from_protein_sequence(
-            "bcl2",
-            "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDA",
-            ksize,
-            1,
-            "protein20",
-        )?;
-        let mean = searcher.db_n_kmers as f64 / searcher.stats.total_signatures as f64;
-        let small = searcher.calculate_expected_shared_kmers(&sketch, (mean / 4.0) as usize);
-        let large = searcher.calculate_expected_shared_kmers(&sketch, (mean * 4.0) as usize);
-        assert!(0.0 < small && small < large, "small {small}, large {large}");
-        assert!(poisson_survival(3, small) < poisson_survival(3, large));
+        let sketch =
+            ProteinSketch::from_protein_sequence("bcl2", BCL2_1_32, ksize, 1, "protein20")?;
+        assert_eq!(searcher.stats.total_signatures, 25);
+        assert_eq!(searcher.db_n_kmers, 9_167);
+        assert_eq!(sketch.signature().minhash.mins().len(), BCL2_1_32_KMERS_K5);
+        // How many fixture proteins hold each query k-mer, summed: the count at r = 1 is this
+        // over 25, computed here without the formula under test.
+        let proteins_holding: usize = sketch
+            .signature()
+            .minhash
+            .mins()
+            .into_iter()
+            .map(|h| searcher.stats.kmer_frequencies.get(&h).copied().unwrap_or(1))
+            .sum();
+        assert_eq!(proteins_holding, 30);
+        let small = searcher.calculate_expected_shared_kmers(&sketch, 91);
+        let large = searcher.calculate_expected_shared_kmers(&sketch, 1_466);
+        assert_relative_eq!(small, 0.303_034_684_314_427_2, epsilon = 1e-12);
+        assert_relative_eq!(large, 4.482_198_746_795_942, epsilon = 1e-12);
+        // Three shared k-mers: p = 0.0037 against the small target, 0.82 against the large one.
+        assert_relative_eq!(
+            poisson_survival(3, small),
+            3.701_531_296_595_339_5e-3,
+            epsilon = 1e-15
+        );
+        assert_relative_eq!(poisson_survival(3, large), 0.824_409_746_294_393_1, epsilon = 1e-12);
         Ok(())
     }
 
@@ -5351,15 +5398,9 @@ mod tests {
         let searcher = ProteinSearcher::new(index)?;
         assert_eq!(searcher.stats.total_signatures, 0);
         assert_eq!(searcher.db_n_kmers, 0);
-        // BCL2_HUMAN (P10415) residues 1-32.
-        let sketch = ProteinSketch::from_protein_sequence(
-            "bcl2",
-            "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDA",
-            ksize,
-            1,
-            "protein20",
-        )?;
-        let expected = searcher.calculate_expected_shared_kmers(&sketch, 28);
+        let sketch =
+            ProteinSketch::from_protein_sequence("bcl2", BCL2_1_32, ksize, 1, "protein20")?;
+        let expected = searcher.calculate_expected_shared_kmers(&sketch, BCL2_1_32_KMERS_K5);
         assert_eq!(expected, 0.0);
         assert_eq!(poisson_survival(3, expected), 1.0);
         Ok(())
@@ -5421,13 +5462,8 @@ mod tests {
     /// ~1.301 default cap (p=0.05). This shows the OR only needs one scope to hold, in either
     /// direction.
     ///
-    /// The whole-protein p-value was 1.0e-9 before the expected count scaled with the target's
-    /// size: RTN3 is 1_032 residues, 2.8 times the fixture's mean of 371.5, so it shares more
-    /// k-mers with any query by chance.
-    ///
-    /// The pair used to be BCL2A1 vs ASPP2 (115 k-mers, 333 regions, best p=0.0956). Chaining
-    /// seeds per diagonal merges the pieces a repeated k-mer used to split, and that pair's
-    /// best region became 13 residues at p=0.0491, just over the cap.
+    /// The whole-protein pass is weak because RTN3 is long: 1_032 residues, 2.8 times the
+    /// fixture's mean of 371.5, so it shares more k-mers with any query by chance.
     #[test]
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
         let ksize = 9;
