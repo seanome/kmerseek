@@ -570,7 +570,12 @@ and cost nothing. Indexing every reading rather than a chosen subset keeps match
 depending on which reading was kept. A matched region runs through an ambiguous residue in
 the same way: the stored encoded sequence writes the residue as its class where the alphabet
 merges the two readings and as the letter itself where it does not, and the letter agrees
-with either class it stands for.
+with either class it stands for. A window sketched under several readings that both
+sequences share would list the same (query, target) position once per reading, so the
+region search keeps each position once. Without that, topi ribonuclease against itself at
+`protein20` k=10 came back as 427 regions instead of one over all 124 residues
+([figure](docs/images/topi_self_ambiguous_position_dedup.png),
+drawn by `scripts/plot_ambiguous_position_dedup.py`).
 
 Containment, its target-side counterpart and Jaccard count a window once however many
 readings it was sketched under. A true homolog matches one reading per window, so counting
