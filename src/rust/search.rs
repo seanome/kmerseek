@@ -44,7 +44,7 @@ pub struct SearchFilters {
     /// heuristic cutoff on a ranking score, not a statistically calibrated significance
     /// threshold.
     pub min_region_score: f64,
-    /// Drop a target whose sketch is the query's own (same md5). On for all-vs-all searches
+    /// Drop a target whose sequence is the query's own (same md5). On for all-vs-all searches
     /// of one index against itself, where every query would otherwise hit itself; off when a
     /// FASTA is searched against an index, where the query's identical entry is a real hit.
     pub skip_self_matches: bool,
@@ -1154,8 +1154,8 @@ impl ProteinSearcher {
     }
 
     /// `result` again under every other entry name stored with its target's sketch. Those
-    /// entries have the same k-mer set, so every statistic and region is the same; only the
-    /// name differs.
+    /// entries have the same sequence (`sketch::sequence_key`), so every statistic, region
+    /// and residue is the same; only the name differs.
     fn alias_results(&self, result: &SearchResult) -> Vec<SearchResult> {
         let Some(names) = self.aliases.get(&result.target_md5) else {
             return Vec::new();
@@ -5025,18 +5025,18 @@ mod ka_calibration_tests {
         // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
         // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
         // regions, x 7.5 to 11.5 nats.
-        assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
+        assert_eq!((fit.n_queries, fit.n_regions), (25, 9576));
         assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
         assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
         assert_eq!(fit.x_range(), (7.5, 11.5));
-        assert!((fit.slope - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.slope);
-        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
-        assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
+        assert!((fit.slope - 0.846_869_675_267_072).abs() < 1e-12, "{}", fit.slope);
+        assert!((fit.k - 0.015_285_759_225_763_968).abs() < 1e-12, "{}", fit.k);
+        assert!((fit.rms_residual - 0.084_113_149_881_278_44).abs() < 1e-12);
         // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
         // closed-form lambda is ln of the golden ratio.
         assert!((fit.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
         assert!((fit.lambda_analytic - 0.481_208_536_966_019_95).abs() < 1e-12);
-        assert_eq!(fit.survival[0].1, 9561);
+        assert_eq!(fit.survival[0].1, 9576);
 
         // Same seed, same fit.
         let again = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;

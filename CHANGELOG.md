@@ -1,5 +1,9 @@
 # Changelog
 
+## Unreleased
+
+- Fixed hits on a target being reported with another target's coordinates and residues. The index stored two entries as one when their k-mer sets were equal, even if their sequences differed (a poly-A run of 5 and of 8 have the same 5-mers), and reported the second under the first one's sequence. Entries are now keyed by a hash of their sequence, so only identical sequences share an entry. Indexes must be rebuilt (schema version 5).
+
 ## 0.4.0
 
 - Added Rust-based k-mer search, replacing sourmash's search so that results can report which sub-sequences overlap and what they look like in the reduced alphabet ([#25](https://github.com/seanome/kmerseek/pull/25))
