@@ -2886,6 +2886,97 @@ mod tests {
         Ok(())
     }
 
+    /// Every region's `target_subseq` is the named target's residues at
+    /// `target_start..target_end`, and `subseq` is the query's at `start..end`.
+    fn assert_subseqs_match_coordinates(
+        results: &[SearchResult],
+        query: &str,
+        targets: &HashMap<&str, &str>,
+    ) {
+        for r in results {
+            let target = targets[r.target_name.as_str()];
+            for m in &r.matched_regions {
+                assert_eq!(m.subseq, &query[m.start as usize..m.end as usize], "{m:?}");
+                assert_eq!(
+                    m.target_subseq,
+                    &target[m.target_start as usize..m.target_end as usize],
+                    "target {} region {m:?}",
+                    r.target_name
+                );
+            }
+        }
+    }
+
+    /// Two entries whose 5-mer sets are identical but whose sequences differ (a poly-A run of
+    /// 5 and of 8: both hold AAAAA once and nothing else new) are two targets, each reported
+    /// with its own residues and coordinates. In 0.4.0 the second became an alias of the first,
+    /// so its hits carried the first sequence's coordinates and residues.
+    #[test]
+    fn same_kmer_set_different_sequence_is_its_own_target() -> Result<()> {
+        let short = "MKTWLRDEHPAAAAACYFNQSGV";
+        let long = "MKTWLRDEHPAAAAAAAACYFNQSGV";
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">short\n{short}\n>long\n{long}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        assert_eq!(index.signature_count(), 2);
+        assert!(index.aliases()?.is_empty());
+        let searcher = ProteinSearcher::new(index)?;
+
+        let query = ProteinSketch::from_protein_sequence("q", long, 5, 1, "protein20")?;
+        let results = searcher.search_one(&query, &SearchFilters::default(), 1);
+        let mut names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["long", "short"]);
+        assert_subseqs_match_coordinates(
+            &results,
+            long,
+            &HashMap::from([("short", short), ("long", long)]),
+        );
+        // The query is the "long" entry, so it covers all of it in one region.
+        let own = results.iter().find(|r| r.target_name == "long").unwrap();
+        assert!(own.matched_regions.iter().any(|m| m.target_subseq == long));
+        Ok(())
+    }
+
+    /// A chain whose two members sit on diagonals 3 apart (the target has 3 more residues
+    /// between them) spans the first member's start to the last member's end on each
+    /// sequence, and its subsequences are cut at exactly those coordinates.
+    #[test]
+    fn chained_region_with_a_shift_reports_its_own_residues() -> Result<()> {
+        let left = "MKTWLRDEHPICYFNQSGVA";
+        let right = "WHEKCRYMFDPLNGTVIQSA";
+        let query = format!("{left}GGGGGG{right}");
+        let target = format!("{left}PPPPPPPPP{right}");
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">t\n{target}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        searcher.set_extension(Some(ExtensionParams {
+            mismatch_penalty: 0.14,
+            xdrop: 0.56,
+            ka_k: 0.1,
+            ka_lambda_scale: 1.0,
+            chain_max_gap: 30,
+            chain_max_shift: 10,
+        }));
+
+        let q = ProteinSketch::from_protein_sequence("q", &query, 5, 1, "protein20")?;
+        let results = searcher.search_one(&q, &SearchFilters::default(), 1);
+        assert_eq!(results.len(), 1);
+        let chained: Vec<_> =
+            results[0].matched_regions.iter().filter(|m| m.n_chained > 1).collect();
+        assert_eq!(chained.len(), 1, "{:?}", results[0].matched_regions);
+        let c = chained[0];
+        assert_eq!((c.start, c.target_start), (0, 0));
+        assert_eq!((c.end, c.target_end), (query.len() as u32, target.len() as u32));
+        assert_subseqs_match_coordinates(&results, &query, &HashMap::from([("t", &*target)]));
+        Ok(())
+    }
+
     /// Read the first record from a FASTA file and return name and sequence.
     ///
     /// WHY: This helper function eliminates code duplication in tests. It provides a simple
