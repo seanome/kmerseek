@@ -248,6 +248,44 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 `region_evalue` is never the smaller of the two E-values. Picking the better of two tests
 makes a region look more significant than either test says.
 
+### Which one to use
+
+Use `region_evalue`. `region_run_evalue` and `region_ka_evalue` are the two values it is
+chosen from, and `region_evalue_source` says which one it is. Which one you get depends
+only on whether the search was run with `--extend-mismatch-penalty`:
+
+- without it, every region is exact and `region_evalue` is `region_run_evalue`;
+- with it, `region_evalue` is `region_ka_evalue` on every row whose pair has λ > 0.
+
+Three of CED9's regions against the 300 human proteins in
+`tests/testdata/fasta/uniprotkb_BCL2_AND_model_organism_9606_2025_02_06.fasta.gz`,
+`hp_lehninger2` k=19, searched once without and once with `--extend-mismatch-penalty 2`
+(query positions as in the CSV, counted from 0):
+
+| target | search | query span | length | mismatches | L | `region_run_evalue` | `region_ka_evalue` | `region_evalue` | source |
+|---|---|---|---|---|---|---|---|---|---|
+| RTN3_HUMAN | exact | 198-221 | 23 | 0 | 23 | 1.8 | empty | 1.8 | `run` |
+| RTN3_HUMAN | extended | 198-221 | 23 | 0 | 23 | 1.8 | 9.0 | 9.0 | `ka` |
+| CUL1_HUMAN | exact | 152-172 | 20 | 0 | 20 | 14.9 | empty | 14.9 | `run` |
+| CUL1_HUMAN | extended | 139-188 | 49 | 7 | 20 | 14.9 | 1.3 | 1.3 | `ka` |
+| BCL2_HUMAN | exact | 162-181 | 19 | 0 | 19 | 33.6 | empty | 33.6 | `run` |
+| BCL2_HUMAN | extended | 162-188 | 26 | 2 | 19 | 33.6 | 33.8 | 33.8 | `ka` |
+
+`region_run_evalue` looks only at the longest exact run (L), so for these three regions it
+is the same in both searches. `region_ka_evalue` scores the whole extended region. CUL1's region grew from 20
+to 49 positions with 7 mismatches, and its E-value dropped from 14.9 to 1.3. RTN3's region
+did not grow, and the Karlin-Altschul value is 5 times larger than the run value: the run
+E-value assumes positions are independent, while K for `region_ka_evalue` was fitted on the
+database's own proteins (`r_database` 0.80, K 0.0022 for this index). Over all 59 regions
+of the extended search:
+
+![region_ka_evalue against region_run_evalue for CED9 vs 300 human proteins](docs/images/evalue_columns_ced9_bcl2_human_k19.png)
+
+Drawn by `scripts/plot_evalue_columns_ced9.py`, which lists the commands that made the CSV.
+For a region with no mismatch (blue circles) `region_ka_evalue` is 1.4 to 4.9 times
+`region_run_evalue`. For a region that grew past mismatches (orange triangles) it is 0.09
+to 1.0 times: the mismatches it crossed are paid for, and the matches past them count.
+
 The run E-value is the Karlin-Altschul E-value for +1 per match with no mismatch allowed,
 where λ = ln(1 / Pr(same)) and K = 1 − Pr(same). K is the chance that the position before
 a run disagrees, so each run is counted once, where it starts. Counting shared k-mers
