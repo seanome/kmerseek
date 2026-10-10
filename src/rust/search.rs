@@ -44,7 +44,7 @@ pub struct SearchFilters {
     /// heuristic cutoff on a ranking score, not a statistically calibrated significance
     /// threshold.
     pub min_region_score: f64,
-    /// Drop a target whose sketch is the query's own (same md5). On for all-vs-all searches
+    /// Drop a target whose sequence is the query's own (same md5). On for all-vs-all searches
     /// of one index against itself, where every query would otherwise hit itself; off when a
     /// FASTA is searched against an index, where the query's identical entry is a real hit.
     pub skip_self_matches: bool,
@@ -1154,8 +1154,8 @@ impl ProteinSearcher {
     }
 
     /// `result` again under every other entry name stored with its target's sketch. Those
-    /// entries have the same k-mer set, so every statistic and region is the same; only the
-    /// name differs.
+    /// entries have the same sequence (`sketch::sequence_key`), so every statistic, region
+    /// and residue is the same; only the name differs.
     fn alias_results(&self, result: &SearchResult) -> Vec<SearchResult> {
         let Some(names) = self.aliases.get(&result.target_md5) else {
             return Vec::new();
@@ -2883,6 +2883,97 @@ mod tests {
         // All-vs-all drops every query's hit on its own sketch, under either name.
         let all = searcher.search_all_vs_all(&SearchFilters::default())?;
         assert!(all.iter().all(|r| r.query_md5 != r.target_md5), "self-hits should be skipped");
+        Ok(())
+    }
+
+    /// Every region's `target_subseq` is the named target's residues at
+    /// `target_start..target_end`, and `subseq` is the query's at `start..end`.
+    fn assert_subseqs_match_coordinates(
+        results: &[SearchResult],
+        query: &str,
+        targets: &HashMap<&str, &str>,
+    ) {
+        for r in results {
+            let target = targets[r.target_name.as_str()];
+            for m in &r.matched_regions {
+                assert_eq!(m.subseq, &query[m.start as usize..m.end as usize], "{m:?}");
+                assert_eq!(
+                    m.target_subseq,
+                    &target[m.target_start as usize..m.target_end as usize],
+                    "target {} region {m:?}",
+                    r.target_name
+                );
+            }
+        }
+    }
+
+    /// Two entries whose 5-mer sets are identical but whose sequences differ (a poly-A run of
+    /// 5 and of 8: both hold AAAAA once and nothing else new) are two targets, each reported
+    /// with its own residues and coordinates. In 0.4.0 the second became an alias of the first,
+    /// so its hits carried the first sequence's coordinates and residues.
+    #[test]
+    fn same_kmer_set_different_sequence_is_its_own_target() -> Result<()> {
+        let short = "MKTWLRDEHPAAAAACYFNQSGV";
+        let long = "MKTWLRDEHPAAAAAAAACYFNQSGV";
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">short\n{short}\n>long\n{long}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        assert_eq!(index.signature_count(), 2);
+        assert!(index.aliases()?.is_empty());
+        let searcher = ProteinSearcher::new(index)?;
+
+        let query = ProteinSketch::from_protein_sequence("q", long, 5, 1, "protein20")?;
+        let results = searcher.search_one(&query, &SearchFilters::default(), 1);
+        let mut names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["long", "short"]);
+        assert_subseqs_match_coordinates(
+            &results,
+            long,
+            &HashMap::from([("short", short), ("long", long)]),
+        );
+        // The query is the "long" entry, so it covers all of it in one region.
+        let own = results.iter().find(|r| r.target_name == "long").unwrap();
+        assert!(own.matched_regions.iter().any(|m| m.target_subseq == long));
+        Ok(())
+    }
+
+    /// A chain whose two members sit on diagonals 3 apart (the target has 3 more residues
+    /// between them) spans the first member's start to the last member's end on each
+    /// sequence, and its subsequences are cut at exactly those coordinates.
+    #[test]
+    fn chained_region_with_a_shift_reports_its_own_residues() -> Result<()> {
+        let left = "MKTWLRDEHPICYFNQSGVA";
+        let right = "WHEKCRYMFDPLNGTVIQSA";
+        let query = format!("{left}GGGGGG{right}");
+        let target = format!("{left}PPPPPPPPP{right}");
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">t\n{target}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        searcher.set_extension(Some(ExtensionParams {
+            mismatch_penalty: 0.14,
+            xdrop: 0.56,
+            ka_k: 0.1,
+            ka_lambda_scale: 1.0,
+            chain_max_gap: 30,
+            chain_max_shift: 10,
+        }));
+
+        let q = ProteinSketch::from_protein_sequence("q", &query, 5, 1, "protein20")?;
+        let results = searcher.search_one(&q, &SearchFilters::default(), 1);
+        assert_eq!(results.len(), 1);
+        let chained: Vec<_> =
+            results[0].matched_regions.iter().filter(|m| m.n_chained > 1).collect();
+        assert_eq!(chained.len(), 1, "{:?}", results[0].matched_regions);
+        let c = chained[0];
+        assert_eq!((c.start, c.target_start), (0, 0));
+        assert_eq!((c.end, c.target_end), (query.len() as u32, target.len() as u32));
+        assert_subseqs_match_coordinates(&results, &query, &HashMap::from([("t", &*target)]));
         Ok(())
     }
 
@@ -4934,18 +5025,18 @@ mod ka_calibration_tests {
         // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
         // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
         // regions, x 7.5 to 11.5 nats.
-        assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
+        assert_eq!((fit.n_queries, fit.n_regions), (25, 9576));
         assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
         assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
         assert_eq!(fit.x_range(), (7.5, 11.5));
-        assert!((fit.slope - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.slope);
-        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
-        assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
+        assert!((fit.slope - 0.846_869_675_267_072).abs() < 1e-12, "{}", fit.slope);
+        assert!((fit.k - 0.015_285_759_225_763_968).abs() < 1e-12, "{}", fit.k);
+        assert!((fit.rms_residual - 0.084_113_149_881_278_44).abs() < 1e-12);
         // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
         // closed-form lambda is ln of the golden ratio.
         assert!((fit.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
         assert!((fit.lambda_analytic - 0.481_208_536_966_019_95).abs() < 1e-12);
-        assert_eq!(fit.survival[0].1, 9561);
+        assert_eq!(fit.survival[0].1, 9576);
 
         // Same seed, same fit.
         let again = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;

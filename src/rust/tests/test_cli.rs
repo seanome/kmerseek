@@ -941,7 +941,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "fitted now: 25 database queries, 9838 regions; slope 0.806 per nat of lambda_pair S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
              0.500), K 0.0115, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
-             slope 0.760 over the same bins",
+             slope 0.882 over the same bins",
         ))
         .stderr(predicate::str::contains(
             "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
@@ -976,7 +976,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         .stderr(predicate::str::contains("no Karlin-Altschul fit for penalty 3, X-drop 8"));
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.1264, lambda scale 0.962 (fitted now: 25 database queries, 9854 regions; slope 0.962",
+            "Karlin-Altschul: K 0.0662, lambda scale 0.891 (fitted now: 25 database queries, 9854 regions; slope 0.891",
         ),
     );
     Ok(())

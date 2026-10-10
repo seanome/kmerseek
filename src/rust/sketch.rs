@@ -272,8 +272,13 @@ impl ProteinSketch {
             minhash.add_many(&data.mins)?;
         }
 
-        let md5sum = data.mins.iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
-        let md5sum = format!("{:x}", md5sum);
+        // A store written by `to_efficient_data` carries its sequence's key; one built by
+        // hand (tests) has none, and falls back to a key over its k-mer set.
+        let md5sum = if data.md5sum.is_empty() {
+            format!("{:x}", data.mins.iter().fold(0u64, |acc, &min| acc.wrapping_add(min)))
+        } else {
+            data.md5sum.clone()
+        };
         let name = data.name.clone();
 
         let signature = StableSignature {
@@ -321,14 +326,16 @@ impl ProteinSketch {
             None
         };
 
-        ProteinSketchStore::new(
+        let mut store = ProteinSketchStore::new(
             self.signature.name.clone(),
             mins,
             abunds,
             self.kmer_positions.clone(),
             raw_sequence,
             encoded_sequence,
-        )
+        );
+        store.md5sum = self.signature.md5sum.clone();
+        store
     }
 
     /// Convert to efficient storage format with pre-allocated sequence capacity
@@ -337,13 +344,15 @@ impl ProteinSketch {
         let mins = minhash.mins().to_vec();
         let abunds = minhash.abunds().map(|abunds| abunds.to_vec());
 
-        ProteinSketchStore::with_sequence_capacity(
+        let mut store = ProteinSketchStore::with_sequence_capacity(
             self.signature.name.clone(),
             mins,
             abunds,
             self.kmer_positions.clone(),
             sequence_capacity,
-        )
+        );
+        store.md5sum = self.signature.md5sum.clone();
+        store
     }
 
     pub fn set_efficient_data(&mut self, data: ProteinSketchStore) {
@@ -550,9 +559,7 @@ impl ProteinSketch {
             self.signature.minhash.add_protein(sequence.as_bytes())?;
         }
 
-        let md5sum =
-            self.signature.minhash.mins().iter().fold(0u64, |acc, &min| acc.wrapping_add(min));
-        self.signature.md5sum = format!("{:x}", md5sum);
+        self.signature.md5sum = sequence_key(sequence);
 
         let hashvals: HashSet<u64> = self.signature().minhash.mins().iter().copied().collect();
 
@@ -668,6 +675,20 @@ impl ProteinSketch {
     }
 }
 
+/// The key a sketch is stored and deduplicated under: a 64-bit MurmurHash3 of the
+/// sequence's residues, in hex. The index stores two entries under one key only when their
+/// sequences are identical (the later names become aliases), so the key has to tell apart
+/// any two sequences that differ.
+///
+/// Before 0.4.1 the key was the sum of the sketch's k-mer hashes, which two different
+/// sequences share whenever their k-mer sets are equal: "MKTWLRDEHPAAAAACYFNQSGV" and the
+/// same with eight A's both have AAAAA as their only poly-A 5-mer. The second was then
+/// stored as an alias of the first and reported with the first one's coordinates and
+/// residues.
+pub fn sequence_key(sequence: &str) -> String {
+    format!("{:x}", sourmash::_hash_murmur(sequence.as_bytes(), SEED))
+}
+
 /// Efficient storage structure for protein sketches
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(crate = "serde")]
@@ -679,6 +700,10 @@ pub struct ProteinSketchStore {
     pub kmer_positions: HashMap<u64, Vec<usize>>,
     pub raw_sequence: Option<String>,
     pub encoded_sequence: Option<String>,
+    /// The sketch's key (`StableSignature::md5sum`), from [`sequence_key`]. Stored, not
+    /// recomputed on load, because the raw sequence it is computed from is not always
+    /// stored. Empty in a store built by hand.
+    pub md5sum: String,
 }
 
 impl ProteinSketchStore {
@@ -690,7 +715,15 @@ impl ProteinSketchStore {
         raw_sequence: Option<String>,
         encoded_sequence: Option<String>,
     ) -> Self {
-        Self { name, mins, abunds, kmer_positions, raw_sequence, encoded_sequence }
+        Self {
+            name,
+            mins,
+            abunds,
+            kmer_positions,
+            raw_sequence,
+            encoded_sequence,
+            md5sum: String::new(),
+        }
     }
 
     pub fn with_sequence_capacity(
@@ -705,7 +738,15 @@ impl ProteinSketchStore {
         } else {
             None
         };
-        Self { name, mins, abunds, kmer_positions, raw_sequence, encoded_sequence: None }
+        Self {
+            name,
+            mins,
+            abunds,
+            kmer_positions,
+            raw_sequence,
+            encoded_sequence: None,
+            md5sum: String::new(),
+        }
     }
 
     pub fn set_raw_sequence(&mut self, sequence: String) {
