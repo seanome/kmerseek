@@ -1260,7 +1260,12 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     let evalues = |out: &std::path::Path| -> Result<Vec<String>, Box<dyn std::error::Error>> {
         let mut reader = csv::Reader::from_path(out)?;
         let i = reader.headers()?.iter().position(|h| h == "region_evalue").unwrap();
-        Ok(reader.records().map(|r| r.map(|r| r[i].to_string())).collect::<Result<_, _>>()?)
+        // Rows come out in the order the parallel search finishes them, so compare the
+        // E-values as a sorted list.
+        let mut v: Vec<String> =
+            reader.records().map(|r| r.map(|r| r[i].to_string())).collect::<Result<_, _>>()?;
+        v.sort();
+        Ok(v)
     };
 
     let stored = temp_dir.path().join("stored.csv");
