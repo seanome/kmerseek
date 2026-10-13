@@ -83,6 +83,12 @@ Nothing else matters if the code is wrong. Look for:
   `try_from`.
 - **Error handling that destroys information** — `.ok()`, `let _ =`, `map_err(|_| ...)`,
   a `?` that converts a specific error into a stringly-typed one.
+- **Recomputing at load what the index already saved** — a search that rebuilds IDF, k-mer
+  strings or any other value `kmerseek index` computed and stored, instead of reading the
+  stored value. It throws away work and lets the two copies drift apart. Blocking unless the
+  PR says why the stored value cannot be used. Added 2026-10-13 from kmerseek PR 137: "Why
+  isn't it just reading the idf that was already computed at index time?" (asked three
+  times there, and before in PR 36: "Can't we use the saved kmers from the index?").
 - **`unsafe` without a `// SAFETY:` comment** stating which invariant makes it sound.
   Suggest `cargo miri test` for anything non-trivial.
 - **Trait-contract violations** — `Hash`/`Eq` disagreeing, `Ord` inconsistent with `PartialOrd`,
@@ -289,6 +295,10 @@ procedure for changed expected values (run both builds, draw the case, post it o
 - Formulas are written out in the doc comment and the PR text: "lambda is the sum of
   database abundances of the k-mers from the region, divided by the region size" (#38);
   "the slope is K and intercept is lambda" (#54).
+- A PR that adds a second score of the same kind (another E-value, another p-value) says in
+  the README which one to use for what, and shows example rows where they disagree. "This is
+  too many e-values... I don't know which one to use. Can you show me some examples?" (PR
+  133, added 2026-10-13).
 - A number that is not a p-value is not named like one (#38).
 - A non-obvious line gets a why-comment (#40, #38: "what does saturating_sub help with
   here?"). A variable name says what the value is for, not that someone "wanted" it (#40).
