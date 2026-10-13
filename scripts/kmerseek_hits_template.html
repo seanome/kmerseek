@@ -592,7 +592,9 @@ function rowEl(row) {
   if (isFragment(row)) { const t = el("span", "tag", "fragment"); s.appendChild(t); }
   if (row.n_entries > 1) { const t = el("span", "tag", `+${row.n_entries - 1}`); t.title = `${row.n_entries - 1} more ${row.n_entries > 2 ? "entries" : "entry"} of this gene: ${row.other_entries.join(", ")}`; s.appendChild(t); }
   name.appendChild(s); g.appendChild(name);
-  const id = identity(row, 0);
+  // A row can have no run: kmerseek search chains k-mers across diagonals into a region,
+  // and the pair view only counts 2 or more shared k-mers in a row on one diagonal.
+  const id = row.runs.length ? identity(row, 0) : { identical: 0, of: 0, exact: 0, gapped: false };
   const cells = [[row.length], [row.runs.length], [row.best.length], [row.runs.length ? `${Math.round(row.bestPct)}%` : "\u2013", row.runs.length ? (GAPPED ? `${row.bestIdent} of ${id.of} aligned columns; ${id.exact} on the run itself` : `${row.bestIdent} of the run's ${id.of} residues`) : ""], [row.n_shared]];
   for (const sc of SCORES) { const v = scoreOf(row, sc); cells.push([fmtScore(v), v === null ? `${sc.label}: not computed for this row` : `${sc.label} ${v}`, v === null]); }
   for (const [v, title, dim] of cells) { const c = el("div", "num" + (dim ? " dim" : ""), v); if (title) c.title = title; g.appendChild(c); }
