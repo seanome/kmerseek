@@ -157,6 +157,9 @@ pub struct KaParams {
 pub enum KaSource {
     /// `--ka-k`, with the closed-form lambda per pair.
     Flag,
+    /// `--ka-k` and `--ka-r-database`: a whole fit given by hand, such as one stored in
+    /// another index.
+    GivenFit,
     Index(KaCalibration),
     Fitted(KaCalibration),
 }
@@ -165,6 +168,7 @@ impl Display for KaSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             KaSource::Flag => write!(f, "--ka-k, closed-form lambda"),
+            KaSource::GivenFit => write!(f, "--ka-k and --ka-r-database"),
             KaSource::Index(c) | KaSource::Fitted(c) => write!(
                 f,
                 "{}: {} {} queries, {} regions; slope {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}{}, rms {:.3}{}",
@@ -1082,12 +1086,14 @@ impl ProteinSearcher {
     /// E-value without a fit for its own index is not printed.
     pub fn resolve_ka(
         &mut self,
-        explicit: Option<f64>,
+        explicit: Option<KaParams>,
         settings: KaCalibrationSettings,
     ) -> IndexResult<(KaParams, KaSource)> {
         let KaCalibrationSettings { mismatch_penalty, xdrop, .. } = settings;
-        if let Some(k) = explicit {
-            return Ok((KaParams { k, lambda_scale: 1.0 }, KaSource::Flag));
+        if let Some(params) = explicit {
+            let source =
+                if params.lambda_scale == 1.0 { KaSource::Flag } else { KaSource::GivenFit };
+            return Ok((params, source));
         }
         if let Some(stored) = self.index.ka_calibration(mismatch_penalty, xdrop)? {
             let params = KaParams { k: stored.k, lambda_scale: stored.lambda_scale() };
@@ -4956,8 +4962,14 @@ mod ka_calibration_tests {
         assert_eq!(params, KaParams { k: fit.k, lambda_scale: fit.slope });
         assert_eq!(source, KaSource::Index(fit.clone()));
 
-        let (params, source) = searcher.resolve_ka(Some(0.03), shuffled_settings(2.0, 0))?;
-        assert_eq!((params, source), (KaParams { k: 0.03, lambda_scale: 1.0 }, KaSource::Flag));
+        let given = KaParams { k: 0.03, lambda_scale: 1.0 };
+        let (params, source) = searcher.resolve_ka(Some(given), shuffled_settings(2.0, 0))?;
+        assert_eq!((params, source), (given, KaSource::Flag));
+
+        // A whole fit given by hand wins over the stored one and is used as given.
+        let other = KaParams { k: 0.0115, lambda_scale: 0.806 };
+        let (params, source) = searcher.resolve_ka(Some(other), shuffled_settings(2.0, 0))?;
+        assert_eq!((params, source), (other, KaSource::GivenFit));
 
         // No stored fit for penalty 3 and no queries allowed: refused, not guessed.
         let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();

@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::karlin_altschul::{DecoyNull, KaCalibration, BIN_WIDTH};
-use kmerseek::search::{KaCalibrationReport, KaCalibrationSettings, KaSource};
+use kmerseek::search::{KaCalibrationReport, KaCalibrationSettings, KaParams, KaSource};
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
 use std::path::{Path, PathBuf};
@@ -234,6 +234,16 @@ enum Commands {
         /// the search. Used only with --extend-mismatch-penalty.
         #[arg(long)]
         ka_k: Option<f64>,
+
+        /// Lambda scale to use with --ka-k: the fitted factor on every pair's closed-form
+        /// lambda (the `slope` a fit stores). With --ka-k and --ka-r-database together a
+        /// search uses a fit made on another index, so two indexes can be searched with one
+        /// fit and differ only in their size n. Copy both numbers from the other index's
+        /// `kmerseek index --ka-survival-out` CSV (columns `k` and `slope`). Without it
+        /// --ka-k uses 1, the closed form. Named for what later kmerseek versions call this
+        /// number, r_database.
+        #[arg(long, requires = "ka_k")]
+        ka_r_database: Option<f64>,
 
         /// Calibration queries to fit lambda and K on when the index has no fit for this
         /// penalty and X-drop and --ka-k is unset. 0 refuses to search without a fit.
@@ -563,6 +573,7 @@ fn main() -> IndexResult<()> {
             extend_mismatch_penalty,
             extend_xdrop,
             ka_k,
+            ka_r_database,
             ka_queries,
             ka_seed,
             ka_null,
@@ -676,7 +687,18 @@ fn main() -> IndexResult<()> {
                     n_queries: ka_queries,
                     seed: ka_seed,
                 };
-                let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
+                if let Some(r) = ka_r_database {
+                    if r <= 0.0 || !r.is_finite() {
+                        return Err(anyhow::anyhow!(
+                            "--ka-r-database must be positive and finite (got {r}); it \
+                             multiplies every pair's lambda"
+                        )
+                        .into());
+                    }
+                }
+                let explicit =
+                    ka_k.map(|k| KaParams { k, lambda_scale: ka_r_database.unwrap_or(1.0) });
+                let (ka, source) = searcher.resolve_ka(explicit, settings)?;
                 eprintln!(
                     "  Karlin-Altschul: K {:.4}, lambda scale {:.3} ({source})",
                     ka.k, ka.lambda_scale
