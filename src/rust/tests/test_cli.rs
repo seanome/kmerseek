@@ -1205,6 +1205,92 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+/// `--ka-k` with `--ka-r-database` is a whole fit given by hand. Given the numbers an
+/// index stored, a search prints exactly the E-values the stored fit gives, so one index's
+/// fit can be used to search another. `--ka-r-database` needs `--ka-k` and must be
+/// positive.
+#[test]
+fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let survival = temp_dir.path().join("survival.csv");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+            "--ka-survival-out",
+            survival.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The stored fit, at full precision, from the survival curve's own columns.
+    let mut reader = csv::Reader::from_path(&survival)?;
+    let headers = reader.headers()?.clone();
+    let column = |name: &str| headers.iter().position(|h| h == name).unwrap();
+    let first = reader.records().next().expect("one row per score bin")?;
+    let k = first[column("k")].to_string();
+    let r_database = first[column("r_database")].to_string();
+
+    let search = |out: &std::path::Path, extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            "2",
+        ]);
+        cmd.args(extra);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+    let evalues = |out: &std::path::Path| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut reader = csv::Reader::from_path(out)?;
+        let i = reader.headers()?.iter().position(|h| h == "region_evalue").unwrap();
+        Ok(reader.records().map(|r| r.map(|r| r[i].to_string())).collect::<Result<_, _>>()?)
+    };
+
+    let stored = temp_dir.path().join("stored.csv");
+    search(&stored, &[])?
+        .success()
+        .stderr(predicate::str::contains("(stored in the index: 25 database queries"));
+    let given = temp_dir.path().join("given.csv");
+    search(&given, &["--ka-k", &k, "--ka-r-database", &r_database])?
+        .success()
+        .stderr(predicate::str::contains("(--ka-k and --ka-r-database)"));
+    let (a, b) = (evalues(&stored)?, evalues(&given)?);
+    assert!(!a.is_empty(), "CED-9 against the BCL2 family gives regions");
+    assert_eq!(a, b, "the same fit given by hand gives the same E-values");
+
+    // --ka-k alone keeps the closed form, so the E-values differ.
+    let closed = temp_dir.path().join("closed.csv");
+    search(&closed, &["--ka-k", &k])?
+        .success()
+        .stderr(predicate::str::contains("r_database 1.000 (--ka-k, closed-form lambda)"));
+    assert_ne!(a, evalues(&closed)?);
+
+    search(&temp_dir.path().join("x.csv"), &["--ka-r-database", &r_database])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-k"));
+    search(&temp_dir.path().join("y.csv"), &["--ka-k", &k, "--ka-r-database", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-r-database must be positive"));
+    Ok(())
+}
+
 /// One calibration query gives too few score bins to fit, so nothing is stored; three
 /// give a fit that leans on the seed end of the curve, which the index step says out
 /// loud and writes out as a survival curve.
