@@ -5,8 +5,9 @@
 //!
 //! Two families make up most of the list. The HP tables split the residues into
 //! hydrophobic and polar, differing only on the borderline residues C, G, P, W and Y, plus
-//! one three-class variant that gives cysteine its own symbol. The multi-letter alphabets
-//! keep 4 to 18 classes and come from the fold-recognition literature.
+//! two three-class variants that give cysteine its own symbol. The multi-letter alphabets
+//! keep 4 to 18 classes and come from the fold-recognition literature. `cys2` stands
+//! alone: it keeps only where the cysteines are, for disulfide-rich peptides.
 //!
 //! [`alphabet_table`] gives the table to pre-encode a sequence with. It returns `None` for
 //! `protein20`, `dayhoff6` and `hp_lehninger2`, which sourmash encodes itself; those go
@@ -75,6 +76,11 @@ pub enum Alphabet {
     HpLehningerHpc3,
     /// Physical Biology of the Cell, 1st edition.
     HpPBotC1stEd2,
+    /// Physical Biology of the Cell, 1st edition, with C in a third class of its own.
+    HpPBotC1stEdHpc3,
+
+    /// Cysteine against every other residue, 2 classes.
+    Cys2,
 
     /// Solis & Rackovsky 2000, 4 classes.
     Gbmr4,
@@ -111,6 +117,8 @@ impl Alphabet {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::HpPBotC1stEdHpc3,
+            Alphabet::Cys2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
             Alphabet::Wwmj5,
@@ -136,6 +144,8 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => "hp_lehninger_c_nonpolar2",
             Self::HpLehningerHpc3 => "hp_lehninger_hpc3",
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
+            Self::HpPBotC1stEdHpc3 => "hp_pbotc_1st_ed_hpc3",
+            Self::Cys2 => "cys2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
             Self::Wwmj5 => "wwmj5",
@@ -163,7 +173,7 @@ impl Alphabet {
         match self {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
-            Self::HpLehningerHpc3 => 3,
+            Self::HpLehningerHpc3 | Self::HpPBotC1stEdHpc3 => 3,
             Self::Gbmr4 | Self::Polarity4 => 4,
             Self::Wwmj5 => 5,
             Self::Gbmr7 => 7,
@@ -201,6 +211,8 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => &LEHNINGER_C_NONPOLAR_HP,
             Self::HpLehningerHpc3 => &LEHNINGER_HPC,
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
+            Self::HpPBotC1stEdHpc3 => &PBOTC_1ST_ED_HPC,
+            Self::Cys2 => &CYS2,
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
             Self::Wwmj5 => &WWMJ5,
@@ -392,6 +404,37 @@ static LEHNINGER_HPC: LazyLock<HashMap<u8, u8>> =
 static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFILMPVWY", b"DEGHKNQRST"));
 
+// -----------------------------------------------------------------------------
+// PBotC 1st ed HPC: 3-letter extension of PBotC1stEd, built the same way as
+// LehningerHpc. Keeps the PBotC split for the other 19 residues and gives cysteine
+// its own symbol, so a disulfide-bonded cysteine no longer matches an ordinary
+// hydrophobic residue.
+//
+//   h: A F I L M P V W Y         (9 residues; = PBotC 1st ed's h, C excluded)
+//   p: D E G H K N Q R S T       (10 residues; = PBotC 1st ed's p)
+//   c: C                         (1 residue)
+// -----------------------------------------------------------------------------
+static PBOTC_1ST_ED_HPC: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_hpc(b"AFILMPVWY", b"DEGHKNQRST", b"C"));
+
+// -----------------------------------------------------------------------------
+// CYS2: cysteine against everything else.
+//
+// Disulfide-rich peptides such as conotoxins are classified by their cysteine
+// framework, the order and spacing of their cysteines, while the residues between
+// them vary fast. This alphabet keeps the framework and nothing else, so a k-mer
+// under it is a stretch of cysteine positions and spacer lengths.
+//
+//   c: C                                       (1 residue)
+//   x: A D E F G H I K L M N P Q R S T V W Y   (19 residues)
+// -----------------------------------------------------------------------------
+static CYS2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
+    let mut m: HashMap<u8, u8> = CANONICAL_AA.iter().map(|&r| (r, b'x')).collect();
+    m.insert(b'C', b'c');
+    m.insert(b'*', b'*'); // stop codon pass-through
+    m
+});
+
 /// The partition of an alphabet that has one, for tests that compare tables directly.
 #[cfg(test)]
 fn test_partition(alphabet: Alphabet) -> &'static HashMap<u8, u8> {
@@ -492,6 +535,11 @@ mod hp_tests {
             b'c',
             "LehningerHpc: C is cystine, its own class distinct from h/p"
         );
+        assert_eq!(
+            test_partition(Alphabet::HpPBotC1stEdHpc3)[&b'C'],
+            b'c',
+            "PBotC1stEdHpc: C is cystine, its own class distinct from h/p"
+        );
     }
 
     #[test]
@@ -533,6 +581,11 @@ mod hp_tests {
             test_partition(Alphabet::HpPBotC1stEd2)[&b'G'],
             b'p',
             "PBotC1stEd: G polar (Phillips et al. 2008, Fig. 8.30)"
+        );
+        assert_eq!(
+            test_partition(Alphabet::HpPBotC1stEdHpc3)[&b'G'],
+            b'p',
+            "PBotC1stEdHpc: G inherits PBotC1stEd placement"
         );
     }
 
@@ -595,6 +648,7 @@ mod hp_tests {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::HpPBotC1stEdHpc3,
         ] {
             assert_eq!(test_partition(alpha)[&b'W'], b'h', "{:?}: W hydrophobic (aromatic)", alpha);
         }
@@ -617,6 +671,7 @@ mod hp_tests {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::HpPBotC1stEdHpc3,
         ] {
             assert_eq!(test_partition(alpha)[&b'Y'], b'h', "{:?}: Y hydrophobic (aromatic)", alpha);
         }
@@ -643,6 +698,7 @@ mod hp_tests {
             (Alphabet::HpLehningerCNonpolar2, "hp_lehninger_c_nonpolar2"),
             (Alphabet::HpLehningerHpc3, "hp_lehninger_hpc3"),
             (Alphabet::HpPBotC1stEd2, "hp_pbotc_1st_ed2"),
+            (Alphabet::HpPBotC1stEdHpc3, "hp_pbotc_1st_ed_hpc3"),
         ];
 
         for (alphabet, moltype) in expected {
@@ -911,6 +967,57 @@ static HSDM17: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(HSDM17
 const UNIPROT18_CLUSTERS: &[&str] =
     &["A", "R", "N", "D", "C", "Q", "EP", "G", "HL", "I", "K", "M", "F", "S", "T", "W", "Y", "V"];
 static UNIPROT18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(UNIPROT18_CLUSTERS));
+
+#[cfg(test)]
+mod cys_tests {
+    use super::*;
+
+    /// Omega-conotoxin MVIIA (ziconotide, UniProt P05484), the mature 25-residue peptide.
+    /// Its six cysteines form framework VI/VII, C-C-CC-C-C.
+    const MVIIA: &[u8] = b"CKGKGAKCSRLMYDCCTGSCRSGKC";
+
+    fn encode(alphabet: Alphabet, sequence: &[u8]) -> String {
+        let table = test_partition(alphabet);
+        sequence.iter().map(|r| table[r] as char).collect()
+    }
+
+    /// cys2 keeps only the cysteine positions: every other residue becomes `x`.
+    #[test]
+    fn cys2_keeps_only_the_cysteine_framework() {
+        assert_eq!(encode(Alphabet::Cys2, MVIIA), "cxxxxxxcxxxxxxccxxxcxxxxc");
+        let table = test_partition(Alphabet::Cys2);
+        assert_eq!(table.len(), 21);
+        for &r in CANONICAL_AA {
+            assert_eq!(table[&r], if r == b'C' { b'c' } else { b'x' }, "{}", r as char);
+        }
+        assert_eq!(table[&b'*'], b'*');
+        assert_eq!(Alphabet::Cys2.size(), 2);
+        assert_eq!(Alphabet::from_moltype("cys2"), Some(Alphabet::Cys2));
+        assert!(!Alphabet::Cys2.uses_sourmash_encoder());
+        assert!(alphabet_table("cys2").is_some());
+    }
+
+    /// The PBotC HPC variant changes only cysteine: every other residue keeps the class
+    /// it has in hp_pbotc_1st_ed2, and the cysteines of MVIIA line up with cys2's.
+    #[test]
+    fn pbotc_hpc_differs_from_pbotc_only_at_cysteine() {
+        let (two, three) =
+            (test_partition(Alphabet::HpPBotC1stEd2), test_partition(Alphabet::HpPBotC1stEdHpc3));
+        for &r in CANONICAL_AA {
+            if r == b'C' {
+                assert_eq!((two[&r], three[&r]), (b'h', b'c'));
+            } else {
+                assert_eq!(two[&r], three[&r], "{}", r as char);
+            }
+        }
+        let hpc = encode(Alphabet::HpPBotC1stEdHpc3, MVIIA);
+        assert_eq!(hpc, "cpppphpcpphhhpccpppcppppc");
+        let cys = encode(Alphabet::Cys2, MVIIA);
+        for (a, b) in hpc.chars().zip(cys.chars()) {
+            assert_eq!(a == 'c', b == 'c');
+        }
+    }
+}
 
 #[cfg(test)]
 mod multi_letter_tests {

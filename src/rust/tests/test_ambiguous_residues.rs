@@ -70,8 +70,9 @@ mod tests {
         /// Distinct hashes those readings produce, equal to `readings` for every alphabet
         /// since no two windows of the query encode the same.
         query_hashes: usize,
-        /// Query hashes also found in bovine RNase A.
-        shared_with_bovine: usize,
+        /// Query hashes also found in bovine RNase A, or `None` when bovine RNase A is not
+        /// in the index at all, which happens only under cys2. See the note below.
+        shared_with_bovine: Option<usize>,
     }
 
     /// One row per alphabet, in `Alphabet::all()` order.
@@ -91,139 +92,163 @@ mod tests {
     /// A, Q, K and N in one class, so it sees no mismatch at all and every one of its 103
     /// windows is shared. The HP alphabets merge three of the four (S/T, Q/K and K/N are
     /// each polar/polar) and keep only residue 19's S/A.
+    ///
+    /// cys2 is `None`, not because the two peptides disagree but because bovine RNase A is
+    /// not in the index to be found. Under cys2 at k=43 it has exactly the same k-mer set as
+    /// rat ribonuclease 1B (P00684), and an index entry is keyed by that set, so only the
+    /// first of the two is stored: the 125 ribonucleases index as 94 targets. Topi does share
+    /// all 82 of its cys2 k-mers with bovine RNase A, so a search would report containment
+    /// 1.0 if the target were there. kmerseek PR 141 re-keys entries by sequence and will
+    /// make every one of the 125 reachable; this row records today's behaviour and should
+    /// become `Some(82)` once that lands. This matters most for cys2, which is built so that
+    /// peptides sharing a cysteine framework encode identically.
     const EXPECTED: &[Expected] = &[
         Expected {
             moltype: "protein20",
             ksize: 10,
             readings: 541,
             query_hashes: 541,
-            shared_with_bovine: 82,
+            shared_with_bovine: Some(82),
         },
         Expected {
             moltype: "dayhoff6",
             ksize: 17,
             readings: 108,
             query_hashes: 108,
-            shared_with_bovine: 74,
+            shared_with_bovine: Some(74),
         },
         Expected {
             moltype: "hp_lehninger2",
             ksize: 43,
             readings: 82,
             query_hashes: 82,
-            shared_with_bovine: 63,
+            shared_with_bovine: Some(63),
         },
         Expected {
             moltype: "hp_thomas_dill2",
             ksize: 43,
             readings: 82,
             query_hashes: 82,
-            shared_with_bovine: 63,
+            shared_with_bovine: Some(63),
         },
         Expected {
             moltype: "hp_kyte_doolittle2",
             ksize: 43,
             readings: 82,
             query_hashes: 82,
-            shared_with_bovine: 63,
+            shared_with_bovine: Some(63),
         },
         Expected {
             moltype: "hp_thomas_dill_no_c2",
             ksize: 43,
             readings: 82,
             query_hashes: 82,
-            shared_with_bovine: 63,
+            shared_with_bovine: Some(63),
         },
         Expected {
             moltype: "hp_lehninger_c_nonpolar2",
             ksize: 43,
             readings: 82,
             query_hashes: 82,
-            shared_with_bovine: 63,
+            shared_with_bovine: Some(63),
         },
         Expected {
             moltype: "hp_lehninger_hpc3",
             ksize: 27,
             readings: 98,
             query_hashes: 98,
-            shared_with_bovine: 79,
+            shared_with_bovine: Some(79),
         },
         Expected {
             moltype: "hp_pbotc_1st_ed2",
             ksize: 43,
             readings: 82,
             query_hashes: 82,
-            shared_with_bovine: 63,
+            shared_with_bovine: Some(63),
+        },
+        Expected {
+            moltype: "hp_pbotc_1st_ed_hpc3",
+            ksize: 27,
+            readings: 98,
+            query_hashes: 98,
+            shared_with_bovine: Some(79),
+        },
+        Expected {
+            moltype: "cys2",
+            ksize: 43,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: None,
         },
         Expected {
             moltype: "gbmr4",
             ksize: 22,
             readings: 103,
             query_hashes: 103,
-            shared_with_bovine: 103,
+            shared_with_bovine: Some(103),
         },
         Expected {
             moltype: "polarity4",
             ksize: 22,
             readings: 3250,
             query_hashes: 3250,
-            shared_with_bovine: 44,
+            shared_with_bovine: Some(44),
         },
         Expected {
             moltype: "wwmj5",
             ksize: 19,
             readings: 1984,
             query_hashes: 1984,
-            shared_with_bovine: 87,
+            shared_with_bovine: Some(87),
         },
         Expected {
             moltype: "gbmr7",
             ksize: 15,
             readings: 110,
             query_hashes: 110,
-            shared_with_bovine: 77,
+            shared_with_bovine: Some(77),
         },
         Expected {
             moltype: "funcgroups8",
             ksize: 14,
             readings: 933,
             query_hashes: 933,
-            shared_with_bovine: 69,
+            shared_with_bovine: Some(69),
         },
         Expected {
             moltype: "sdm12",
             ksize: 12,
             readings: 709,
             query_hashes: 709,
-            shared_with_bovine: 77,
+            shared_with_bovine: Some(77),
         },
         Expected {
             moltype: "mmseqs12",
             ksize: 12,
             readings: 113,
             query_hashes: 113,
-            shared_with_bovine: 89,
+            shared_with_bovine: Some(89),
         },
         Expected {
             moltype: "wass14",
             ksize: 11,
             readings: 617,
             query_hashes: 617,
-            shared_with_bovine: 78,
+            shared_with_bovine: Some(78),
         },
         Expected {
             moltype: "hsdm17",
             ksize: 11,
             readings: 617,
             query_hashes: 617,
-            shared_with_bovine: 78,
+            shared_with_bovine: Some(78),
         },
         Expected {
             moltype: "uniprot18",
             ksize: 10,
             readings: 541,
             query_hashes: 541,
-            shared_with_bovine: 82,
+            shared_with_bovine: Some(82),
         },
     ];
 
@@ -299,19 +324,22 @@ mod tests {
             assert_eq!(readings, expected.readings, "{moltype}: readings sketched");
             assert_eq!(query.mins_as_set().len(), expected.query_hashes, "{moltype}: query hashes");
 
+            let Some(shared) = expected.shared_with_bovine else {
+                assert!(
+                    !results.iter().any(|r| r.target_name.contains("RNAS1_BOVIN")),
+                    "{moltype}: bovine RNase A is expected to be absent from the index"
+                );
+                continue;
+            };
             let bovine = shared_with(&results, "RNAS1_BOVIN");
             assert_eq!(
-                bovine.n_intersecting_hashes, expected.shared_with_bovine,
+                bovine.n_intersecting_hashes, shared,
                 "{moltype}: k-mers shared with bovine RNase A"
             );
             // Containment counts the query's 124 - k + 1 windows, not its readings, so it is
             // the same whether or not the alphabet keeps B and Z ambiguous.
             let windows = (124 - expected.ksize + 1) as f64;
-            assert_relative_eq!(
-                bovine.containment,
-                expected.shared_with_bovine as f64 / windows,
-                epsilon = 1e-12
-            );
+            assert_relative_eq!(bovine.containment, shared as f64 / windows, epsilon = 1e-12);
         }
         Ok(())
     }

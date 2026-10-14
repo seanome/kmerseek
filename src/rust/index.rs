@@ -2242,7 +2242,11 @@ mod tests {
     /// Removal drops a reading whose encoding is a run of one class, such as `IMALG`
     /// under the Lehninger split (`hhhhh`) or `ANTAN` under gbmr4 (`aaaaa`). No window
     /// here is a run under protein20 or dayhoff6.
-    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 19] = [
+    ///
+    /// Neither sequence has a cysteine, so hp_pbotc_1st_ed_hpc3 counts the same as
+    /// hp_pbotc_1st_ed2, and under cys2 every window reads `xxxxx`: one k-mer, and with
+    /// removal on all 17 windows are a run of one class and are dropped.
+    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 21] = [
         // moltype, then the counts for the B sequence and for the Z sequence
         ("protein20", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("dayhoff6", [counts(17, 17, 0), counts(17, 17, 0)]),
@@ -2253,6 +2257,8 @@ mod tests {
         ("hp_lehninger_c_nonpolar2", [counts(14, 13, 1), counts(14, 13, 1)]),
         ("hp_lehninger_hpc3", [counts(14, 13, 1), counts(14, 13, 1)]),
         ("hp_pbotc_1st_ed2", [counts(14, 14, 0), counts(14, 14, 0)]),
+        ("hp_pbotc_1st_ed_hpc3", [counts(14, 14, 0), counts(14, 14, 0)]),
+        ("cys2", [counts(1, 0, 17), counts(1, 0, 17)]),
         ("gbmr4", [counts(14, 13, 4), counts(14, 13, 4)]),
         ("polarity4", [counts(21, 20, 1), counts(21, 20, 1)]),
         ("wwmj5", [counts(21, 21, 0), counts(21, 21, 0)]),

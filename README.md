@@ -414,6 +414,8 @@ partitions live in `src/rust/alphabets.rs`.
 | `hp_lehninger_c_nonpolar2` | 2 | `ACFGILMPVWY` `DEHKNQRST` | Lehninger with C moved to hydrophobic |
 | `hp_pbotc_1st_ed2` | 2 | `ACFILMPVWY` `DEGHKNQRST` | Physical Biology of the Cell, 1st ed |
 | `hp_lehninger_hpc3` | 3 | `AFGILMPVWY` `DEHKNQRST` `C` | Lehninger with C in a class of its own |
+| `hp_pbotc_1st_ed_hpc3` | 3 | `AFILMPVWY` `DEGHKNQRST` `C` | PBotC 1st ed with C in a class of its own |
+| `cys2` | 2 | `C` `ADEFGHIKLMNPQRSTVWY` | cysteine against every other residue |
 | `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
 | `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
 | `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
@@ -428,7 +430,8 @@ partitions live in `src/rust/alphabets.rs`.
 | `protein20` | 20 | each residue its own class | no reduction |
 
 Clusters are listed in the order their classes are numbered. The `hp_` alphabets write
-their classes as `h` and `p`, and `hp_lehninger_hpc3` adds `c` for cysteine. Every other
+their classes as `h` and `p`, and the two `hpc3` alphabets add `c` for cysteine. `cys2`
+writes `c` for cysteine and `x` for everything else. Every other
 alphabet writes a class as its first residue in lowercase, so an SDM12-encoded sequence
 shows the `LIVM` class as `l` and can be read against the source residues directly.
 
@@ -446,8 +449,26 @@ residue and disagree about five borderline cases.
 
 Cysteine is the one they disagree about most, because its thiol side chain is nonpolar
 but its disulfide bonding is a chemistry of its own. `hp_lehninger_c_nonpolar2` folds it
-into `h`; `hp_lehninger_hpc3` gives it a third class instead, keeping Lehninger's split
-for the other 19 residues.
+into `h`; `hp_lehninger_hpc3` and `hp_pbotc_1st_ed_hpc3` give it a third class instead,
+keeping their own H/P split for the other 19 residues.
+
+### cys2
+
+`cys2` is not an HP alphabet: it splits on cysteine rather than on hydrophobicity, so its
+name carries no `hp_` prefix and the HP-family tests skip it. A `cys2` k-mer records where
+the cysteines sit in a stretch of sequence and nothing else.
+
+Disulfide-rich peptides such as conotoxins are grouped by the order and spacing of their
+cysteines, written for example as C-C-CC-C-C, while the residues in between change fast.
+`cys2` keeps that spacing, which makes it the alphabet for asking whether the spacing on
+its own finds a homolog.
+
+Two things to know before using it. A stretch holding no cysteine encodes to a run of one
+letter, so low-complexity removal drops every such window: run with removal off. And two
+peptides with the same cysteine spacing encode to the same k-mers by design, which is the
+point, but an index today keys an entry by its k-mer set and so stores only the first of
+them. Of the 125 ribonucleases in the test data, 94 are stored under `cys2` at k=43.
+kmerseek PR 141 re-keys entries by sequence and fixes this.
 
 ### Choosing a class count
 
