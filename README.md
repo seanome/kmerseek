@@ -358,6 +358,7 @@ partitions live in `src/rust/alphabets.rs`.
 | `hp_lehninger_c_nonpolar2` | 2 | `ACFGILMPVWY` `DEHKNQRST` | Lehninger with C moved to hydrophobic |
 | `hp_pbotc_1st_ed2` | 2 | `ACFILMPVWY` `DEGHKNQRST` | Physical Biology of the Cell, 1st ed |
 | `hp_lehninger_hpc3` | 3 | `AFGILMPVWY` `DEHKNQRST` `C` | Lehninger with C in a class of its own |
+| `hp_pbotc_1st_ed_hpc3` | 3 | `AFILMPVWY` `DEGHKNQRST` `C` | PBotC 1st ed with C in a class of its own; `cys_hp3` for short |
 | `cys2` | 2 | `C` `ADEFGHIKLMNPQRSTVWY` | Cysteine against everything else; a k-mer records only the cysteine spacing. Not a hydrophobicity scheme |
 | `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
 | `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
@@ -373,7 +374,8 @@ partitions live in `src/rust/alphabets.rs`.
 | `protein20` | 20 | each residue its own class | no reduction |
 
 Clusters are listed in the order their classes are numbered. The `hp_` alphabets write
-their classes as `h` and `p`, and `hp_lehninger_hpc3` adds `c` for cysteine. Every other
+their classes as `h` and `p`, and the two three-class alphabets add `c` for cysteine.
+Every other
 alphabet writes a class as its first residue in lowercase, so an SDM12-encoded sequence
 shows the `LIVM` class as `l` and can be read against the source residues directly.
 
@@ -391,8 +393,20 @@ residue and disagree about five borderline cases.
 
 Cysteine is the one they disagree about most, because its thiol side chain is nonpolar
 but its disulfide bonding is a chemistry of its own. `hp_lehninger_c_nonpolar2` folds it
-into `h`; `hp_lehninger_hpc3` gives it a third class instead, keeping Lehninger's split
-for the other 19 residues.
+into `h`; `hp_lehninger_hpc3` and `hp_pbotc_1st_ed_hpc3` give it a third class instead,
+each keeping its own split for the other 19 residues.
+
+`hp_pbotc_1st_ed_hpc3` takes `cys_hp3` as a shorter name on the command line. It carries
+the cysteine positions and the hydrophobic/polar pattern of the stretches between them at
+the same time, which `cys2` drops and the two-class alphabets blur. On omega-conotoxin
+MVIIA (P05484) the three readings are:
+
+```
+residues  C K G K G A K C S R L M Y D C C T G S C R S G K C
+cys2      c x x x x x x c x x x x x x c c x x x c x x x x c
+cys_hp3   c p p p p h p c p p h h h p c c p p p c p p p p c
+pbotc2    h p p p p h p h p p h h h p h h p p p h p p p p h
+```
 
 ### Choosing a class count
 

@@ -136,6 +136,13 @@ mod tests {
             shared_with_bovine: 63,
         },
         Expected {
+            moltype: "hp_pbotc_1st_ed_hpc3",
+            ksize: 27,
+            readings: 98,
+            query_hashes: 98,
+            shared_with_bovine: 79,
+        },
+        Expected {
             moltype: "cys2",
             ksize: 43,
             readings: 82,
