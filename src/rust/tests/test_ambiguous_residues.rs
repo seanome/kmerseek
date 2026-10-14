@@ -225,6 +225,20 @@ mod tests {
             query_hashes: 541,
             shared_with_bovine: 82,
         },
+        Expected {
+            moltype: "aro_hyd_chg_pol4",
+            ksize: 22,
+            readings: 3250,
+            query_hashes: 3250,
+            shared_with_bovine: 44,
+        },
+        Expected {
+            moltype: "aro_hyd_arg_chg_pol5",
+            ksize: 19,
+            readings: 1984,
+            query_hashes: 1984,
+            shared_with_bovine: 50,
+        },
     ];
 
     /// Index the 125 ribonucleases and sketch the topi query under one alphabet, then

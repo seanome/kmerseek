@@ -425,6 +425,8 @@ partitions live in `src/rust/alphabets.rs`.
 | `wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
 | `hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
 | `uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
+| `aro_hyd_chg_pol4` | 4 | `YFW` `LIVMA` `DEKR` `SGTNQCPH` | sticker and spacer residues, after Martin et al. 2020 |
+| `aro_hyd_arg_chg_pol5` | 5 | `YFW` `LIVMA` `R` `DEK` `SGTNQCPH` | as `aro_hyd_chg_pol4`, arginine on its own |
 | `protein20` | 20 | each residue its own class | no reduction |
 
 Clusters are listed in the order their classes are numbered. The `hp_` alphabets write
@@ -437,6 +439,13 @@ borderline residues, which keeps a sweep easy to write and to grep. The rest use
 names their papers use, digit included, so `sdm12` and `gbmr4` can be looked up.
 `polarity4` and `funcgroups8` have no name in their source and are named for what they
 group on.
+
+`aro_hyd_chg_pol4` and `aro_hyd_arg_chg_pol5` are for phase separation. Martin et al. 2020
+found that the number and spacing of aromatic residues (Y, F, W) decide whether a
+disordered region separates into droplets. They call the aromatic residues stickers, the
+stretches between them spacers, and arginine a weaker sticker. Both alphabets keep the
+aromatic residues as one class, so a k-mer records where the stickers sit; the
+five-class one gives arginine its own class. G, P, C and H go to the polar class.
 
 ### The HP family
 

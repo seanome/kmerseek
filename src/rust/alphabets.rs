@@ -96,6 +96,12 @@ pub enum Alphabet {
     Hsdm17,
     /// Ieremie et al. 2024, 18 classes, learned by a protein language model.
     Uniprot18,
+
+    /// Aromatic, other hydrophobic, charged and polar: the sticker and spacer residues of
+    /// Martin et al. 2020, 4 classes.
+    AroHydChgPol4,
+    /// [`Self::AroHydChgPol4`] with arginine as its own class, 5 classes.
+    AroHydArgChgPol5,
 }
 
 impl Alphabet {
@@ -121,6 +127,8 @@ impl Alphabet {
             Alphabet::Wass14,
             Alphabet::Hsdm17,
             Alphabet::Uniprot18,
+            Alphabet::AroHydChgPol4,
+            Alphabet::AroHydArgChgPol5,
         ]
     }
 
@@ -146,6 +154,8 @@ impl Alphabet {
             Self::Wass14 => "wass14",
             Self::Hsdm17 => "hsdm17",
             Self::Uniprot18 => "uniprot18",
+            Self::AroHydChgPol4 => "aro_hyd_chg_pol4",
+            Self::AroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
         }
     }
 
@@ -164,8 +174,8 @@ impl Alphabet {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
             Self::HpLehningerHpc3 => 3,
-            Self::Gbmr4 | Self::Polarity4 => 4,
-            Self::Wwmj5 => 5,
+            Self::Gbmr4 | Self::Polarity4 | Self::AroHydChgPol4 => 4,
+            Self::Wwmj5 | Self::AroHydArgChgPol5 => 5,
             Self::Gbmr7 => 7,
             Self::FuncGroups8 => 8,
             Self::Sdm12 | Self::Mmseqs12 => 12,
@@ -211,6 +221,8 @@ impl Alphabet {
             Self::Wass14 => &WASS14,
             Self::Hsdm17 => &HSDM17,
             Self::Uniprot18 => &UNIPROT18,
+            Self::AroHydChgPol4 => &ARO_HYD_CHG_POL4,
+            Self::AroHydArgChgPol5 => &ARO_HYD_ARG_CHG_POL5,
         })
     }
 
@@ -228,6 +240,8 @@ impl Alphabet {
             Self::Wass14 => WASS14_CLUSTERS,
             Self::Hsdm17 => HSDM17_CLUSTERS,
             Self::Uniprot18 => UNIPROT18_CLUSTERS,
+            Self::AroHydChgPol4 => ARO_HYD_CHG_POL4_CLUSTERS,
+            Self::AroHydArgChgPol5 => ARO_HYD_ARG_CHG_POL5_CLUSTERS,
             _ => return None,
         })
     }
@@ -912,6 +926,36 @@ const UNIPROT18_CLUSTERS: &[&str] =
     &["A", "R", "N", "D", "C", "Q", "EP", "G", "HL", "I", "K", "M", "F", "S", "T", "W", "Y", "V"];
 static UNIPROT18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(UNIPROT18_CLUSTERS));
 
+// -----------------------------------------------------------------------------
+// ARO_HYD_CHG_POL4 and ARO_HYD_ARG_CHG_POL5 — sticker and spacer residues, 4 and 5 classes.
+//
+// Martin et al. (2020) found that the number and the even spacing of aromatic residues
+// set whether a disordered region phase-separates. They call the aromatic residues
+// stickers and the stretches between them spacers, and treat arginine as a weaker
+// sticker. These two alphabets keep the aromatic residues (Y, F, W) as one class so that
+// a k-mer records where the stickers sit. The other residues are split into the rest of
+// the hydrophobic ones, the charged ones, and the polar ones. The five-class version takes
+// arginine out of the charged class, because Martin et al. treat it as a sticker too.
+//
+// C, P, H and G go to the polar class: G and P are the commonest spacer residues in the
+// low-complexity regions Martin et al. studied, H is mostly uncharged at pH 7, and C is
+// rare in those regions. The clusters are ordered so the symbols read y (aromatic),
+// l (hydrophobic), d (charged), r (arginine) and s (polar).
+//
+// Reference:
+//   Martin, E. W., Holehouse, A. S., Peran, I., Farag, M., Incicco, J. J., Bremer, A.,
+//   Grace, C. R., Soranno, A., Pappu, R. V. & Mittag, T. (2020). Valence and patterning
+//   of aromatic residues determine the phase behavior of prion-like domains.
+//   Science 367(6478):694-699. doi:10.1126/science.aaw8653.
+// -----------------------------------------------------------------------------
+const ARO_HYD_CHG_POL4_CLUSTERS: &[&str] = &["YFW", "LIVMA", "DEKR", "SGTNQCPH"];
+static ARO_HYD_CHG_POL4: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_CHG_POL4_CLUSTERS));
+
+const ARO_HYD_ARG_CHG_POL5_CLUSTERS: &[&str] = &["YFW", "LIVMA", "R", "DEK", "SGTNQCPH"];
+static ARO_HYD_ARG_CHG_POL5: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_ARG_CHG_POL5_CLUSTERS));
+
 #[cfg(test)]
 mod multi_letter_tests {
     use super::*;
@@ -931,6 +975,18 @@ mod multi_letter_tests {
     fn test_polarity4_partition() {
         // GAVLIFWMP -> g, STCYNQ -> s, DE -> d, HKR -> h
         assert_eq!(encode_canonical(Alphabet::Polarity4), "gsddgghghggsgshssggs");
+    }
+
+    #[test]
+    fn test_aro_hyd_chg_pol4_partition() {
+        // YFW -> y, LIVMA -> l, DEKR -> d, SGTNQCPH -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydChgPol4), "lsddyssldllsssdsslyy");
+    }
+
+    #[test]
+    fn test_aro_hyd_arg_chg_pol5_partition() {
+        // YFW -> y, LIVMA -> l, R -> r, DEK -> d, SGTNQCPH -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydArgChgPol5), "lsddyssldllsssrsslyy");
     }
 
     #[test]

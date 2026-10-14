@@ -376,6 +376,13 @@ enum ProteinAlphabet {
     /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
     #[value(name = "uniprot18")]
     ReducedUniprot18,
+    /// ARO_HYD_CHG_POL4, aromatic/hydrophobic/charged/polar, the sticker and spacer
+    /// residues of Martin et al. 2020
+    #[value(name = "aro_hyd_chg_pol4")]
+    ReducedAroHydChgPol4,
+    /// ARO_HYD_ARG_CHG_POL5, as ARO_HYD_CHG_POL4 with arginine as its own class
+    #[value(name = "aro_hyd_arg_chg_pol5")]
+    ReducedAroHydArgChgPol5,
 }
 
 impl From<ProteinAlphabet> for &'static str {
@@ -400,6 +407,8 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::ReducedWass14 => "wass14",
             ProteinAlphabet::ReducedHsdm17 => "hsdm17",
             ProteinAlphabet::ReducedUniprot18 => "uniprot18",
+            ProteinAlphabet::ReducedAroHydChgPol4 => "aro_hyd_chg_pol4",
+            ProteinAlphabet::ReducedAroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
         }
     }
 }
@@ -1103,6 +1112,8 @@ fn assign_encoding(
         "wass14" => ProteinAlphabet::ReducedWass14,
         "hsdm17" => ProteinAlphabet::ReducedHsdm17,
         "uniprot18" => ProteinAlphabet::ReducedUniprot18,
+        "aro_hyd_chg_pol4" => ProteinAlphabet::ReducedAroHydChgPol4,
+        "aro_hyd_arg_chg_pol5" => ProteinAlphabet::ReducedAroHydArgChgPol5,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
@@ -1110,7 +1121,7 @@ fn assign_encoding(
                      hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
                      hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
                      gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
-                     wass14, hsdm17, uniprot18",
+                     wass14, hsdm17, uniprot18, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5",
                     detected_moltype
                 ),
             });
