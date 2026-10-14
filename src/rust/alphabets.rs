@@ -80,6 +80,9 @@ pub enum Alphabet {
     Gbmr4,
     /// Ball, Hill & Scott 2014, 4 classes on polarity and charge.
     Polarity4,
+    /// Aromatic, other hydrophobic, charged, polar: the sticker and spacer classes of
+    /// Martin et al. 2020.
+    AroHydChgPol4,
     /// Wang & Wang 1999, 5 classes.
     Wwmj5,
     /// Solis & Rackovsky 2000, 7 classes.
@@ -113,6 +116,7 @@ impl Alphabet {
             Alphabet::HpPBotC1stEd2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
+            Alphabet::AroHydChgPol4,
             Alphabet::Wwmj5,
             Alphabet::Gbmr7,
             Alphabet::FuncGroups8,
@@ -138,6 +142,7 @@ impl Alphabet {
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
+            Self::AroHydChgPol4 => "aro_hyd_chg_pol4",
             Self::Wwmj5 => "wwmj5",
             Self::Gbmr7 => "gbmr7",
             Self::FuncGroups8 => "funcgroups8",
@@ -164,7 +169,7 @@ impl Alphabet {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
             Self::HpLehningerHpc3 => 3,
-            Self::Gbmr4 | Self::Polarity4 => 4,
+            Self::Gbmr4 | Self::Polarity4 | Self::AroHydChgPol4 => 4,
             Self::Wwmj5 => 5,
             Self::Gbmr7 => 7,
             Self::FuncGroups8 => 8,
@@ -203,6 +208,7 @@ impl Alphabet {
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
+            Self::AroHydChgPol4 => &ARO_HYD_CHG_POL4,
             Self::Wwmj5 => &WWMJ5,
             Self::Gbmr7 => &GBMR7,
             Self::FuncGroups8 => &FUNCGROUPS8,
@@ -220,6 +226,7 @@ impl Alphabet {
         Some(match self {
             Self::Gbmr4 => GBMR4_CLUSTERS,
             Self::Polarity4 => POLARITY4_CLUSTERS,
+            Self::AroHydChgPol4 => ARO_HYD_CHG_POL4_CLUSTERS,
             Self::Wwmj5 => WWMJ5_CLUSTERS,
             Self::Gbmr7 => GBMR7_CLUSTERS,
             Self::FuncGroups8 => FUNCGROUPS8_CLUSTERS,
@@ -823,6 +830,23 @@ const POLARITY4_CLUSTERS: &[&str] = &["GAVLIFWMP", "STCYNQ", "DE", "HKR"];
 static POLARITY4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(POLARITY4_CLUSTERS));
 
 // -----------------------------------------------------------------------------
+// ARO_HYD_CHG_POL4 — aromatic, other hydrophobic, charged, polar.
+//
+// Built for disordered regions that phase-separate. Martin et al. (2020, Science
+// 367:694) showed that the number and even spacing of aromatic residues (F, W, Y) in a
+// disordered region set whether it phase-separates: aromatic residues are the "stickers"
+// that bind each other, and the stretches between them are "spacers". So the aromatic
+// residues get a letter of their own instead of joining the other hydrophobic ones.
+// Charged residues are pooled (D, E, K, R) because their pattern is measured separately
+// by kappa (Das & Pappu 2013). C, G, P and H go with the polar residues: none of them is
+// aromatic or charged at neutral pH, G and P are the most common spacer residues in
+// low-complexity regions, and C is rare in them.
+// -----------------------------------------------------------------------------
+const ARO_HYD_CHG_POL4_CLUSTERS: &[&str] = &["FWY", "AILMV", "DEKR", "SNQTGCPH"];
+static ARO_HYD_CHG_POL4: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_CHG_POL4_CLUSTERS));
+
+// -----------------------------------------------------------------------------
 // WWMJ5 — Wang & Wang (1999), 5 classes.
 //
 // Derived by minimizing the mismatch within the Miyazawa-Jernigan contact potential
@@ -934,6 +958,12 @@ mod multi_letter_tests {
     }
 
     #[test]
+    fn test_aro_hyd_chg_pol4_partition() {
+        // FWY -> f, AILMV -> a, DEKR -> d, SNQTGCPH -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydChgPol4), "asddfssadaasssdssaff");
+    }
+
+    #[test]
     fn test_wwmj5_partition() {
         // CMFILVWY -> c, ATH -> a, GP -> g, DE -> d, SNQRK -> s
         assert_eq!(encode_canonical(Alphabet::Wwmj5), "acddcgacsccsgsssaccc");
@@ -985,7 +1015,7 @@ mod multi_letter_tests {
     /// table is itself the check that no cluster list drifts out of shape.
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
-        let expected_sizes = [4usize, 4, 5, 7, 8, 12, 12, 14, 17, 18];
+        let expected_sizes = [4usize, 4, 4, 5, 7, 8, 12, 12, 14, 17, 18];
         for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
             let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.
