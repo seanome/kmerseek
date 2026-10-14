@@ -2242,7 +2242,7 @@ mod tests {
     /// Removal drops a reading whose encoding is a run of one class, such as `IMALG`
     /// under the Lehninger split (`hhhhh`) or `ANTAN` under gbmr4 (`aaaaa`). No window
     /// here is a run under protein20 or dayhoff6.
-    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 20] = [
+    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 21] = [
         // moltype, then the counts for the B sequence and for the Z sequence
         ("protein20", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("dayhoff6", [counts(17, 17, 0), counts(17, 17, 0)]),
@@ -2256,6 +2256,7 @@ mod tests {
         ("gbmr4", [counts(14, 13, 4), counts(14, 13, 4)]),
         ("polarity4", [counts(21, 20, 1), counts(21, 20, 1)]),
         ("aro_hyd_chg_pol4", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("aro_hyd_arg_chg_pol5", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("wwmj5", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("gbmr7", [counts(17, 17, 0), counts(16, 16, 0)]),
         ("funcgroups8", [counts(21, 21, 0), counts(21, 21, 0)]),

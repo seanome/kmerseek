@@ -96,7 +96,7 @@ impl MolType {
             "Invalid molecular type: {}. Must be one of: protein20, dayhoff6, \
              hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
              hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-             gbmr4, polarity4, aro_hyd_chg_pol4, wwmj5, gbmr7, funcgroups8, sdm12, \
+             gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, wwmj5, gbmr7, funcgroups8, sdm12, \
              mmseqs12, wass14, hsdm17, uniprot18 (sourmash's protein, dayhoff and hp are \
              also read)",
             moltype

@@ -177,6 +177,13 @@ mod tests {
             shared_with_bovine: 44,
         },
         Expected {
+            moltype: "aro_hyd_arg_chg_pol5",
+            ksize: 19,
+            readings: 1984,
+            query_hashes: 1984,
+            shared_with_bovine: 50,
+        },
+        Expected {
             moltype: "wwmj5",
             ksize: 19,
             readings: 1984,
