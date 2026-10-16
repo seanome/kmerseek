@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="465.063368pt" height="125.51976pt" viewBox="0 0 465.063368 125.51976" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-16T10:49:58.362720</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.6, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 125.51976 
+L 465.063368 125.51976 
+L 465.063368 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 57.465312 108.035697 
+L 198.924931 108.035697 
+L 198.924931 30.232908 
+L 57.465312 30.232908 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1"/>
+     <g id="text_1">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="92.830217" y="114.40351" transform="rotate(-0 92.830217 114.40351)">BCL2_HUMAN</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_2"/>
+     <g id="text_2">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="163.560026" y="114.40351" transform="rotate(-0 163.560026 114.40351)">CED9_CAEEL</text>
+     </g>
+    </g>
+    <g id="text_3">
+     <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="128.195122" y="122.606479" transform="rotate(-0 128.195122 122.606479)">database entry</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_3"/>
+     <g id="text_4">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: end" x="55.465312" y="53.635756" transform="rotate(-0 55.465312 53.635756)">before: BCL-2 query</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_4"/>
+     <g id="text_5">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: end" x="55.465312" y="89.000661" transform="rotate(-0 55.465312 89.000661)">after: BCL-2 query</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_3">
+    <path d="M 78.684255 37.305888 
+L 106.976179 37.305888 
+L 106.976179 65.597812 
+L 78.684255 65.597812 
+L 78.684255 37.305888 
+z
+" clip-path="url(#pd7663d5853)" style="fill: none; stroke: #999999; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 149.414064 37.305888 
+L 177.705988 37.305888 
+L 177.705988 65.597812 
+L 149.414064 65.597812 
+z
+" clip-path="url(#pd7663d5853)" style="fill: #0072b2; stroke: #0072b2; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_5">
+    <path d="M 78.684255 72.670793 
+L 106.976179 72.670793 
+L 106.976179 100.962717 
+L 78.684255 100.962717 
+z
+" clip-path="url(#pd7663d5853)" style="fill: #0072b2; stroke: #0072b2; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 149.414064 72.670793 
+L 177.705988 72.670793 
+L 177.705988 100.962717 
+L 149.414064 100.962717 
+z
+" clip-path="url(#pd7663d5853)" style="fill: #0072b2; stroke: #0072b2; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="line2d_5"/>
+   <g id="line2d_6"/>
+   <g id="text_6">
+    <text style="font-weight: 700; font-size: 8px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="39.465312" y="24.654158" transform="rotate(-0 39.465312 24.654158)">a</text>
+   </g>
+   <g id="text_7">
+    <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="128.195122" y="24.232908" transform="rotate(-0 128.195122 24.232908)">FASTA query against the index</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_7">
+    <path d="M 322.16375 108.035697 
+L 463.623368 108.035697 
+L 463.623368 30.232908 
+L 322.16375 30.232908 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_3">
+     <g id="line2d_7"/>
+     <g id="text_8">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="357.528655" y="114.40351" transform="rotate(-0 357.528655 114.40351)">BCL2_HUMAN</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_8"/>
+     <g id="text_9">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="428.258464" y="114.40351" transform="rotate(-0 428.258464 114.40351)">CED9_CAEEL</text>
+     </g>
+    </g>
+    <g id="text_10">
+     <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="392.893559" y="122.606479" transform="rotate(-0 392.893559 122.606479)">database entry</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_3">
+     <g id="line2d_9"/>
+     <g id="text_11">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: end" x="320.16375" y="53.635756" transform="rotate(-0 320.16375 53.635756)">BCL2_HUMAN as query</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_10"/>
+     <g id="text_12">
+      <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: end" x="320.16375" y="89.000661" transform="rotate(-0 320.16375 89.000661)">CED9_CAEEL as query</text>
+     </g>
+    </g>
+   </g>
+   <g id="patch_8">
+    <path d="M 343.382693 37.305888 
+L 371.674616 37.305888 
+L 371.674616 65.597812 
+L 343.382693 65.597812 
+L 343.382693 37.305888 
+z
+" clip-path="url(#pb050a98283)" style="fill: none; stroke: #999999; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_9">
+    <path d="M 414.112502 37.305888 
+L 442.404425 37.305888 
+L 442.404425 65.597812 
+L 414.112502 65.597812 
+z
+" clip-path="url(#pb050a98283)" style="fill: #0072b2; stroke: #0072b2; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_10">
+    <path d="M 343.382693 72.670793 
+L 371.674616 72.670793 
+L 371.674616 100.962717 
+L 343.382693 100.962717 
+z
+" clip-path="url(#pb050a98283)" style="fill: #0072b2; stroke: #0072b2; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="patch_11">
+    <path d="M 414.112502 72.670793 
+L 442.404425 72.670793 
+L 442.404425 100.962717 
+L 414.112502 100.962717 
+L 414.112502 72.670793 
+z
+" clip-path="url(#pb050a98283)" style="fill: none; stroke: #999999; stroke-width: 0.5; stroke-linejoin: miter"/>
+   </g>
+   <g id="text_13">
+    <text style="font-weight: 700; font-size: 8px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="304.16375" y="24.654158" transform="rotate(-0 304.16375 24.654158)">b</text>
+   </g>
+   <g id="text_14">
+    <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="392.893559" y="24.232908" transform="rotate(-0 392.893559 24.232908)">index against itself (all-vs-all)</text>
+   </g>
+  </g>
+  <g id="legend_1">
+   <g id="line2d_11">
+    <defs>
+     <path id="mba39733a48" d="M -1.5 1.5 
+L 1.5 1.5 
+L 1.5 -1.5 
+L -1.5 -1.5 
+z
+" style="stroke: #0072b2; stroke-linejoin: miter"/>
+    </defs>
+    <g>
+     <use xlink:href="#mba39733a48" x="193.346997" y="6.394687" style="fill: #0072b2; stroke: #0072b2; stroke-linejoin: miter"/>
+    </g>
+   </g>
+   <g id="text_15">
+    <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="199.346997" y="8.494687" transform="rotate(-0 199.346997 8.494687)">hit reported</text>
+   </g>
+   <g id="line2d_12">
+    <defs>
+     <path id="m5834f6c8c4" d="M -1.5 1.5 
+L 1.5 1.5 
+L 1.5 -1.5 
+L -1.5 -1.5 
+z
+" style="stroke: #999999; stroke-linejoin: miter"/>
+    </defs>
+    <g>
+     <use xlink:href="#m5834f6c8c4" x="239.295747" y="6.394687" style="fill-opacity: 0; stroke: #999999; stroke-linejoin: miter"/>
+    </g>
+   </g>
+   <g id="text_16">
+    <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="245.295747" y="8.494687" transform="rotate(-0 245.295747 8.494687)">hit dropped</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pd7663d5853">
+   <rect x="57.465312" y="30.232908" width="141.459618" height="77.80279"/>
+  </clipPath>
+  <clipPath id="pb050a98283">
+   <rect x="322.16375" y="30.232908" width="141.459618" height="77.80279"/>
+  </clipPath>
+ </defs>
+</svg>

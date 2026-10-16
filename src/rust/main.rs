@@ -665,9 +665,6 @@ fn main() -> IndexResult<()> {
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters =
-                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
-
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
             // When doing an all-vs-all search (query == target), we need to reuse the same database
@@ -679,6 +676,16 @@ fn main() -> IndexResult<()> {
                 query_path == target_path
             } else {
                 false
+            };
+
+            // Each entry's hit on itself is dropped only when the index is searched against
+            // itself; a FASTA query identical to an entry is a real hit.
+            let filters = SearchFilters {
+                threshold,
+                min_shared_kmers,
+                max_query_pvalue,
+                min_region_score,
+                skip_self_matches: is_all_vs_all,
             };
 
             // Load the target database
@@ -758,7 +765,7 @@ fn main() -> IndexResult<()> {
                 // Use optimized all-vs-all search that avoids cloning signatures
                 // WHY: When query == target, we can use a specialized method that works directly
                 // with references from the index, avoiding expensive clones. This is much more
-                // memory-efficient for large databases and automatically skips self-matches.
+                // memory-efficient for large databases, and it skips each entry's hit on itself.
                 eprintln!(
                     "Detected all-vs-all search (query == target), using optimized search method..."
                 );
