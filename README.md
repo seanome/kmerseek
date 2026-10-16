@@ -414,6 +414,7 @@ partitions live in `src/rust/alphabets.rs`.
 | `hp_lehninger_c_nonpolar2` | 2 | `ACFGILMPVWY` `DEHKNQRST` | Lehninger with C moved to hydrophobic |
 | `hp_pbotc_1st_ed2` | 2 | `ACFILMPVWY` `DEGHKNQRST` | Physical Biology of the Cell, 1st ed |
 | `hp_lehninger_hpc3` | 3 | `AFGILMPVWY` `DEHKNQRST` `C` | Lehninger with C in a class of its own |
+| `cys2` | 2 | `C` `ADEFGHIKLMNPQRSTVWY` | Cysteine against everything else; a k-mer records only the cysteine spacing. Not a hydrophobicity scheme |
 | `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
 | `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
 | `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
