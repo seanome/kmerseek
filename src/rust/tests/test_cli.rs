@@ -1071,7 +1071,7 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
         "Karlin-Altschul: K 0.0115, r_database 0.806 (fitted now: 25 database queries, 9838 \
          regions; r_database 0.806 per nat of lambda_pair S (1 = closed form holds; closed \
          form 0.481 at the database's match probability 0.500), K 0.0115, fit on x \
-         7.5..11.5, rms 0.086; shuffled-dipeptide reference slope 0.760 over the same bins",
+         7.5..11.5, rms 0.086; shuffled-dipeptide reference slope 0.882 over the same bins",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
@@ -1088,10 +1088,10 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     // Shuffled queries have no relatives, so no reference is searched and none is reported.
     search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.0768, r_database 0.913 (fitted now: 25 shuffled queries, \
-             9570 regions; r_database 0.913 per nat of lambda_pair S (1 = closed form holds; \
-             closed form 0.609 at the database's match probability 0.500), K 0.0768, fit on \
-             x 8.5..12.5, rms 0.156)\n",
+            "Karlin-Altschul: K 0.1162, r_database 0.954 (fitted now: 25 shuffled queries, \
+             9582 regions; r_database 0.954 per nat of lambda_pair S (1 = closed form holds; \
+             closed form 0.609 at the database's match probability 0.500), K 0.1162, fit on \
+             x 8.5..12.5, rms 0.125)\n",
         ),
     );
     Ok(())
@@ -1164,7 +1164,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "fitted now: 25 database queries, 9838 regions; r_database 0.806 per nat of lambda_pair S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
              0.500), K 0.0115, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
-             slope 0.760 over the same bins",
+             slope 0.882 over the same bins",
         ))
         .stderr(predicate::str::contains(
             "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
@@ -1199,7 +1199,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     );
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.1264, r_database 0.962 (fitted now: 25 database queries, 9854 regions; r_database 0.962",
+            "Karlin-Altschul: K 0.0662, r_database 0.891 (fitted now: 25 database queries, 9854 regions; r_database 0.891",
         ),
     );
     Ok(())
@@ -1329,7 +1329,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
 
     let unfit = temp_dir.path().join("unfit.csv");
     index("1", "database", &unfit)?.success().stderr(predicate::str::contains(
-        "1 queries gave 420 regions and 1 shuffled queries gave 441 chance regions, but \
+        "1 queries gave 416 regions and 1 shuffled queries gave 447 chance regions, but \
          fewer than 4 score bins above the peak hold 30 of each, too few to fit; nothing \
          stored. Raise --ka-reference-shuffles when the chance regions are what ran out, \
          --ka-queries when both did.",
@@ -1339,7 +1339,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
     // --ka-reference-shuffles.
     index("1", "shuffled", &temp_dir.path().join("unfit_shuffled.csv"))?.success().stderr(
         predicate::str::contains(
-            "1 queries gave 376 regions, but fewer than 4 score bins above the peak hold 30 of \
+            "1 queries gave 361 regions, but fewer than 4 score bins above the peak hold 30 of \
              them, too few to fit; nothing stored. Raise --ka-queries.",
         ),
     );
@@ -1351,9 +1351,9 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "Fitting r_database and K on 3 shuffled sequences (mismatch penalty 2, give-up margin 8)...",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 3 shuffled queries, 789 regions; r_database 0.896 per nat of lambda_pair S",
+            "fitted now: 3 shuffled queries, 1457 regions; r_database 0.753 per nat of lambda_pair S",
         ))
-        .stderr(predicate::str::contains("K 0.0191, fit on x 6.5..8.5, rms 0.070\n"));
+        .stderr(predicate::str::contains("K 0.0072, fit on x 6.0..9.5, rms 0.112\n"));
 
     let survival = temp_dir.path().join("survival.csv");
     index("3", "database", &survival)?
@@ -1364,13 +1364,13 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
              shuffled-dipeptide...",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 3 database queries, 903 regions; r_database 0.730 per nat of lambda_pair S \
+            "fitted now: 3 database queries, 1567 regions; r_database 0.826 per nat of lambda_pair S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
-             0.500), K 0.0082, fit on x 6.0..9.0, rms 0.184; shuffled-dipeptide reference \
-             slope 0.712 over the same bins",
+             0.500), K 0.0118, fit on x 6.0..9.5, rms 0.125; shuffled-dipeptide reference \
+             slope 0.687 over the same bins",
         ))
         .stderr(predicate::str::contains(
-            "WARNING: the fit has only 6 bins (x 6.0..9.0) below the relatives at x none.",
+            "WARNING: the fit has only 7 bins (x 6.0..9.5) below the relatives at x none.",
         ))
         .stderr(predicate::str::contains(format!(
             "Survival curve written to {}",
@@ -1416,28 +1416,28 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
         ]
     );
     let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
-    assert_eq!(rows.len(), 62, "one row per half-nat bin of x from 4.5 to 35");
-    assert_eq!((&rows[0][0], &rows[61][0]), ("4.500", "35.000"));
-    // The lowest bin holds every region (903 seeds and up); the fit window is x 6.0..9.0.
-    assert_eq!(&rows[0][1], "903");
+    assert_eq!(rows.len(), 23, "one row per half-nat bin of x from 5 to 16");
+    assert_eq!((&rows[0][0], &rows[22][0]), ("5.000", "16.000"));
+    // The lowest bin holds every region (1567 seeds and up); the fit window is x 6.0..9.5.
+    assert_eq!(&rows[0][1], "1567");
     assert_eq!(&rows[0][4], "false");
     let in_fit: Vec<&str> = rows.iter().filter(|r| &r[4] == "true").map(|r| &r[0]).collect();
-    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500"]);
-    // Lowest bin: 903 regions, the fitted line far above at 1955.2 (the seed floor bends
-    // the curve there), 864 in the shuffled-dipeptide reference.
-    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("903", "1955.2449556084264", "864"));
-    // The top bin is one region, far above the fitted line's 4e-7, and the reference never
-    // got there. The line is written at full precision so its tail can be plotted on a
-    // log axis.
-    assert_eq!((&rows[61][1], &rows[61][2], &rows[61][3]), ("1", "0.00000041235460000641815", ""));
+    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500", "9.000"]);
+    // Lowest bin: 1567 regions, the fitted line far above at 2477.4 (the seed floor bends
+    // the curve there), 1525 in the shuffled-dipeptide reference.
+    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("1567", "2477.4225474474306", "1525"));
+    // The top bin is one region, above the fitted line's 0.28, and the reference never got
+    // there. The line is written at full precision so its tail can be plotted on a log
+    // axis.
+    assert_eq!((&rows[22][1], &rows[22][2], &rows[22][3]), ("1", "0.2794322398328976", ""));
     // Fit constants repeat on every row.
     let constants = |r: &csv::StringRecord| r.iter().skip(5).map(str::to_owned).collect::<Vec<_>>();
     assert!(rows.iter().all(|r| constants(r) == constants(&rows[0])));
     assert_eq!(
         constants(&rows[0]),
         [
-            "0.7304804242524211",
-            "0.008235243224364983",
+            "0.8263608593295924",
+            "0.011815771502398252",
             "0.48120853696601995",
             "0.5000011360087127",
             "database",
@@ -1446,8 +1446,8 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "8",
             "3",
             "3",
-            "864",
-            "762",
+            "1525",
+            "1566",
             "8340",
             "0.5"
         ]

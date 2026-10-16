@@ -1015,6 +1015,9 @@ pub struct ProteinSearcher {
     /// allowing concurrent reads from rayon's par_iter() in search_one(). Memory grows
     /// only as candidates are accessed — hot targets are cached, cold ones are never loaded.
     sig_cache: DashMap<String, ProteinSketch>,
+    /// Other entry names stored under each target md5 (see `ProteomeIndex::aliases`). A hit
+    /// on the md5 is reported once more under each of them.
+    aliases: HashMap<String, Vec<String>>,
     /// K-mer frequencies across the query proteome, set via set_query_frequencies() before
     /// searching. None = single-pass mode; joint_kmer_freq will be 0.0 for all results.
     query_kmer_frequencies: Option<HashMap<u64, usize>>,
@@ -1199,7 +1202,9 @@ impl ProteinSearcher {
         queries
             .par_iter()
             .flat_map_iter(|(source_md5, query)| {
-                self.search_one(query, &filters, queries.len())
+                // One result per stored sequence: a repeated sequence would count its
+                // regions once per entry name.
+                self.search_stored(query, &filters, queries.len())
                     .into_iter()
                     .filter(|r| &r.target_md5 != source_md5)
                     .flat_map(|r| {
@@ -1307,7 +1312,7 @@ impl ProteinSearcher {
     pub fn new(index: ProteomeIndex) -> IndexResult<Self> {
         index.finalize()?;
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
-        Ok(Self::from_cache(index, cache))
+        Self::from_cache(index, cache)
     }
 
     /// Load a searcher from a saved index.
@@ -1319,23 +1324,45 @@ impl ProteinSearcher {
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
         let (targets, kmers) = (cache.target_list.len(), cache.inverted_index.len());
         eprintln!("Loaded search cache: {targets} targets, {kmers} k-mers indexed");
-        Ok(Self::from_cache(index, cache))
+        Self::from_cache(index, cache)
     }
 
-    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
+    fn from_cache(index: ProteomeIndex, cache: SearchCache) -> IndexResult<Self> {
         let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
         let db_n_kmers = stats.kmer_frequencies.values().sum();
-        Self {
+        let aliases = index.aliases()?;
+        Ok(Self {
             index,
             stats,
             target_list: cache.target_list,
             inverted_index: cache.inverted_index,
             sig_cache: DashMap::new(),
+            aliases,
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
             extension: None,
-        }
+        })
+    }
+
+    /// `result` again under every other entry name stored with its target's sequence. Those
+    /// entries have the same sequence, so every statistic, region and residue is the same;
+    /// only the name differs.
+    fn alias_results(&self, result: &SearchResult) -> Vec<SearchResult> {
+        let Some(names) = self.aliases.get(&result.target_md5) else {
+            return Vec::new();
+        };
+        names
+            .iter()
+            .map(|name| {
+                let mut copy = result.clone();
+                copy.target_name.clone_from(name);
+                for region in &mut copy.matched_regions {
+                    region.target_name.clone_from(name);
+                }
+                copy
+            })
+            .collect()
     }
 
     /// Prepare a query for efficient batch searching
@@ -1500,7 +1527,28 @@ impl ProteinSearcher {
     ///
     /// `filters` is applied inline as each candidate is compared: results that fail are never
     /// pushed into the returned `Vec`, rather than being built up and filtered out afterward.
+    ///
+    /// A hit on a sequence stored under several entry names is reported under each name.
     pub fn search_one(
+        &self,
+        query: &ProteinSketch,
+        filters: &SearchFilters,
+        total_queries: usize,
+    ) -> Vec<SearchResult> {
+        let mut results = self.search_stored(query, filters, total_queries);
+        if self.aliases.is_empty() {
+            return results;
+        }
+        let copies: Vec<SearchResult> =
+            results.iter().flat_map(|r| self.alias_results(r)).collect();
+        results.extend(copies);
+        sort_results(&mut results);
+        results
+    }
+
+    /// `search_one` with one result per stored sequence: a sequence held by several entries
+    /// is reported once, under the name it was first indexed with.
+    fn search_stored(
         &self,
         query: &ProteinSketch,
         filters: &SearchFilters,
@@ -3160,6 +3208,117 @@ mod tests {
         assert!(regions.iter().any(|r| r.start == 81 && r.target_start == 170 && r.length == 12));
     }
 
+    /// Every region's `target_subseq` is the named target's residues at
+    /// `target_start..target_end`, and `subseq` is the query's at `start..end`.
+    fn assert_subseqs_match_coordinates(
+        results: &[SearchResult],
+        query: &str,
+        targets: &HashMap<&str, &str>,
+    ) {
+        for r in results {
+            let target = targets[r.target_name.as_str()];
+            for m in &r.matched_regions {
+                assert_eq!(m.subseq, &query[m.start as usize..m.end as usize], "{m:?}");
+                assert_eq!(
+                    m.target_subseq,
+                    &target[m.target_start as usize..m.target_end as usize],
+                    "target {} region {m:?}",
+                    r.target_name
+                );
+            }
+        }
+    }
+
+    /// Two entries whose 5-mer sets are equal but whose sequences differ (a poly-A run of 5
+    /// and of 8: both hold AAAAA and nothing else the other lacks) are two targets, each
+    /// reported with its own residues and coordinates. Keyed by their k-mer set, the second
+    /// entry was dropped. The query has a run of 7, so it is neither entry: a query whose
+    /// key equals a target's is skipped as a self-match. Drawn as dot plots in
+    /// `docs/images/same_kmer_set_polyA5_polyA8_protein20_k5.png`
+    /// (`scripts/plot_same_kmer_set_targets.py`).
+    #[test]
+    fn same_kmer_set_different_sequence_is_its_own_target() -> Result<()> {
+        let short = "MKTWLRDEHPAAAAACYFNQSGV";
+        let long = "MKTWLRDEHPAAAAAAAACYFNQSGV";
+        let query = "MKTWLRDEHPAAAAAAACYFNQSGV";
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">short\n{short}\n>long\n{long}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        assert_eq!(index.signature_count(), 2);
+        assert!(index.aliases()?.is_empty());
+        let searcher = ProteinSearcher::new(index)?;
+
+        let q = ProteinSketch::from_protein_sequence("q", query, 5, 1, "protein20")?;
+        let results = searcher.search_one(&q, &SearchFilters::default(), 1);
+        let mut names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["long", "short"]);
+        assert_subseqs_match_coordinates(
+            &results,
+            query,
+            &HashMap::from([("short", short), ("long", long)]),
+        );
+        // Each target's regions are its own runs of shared 5-mers: (query start, end, target
+        // start, end). The poly-A runs also line up off the main diagonal.
+        let coordinates = |name: &str| -> Vec<(u32, u32, u32, u32)> {
+            let r = results.iter().find(|r| r.target_name == name).unwrap();
+            assert_eq!(r.n_intersecting_hashes, 19, "{name}");
+            r.matched_regions
+                .iter()
+                .map(|m| (m.start, m.end, m.target_start, m.target_end))
+                .collect()
+        };
+        assert_eq!(coordinates("short"), [(0, 15, 0, 15), (11, 16, 10, 15), (12, 25, 10, 23)]);
+        assert_eq!(
+            coordinates("long"),
+            [
+                (0, 17, 0, 17),
+                (10, 25, 11, 26),
+                (10, 16, 12, 18),
+                (10, 15, 13, 18),
+                (11, 17, 10, 16),
+                (12, 17, 10, 15)
+            ]
+        );
+        Ok(())
+    }
+
+    /// Two entries with the same sequence are stored once; a hit on it is reported under
+    /// both names, with the same statistics and regions, each region naming its own entry.
+    #[test]
+    fn identical_entries_are_each_reported() -> Result<()> {
+        let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let (_, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">{bcl2_name}\n{bcl2}\n>copy of BCL2\n{bcl2}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        assert_eq!(index.signature_count(), 1);
+        let searcher = ProteinSearcher::new(index)?;
+
+        let query = ProteinSketch::from_protein_sequence("ced9", &ced9, 12, 1, "hp_lehninger2")?;
+        let results = searcher.search_one(&query, &SearchFilters::default(), 1);
+        let mut names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
+        names.sort();
+        assert_eq!(names, ["copy of BCL2", bcl2_name.as_str()]);
+        let copy = results.iter().find(|r| r.target_name == "copy of BCL2").unwrap();
+        let original = results.iter().find(|r| r.target_name == bcl2_name).unwrap();
+        assert_eq!(copy.target_md5, original.target_md5);
+        assert_eq!(copy.n_intersecting_hashes, original.n_intersecting_hashes);
+        assert_eq!(copy.matched_regions.len(), original.matched_regions.len());
+        assert!(copy.matched_regions.iter().all(|m| m.target_name == "copy of BCL2"));
+        assert!(original.matched_regions.iter().all(|m| m.target_name == bcl2_name));
+        assert_subseqs_match_coordinates(
+            &results,
+            &ced9,
+            &HashMap::from([("copy of BCL2", bcl2.as_str()), (bcl2_name.as_str(), &bcl2)]),
+        );
+        Ok(())
+    }
+
     /// Read the first record from a FASTA file and return name and sequence.
     ///
     /// WHY: This helper function eliminates code duplication in tests. It provides a simple
@@ -4310,6 +4469,7 @@ mod tests {
             target_list: Vec::new(),
             inverted_index: HashMap::new(),
             sig_cache: DashMap::new(),
+            aliases: HashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
@@ -5595,18 +5755,18 @@ mod ka_calibration_tests {
         // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
         // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
         // regions, x 7.5 to 11.5 nats.
-        assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
+        assert_eq!((fit.n_queries, fit.n_regions), (25, 9576));
         assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
         assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
         assert_eq!(fit.x_range(), (7.5, 11.5));
-        assert!((fit.r_database - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.r_database);
-        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
-        assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
+        assert!((fit.r_database - 0.846_869_675_267_072).abs() < 1e-12, "{}", fit.r_database);
+        assert!((fit.k - 0.015_285_759_225_763_968).abs() < 1e-12, "{}", fit.k);
+        assert!((fit.rms_residual - 0.084_113_149_881_278_44).abs() < 1e-12);
         // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
         // closed-form lambda is ln of the golden ratio.
         assert!((fit.match_probability - 0.500_001_136_008_712_7).abs() < 1e-12);
         assert!((fit.lambda_analytic - 0.481_208_536_966_019_95).abs() < 1e-12);
-        assert_eq!(fit.survival[0].1, 9561);
+        assert_eq!(fit.survival[0].1, 9576);
 
         // Same seed, same fit.
         let again = searcher.calibrate_ka(shuffled_settings(2.0, 25))?;
@@ -5667,8 +5827,8 @@ mod ka_calibration_tests {
         assert_eq!((one.n_regions, four.n_regions), (9838, 9838));
         assert_eq!(survival(&one), survival(&four));
         assert_eq!((one.n_reference_queries, four.n_reference_queries), (25, 100));
-        // 38_606 / 9_392 = 4.1: four shuffles, four times the chance regions.
-        assert_eq!((one.n_reference_regions, four.n_reference_regions), (9392, 38606));
+        // 37_750 / 9_377 = 4.0: four shuffles, four times the chance regions.
+        assert_eq!((one.n_reference_regions, four.n_reference_regions), (9377, 37750));
         // The fit itself moves: more chance regions shrink each bin's noise allowance, so the
         // stop where the real curve rises above the chance curve fires at a different bin.
         let fit = |r: &KaCalibrationReport| {
