@@ -542,8 +542,8 @@ pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64, n_targets: f64)
 /// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
 /// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
 /// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on the Swiss-Prot
-/// sample real sequences give 0.87, a plain shuffle 1.0, and keeping dipeptides already
-/// pulls the shuffle to 0.94, so hydrophobic runs alone explain about half of the gap.
+/// sample real sequences give 0.88, a plain shuffle 0.99, and keeping dipeptides pulls the
+/// shuffle to 0.95, so hydrophobic runs alone explain about two fifths of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays

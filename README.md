@@ -277,7 +277,7 @@ is the same in both searches. `region_ka_evalue` scores the whole extended regio
 to 49 positions with 7 mismatches, and its E-value dropped from 15.2 to 1.3. RTN3's region
 did not grow, and the Karlin-Altschul value is 4.8 times the run value: the run
 E-value assumes positions are independent, while K for `region_ka_evalue` was fitted on the
-database's own proteins (`r_database` 0.80, K 0.0022 for this index). Over all 59 regions
+database's own proteins (`r_database` 0.80, K 0.0021 for this index). Over all 59 regions
 of the extended search:
 
 ![region_ka_evalue against region_run_evalue for CED9 vs 300 human proteins](docs/images/evalue_columns_ced9_bcl2_human_k19.png)

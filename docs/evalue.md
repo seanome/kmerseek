@@ -85,11 +85,11 @@ would, and the E-value needs two corrections that the closed form cannot give:
   point. 1.00 means the equation is right as it stands. 0.947 (SCOPe40) means one point is
   worth 5% fewer nats than the equation says: the BCL2/CED9 region above is worth
   0.481 × 0.947 × 40 = 18.2 nats and its E-value is e^(19.2 − 18.2) = 2.8× larger than
-  under independence. 0.85 (Swiss-Prot) makes it 16.4 nats and the E-value 18× larger.
+  under independence. 0.85 (Swiss-Prot) makes it 16.3 nats and the E-value 19× larger.
 - `K`: the fraction of the m × n cells of the comparison that can start a region. Cells
   next to each other on one diagonal belong to the same run of agreement, and a region only
-  exists where an exact seed matched, so K is well under 1: 0.023 on SCOPe40, 0.016 to
-  0.018 on Swiss-Prot, 0.014 on UniRef50, all at `hp_thomas_dill2` k = 12, C = 2.
+  exists where an exact seed matched, so K is well under 1: 0.020 on SCOPe40, 0.014 to
+  0.018 on Swiss-Prot, 0.011 on UniRef50, all at `hp_thomas_dill2` k = 12, C = 2.
 
 Both are fitted by `kmerseek index` and stored in the index under their C and X. A search
 with the same pair reads them back; a search with another pair fits its own on
@@ -144,24 +144,33 @@ python scripts/plot_ka_survival.py docs/images/ka_fit_curves/{scope40,swissprot_
     --subtitle "hp_thomas_dill2 k = 12, C = 2, X = 8, 200 database queries each"
 ```
 
-| database | sequences | residues | r_database | K | bins fitted (x, nats) | relatives begin at |
+| database | sequences | residues indexed (N) | r_database | K | bins fitted (x, nats) | relatives begin at |
 |---|---|---|---|---|---|---|
-| SCOPe40 | 15,177 | 2.8 M | 0.947 ± 0.015 | 0.0227 | 13.5 to 17.5 | not reached |
-| Swiss-Prot sample | 15,000 of 575,748 | 5.5 M | 0.865 ± 0.004 | 0.0180 | 7.5 to 11.5 | x = 11.5 |
-| Swiss-Prot sample | 60,000 of 575,748 | 21.7 M | 0.851 ± 0.003 | 0.0159 | 7.0 to 11.0 | x = 11.0 |
-| UniRef50 sample | 15,000 of 38.8 M | 4.7 M | 0.826 ± 0.005 | 0.0139 | 6.5 to 10.5 | x = 10.5 |
+| SCOPe40 | 15,177 | 2,805,012 | 0.947 ± 0.015 | 0.0205 | 13.5 to 17.5 | not reached |
+| Swiss-Prot sample | 15,000 of 575,748 | 5,369,879 | 0.883 ± 0.004 | 0.0178 | 8.0 to 12.0 | x = 12.0 |
+| Swiss-Prot sample | 60,000 of 575,748 | 20,618,766 | 0.847 ± 0.005 | 0.0135 | 7.0 to 11.0 | x = 11.0 |
+| UniRef50 sample | 15,000 of 38.8 M | 4,688,826 | 0.810 ± 0.003 | 0.0106 | 7.0 to 11.0 | x = 11.0 |
 
-(`hp_thomas_dill2` k = 12, C = 2, X = 8, 200 database queries, seed 1.) SCOPe40 domains
-behave almost like independent positions. Full-length proteins do not: every E-value on a
-proteome is larger than the closed form would give. The two Swiss-Prot samples agree to
-2% in r_database and 12% in K, so a sample calibrates the full database.
+(`hp_thomas_dill2` k = 12, C = 2, X = 8, 200 database queries, seed 1.) N is the residues
+the index holds, which is n in every E-value: the Swiss-Prot samples lose 411 and 4,368
+sequences that repeat one already indexed. The samples were drawn with
+`scripts/sample_fasta.py` (seed 1) from UniProt Swiss-Prot 2026_03 (575,748 sequences,
+MD5 bc9d398533e6df582b563c6c03093bd0) and UniRef50 (38,794,121 sequences, MD5
+3228886e9d749f050f60e9a0ce1f727d), and each fit was run by `scripts/ka_fit_curve.sbatch`.
+SCOPe40 domains behave almost like independent positions. Full-length proteins do not:
+every E-value on a proteome is larger than the closed form would give. The two Swiss-Prot
+samples differ by 4% in r_database and 32% in K. For a 200-residue query against all of
+Swiss-Prot, the 15,000-sequence fit gives an E-value 0.77 times the 60,000-sequence fit's
+at x = 15 and 0.54 times at x = 25. A smaller sample makes E-values smaller, so fit on the
+larger one; with one sample of each size, how much of the gap is sample size and how much
+is the draw is not known.
 
 What the numbers mean for a hit, for a 200-residue query:
 
 | database | E at x = 15 | E at x = 20 | E at x = 25 |
 |---|---|---|---|
-| SCOPe40 (n = 2.5 M) | 7.8 | 0.068 | 6.0e-4 |
-| Swiss-Prot, full (n = 210 M, 60,000-sample fit) | 1.9e3 | 27 | 0.38 |
+| SCOPe40 (n = 2.8 M) | 7.8 | 0.068 | 6.0e-4 |
+| Swiss-Prot, full (n = 209 M, 60,000-sample fit) | 1.7e3 | 25 | 0.36 |
 
 ## What the calibration queries are: `--ka-null`
 
@@ -178,18 +187,19 @@ r_database by null and database (1.00 = the closed form is right as it stands):
 
 | calibration queries are | SCOPe40 | Swiss-Prot sample | UniRef50 sample |
 |---|---|---|---|
-| `database`: the sequences as they are | 0.947 | 0.865 | 0.826 |
-| `shuffled-dipeptide`: shuffled, neighbouring pairs kept | 1.038 | 0.942 | 0.873 |
-| `shuffled`: shuffled | 1.037 | 1.015 | 0.863 |
-| `reversed`: read back to front | 1.036 | 0.858 | 0.809 |
+| `database`: the sequences as they are | 0.947 | 0.883 | 0.810 |
+| `shuffled-dipeptide`: shuffled, neighbouring pairs kept | 1.038 | 0.946 | 0.879 |
+| `shuffled`: shuffled | 1.037 | 0.986 | 0.865 |
+| `reversed`: read back to front | 1.036 | 0.855 | 0.788 |
 
 On SCOPe40 the three scrambled nulls agree with each other and give 1.04: the closed form
 holds for scrambled domains, which checks the fitting code. Real domains give 0.95. On
-Swiss-Prot a plain shuffle still gives 1.0, but keeping neighbouring pairs already pulls
-the value to 0.94: hydrophobic runs alone account for about half of the gap between
-scrambled and real ((1.015 − 0.942) / (1.015 − 0.865) = 0.49). On the UniRef50 sample a
-plain shuffle already gives 0.86, so there the two shuffles differ little. Reversed sequences give the same value as real ones and their curve
-bends upward from x = 14: a helix or a strand reads nearly the same backwards in a
+Swiss-Prot a plain shuffle gives 0.99, and keeping neighbouring pairs pulls the value to
+0.95: hydrophobic runs alone account for about two fifths of the gap between scrambled and
+real ((0.986 − 0.946) / (0.986 − 0.883) = 0.39). On the UniRef50 sample a plain shuffle
+already gives 0.87, so there the two shuffles differ little. Reversed sequences give
+nearly the same value as real ones (within 3%), and their curve bends upward from x = 15.5
+on the Swiss-Prot sample and x = 13 on UniRef50: a helix or a strand reads nearly the same backwards in a
 two-class alphabet, so reversed proteins still match their forward paralogs. That is why
 `reversed` is a check and not a null to fit on in this alphabet.
 
@@ -206,26 +216,26 @@ proteins significant. The bins the `database` fit uses lie below the score where
 begin, so the regions in them come from unrelated real proteins. Those proteins share
 hydrophobic runs and the repeat of a helix or a strand, so they produce more high-scoring
 regions than shuffled copies of themselves do. A line fitted to shuffled copies falls
-faster (r_database 0.942 instead of 0.865 on the Swiss-Prot sample), predicts fewer chance
+faster (r_database 0.946 instead of 0.883 on the Swiss-Prot sample), predicts fewer chance
 regions than unrelated real proteins actually give, and so reports every hit with an
 E-value that is too small.
 
 ![E-value against region score for fits on real, dipeptide-shuffled and shuffled Swiss-Prot sequences](images/evalue_by_null_swissprot.png)
 
 E = K × m × n × e^(−r_database × x) for a 200-residue query against all of Swiss-Prot
-(n = 210 M residues), with r_database and K fitted on the 15,000-sequence sample three
+(n = 209 M residues), with r_database and K fitted on the 15,000-sequence sample three
 ways. Drawn by `scripts/plot_evalue_by_null.py`.
 
 | region score x | E, `database` fit | E, `shuffled-dipeptide` fit | how much smaller |
 |---|---|---|---|
-| 15 | 1,745 | 878 | 2.0 × |
-| 20 | 23 | 7.9 | 2.9 × |
-| 25 | 0.30 | 0.071 | 4.3 × |
+| 15 | 1,310 | 660 | 2.0 × |
+| 20 | 16 | 5.8 | 2.7 × |
+| 25 | 0.19 | 0.052 | 3.7 × |
 
 The gap grows with the score, so it is widest where hits are called. At a cutoff of
-E = 0.01, the dipeptide-shuffled fit lets through regions from x = 27.1; the `database`
-fit gives a region at x = 27.1 an E-value of 0.050, five times the cutoff, and needs
-x = 28.9 to reach 0.01. A plain shuffle is further off still (x = 26.1). This is why
+E = 0.01, the dipeptide-shuffled fit lets through regions from x = 26.7; the `database`
+fit gives a region at x = 26.7 an E-value of 0.041, four times the cutoff, and needs
+x = 28.3 to reach 0.01. A plain shuffle is further off still (x = 26.4). This is why
 `shuffled-dipeptide` is the default reference, the set that decides where the fit stops,
 and not the default `--ka-null`.
 
