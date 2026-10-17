@@ -859,11 +859,11 @@ pub struct MatchedRegion {
     pub n_chained: u32,
 
     /// Karlin-Altschul E-value for `ka_bits` against the searched database:
-    /// K * m * n * exp(-lambda * S), with m the query's encoded length and n = `db_n_kmers`,
-    /// the number of distinct sketched hashes per target summed over targets (about
-    /// residues / scaled). K is `KaParams::k`, fitted on the index for the alphabet,
-    /// penalty, give-up margin and `--scaled` in use: K absorbs the scaled factor, so a K
-    /// measured at one `--scaled` does not carry to another. For a chain it is the sum
+    /// K * m * n * exp(-lambda * S), with m the query's encoded length and n the database's
+    /// residues (`ProteinSearcher::db_n_residues`), the same n as `run_evalue`. K is
+    /// `KaParams::k`, fitted on the index for the alphabet, penalty, give-up margin and
+    /// `--scaled` in use, with the same n: K absorbs the scaled factor, so a K measured at
+    /// one `--scaled` does not carry to another. For a chain it is the sum
     /// P-value times the number of targets (see `chain_regions`). None without extension,
     /// without DB context, or when the pair has no positive lambda: then no score is
     /// surprising and there is no number to report.
@@ -1154,7 +1154,8 @@ pub struct ProteinSearcher {
     /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
     /// on every candidate pair.
     db_n_kmers: usize,
-    /// Residues in the database, n in `run_evalue`: `ProteomeIndex::total_residues`, counted
+    /// Residues in the database, n in `run_evalue` and in the Karlin-Altschul E-value and
+    /// fit: `ProteomeIndex::total_residues`, counted
     /// when the index was built. Estimating it from the k-mer count instead came out low,
     /// since a k-mer that repeats within a target is counted once and low-complexity k-mers
     /// are left out: 0.47 of the real count at hp k=8 on the 25-protein test set, which made
@@ -1235,7 +1236,7 @@ impl ProteinSearcher {
         let n_queries = queries.len();
         let query_residues: u64 =
             queries.iter().map(|(_, q)| q.get_raw_sequence().map_or(0, |r| r.len() as u64)).sum();
-        let database_kmers = self.db_n_kmers as u64;
+        let database_residues = self.db_n_residues as u64;
         let lambda_analytic = karlin_altschul_lambda(match_probability, scoring.mismatch_penalty);
         let fitted = fit.map(|fit| KaCalibration {
             scoring,
@@ -1243,7 +1244,7 @@ impl ProteinSearcher {
             seed,
             n_queries,
             query_residues,
-            database_kmers,
+            database_residues,
             n_regions: scores.len(),
             match_probability,
             lambda_analytic,
@@ -1252,7 +1253,7 @@ impl ProteinSearcher {
             // ln(regions in the bin at x) = ln(K L N (1 - e^(-r_database w))) - r_database x,
             // and r_database w is the fit's slope per bin.
             k: fit.ln_intercept.exp()
-                / (query_residues as f64 * database_kmers as f64 * (1.0 - (-fit.lambda).exp())),
+                / (query_residues as f64 * database_residues as f64 * (1.0 - (-fit.lambda).exp())),
             bin_width: BIN_WIDTH,
             score_lo: fit.score_lo,
             score_hi: fit.score_hi,
@@ -1918,7 +1919,7 @@ impl ProteinSearcher {
             {
                 let ka_lambda = karlin_altschul_lambda(a, params.scoring.mismatch_penalty)
                     * params.ka.r_database;
-                let n = self.db_n_kmers as f64;
+                let n = self.db_n_residues;
                 for region in result.matched_regions.iter_mut() {
                     let matches = region.length as f64 - region.n_mismatches as f64;
                     let raw =
@@ -2904,7 +2905,8 @@ pub struct ChainContext<'a> {
 /// of targets: each member's normalised score is lambda S_i - ln(K m n_t) with n_t the
 /// target length, so for a single region this reduces to the per-region E within the
 /// approximation n = N n_t. So a chained row's `evalue` uses N n_t for the database size
-/// and an unchained row's uses `db_n_kmers`; the two are close but not the same formula.
+/// and an unchained row's uses the database's residues n; the two are close but not the
+/// same formula.
 ///
 /// Members must each have a positive normalised score: the sum statistic assumes it, and
 /// a member at or below 0 lowers the sum, which would give the chain a worse E-value than
@@ -5202,7 +5204,9 @@ mod tests {
         assert_eq!(flat.evalue_source, Some(EvalueSource::Run));
 
         let steep = best_bcl2_region(2.0)?;
-        assert_relative_eq!(steep.ka_evalue.unwrap(), 5.629_646_129_418_843, epsilon = 1e-9);
+        // K m n e^(-lambda S) with n the 9,288 database residues: the same region, K and n as
+        // test_cli_search_extend_mismatch_penalty at k=12, so the same E-value.
+        assert_relative_eq!(steep.ka_evalue.unwrap(), 5.917_627_122_005_681_5, epsilon = 1e-9);
         assert_eq!((steep.length, steep.n_mismatches, steep.run_length), (26, 2, 19));
         assert_eq!(steep.evalue, steep.ka_evalue);
         assert_eq!(steep.evalue_source, Some(EvalueSource::Ka));
@@ -5912,15 +5916,16 @@ mod ka_calibration_tests {
             report.fitted.clone().expect("25 shuffled BCL2 queries give thousands of regions");
         assert_eq!(searcher.extension, None, "calibration restores the extension setting");
         // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
-        // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
+        // 9,288 query residues against the database's 9,288 residues, no homolog excess, the line
         // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
         // regions, x 7.5 to 11.5 nats.
         assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
-        assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
+        assert_eq!((fit.query_residues, fit.database_residues), (9288, 9288));
         assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
         assert_eq!(fit.x_range(), (7.5, 11.5));
         assert!((fit.r_database - 0.870_188_020_651_917_2).abs() < 1e-12, "{}", fit.r_database);
-        assert!((fit.k - 0.017_800_758_981_773_558).abs() < 1e-12, "{}", fit.k);
+        // The same line as when N was the 8,340 database k-mers, divided by 9,288 instead.
+        assert!((fit.k - 0.017_800_758_981_773_558 * 8340.0 / 9288.0).abs() < 1e-12, "{}", fit.k);
         assert!((fit.rms_residual - 0.054_470_348_895_711_2).abs() < 1e-12);
         // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
         // closed-form lambda is ln of the golden ratio.
@@ -5991,9 +5996,11 @@ mod ka_calibration_tests {
         };
         let ((r1, k1), (r4, k4)) = (fit(&one), fit(&four));
         assert_relative_eq!(r1, 0.8055981514319699, epsilon = 1e-12);
-        assert_relative_eq!(k1, 0.011522349930672795, epsilon = 1e-12);
+        // K is the fitted height over N = 9,288 database residues; it was over 8,340 k-mers.
+        let per_residue = 8340.0 / 9288.0;
+        assert_relative_eq!(k1, 0.011522349930672795 * per_residue, epsilon = 1e-12);
         assert_relative_eq!(r4, 0.8464263063538485, epsilon = 1e-12);
-        assert_relative_eq!(k4, 0.015400688613533853, epsilon = 1e-12);
+        assert_relative_eq!(k4, 0.015400688613533853 * per_residue, epsilon = 1e-12);
         Ok(())
     }
 }

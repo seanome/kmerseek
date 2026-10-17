@@ -39,7 +39,8 @@ back to where the best was. Seeds on one diagonal whose walks meet are merged.
 - `X`: the give-up margin (BLAST's X-drop), `--extend-xdrop`, default 8. With C = 2,
   four disagreeing positions in a row cost 8 and end the walk.
 - `m`: query length in residues.
-- `n`: residues in the database. The index's k-mer count stands in for it.
+- `n`: residues in the database, counted when the index is built. The fit below uses the
+  same count for N, so K and n are in the same units.
 
 The test `test_cli_search_extend_mismatch_penalty` shows one region before and after:
 the BH1 match between CED9 and human BCL2 is an exact 19-residue run at k = 12, and with

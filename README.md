@@ -190,10 +190,10 @@ E    = K × m × n × e^(-λS)
 bits = (λS - ln K) / ln 2
 ```
 
-`m` is the query's length in the encoded alphabet. `n` is the number of distinct sketched
-k-mers in each target, summed over the targets (`db_n_kmers`, about residues / scaled).
-`K` takes up the scaled factor, so a `K` measured at one `--scaled` does not carry over to
-another. `λ` is solved
+`m` is the query's length in the encoded alphabet. `n` is the number of residues in the
+database, counted when the index is built: the same `n` as the run E-value below. `K` is
+fitted with that same `n`, and takes up the scaled factor, so a `K` measured at one
+`--scaled` does not carry over to another. `λ` is solved
 per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
 `u` that a random position from each falls in the same class gives λ as the positive
 root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,
@@ -227,7 +227,7 @@ domain that no single gapless run covers becomes one call. On SCOPe40 domains it
 ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
 transfer, where a call has to cover a domain to carry its label. A chained row's
 `region_ka_evalue` takes the database size as the number of targets times the target's
-length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical,
+length; an unchained row's takes it as the database's residues. The two are close, not identical,
 so `region_evalue_source` says `ka_chain` for a chained row and `ka` for a single region.
 
 ## E-values in the CSV
