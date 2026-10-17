@@ -31,6 +31,10 @@ SEPT4_NAME = "sp|O43236|SEPT4_HUMAN Septin-4 OS=Homo sapiens OX=9606 GN=SEPTIN4 
 SEPT4_LEN = 478
 B2L11_NAME = "sp|O43521|B2L11_HUMAN Bcl-2-like protein 11 OS=Homo sapiens OX=9606 GN=BCL2L11 PE=1 SV=1"
 B2L11_LEN = 198
+# The 25 proteins in MULTI_FASTA and their total length, checked in
+# test_read_fasta_lengths_multi_record_fasta. _row() uses them as the searched database.
+MULTI_N_PROTEINS = 25
+MULTI_N_RESIDUES = 9288
 
 
 # --- read_fasta_lengths ---------------------------------------------------
@@ -41,7 +45,8 @@ def test_read_fasta_lengths_single_record_fasta():
 
 def test_read_fasta_lengths_multi_record_fasta():
     lengths = vh.read_fasta_lengths(MULTI_FASTA)
-    assert len(lengths) == 25
+    assert len(lengths) == MULTI_N_PROTEINS
+    assert sum(lengths.values()) == MULTI_N_RESIDUES
     assert lengths[SEPT4_NAME] == SEPT4_LEN
     assert lengths[B2L11_NAME] == B2L11_LEN
 
@@ -128,6 +133,16 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
     # region_tail_probability directly since they exercise the probability, not the score.
     if region_tail_probability is None:
         region_tail_probability = 10.0**-region_poisson_score
+    # CED9 searched at k=10 against MULTI_FASTA: 9,288 residues in 25 proteins, so
+    # 25 x (CED9_LEN - 1) + 9,288 diagonals where a run can start with nothing before it.
+    ksize = 10
+    # Each protein of L residues has L - 9 10-mers, none repeated.
+    db_n_kmers = MULTI_N_RESIDUES - (ksize - 1) * MULTI_N_PROTEINS
+    starts_inside = (1 - 0.5) * CED9_LEN * MULTI_N_RESIDUES
+    diagonals = MULTI_N_PROTEINS * (CED9_LEN - 1) + MULTI_N_RESIDUES
+    # Two HP classes at about half each.
+    pr_same = 0.5
+    run_evalue = (starts_inside + diagonals) * pr_same**region_length
     return {
         "query_name": query_name,
         "query_md5": "qmd5",
@@ -135,7 +150,7 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "target_md5": "tmd5",
         "containment": containment,
         "n_intersecting_hashes": 5,
-        "ksize": 10,
+        "ksize": ksize,
         "scaled": 1,
         "moltype": moltype,
         "remove_low_complexity": remove_low_complexity,
@@ -156,9 +171,10 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "query_enrichment": query_enrichment,
         "joint_kmer_freq": 0.0,
         "query_poisson_pvalue": query_poisson_pvalue,
-        "region_search_space": 271,
-        "db_n_targets": 25,
-        "db_n_kmers": 7629,
+        # Places a 10-mer can start in CED9's 280 residues.
+        "region_search_space": CED9_LEN - ksize + 1,
+        "db_n_targets": MULTI_N_PROTEINS,
+        "db_n_kmers": db_n_kmers,
         "run_n_queries": 1,
         "region_start": region_start,
         "region_end": region_end,
@@ -180,7 +196,15 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_n_mismatches": 0,
         # Karlin-Altschul bits and E-value need --extend-mismatch-penalty; off here.
         "region_ka_bits": 0.0,
-        "region_evalue": float("inf"),
+        # Empty in the CSV (None here) unless the region was extended.
+        "region_ka_evalue": None,
+        # An exact region is one unbroken run of agreeing positions.
+        "region_run_length": region_length,
+        "region_pr_same": pr_same,
+        "region_run_evalue": run_evalue,
+        # Not extended, so region_evalue is the run E-value.
+        "region_evalue": run_evalue,
+        "region_evalue_source": "run",
         # A region that stands alone; only --chain-max-gap joins regions into one row.
         "region_n_chained": 1,
     }

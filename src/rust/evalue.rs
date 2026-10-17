@@ -64,9 +64,9 @@ pub struct KaCalibration {
     pub n_queries: usize,
     /// Residues in the calibration queries added up: L in ln(K L N).
     pub query_residues: u64,
-    /// The database size the E-value uses for n: the index's k-mer count stands in for its
-    /// residue count.
-    pub database_kmers: u64,
+    /// Residues in the database (`ProteomeIndex::total_residues`): N in ln(K L N), and n in
+    /// every Karlin-Altschul E-value searched with this fit.
+    pub database_residues: u64,
     /// Regions the calibration queries produced, at any score.
     pub n_regions: usize,
     /// Chance that two positions drawn from the sampled database sequences share a class
@@ -135,7 +135,7 @@ impl KaCalibration {
             seed: 0,
             n_queries: 0,
             query_residues: 0,
-            database_kmers: 0,
+            database_residues: 0,
             n_regions: 0,
             match_probability: 0.0,
             lambda_analytic: 0.0,
@@ -493,6 +493,44 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
 }
 
+/// Which E-value a region's `region_evalue` is, written in `region_evalue_source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalueSource {
+    /// `region_ka_evalue` of one extended region whose pair has a positive lambda:
+    /// K m n exp(-lambda S), with n the database's residues.
+    Ka,
+    /// `region_ka_evalue` of a chain of extended regions: the sum P-value times the number
+    /// of targets (see `search::chain_regions`). Close to `Ka` on the same evidence, not
+    /// equal.
+    KaChain,
+    /// `region_run_evalue`.
+    Run,
+}
+
+/// Expected number of runs of at least `run_length` class-identical positions between an
+/// unrelated query of `m` residues and a database of `n` residues in `n_targets` sequences:
+///
+/// E_run = pr_same^run_length ((1 - pr_same) m n + n_targets (m - 1) + n)
+///
+/// `pr_same` is the chance that one query position and one target position fall in the
+/// same class, from the pair's class compositions (`search::match_probability`). A run is
+/// counted once, where it starts. Inside a diagonal a run starts where the position before
+/// it disagrees, chance 1 - pr_same, which gives the first term: the Karlin-Altschul
+/// E-value for +1 per match with no mismatch allowed, with lambda ln(1 / pr_same) and K
+/// 1 - pr_same. The first position of a diagonal has no position before it, so a run can
+/// start there with no disagreement; a query of m residues against a target of t has
+/// m + t - 1 diagonals, n_targets (m - 1) + n over the database. That second term is small
+/// for ordinary pr_same and takes over as pr_same nears 1, where almost no position inside
+/// a diagonal starts a run but every diagonal still holds one. Counting every cell of the
+/// grid as a possible start, including the last L - 1 of each diagonal, makes the value a
+/// little high, never low. Positions are drawn independently, so real proteins, whose
+/// classes repeat in patterns, give more long runs than this predicts.
+pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64, n_targets: f64) -> f64 {
+    let starts = (1.0 - pr_same) * m * n + n_targets * (m - 1.0) + n;
+    starts * pr_same.powi(run_length as i32)
+}
+
 /// Which sequences are searched to fit r_database and K: the database sequences
 /// themselves (`Database`), or decoys made from them (`Shuffled`, `ShuffledDipeptide`,
 /// `Reversed`). A decoy keeps some of a real protein's make-up, such as its composition
@@ -504,8 +542,8 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
 /// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
 /// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
 /// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on the Swiss-Prot
-/// sample real sequences give 0.87, a plain shuffle 1.0, and keeping dipeptides already
-/// pulls the shuffle to 0.94, so hydrophobic runs alone explain about half of the gap.
+/// sample real sequences give 0.88, a plain shuffle 0.99, and keeping dipeptides pulls the
+/// shuffle to 0.95, so hydrophobic runs alone explain about two fifths of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
@@ -794,14 +832,14 @@ pub fn write_survival_csv(
         "n_reference_queries",
         "n_reference_regions",
         "query_residues",
-        "database_kmers",
+        "database_residues",
         "bin_width",
     ])?;
     // The fit is a line through ln(regions in the bin at x); its survival is the same line
     // divided by (1 - e^(-r_database w)).
     let per_bin = 1.0 - (-fit.r_database * fit.bin_width).exp();
     let ln_intercept =
-        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+        (fit.k * fit.query_residues as f64 * fit.database_residues as f64 * per_bin).ln();
     let reference: std::collections::HashMap<i64, u64> =
         fit.reference_survival.iter().copied().collect();
     for &(bin, count) in &fit.survival {
@@ -827,7 +865,7 @@ pub fn write_survival_csv(
             report.n_reference_queries.to_string(),
             report.n_reference_regions.to_string(),
             fit.query_residues.to_string(),
-            fit.database_kmers.to_string(),
+            fit.database_residues.to_string(),
             fit.bin_width.to_string(),
         ])?;
     }
@@ -840,6 +878,58 @@ mod tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_BLC2_FASTA;
     use serde_json::{json, Value};
+
+    /// E_run = pr_same^L ((1 - pr_same) m n + n_targets (m - 1) + n), worked by hand. A
+    /// 300-residue query against 10 targets of 300 residues has 10 x 299 + 3,000 = 5,990
+    /// diagonals. Two equal classes at L = 16: (0.5 x 900,000 + 5,990) / 2^16. Four equal
+    /// classes at L = 8: (0.75 x 900,000 + 5,990) / 4^8. At pr_same 1 no run starts inside
+    /// a diagonal, and every diagonal is one run: 99 + 1,000 = 1,099 for a 100-residue query
+    /// against one 1,000-residue target.
+    #[test]
+    fn test_run_evalue_by_hand() {
+        assert_eq!(run_evalue(0.5, 16, 300.0, 3000.0, 10.0), 6.957_855_224_609_375);
+        assert_eq!(run_evalue(0.25, 8, 300.0, 3000.0, 10.0), 10.391_082_763_671_875);
+        assert_eq!(run_evalue(1.0, 100, 100.0, 1000.0, 1.0), 1099.0);
+    }
+
+    /// The exact expected number of runs of at least L on one diagonal of D positions, D >= L,
+    /// is pr_same^L (1 + (D - L)(1 - pr_same)): the first position starts a run with no
+    /// disagreement before it, and each of the next D - L needs one. Summed over every
+    /// diagonal of an m x t grid, it is never above `run_evalue`, which also counts the
+    /// last L - 1 positions of each diagonal as starts.
+    #[test]
+    fn test_run_evalue_never_below_the_exact_count() {
+        let exact = |p: f64, l: usize, m: usize, t: usize| -> f64 {
+            (0..m + t - 1)
+                .map(|d| {
+                    // Diagonal d starts at query position max(0, d - (t - 1)).
+                    let (q0, t0) = (d.saturating_sub(t - 1), (t - 1).saturating_sub(d));
+                    (m - q0).min(t - t0)
+                })
+                .filter(|&len| len >= l)
+                .map(|len| p.powi(l as i32) * (1.0 + (len - l) as f64 * (1.0 - p)))
+                .sum()
+        };
+        for (p, l, m, t) in
+            [(0.5, 5, 30, 40), (0.5, 19, 280, 400), (0.95, 20, 30, 40), (1.0, 10, 50, 60)]
+        {
+            let formula = run_evalue(p, l as u32, m as f64, t as f64, 1.0);
+            let truth = exact(p, l, m, t);
+            assert!(formula >= truth - 1e-12, "p={p} L={l}: {formula} < {truth}");
+        }
+        // At a protein's size the extra count is small: 12% at pr_same 0.5, L 19.
+        let (formula, truth) = (run_evalue(0.5, 19, 280.0, 400.0, 1.0), exact(0.5, 19, 280, 400));
+        assert!(formula / truth < 1.15, "{formula} / {truth}");
+    }
+
+    /// No step in pr_same: 0.989 and 0.991 give E-values within 12% of each other, where
+    /// dropping the (1 - pr_same) factor above 0.99 used to make them 100 times apart.
+    #[test]
+    fn test_run_evalue_is_smooth_near_pr_same_one() {
+        let below = run_evalue(0.989, 100, 100.0, 1000.0, 1.0);
+        let above = run_evalue(0.991, 100, 100.0, 1000.0, 1.0);
+        assert!((above / below - 1.0).abs() < 0.12, "{below} vs {above}");
+    }
 
     /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
     /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,

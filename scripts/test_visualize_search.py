@@ -68,6 +68,17 @@ def test_ranking_falls_back_to_q_value_without_region_evalue(rows):
     assert stat[fbx10] == pytest.approx(1.36e-5, rel=0.05)
 
 
+def test_ranking_puts_an_empty_region_evalue_last(rows):
+    _, rows = rows
+    with_evalue = [dict(r, region_evalue="1e-3") for r in rows]
+    fbx10 = next(r["target_name"] for r in rows if "FBX10_HUMAN" in r["target_name"])
+    with_evalue = [dict(r, region_evalue="") if r["target_name"] == fbx10 else r for r in with_evalue]
+    stat, is_evalue = vs.ranking(with_evalue)
+    assert is_evalue
+    assert stat[fbx10] == float("inf")
+    assert sorted(set(stat.values())) == [1e-3, float("inf")]
+
+
 def test_rank_proteins_orders_by_statistic_and_caps(rows):
     _, rows = rows
     ranked = vs.rank_proteins(rows, max_rows=100)
