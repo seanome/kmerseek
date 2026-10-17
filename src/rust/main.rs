@@ -344,6 +344,10 @@ enum ProteinAlphabet {
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
     #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
+    /// Cysteine against everything else, 2 classes: a k-mer records only the
+    /// cysteine spacing. Not a hydrophobicity scheme
+    #[value(name = "cys2")]
+    Cys2,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
     #[value(name = "gbmr4")]
     ReducedGbmr4,
@@ -388,6 +392,7 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
             ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
             ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
+            ProteinAlphabet::Cys2 => "cys2",
             ProteinAlphabet::ReducedGbmr4 => "gbmr4",
             ProteinAlphabet::ReducedPolarity4 => "polarity4",
             ProteinAlphabet::ReducedWwmj5 => "wwmj5",
@@ -1094,6 +1099,7 @@ fn assign_encoding(
         "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
         "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
         "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
+        "cys2" => ProteinAlphabet::Cys2,
         "gbmr4" => ProteinAlphabet::ReducedGbmr4,
         "polarity4" => ProteinAlphabet::ReducedPolarity4,
         "wwmj5" => ProteinAlphabet::ReducedWwmj5,
@@ -1109,7 +1115,7 @@ fn assign_encoding(
                 message: format!(
                     "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
                      hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
-                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
+                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, cys2, \
                      gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
                      wass14, hsdm17, uniprot18",
                     detected_moltype

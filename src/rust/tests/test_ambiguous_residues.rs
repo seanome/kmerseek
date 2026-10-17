@@ -136,6 +136,13 @@ mod tests {
             shared_with_bovine: 63,
         },
         Expected {
+            moltype: "cys2",
+            ksize: 43,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 82,
+        },
+        Expected {
             moltype: "gbmr4",
             ksize: 22,
             readings: 103,
