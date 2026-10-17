@@ -1,0 +1,1268 @@
+<?xml version="1.0" encoding="utf-8" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"
+  "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg xmlns:xlink="http://www.w3.org/1999/xlink" width="514.701535pt" height="281.39976pt" viewBox="0 0 514.701535 281.39976" xmlns="http://www.w3.org/2000/svg" version="1.1">
+ <metadata>
+  <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+   <cc:Work>
+    <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
+    <dc:date>2026-10-16T10:38:57.434167</dc:date>
+    <dc:format>image/svg+xml</dc:format>
+    <dc:creator>
+     <cc:Agent>
+      <dc:title>Matplotlib v3.10.6, https://matplotlib.org/</dc:title>
+     </cc:Agent>
+    </dc:creator>
+   </cc:Work>
+  </rdf:RDF>
+ </metadata>
+ <defs>
+  <style type="text/css">*{stroke-linejoin: round; stroke-linecap: butt}</style>
+ </defs>
+ <g id="figure_1">
+  <g id="patch_1">
+   <path d="M 0 281.39976 
+L 514.701535 281.39976 
+L 514.701535 0 
+L 0 0 
+z
+" style="fill: #ffffff"/>
+  </g>
+  <g id="axes_1">
+   <g id="patch_2">
+    <path d="M 19.44 264.583197 
+L 234.910304 264.583197 
+L 234.910304 30.376345 
+L 19.44 30.376345 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_1">
+    <g id="xtick_1">
+     <g id="line2d_1">
+      <path d="M 24.124137 264.583197 
+L 24.124137 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_2"/>
+     <g id="text_1">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="24.124137" y="270.260072" transform="rotate(-0 24.124137 270.260072)">M</text>
+     </g>
+    </g>
+    <g id="xtick_2">
+     <g id="line2d_3">
+      <path d="M 33.492411 264.583197 
+L 33.492411 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_4"/>
+     <g id="text_2">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="33.492411" y="270.260072" transform="rotate(-0 33.492411 270.260072)">K</text>
+     </g>
+    </g>
+    <g id="xtick_3">
+     <g id="line2d_5">
+      <path d="M 42.860685 264.583197 
+L 42.860685 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_6"/>
+     <g id="text_3">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="42.860685" y="270.260072" transform="rotate(-0 42.860685 270.260072)">T</text>
+     </g>
+    </g>
+    <g id="xtick_4">
+     <g id="line2d_7">
+      <path d="M 52.228959 264.583197 
+L 52.228959 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_8"/>
+     <g id="text_4">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="52.228959" y="270.260072" transform="rotate(-0 52.228959 270.260072)">W</text>
+     </g>
+    </g>
+    <g id="xtick_5">
+     <g id="line2d_9">
+      <path d="M 61.597233 264.583197 
+L 61.597233 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_10"/>
+     <g id="text_5">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="61.597233" y="270.260072" transform="rotate(-0 61.597233 270.260072)">L</text>
+     </g>
+    </g>
+    <g id="xtick_6">
+     <g id="line2d_11">
+      <path d="M 70.965508 264.583197 
+L 70.965508 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_12"/>
+     <g id="text_6">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="70.965508" y="270.260072" transform="rotate(-0 70.965508 270.260072)">R</text>
+     </g>
+    </g>
+    <g id="xtick_7">
+     <g id="line2d_13">
+      <path d="M 80.333782 264.583197 
+L 80.333782 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_14"/>
+     <g id="text_7">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="80.333782" y="270.260072" transform="rotate(-0 80.333782 270.260072)">D</text>
+     </g>
+    </g>
+    <g id="xtick_8">
+     <g id="line2d_15">
+      <path d="M 89.702056 264.583197 
+L 89.702056 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_16"/>
+     <g id="text_8">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="89.702056" y="270.260072" transform="rotate(-0 89.702056 270.260072)">E</text>
+     </g>
+    </g>
+    <g id="xtick_9">
+     <g id="line2d_17">
+      <path d="M 99.07033 264.583197 
+L 99.07033 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_18"/>
+     <g id="text_9">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="99.07033" y="270.260072" transform="rotate(-0 99.07033 270.260072)">H</text>
+     </g>
+    </g>
+    <g id="xtick_10">
+     <g id="line2d_19">
+      <path d="M 108.438604 264.583197 
+L 108.438604 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_20"/>
+     <g id="text_10">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="108.438604" y="270.260072" transform="rotate(-0 108.438604 270.260072)">P</text>
+     </g>
+    </g>
+    <g id="xtick_11">
+     <g id="line2d_21">
+      <path d="M 117.806878 264.583197 
+L 117.806878 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_22"/>
+     <g id="text_11">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="117.806878" y="270.260072" transform="rotate(-0 117.806878 270.260072)">A</text>
+     </g>
+    </g>
+    <g id="xtick_12">
+     <g id="line2d_23">
+      <path d="M 127.175152 264.583197 
+L 127.175152 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_24"/>
+     <g id="text_12">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="127.175152" y="270.260072" transform="rotate(-0 127.175152 270.260072)">A</text>
+     </g>
+    </g>
+    <g id="xtick_13">
+     <g id="line2d_25">
+      <path d="M 136.543426 264.583197 
+L 136.543426 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_26"/>
+     <g id="text_13">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="136.543426" y="270.260072" transform="rotate(-0 136.543426 270.260072)">A</text>
+     </g>
+    </g>
+    <g id="xtick_14">
+     <g id="line2d_27">
+      <path d="M 145.9117 264.583197 
+L 145.9117 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_28"/>
+     <g id="text_14">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="145.9117" y="270.260072" transform="rotate(-0 145.9117 270.260072)">A</text>
+     </g>
+    </g>
+    <g id="xtick_15">
+     <g id="line2d_29">
+      <path d="M 155.279974 264.583197 
+L 155.279974 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_30"/>
+     <g id="text_15">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="155.279974" y="270.260072" transform="rotate(-0 155.279974 270.260072)">A</text>
+     </g>
+    </g>
+    <g id="xtick_16">
+     <g id="line2d_31">
+      <path d="M 164.648249 264.583197 
+L 164.648249 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_32"/>
+     <g id="text_16">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="164.648249" y="270.260072" transform="rotate(-0 164.648249 270.260072)">C</text>
+     </g>
+    </g>
+    <g id="xtick_17">
+     <g id="line2d_33">
+      <path d="M 174.016523 264.583197 
+L 174.016523 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_34"/>
+     <g id="text_17">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="174.016523" y="270.260072" transform="rotate(-0 174.016523 270.260072)">Y</text>
+     </g>
+    </g>
+    <g id="xtick_18">
+     <g id="line2d_35">
+      <path d="M 183.384797 264.583197 
+L 183.384797 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_36"/>
+     <g id="text_18">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="183.384797" y="270.260072" transform="rotate(-0 183.384797 270.260072)">F</text>
+     </g>
+    </g>
+    <g id="xtick_19">
+     <g id="line2d_37">
+      <path d="M 192.753071 264.583197 
+L 192.753071 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_38"/>
+     <g id="text_19">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="192.753071" y="270.260072" transform="rotate(-0 192.753071 270.260072)">N</text>
+     </g>
+    </g>
+    <g id="xtick_20">
+     <g id="line2d_39">
+      <path d="M 202.121345 264.583197 
+L 202.121345 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_40"/>
+     <g id="text_20">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="202.121345" y="270.260072" transform="rotate(-0 202.121345 270.260072)">Q</text>
+     </g>
+    </g>
+    <g id="xtick_21">
+     <g id="line2d_41">
+      <path d="M 211.489619 264.583197 
+L 211.489619 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_42"/>
+     <g id="text_21">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="211.489619" y="270.260072" transform="rotate(-0 211.489619 270.260072)">S</text>
+     </g>
+    </g>
+    <g id="xtick_22">
+     <g id="line2d_43">
+      <path d="M 220.857893 264.583197 
+L 220.857893 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_44"/>
+     <g id="text_22">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="220.857893" y="270.260072" transform="rotate(-0 220.857893 270.260072)">G</text>
+     </g>
+    </g>
+    <g id="xtick_23">
+     <g id="line2d_45">
+      <path d="M 230.226167 264.583197 
+L 230.226167 30.376345 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_46"/>
+     <g id="text_23">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="230.226167" y="270.260072" transform="rotate(-0 230.226167 270.260072)">V</text>
+     </g>
+    </g>
+    <g id="text_24">
+     <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="127.175152" y="278.486479" transform="rotate(-0 127.175152 278.486479)">short entry, 23 aa (poly-A run of 5)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_2">
+    <g id="ytick_1">
+     <g id="line2d_47">
+      <path d="M 19.44 35.060482 
+L 234.910304 35.060482 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_48"/>
+     <g id="text_25">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="36.89892" transform="rotate(-0 17.44 36.89892)">M</text>
+     </g>
+    </g>
+    <g id="ytick_2">
+     <g id="line2d_49">
+      <path d="M 19.44 44.428756 
+L 234.910304 44.428756 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_50"/>
+     <g id="text_26">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="46.267194" transform="rotate(-0 17.44 46.267194)">K</text>
+     </g>
+    </g>
+    <g id="ytick_3">
+     <g id="line2d_51">
+      <path d="M 19.44 53.79703 
+L 234.910304 53.79703 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_52"/>
+     <g id="text_27">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="55.635468" transform="rotate(-0 17.44 55.635468)">T</text>
+     </g>
+    </g>
+    <g id="ytick_4">
+     <g id="line2d_53">
+      <path d="M 19.44 63.165304 
+L 234.910304 63.165304 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_54"/>
+     <g id="text_28">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="65.003742" transform="rotate(-0 17.44 65.003742)">W</text>
+     </g>
+    </g>
+    <g id="ytick_5">
+     <g id="line2d_55">
+      <path d="M 19.44 72.533578 
+L 234.910304 72.533578 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_56"/>
+     <g id="text_29">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="74.372016" transform="rotate(-0 17.44 74.372016)">L</text>
+     </g>
+    </g>
+    <g id="ytick_6">
+     <g id="line2d_57">
+      <path d="M 19.44 81.901853 
+L 234.910304 81.901853 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_58"/>
+     <g id="text_30">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="83.74029" transform="rotate(-0 17.44 83.74029)">R</text>
+     </g>
+    </g>
+    <g id="ytick_7">
+     <g id="line2d_59">
+      <path d="M 19.44 91.270127 
+L 234.910304 91.270127 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_60"/>
+     <g id="text_31">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="93.108564" transform="rotate(-0 17.44 93.108564)">D</text>
+     </g>
+    </g>
+    <g id="ytick_8">
+     <g id="line2d_61">
+      <path d="M 19.44 100.638401 
+L 234.910304 100.638401 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_62"/>
+     <g id="text_32">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="102.476838" transform="rotate(-0 17.44 102.476838)">E</text>
+     </g>
+    </g>
+    <g id="ytick_9">
+     <g id="line2d_63">
+      <path d="M 19.44 110.006675 
+L 234.910304 110.006675 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_64"/>
+     <g id="text_33">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="111.845112" transform="rotate(-0 17.44 111.845112)">H</text>
+     </g>
+    </g>
+    <g id="ytick_10">
+     <g id="line2d_65">
+      <path d="M 19.44 119.374949 
+L 234.910304 119.374949 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_66"/>
+     <g id="text_34">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="121.213386" transform="rotate(-0 17.44 121.213386)">P</text>
+     </g>
+    </g>
+    <g id="ytick_11">
+     <g id="line2d_67">
+      <path d="M 19.44 128.743223 
+L 234.910304 128.743223 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_68"/>
+     <g id="text_35">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="130.581661" transform="rotate(-0 17.44 130.581661)">A</text>
+     </g>
+    </g>
+    <g id="ytick_12">
+     <g id="line2d_69">
+      <path d="M 19.44 138.111497 
+L 234.910304 138.111497 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_70"/>
+     <g id="text_36">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="139.949935" transform="rotate(-0 17.44 139.949935)">A</text>
+     </g>
+    </g>
+    <g id="ytick_13">
+     <g id="line2d_71">
+      <path d="M 19.44 147.479771 
+L 234.910304 147.479771 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_72"/>
+     <g id="text_37">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="149.318209" transform="rotate(-0 17.44 149.318209)">A</text>
+     </g>
+    </g>
+    <g id="ytick_14">
+     <g id="line2d_73">
+      <path d="M 19.44 156.848045 
+L 234.910304 156.848045 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_74"/>
+     <g id="text_38">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="158.686483" transform="rotate(-0 17.44 158.686483)">A</text>
+     </g>
+    </g>
+    <g id="ytick_15">
+     <g id="line2d_75">
+      <path d="M 19.44 166.216319 
+L 234.910304 166.216319 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_76"/>
+     <g id="text_39">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="168.054757" transform="rotate(-0 17.44 168.054757)">A</text>
+     </g>
+    </g>
+    <g id="ytick_16">
+     <g id="line2d_77">
+      <path d="M 19.44 175.584594 
+L 234.910304 175.584594 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_78"/>
+     <g id="text_40">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="177.423031" transform="rotate(-0 17.44 177.423031)">A</text>
+     </g>
+    </g>
+    <g id="ytick_17">
+     <g id="line2d_79">
+      <path d="M 19.44 184.952868 
+L 234.910304 184.952868 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_80"/>
+     <g id="text_41">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="186.791305" transform="rotate(-0 17.44 186.791305)">A</text>
+     </g>
+    </g>
+    <g id="ytick_18">
+     <g id="line2d_81">
+      <path d="M 19.44 194.321142 
+L 234.910304 194.321142 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_82"/>
+     <g id="text_42">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="196.159579" transform="rotate(-0 17.44 196.159579)">C</text>
+     </g>
+    </g>
+    <g id="ytick_19">
+     <g id="line2d_83">
+      <path d="M 19.44 203.689416 
+L 234.910304 203.689416 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_84"/>
+     <g id="text_43">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="205.527853" transform="rotate(-0 17.44 205.527853)">Y</text>
+     </g>
+    </g>
+    <g id="ytick_20">
+     <g id="line2d_85">
+      <path d="M 19.44 213.05769 
+L 234.910304 213.05769 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_86"/>
+     <g id="text_44">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="214.896127" transform="rotate(-0 17.44 214.896127)">F</text>
+     </g>
+    </g>
+    <g id="ytick_21">
+     <g id="line2d_87">
+      <path d="M 19.44 222.425964 
+L 234.910304 222.425964 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_88"/>
+     <g id="text_45">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="224.264402" transform="rotate(-0 17.44 224.264402)">N</text>
+     </g>
+    </g>
+    <g id="ytick_22">
+     <g id="line2d_89">
+      <path d="M 19.44 231.794238 
+L 234.910304 231.794238 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_90"/>
+     <g id="text_46">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="233.632676" transform="rotate(-0 17.44 233.632676)">Q</text>
+     </g>
+    </g>
+    <g id="ytick_23">
+     <g id="line2d_91">
+      <path d="M 19.44 241.162512 
+L 234.910304 241.162512 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_92"/>
+     <g id="text_47">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="243.00095" transform="rotate(-0 17.44 243.00095)">S</text>
+     </g>
+    </g>
+    <g id="ytick_24">
+     <g id="line2d_93">
+      <path d="M 19.44 250.530786 
+L 234.910304 250.530786 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_94"/>
+     <g id="text_48">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="252.369224" transform="rotate(-0 17.44 252.369224)">G</text>
+     </g>
+    </g>
+    <g id="ytick_25">
+     <g id="line2d_95">
+      <path d="M 19.44 259.89906 
+L 234.910304 259.89906 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_96"/>
+     <g id="text_49">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="17.44" y="261.737498" transform="rotate(-0 17.44 261.737498)">V</text>
+     </g>
+    </g>
+    <g id="text_50">
+     <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="10.365781" y="147.479771" transform="rotate(-90 10.365781 147.479771)">query, 25 aa (poly-A run of 7)</text>
+    </g>
+   </g>
+   <g id="line2d_97"/>
+   <g id="line2d_98"/>
+   <g id="line2d_99">
+    <path d="M 19.44 30.376345 
+L 159.964112 170.900456 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #0072b2"/>
+   </g>
+   <g id="line2d_100">
+    <path d="M 113.122741 133.42736 
+L 159.964112 180.268731 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #d55e00"/>
+   </g>
+   <g id="line2d_101">
+    <path d="M 113.122741 142.795634 
+L 234.910304 264.583197 
+" clip-path="url(#pd9358d75c7)" style="fill: none; stroke: #0072b2"/>
+   </g>
+   <g id="patch_3">
+    <path d="M 19.44 264.583197 
+L 19.44 30.376345 
+" style="fill: none; stroke: #000000; stroke-width: 0.5; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_4">
+    <path d="M 19.44 264.583197 
+L 234.910304 264.583197 
+" style="fill: none; stroke: #000000; stroke-width: 0.5; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_51">
+    <text style="font-weight: 700; font-size: 8px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="1.44" y="24.797595" transform="rotate(-0 1.44 24.797595)">a</text>
+   </g>
+   <g id="text_52">
+    <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="19.44" y="24.376345" transform="rotate(-0 19.44 24.376345)">3 regions, each cut from the short entry</text>
+   </g>
+  </g>
+  <g id="axes_2">
+   <g id="patch_5">
+    <path d="M 271.870933 263.532945 
+L 513.261535 263.532945 
+L 513.261535 31.426597 
+L 271.870933 31.426597 
+z
+" style="fill: #ffffff"/>
+   </g>
+   <g id="matplotlib.axis_3">
+    <g id="xtick_24">
+     <g id="line2d_102">
+      <path d="M 276.51306 263.532945 
+L 276.51306 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_103"/>
+     <g id="text_53">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="276.51306" y="269.20982" transform="rotate(-0 276.51306 269.20982)">M</text>
+     </g>
+    </g>
+    <g id="xtick_25">
+     <g id="line2d_104">
+      <path d="M 285.797314 263.532945 
+L 285.797314 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_105"/>
+     <g id="text_54">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="285.797314" y="269.20982" transform="rotate(-0 285.797314 269.20982)">K</text>
+     </g>
+    </g>
+    <g id="xtick_26">
+     <g id="line2d_106">
+      <path d="M 295.081568 263.532945 
+L 295.081568 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_107"/>
+     <g id="text_55">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="295.081568" y="269.20982" transform="rotate(-0 295.081568 269.20982)">T</text>
+     </g>
+    </g>
+    <g id="xtick_27">
+     <g id="line2d_108">
+      <path d="M 304.365822 263.532945 
+L 304.365822 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_109"/>
+     <g id="text_56">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="304.365822" y="269.20982" transform="rotate(-0 304.365822 269.20982)">W</text>
+     </g>
+    </g>
+    <g id="xtick_28">
+     <g id="line2d_110">
+      <path d="M 313.650076 263.532945 
+L 313.650076 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_111"/>
+     <g id="text_57">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="313.650076" y="269.20982" transform="rotate(-0 313.650076 269.20982)">L</text>
+     </g>
+    </g>
+    <g id="xtick_29">
+     <g id="line2d_112">
+      <path d="M 322.93433 263.532945 
+L 322.93433 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_113"/>
+     <g id="text_58">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="322.93433" y="269.20982" transform="rotate(-0 322.93433 269.20982)">R</text>
+     </g>
+    </g>
+    <g id="xtick_30">
+     <g id="line2d_114">
+      <path d="M 332.218584 263.532945 
+L 332.218584 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_115"/>
+     <g id="text_59">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="332.218584" y="269.20982" transform="rotate(-0 332.218584 269.20982)">D</text>
+     </g>
+    </g>
+    <g id="xtick_31">
+     <g id="line2d_116">
+      <path d="M 341.502838 263.532945 
+L 341.502838 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_117"/>
+     <g id="text_60">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="341.502838" y="269.20982" transform="rotate(-0 341.502838 269.20982)">E</text>
+     </g>
+    </g>
+    <g id="xtick_32">
+     <g id="line2d_118">
+      <path d="M 350.787092 263.532945 
+L 350.787092 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_119"/>
+     <g id="text_61">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="350.787092" y="269.20982" transform="rotate(-0 350.787092 269.20982)">H</text>
+     </g>
+    </g>
+    <g id="xtick_33">
+     <g id="line2d_120">
+      <path d="M 360.071346 263.532945 
+L 360.071346 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_121"/>
+     <g id="text_62">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="360.071346" y="269.20982" transform="rotate(-0 360.071346 269.20982)">P</text>
+     </g>
+    </g>
+    <g id="xtick_34">
+     <g id="line2d_122">
+      <path d="M 369.3556 263.532945 
+L 369.3556 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_123"/>
+     <g id="text_63">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="369.3556" y="269.20982" transform="rotate(-0 369.3556 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_35">
+     <g id="line2d_124">
+      <path d="M 378.639853 263.532945 
+L 378.639853 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_125"/>
+     <g id="text_64">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="378.639853" y="269.20982" transform="rotate(-0 378.639853 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_36">
+     <g id="line2d_126">
+      <path d="M 387.924107 263.532945 
+L 387.924107 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_127"/>
+     <g id="text_65">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="387.924107" y="269.20982" transform="rotate(-0 387.924107 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_37">
+     <g id="line2d_128">
+      <path d="M 397.208361 263.532945 
+L 397.208361 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_129"/>
+     <g id="text_66">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="397.208361" y="269.20982" transform="rotate(-0 397.208361 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_38">
+     <g id="line2d_130">
+      <path d="M 406.492615 263.532945 
+L 406.492615 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_131"/>
+     <g id="text_67">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="406.492615" y="269.20982" transform="rotate(-0 406.492615 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_39">
+     <g id="line2d_132">
+      <path d="M 415.776869 263.532945 
+L 415.776869 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_133"/>
+     <g id="text_68">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="415.776869" y="269.20982" transform="rotate(-0 415.776869 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_40">
+     <g id="line2d_134">
+      <path d="M 425.061123 263.532945 
+L 425.061123 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_135"/>
+     <g id="text_69">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="425.061123" y="269.20982" transform="rotate(-0 425.061123 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_41">
+     <g id="line2d_136">
+      <path d="M 434.345377 263.532945 
+L 434.345377 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_137"/>
+     <g id="text_70">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="434.345377" y="269.20982" transform="rotate(-0 434.345377 269.20982)">A</text>
+     </g>
+    </g>
+    <g id="xtick_42">
+     <g id="line2d_138">
+      <path d="M 443.629631 263.532945 
+L 443.629631 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_139"/>
+     <g id="text_71">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="443.629631" y="269.20982" transform="rotate(-0 443.629631 269.20982)">C</text>
+     </g>
+    </g>
+    <g id="xtick_43">
+     <g id="line2d_140">
+      <path d="M 452.913885 263.532945 
+L 452.913885 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_141"/>
+     <g id="text_72">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="452.913885" y="269.20982" transform="rotate(-0 452.913885 269.20982)">Y</text>
+     </g>
+    </g>
+    <g id="xtick_44">
+     <g id="line2d_142">
+      <path d="M 462.198139 263.532945 
+L 462.198139 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_143"/>
+     <g id="text_73">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="462.198139" y="269.20982" transform="rotate(-0 462.198139 269.20982)">F</text>
+     </g>
+    </g>
+    <g id="xtick_45">
+     <g id="line2d_144">
+      <path d="M 471.482393 263.532945 
+L 471.482393 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_145"/>
+     <g id="text_74">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="471.482393" y="269.20982" transform="rotate(-0 471.482393 269.20982)">N</text>
+     </g>
+    </g>
+    <g id="xtick_46">
+     <g id="line2d_146">
+      <path d="M 480.766647 263.532945 
+L 480.766647 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_147"/>
+     <g id="text_75">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="480.766647" y="269.20982" transform="rotate(-0 480.766647 269.20982)">Q</text>
+     </g>
+    </g>
+    <g id="xtick_47">
+     <g id="line2d_148">
+      <path d="M 490.050901 263.532945 
+L 490.050901 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_149"/>
+     <g id="text_76">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="490.050901" y="269.20982" transform="rotate(-0 490.050901 269.20982)">S</text>
+     </g>
+    </g>
+    <g id="xtick_48">
+     <g id="line2d_150">
+      <path d="M 499.335155 263.532945 
+L 499.335155 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_151"/>
+     <g id="text_77">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="499.335155" y="269.20982" transform="rotate(-0 499.335155 269.20982)">G</text>
+     </g>
+    </g>
+    <g id="xtick_49">
+     <g id="line2d_152">
+      <path d="M 508.619408 263.532945 
+L 508.619408 31.426597 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_153"/>
+     <g id="text_78">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: middle" x="508.619408" y="269.20982" transform="rotate(-0 508.619408 269.20982)">V</text>
+     </g>
+    </g>
+    <g id="text_79">
+     <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="392.566234" y="277.436227" transform="rotate(-0 392.566234 277.436227)">long entry, 26 aa (poly-A run of 8)</text>
+    </g>
+   </g>
+   <g id="matplotlib.axis_4">
+    <g id="ytick_26">
+     <g id="line2d_154">
+      <path d="M 271.870933 36.068724 
+L 513.261535 36.068724 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_155"/>
+     <g id="text_80">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="37.907162" transform="rotate(-0 269.870933 37.907162)">M</text>
+     </g>
+    </g>
+    <g id="ytick_27">
+     <g id="line2d_156">
+      <path d="M 271.870933 45.352978 
+L 513.261535 45.352978 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_157"/>
+     <g id="text_81">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="47.191416" transform="rotate(-0 269.870933 47.191416)">K</text>
+     </g>
+    </g>
+    <g id="ytick_28">
+     <g id="line2d_158">
+      <path d="M 271.870933 54.637232 
+L 513.261535 54.637232 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_159"/>
+     <g id="text_82">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="56.475669" transform="rotate(-0 269.870933 56.475669)">T</text>
+     </g>
+    </g>
+    <g id="ytick_29">
+     <g id="line2d_160">
+      <path d="M 271.870933 63.921486 
+L 513.261535 63.921486 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_161"/>
+     <g id="text_83">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="65.759923" transform="rotate(-0 269.870933 65.759923)">W</text>
+     </g>
+    </g>
+    <g id="ytick_30">
+     <g id="line2d_162">
+      <path d="M 271.870933 73.20574 
+L 513.261535 73.20574 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_163"/>
+     <g id="text_84">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="75.044177" transform="rotate(-0 269.870933 75.044177)">L</text>
+     </g>
+    </g>
+    <g id="ytick_31">
+     <g id="line2d_164">
+      <path d="M 271.870933 82.489994 
+L 513.261535 82.489994 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_165"/>
+     <g id="text_85">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="84.328431" transform="rotate(-0 269.870933 84.328431)">R</text>
+     </g>
+    </g>
+    <g id="ytick_32">
+     <g id="line2d_166">
+      <path d="M 271.870933 91.774248 
+L 513.261535 91.774248 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_167"/>
+     <g id="text_86">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="93.612685" transform="rotate(-0 269.870933 93.612685)">D</text>
+     </g>
+    </g>
+    <g id="ytick_33">
+     <g id="line2d_168">
+      <path d="M 271.870933 101.058502 
+L 513.261535 101.058502 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_169"/>
+     <g id="text_87">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="102.896939" transform="rotate(-0 269.870933 102.896939)">E</text>
+     </g>
+    </g>
+    <g id="ytick_34">
+     <g id="line2d_170">
+      <path d="M 271.870933 110.342756 
+L 513.261535 110.342756 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_171"/>
+     <g id="text_88">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="112.181193" transform="rotate(-0 269.870933 112.181193)">H</text>
+     </g>
+    </g>
+    <g id="ytick_35">
+     <g id="line2d_172">
+      <path d="M 271.870933 119.627009 
+L 513.261535 119.627009 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_173"/>
+     <g id="text_89">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="121.465447" transform="rotate(-0 269.870933 121.465447)">P</text>
+     </g>
+    </g>
+    <g id="ytick_36">
+     <g id="line2d_174">
+      <path d="M 271.870933 128.911263 
+L 513.261535 128.911263 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_175"/>
+     <g id="text_90">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="130.749701" transform="rotate(-0 269.870933 130.749701)">A</text>
+     </g>
+    </g>
+    <g id="ytick_37">
+     <g id="line2d_176">
+      <path d="M 271.870933 138.195517 
+L 513.261535 138.195517 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_177"/>
+     <g id="text_91">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="140.033955" transform="rotate(-0 269.870933 140.033955)">A</text>
+     </g>
+    </g>
+    <g id="ytick_38">
+     <g id="line2d_178">
+      <path d="M 271.870933 147.479771 
+L 513.261535 147.479771 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_179"/>
+     <g id="text_92">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="149.318209" transform="rotate(-0 269.870933 149.318209)">A</text>
+     </g>
+    </g>
+    <g id="ytick_39">
+     <g id="line2d_180">
+      <path d="M 271.870933 156.764025 
+L 513.261535 156.764025 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_181"/>
+     <g id="text_93">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="158.602463" transform="rotate(-0 269.870933 158.602463)">A</text>
+     </g>
+    </g>
+    <g id="ytick_40">
+     <g id="line2d_182">
+      <path d="M 271.870933 166.048279 
+L 513.261535 166.048279 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_183"/>
+     <g id="text_94">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="167.886717" transform="rotate(-0 269.870933 167.886717)">A</text>
+     </g>
+    </g>
+    <g id="ytick_41">
+     <g id="line2d_184">
+      <path d="M 271.870933 175.332533 
+L 513.261535 175.332533 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_185"/>
+     <g id="text_95">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="177.170971" transform="rotate(-0 269.870933 177.170971)">A</text>
+     </g>
+    </g>
+    <g id="ytick_42">
+     <g id="line2d_186">
+      <path d="M 271.870933 184.616787 
+L 513.261535 184.616787 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_187"/>
+     <g id="text_96">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="186.455224" transform="rotate(-0 269.870933 186.455224)">A</text>
+     </g>
+    </g>
+    <g id="ytick_43">
+     <g id="line2d_188">
+      <path d="M 271.870933 193.901041 
+L 513.261535 193.901041 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_189"/>
+     <g id="text_97">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="195.739478" transform="rotate(-0 269.870933 195.739478)">C</text>
+     </g>
+    </g>
+    <g id="ytick_44">
+     <g id="line2d_190">
+      <path d="M 271.870933 203.185295 
+L 513.261535 203.185295 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_191"/>
+     <g id="text_98">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="205.023732" transform="rotate(-0 269.870933 205.023732)">Y</text>
+     </g>
+    </g>
+    <g id="ytick_45">
+     <g id="line2d_192">
+      <path d="M 271.870933 212.469549 
+L 513.261535 212.469549 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_193"/>
+     <g id="text_99">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="214.307986" transform="rotate(-0 269.870933 214.307986)">F</text>
+     </g>
+    </g>
+    <g id="ytick_46">
+     <g id="line2d_194">
+      <path d="M 271.870933 221.753803 
+L 513.261535 221.753803 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_195"/>
+     <g id="text_100">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="223.59224" transform="rotate(-0 269.870933 223.59224)">N</text>
+     </g>
+    </g>
+    <g id="ytick_47">
+     <g id="line2d_196">
+      <path d="M 271.870933 231.038057 
+L 513.261535 231.038057 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_197"/>
+     <g id="text_101">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="232.876494" transform="rotate(-0 269.870933 232.876494)">Q</text>
+     </g>
+    </g>
+    <g id="ytick_48">
+     <g id="line2d_198">
+      <path d="M 271.870933 240.322311 
+L 513.261535 240.322311 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_199"/>
+     <g id="text_102">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="242.160748" transform="rotate(-0 269.870933 242.160748)">S</text>
+     </g>
+    </g>
+    <g id="ytick_49">
+     <g id="line2d_200">
+      <path d="M 271.870933 249.606564 
+L 513.261535 249.606564 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_201"/>
+     <g id="text_103">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="251.445002" transform="rotate(-0 269.870933 251.445002)">G</text>
+     </g>
+    </g>
+    <g id="ytick_50">
+     <g id="line2d_202">
+      <path d="M 271.870933 258.890818 
+L 513.261535 258.890818 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #e6e6e6; stroke-width: 0.3; stroke-linecap: square"/>
+     </g>
+     <g id="line2d_203"/>
+     <g id="text_104">
+      <text style="font-size: 6px; font-family: 'Courier New', 'Courier', 'Liberation Mono', 'DejaVu Sans Mono', monospace; text-anchor: end" x="269.870933" y="260.729256" transform="rotate(-0 269.870933 260.729256)">V</text>
+     </g>
+    </g>
+    <g id="text_105">
+     <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="262.796715" y="147.479771" transform="rotate(-90 262.796715 147.479771)">query, 25 aa (poly-A run of 7)</text>
+    </g>
+   </g>
+   <g id="line2d_204">
+    <path d="M 271.870933 31.426597 
+L 429.70325 189.258914 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #0072b2"/>
+   </g>
+   <g id="line2d_205">
+    <path d="M 373.997726 124.269136 
+L 513.261535 263.532945 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #0072b2"/>
+   </g>
+   <g id="line2d_206">
+    <path d="M 383.28198 124.269136 
+L 438.987504 179.97466 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #d55e00"/>
+   </g>
+   <g id="line2d_207">
+    <path d="M 392.566234 124.269136 
+L 438.987504 170.690406 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #d55e00"/>
+   </g>
+   <g id="line2d_208">
+    <path d="M 364.713473 133.55339 
+L 420.418996 189.258914 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #d55e00"/>
+   </g>
+   <g id="line2d_209">
+    <path d="M 364.713473 142.837644 
+L 411.134742 189.258914 
+" clip-path="url(#p2b5502e85a)" style="fill: none; stroke: #d55e00"/>
+   </g>
+   <g id="patch_6">
+    <path d="M 271.870933 263.532945 
+L 271.870933 31.426597 
+" style="fill: none; stroke: #000000; stroke-width: 0.5; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="patch_7">
+    <path d="M 271.870933 263.532945 
+L 513.261535 263.532945 
+" style="fill: none; stroke: #000000; stroke-width: 0.5; stroke-linejoin: miter; stroke-linecap: square"/>
+   </g>
+   <g id="text_106">
+    <text style="font-weight: 700; font-size: 8px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="253.870933" y="25.847847" transform="rotate(-0 253.870933 25.847847)">b</text>
+   </g>
+   <g id="text_107">
+    <text style="font-size: 7px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="271.870933" y="25.426597" transform="rotate(-0 271.870933 25.426597)">6 regions, each cut from the long entry</text>
+   </g>
+  </g>
+  <g id="legend_1">
+   <g id="line2d_210">
+    <path d="M 130.286236 6.467813 
+L 133.886236 6.467813 
+L 137.486236 6.467813 
+" style="fill: none; stroke: #0072b2; stroke-linecap: square"/>
+   </g>
+   <g id="text_108">
+    <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="139.886236" y="8.567813" transform="rotate(-0 139.886236 8.567813)">region that reaches past the poly-A run</text>
+   </g>
+   <g id="line2d_211">
+    <path d="M 248.942799 6.467813 
+L 252.542799 6.467813 
+L 256.142799 6.467813 
+" style="fill: none; stroke: #d55e00; stroke-linecap: square"/>
+   </g>
+   <g id="text_109">
+    <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: start" x="258.542799" y="8.567813" transform="rotate(-0 258.542799 8.567813)">region of A's only (the run against itself, shifted)</text>
+   </g>
+  </g>
+ </g>
+ <defs>
+  <clipPath id="pd9358d75c7">
+   <rect x="19.44" y="30.376345" width="215.470304" height="234.206852"/>
+  </clipPath>
+  <clipPath id="p2b5502e85a">
+   <rect x="271.870933" y="31.426597" width="241.390602" height="232.106348"/>
+  </clipPath>
+ </defs>
+</svg>

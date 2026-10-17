@@ -35,8 +35,11 @@ use crate::types::MolType;
 ///
 /// History: 1 = first versioned layout; 2 = `remove_low_complexity` in the metadata;
 /// 3 = streaming index (`sig_{md5}`, `targets_{n}`, `ii_shard_{s}` keys, no combined
-/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped.
-pub const SCHEMA_VERSION: u32 = 4;
+/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped;
+/// 5 = signatures keyed by their sequence (`sketch::sequence_key`) instead of their k-mer
+/// set, the key stored in `ProteinSketchStore::md5sum`, and the names of repeated
+/// sequences kept under `aliases_{md5}`.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
@@ -116,8 +119,9 @@ pub struct SearchCache {
 struct IngestState {
     /// Signatures written so far; also the target index the next one receives.
     next_idx: usize,
-    /// Signature keys already written, so a repeated sequence is skipped rather than
-    /// listed twice. The key is the sketch "md5", a wrapping sum of its mins.
+    /// Signature keys already written, so a repeated sequence is stored once rather than
+    /// listed twice. The key is the sketch "md5", a hash of its sequence
+    /// (`sketch::sequence_key`).
     seen: HashSet<u64>,
     /// The partial last `targets_{n}` chunk, rewritten each time it grows.
     target_tail: Vec<String>,
@@ -133,6 +137,9 @@ struct IngestState {
     saved: bool,
     unique_kmers: usize,
     duplicates_skipped: usize,
+    /// Names of the entries whose sequence was already stored, by that sequence's md5.
+    /// Written to `aliases_{md5}` so search can report every entry.
+    aliases: HashMap<String, Vec<String>>,
     /// Frequency summary gathered while the shards were last written.
     stats: Option<KmerFrequencySummary>,
 }
@@ -149,6 +156,7 @@ impl IngestState {
             saved: false,
             unique_kmers: 0,
             duplicates_skipped: 0,
+            aliases: HashMap::new(),
             stats: None,
         }
     }
@@ -830,8 +838,8 @@ impl ProteomeIndex {
     /// Nothing else about the sketch survives the call, which is what keeps indexing
     /// memory flat in the corpus size.
     ///
-    /// A sketch whose key was already written is skipped, so a repeated sequence appears
-    /// once, under the name it was first seen with.
+    /// A sketch whose key was already written is stored once, under the name it was first
+    /// seen with; the later names go to `aliases_{md5}`, so search reports each of them.
     fn ingest(&self, sketches: Vec<ProteinSketch>, retain: bool) -> IndexResult<()> {
         use rayon::prelude::*;
 
@@ -849,6 +857,10 @@ impl ProteomeIndex {
             })?;
             if !state.seen.insert(key) {
                 state.duplicates_skipped += 1;
+                let names = state.aliases.entry(md5.clone()).or_default();
+                names.push(sketch.signature().name.clone());
+                batch.put(format!("aliases_{md5}").into_bytes(), bincode::serialize(names)?);
+                state.saved = false;
                 continue;
             }
             let idx = u32::try_from(state.next_idx).map_err(|_| IndexError::ValidationError {
@@ -972,7 +984,8 @@ impl ProteomeIndex {
             );
             if state.duplicates_skipped > 0 {
                 eprintln!(
-                    "[save] Skipped {} sequences whose signature key was already indexed",
+                    "[save] {} entries repeat an earlier entry's sequence: stored once, \
+                     reported under every name",
                     state.duplicates_skipped
                 );
             }
@@ -1114,6 +1127,7 @@ impl ProteomeIndex {
         state.unique_kmers = metadata.unique_kmers;
         state.shards_written = true;
         state.saved = true;
+        state.aliases = self.aliases()?;
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
         for chunk in 0..chunks {
             let md5s = self.read_target_chunk(chunk, chunks)?;
@@ -1299,6 +1313,7 @@ impl ProteomeIndex {
         other.finalize()?;
         if self.signature_count() != other.signature_count()
             || self.unique_kmer_count() != other.unique_kmer_count()
+            || self.aliases()? != other.aliases()?
         {
             return Ok(false);
         }
@@ -1316,6 +1331,19 @@ impl ProteomeIndex {
             }
         }
         Ok(true)
+    }
+
+    /// Every entry name whose sequence was already stored under another name, by that
+    /// sequence's md5. Search reports a hit on the md5 once more under each of these names.
+    pub fn aliases(&self) -> IndexResult<HashMap<String, Vec<String>>> {
+        let mut aliases = HashMap::new();
+        for item in self.db.iterator(IteratorMode::From(b"aliases_", Direction::Forward)) {
+            let (key, value) = item?;
+            let Some(md5) = key.strip_prefix(b"aliases_") else { break };
+            let names: Vec<String> = bincode::deserialize(&value)?;
+            aliases.insert(String::from_utf8_lossy(md5).into_owned(), names);
+        }
+        Ok(aliases)
     }
 
     /// Print index statistics
@@ -1769,7 +1797,7 @@ mod tests {
     // Private to the module; needed to forge an unstamped index in
     // test_older_schema_is_rejected_at_open.
     use super::KMERSEEK_VERSION_KEY;
-    use crate::sketch::ProteinSketch;
+    use crate::sketch::{sequence_key, ProteinSketch};
     use crate::tests::test_fixtures::{
         TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST,
         TEST_KMER, TEST_PROTEIN,
@@ -2597,12 +2625,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "f7661cd829e75c0d" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
-                } else if md5sum == "7641839ad508ab8" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
@@ -2656,12 +2684,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "a963d06839b6d6a9" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 dayhoff 5-mers"
                     );
-                } else if md5sum == "84d7545d531dcf51" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 dayhoff 5-mers"
@@ -2715,12 +2743,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "24ca8d939672666b" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 6,
                         "LIVINGALIVE should have 6 hp 5-mers"
                     );
-                } else if md5sum == "668d7173d661287b" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 14,
                         "PLANTANDANIMALGENQMES should have 14 hp 5-mers"
@@ -2769,12 +2797,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "f7661cd829e75c0d" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
-                } else if md5sum == "7641839ad508ab8" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
@@ -2826,13 +2854,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "4d565dee9c8de9db" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 474,
                         "sp|O43236|SEPT4_HUMAN should have 474 protein 5-mers"
                     );
                 }
-                if md5sum == "4da1f84ad8be618e" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 235,
                         "sp|P10415|BCL2_HUMAN should have 235 protein 5-mers"
@@ -2883,13 +2911,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "fc27dcd533217385" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 433,
                         "sp|O43236|SEPT4_HUMAN should have 433 dayhoff 5-mers"
                     );
                 }
-                if md5sum == "3206706fa14185e7" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 204,
                         "sp|P10415|BCL2_HUMAN should have 204 dayhoff 5-mers"
@@ -2947,13 +2975,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "38ffedf9d3ec7cec" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 452,
                         "sp|O43236|SEPT4_HUMAN should have 452 hp 12-mers"
                     );
                 }
-                if md5sum == "204716e4d80eb350" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 220,
                         "sp|P10415|BCL2_HUMAN should have 220 hp 12-mers"
@@ -4066,7 +4094,8 @@ mod tests {
         Ok(())
     }
 
-    /// A sequence seen twice is indexed once, under the name it was first seen with.
+    /// A sequence seen twice is indexed once, under the name it was first seen with; the
+    /// second name is kept as an alias so search can still report it.
     #[test]
     fn test_repeated_sequence_is_indexed_once() -> Result<()> {
         let dir = tempdir()?;
@@ -4086,6 +4115,38 @@ mod tests {
         // 17 5-mers in TEST_PROTEIN and 7 in TEST_KMER, none shared.
         assert_eq!(inverted.len(), 24);
         assert!(inverted.values().all(|targets| targets.len() == 1));
+        assert_eq!(
+            index.aliases()?,
+            HashMap::from([(sequence_key(TEST_PROTEIN), vec!["second".to_string()])])
+        );
+        Ok(())
+    }
+
+    /// Aliases survive closing the index and adding more sequences later: a third copy joins
+    /// the list instead of replacing it.
+    #[test]
+    fn test_aliases_persist_and_accumulate_across_reopen() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("dup.db");
+        let first = dir.path().join("first.fasta");
+        let second = dir.path().join("second.fasta");
+        std::fs::write(&first, format!(">a\n{TEST_PROTEIN}\n>b\n{TEST_PROTEIN}\n"))?;
+        std::fs::write(&second, format!(">c\n{TEST_PROTEIN}\n>d\n{TEST_KMER}\n"))?;
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+            index.process_fasta(&first, 0, 1000)?;
+            index.save_state()?;
+        }
+        let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+        index.load_state()?;
+        index.process_fasta(&second, 0, 1000)?;
+        index.save_state()?;
+        let (targets, _, _) = cache_of(&index)?;
+        assert_eq!(targets, [sequence_key(TEST_PROTEIN), sequence_key(TEST_KMER)]);
+        assert_eq!(
+            index.aliases()?,
+            HashMap::from([(sequence_key(TEST_PROTEIN), vec!["b".to_string(), "c".to_string()])])
+        );
         Ok(())
     }
 
