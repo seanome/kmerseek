@@ -14,6 +14,9 @@
 # Writes ka_fit_curves/<name>_<null>.csv and /usr/bin/time -v output next to it.
 set -euo pipefail
 
+# kmerseek was built with gcc 14 and needs its libstdc++ at run time.
+module load gcc/14.2.0
+
 FASTA=$1
 NAME=$2
 NULL=$3
