@@ -15,8 +15,8 @@ use crate::errors::{IndexError, IndexResult};
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
 use crate::karlin_altschul::{
-    fit_scores, fit_scores_with_reference, make_decoy, survival_counts, DecoyNull, KaCalibration,
-    SplitMix64, BIN_WIDTH, MIN_FIT_POINTS,
+    fit_bins, fit_bins_with_reference, make_decoy, DecoyNull, KaCalibration, ScoreBins, SplitMix64,
+    BIN_WIDTH, MIN_FIT_POINTS,
 };
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -917,19 +917,16 @@ impl ProteinSearcher {
         let KaCalibrationSettings { mismatch_penalty, xdrop, null, reference, n_queries, seed } =
             settings;
         let (queries, match_probability) = self.calibration_queries(null, n_queries, seed)?;
-        let scores = self.calibration_scores(&queries);
+        let bins = self.calibration_bins(&queries);
         // The database null is censored against the same queries shuffled (`reference`).
         let (fit, reference_survival) = if null == DecoyNull::Database {
             let (shuffled, _) = self.calibration_queries(reference, n_queries, seed)?;
-            let reference_scores = self.calibration_scores(&shuffled);
-            (
-                fit_scores_with_reference(&scores, &reference_scores),
-                survival_counts(&reference_scores),
-            )
+            let reference_bins = self.calibration_bins(&shuffled);
+            (fit_bins_with_reference(&bins, &reference_bins), reference_bins.survival())
         } else {
-            (fit_scores(&scores), Vec::new())
+            (fit_bins(&bins), Vec::new())
         };
-        let survival = survival_counts(&scores);
+        let survival = bins.survival();
         let n_queries = queries.len();
         let query_residues: u64 =
             queries.iter().map(|(_, q)| q.get_raw_sequence().map_or(0, |r| r.len() as u64)).sum();
@@ -943,7 +940,7 @@ impl ProteinSearcher {
             n_queries,
             query_residues,
             database_kmers,
-            n_regions: scores.len(),
+            n_regions: bins.n_regions() as usize,
             match_probability,
             lambda_analytic,
             // The fit ran on x / BIN_WIDTH, so its slope per bin is slope-per-nat x width.
@@ -966,7 +963,7 @@ impl ProteinSearcher {
             fitted,
             match_probability,
             n_queries,
-            n_regions: scores.len(),
+            n_regions: bins.n_regions() as usize,
             query_residues,
             database_kmers,
             lambda_analytic,
@@ -1015,7 +1012,7 @@ impl ProteinSearcher {
     /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
     /// with K = 1 and lambda scale 1 during calibration, so a region's `ka_bits` x ln 2 is
     /// exactly lambda_pair S with the closed-form per-pair lambda.
-    fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
+    fn calibration_bins(&self, queries: &[(String, ProteinSketch)]) -> ScoreBins {
         let filters = SearchFilters {
             threshold: 0.0,
             min_shared_kmers: 1,
@@ -1025,20 +1022,30 @@ impl ProteinSearcher {
             // also covers the aliases #63 reports under the same md5.
             skip_self_matches: false,
         };
-        queries
-            .par_iter()
-            .flat_map_iter(|(source_md5, query)| {
-                self.search_one(query, &filters, queries.len())
-                    .into_iter()
-                    .filter(|r| &r.target_md5 != source_md5)
-                    .flat_map(|r| {
-                        r.matched_regions
-                            .into_iter()
-                            .map(|region| region.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH)
-                    })
-                    .collect::<Vec<f64>>()
-            })
-            .collect()
+        // One query at a time, its candidate targets in parallel, and each target's regions
+        // counted into the bins and dropped as soon as it is compared. Holding the scores
+        // instead, or every query's results at once, grows with the database: under cys2
+        // the fit on a full Swiss-Prot was killed at 700 GB (2024-kmerseek-analysis PR 145).
+        // A target's aliases (#63) are counted too, as `search_one` would have returned them.
+        queries.iter().fold(ScoreBins::default(), |bins, (source_md5, query)| {
+            let prepared = self.prepare_query(query);
+            let found = self
+                .candidate_results(&prepared, &filters, queries.len())
+                .flat_map_iter(|r| {
+                    let aliases =
+                        if self.aliases.is_empty() { Vec::new() } else { self.alias_results(&r) };
+                    std::iter::once(r).chain(aliases)
+                })
+                .filter(|r| &r.target_md5 != source_md5)
+                .fold(ScoreBins::default, |mut bins, r| {
+                    for region in &r.matched_regions {
+                        bins.add(region.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH);
+                    }
+                    bins
+                })
+                .reduce(ScoreBins::default, ScoreBins::merge);
+            bins.merge(found)
+        })
     }
 
     /// The calibration query for one target, built the way a search query would be, or
@@ -1309,6 +1316,54 @@ impl ProteinSearcher {
         Ok(sorted_results)
     }
 
+    /// Every candidate target compared with `prepared`, in parallel and in no set order:
+    /// the work of `search_one` before its results are collected and sorted.
+    ///
+    /// A candidate is a target that shares at least one k-mer with the query, found through
+    /// the inverted k-mer index, so targets with no k-mer in common are never compared.
+    /// Results that fail `filters` are never built. Returning the iterator rather than a
+    /// `Vec` lets a caller that needs only part of each result, as the Karlin-Altschul fit
+    /// needs only region scores, use each one and drop it, instead of holding every
+    /// region of every target at once.
+    fn candidate_results<'s>(
+        &'s self,
+        prepared: &'s PreparedQuery<'s>,
+        filters: &'s SearchFilters,
+        total_queries: usize,
+    ) -> impl ParallelIterator<Item = SearchResult> + 's {
+        let mut candidate_set: HashSet<u32> = HashSet::new();
+        for &kmer in &prepared.mins {
+            if let Some(indices) = self.inverted_index.get(&kmer) {
+                candidate_set.extend(indices.iter().copied());
+            }
+        }
+
+        // Three paths for signature access (checked in order of cost):
+        //   1. In-memory DashMap (populated in slow path for old DBs): zero-copy O(1) lookup
+        //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
+        //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
+        let sigs = self.index.get_signatures();
+        candidate_set.into_par_iter().filter_map(move |idx| {
+            let md5 = &self.target_list[idx as usize];
+
+            // Path 1: in-memory signatures (slow path for old DBs without search cache)
+            if let Some(entry) = sigs.get(md5.as_str()) {
+                return self.compare(prepared, entry.value(), filters, total_queries);
+            }
+
+            // Path 2: sig_cache hit (target was loaded by an earlier query)
+            if let Some(entry) = self.sig_cache.get(md5.as_str()) {
+                return self.compare(prepared, entry.value(), filters, total_queries);
+            }
+
+            // Path 3: first-time load from RocksDB; store in cache for future queries
+            let target = self.index.get_signature_by_md5(md5).ok()??;
+            let result = self.compare(prepared, &target, filters, total_queries);
+            self.sig_cache.insert(md5.clone(), target);
+            result
+        })
+    }
+
     /// Search a single query against all targets in the index
     ///
     /// WHY: This enables streaming search where queries are processed one at a time
@@ -1329,46 +1384,8 @@ impl ProteinSearcher {
         total_queries: usize,
     ) -> Vec<SearchResult> {
         let prepared = self.prepare_query(query);
-
-        // Find candidate targets via inverted index: only compare against targets
-        // that share at least one k-mer with the query
-        let mut candidate_set: HashSet<u32> = HashSet::new();
-        for &kmer in &prepared.mins {
-            if let Some(indices) = self.inverted_index.get(&kmer) {
-                for &idx in indices {
-                    candidate_set.insert(idx);
-                }
-            }
-        }
-
-        // Compare only against candidates, in parallel.
-        // Three paths for signature access (checked in order of cost):
-        //   1. In-memory DashMap (populated in slow path for old DBs): zero-copy O(1) lookup
-        //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
-        //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
-        let sigs = self.index.get_signatures();
-        let mut results: Vec<SearchResult> = candidate_set
-            .par_iter()
-            .filter_map(|&idx| {
-                let md5 = &self.target_list[idx as usize];
-
-                // Path 1: in-memory signatures (slow path for old DBs without search cache)
-                if let Some(entry) = sigs.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value(), filters, total_queries);
-                }
-
-                // Path 2: sig_cache hit (target was loaded by an earlier query)
-                if let Some(entry) = self.sig_cache.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value(), filters, total_queries);
-                }
-
-                // Path 3: first-time load from RocksDB; store in cache for future queries
-                let target = self.index.get_signature_by_md5(md5).ok()??;
-                let result = self.compare(&prepared, &target, filters, total_queries);
-                self.sig_cache.insert(md5.clone(), target);
-                result
-            })
-            .collect();
+        let mut results: Vec<SearchResult> =
+            self.candidate_results(&prepared, filters, total_queries).collect();
         if self.aliases.is_empty() {
             return results;
         }
