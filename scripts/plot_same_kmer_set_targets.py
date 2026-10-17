@@ -20,6 +20,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
+import matplotlib.pyplot as plt  # noqa: E402
 import pubfig as pf  # noqa: E402
 
 QUERY = "MKTWLRDEHPAAAAAAACYFNQSGV"
@@ -40,11 +41,29 @@ REGIONS = {
 }
 FLANK = pf.OKABE_ITO["blue"]
 POLY_A = pf.OKABE_ITO["vermillion"]
+RUN_FILL = "#eeeeee"  # the poly-A run, behind every other mark
+K = 5
+CONCLUSION = (
+    "Keyed by its sequence, each entry is its own target: search finds 3 regions in the "
+    "short entry and 6 in the long one.\nBefore PR 152, the long entry was not stored "
+    "and this search found no hits."
+)
+
+
+def kmer_set(seq):
+    """The distinct k-mers of a sequence."""
+    return {seq[i : i + K] for i in range(len(seq) - K + 1)}
 
 
 def only_a(seq, start, end):
     """Whether a region holds nothing but A on this sequence."""
     return set(seq[start:end]) == {"A"}
+
+
+def run_span(seq):
+    """(start, end) of the poly-A run, 0-based, end exclusive."""
+    start = seq.index("A")
+    return start, start + seq.count("A")
 
 
 def residue_axis(axis, seq):
@@ -53,9 +72,36 @@ def residue_axis(axis, seq):
     axis.set_tick_params(length=0)
 
 
+def draw_sequences(ax, rows):
+    """The three sequences, one residue per cell, with the poly-A run shaded."""
+    for y, (label, seq) in enumerate(rows):
+        start, end = run_span(seq)
+        ax.add_patch(plt.Rectangle((start, y - 0.4), end - start, 0.8, color=RUN_FILL, lw=0))
+        for i, residue in enumerate(seq):
+            ax.text(i + 0.5, y, residue, ha="center", va="center", family="monospace")
+        ax.text(len(seq) + 0.6, y, f"{len(seq)} aa", va="center")
+    ax.set_xlim(0, max(len(seq) for _, seq in rows) + 3)
+    ax.set_ylim(len(rows) - 0.5, -0.5)
+    ax.set_yticks(range(len(rows)), [label for label, _ in rows])
+    ax.tick_params(axis="y", length=0)
+    ax.set_xticks([])
+    for side in ("left", "bottom"):
+        ax.spines[side].set_visible(False)
+    n = len(kmer_set(rows[0][1]))
+    ax.set_title(
+        f"All three hold the same {n} distinct {K}-mers (protein20, k = {K}); "
+        "only the length of the poly-A run differs",
+        loc="left",
+    )
+
+
 def draw_panel(ax, name):
     """Dot plot: each region is a diagonal from its first shared residue to its last."""
     target = TARGETS[name]
+    t0, t1 = run_span(target)
+    q0, q1 = run_span(QUERY)
+    ax.axvspan(t0, t1, color=RUN_FILL, lw=0, zorder=0)
+    ax.axhspan(q0, q1, color=RUN_FILL, lw=0, zorder=0)
     for qs, qe, ts, te in REGIONS[name]:
         colour = POLY_A if only_a(target, ts, te) else FLANK
         ax.plot([ts, te], [qs, qe], color=colour, solid_capstyle="butt")
@@ -64,10 +110,10 @@ def draw_panel(ax, name):
     ax.set_aspect("equal")
     residue_axis(ax.xaxis, target)
     residue_axis(ax.yaxis, QUERY)
-    ax.grid(True, color="#e6e6e6", lw=0.3)
-    ax.set_xlabel(f"{name} entry, {len(target)} aa (poly-A run of {target.count('A')})")
-    ax.set_ylabel(f"query, {len(QUERY)} aa (poly-A run of {QUERY.count('A')})")
-    ax.set_title(f"{len(REGIONS[name])} regions, each cut from the {name} entry", loc="left")
+    ax.grid(True, color="#d9d9d9", lw=0.3)
+    ax.set_axisbelow(True)
+    ax.set_xlabel(f"{name} entry ({len(target)} aa)")
+    ax.set_title(f"{name} entry: {len(REGIONS[name])} regions found", loc="left")
 
 
 def main():
@@ -75,14 +121,49 @@ def main():
     parser.add_argument("--output", required=True, help="path stem, without extension")
     args = parser.parse_args()
 
+    rows = [("query", QUERY), ("short entry", TARGETS["short"]), ("long entry", TARGETS["long"])]
+    assert len({frozenset(kmer_set(seq)) for _, seq in rows}) == 1, "k-mer sets differ"
+
     pf.use_style()
-    fig, axs = pf.figure(pf.TWO_COLUMN_MM, 100, ncols=2)
-    axs[0].plot([], [], color=FLANK, label="region that reaches past the poly-A run")
-    axs[0].plot([], [], color=POLY_A, label="region of A's only (the run against itself, shifted)")
-    for ax, name, letter in zip(axs, TARGETS, "ab"):
+    fig = plt.figure(figsize=(pf.TWO_COLUMN_MM * pf.MM, 128 * pf.MM), layout="constrained")
+    grid = fig.add_gridspec(
+        4,
+        2,
+        height_ratios=[1.6, 0.9, 3.2, 25],
+        width_ratios=[len(s) for s in TARGETS.values()],
+    )
+    ax_head = fig.add_subplot(grid[0, :])
+    ax_key = fig.add_subplot(grid[1, :])
+    ax_seq = fig.add_subplot(grid[2, :])
+    axs = [fig.add_subplot(grid[3, 0])]
+    axs.append(fig.add_subplot(grid[3, 1], sharey=axs[0]))
+    for ax in (ax_head, ax_key):
+        ax.axis("off")
+    ax_head.text(0, 0.5, CONCLUSION, ha="left", va="center", fontweight="bold")
+
+    key = [
+        plt.Rectangle((0, 0), 1, 1, color=RUN_FILL),
+        plt.Line2D([], [], color=FLANK),
+        plt.Line2D([], [], color=POLY_A),
+    ]
+    ax_key.legend(
+        key,
+        [
+            "poly-A run",
+            "region that reaches past the poly-A run",
+            "region of A's only (the run against itself, shifted)",
+        ],
+        loc="center left",
+        ncol=3,
+        borderaxespad=0,
+    )
+    draw_sequences(ax_seq, rows)
+    for ax, name in zip(axs, TARGETS):
         draw_panel(ax, name)
+    axs[0].set_ylabel(f"query ({len(QUERY)} aa)")
+    axs[1].tick_params(axis="y", labelleft=False)
+    for ax, letter in zip([ax_seq, *axs], "abc"):
         pf.panel_label(ax, letter)
-    pf.shared_legend(fig, ncol=2)
     pf.save(fig, args.output)
 
 
