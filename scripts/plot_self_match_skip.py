@@ -2,17 +2,12 @@
 """Draw which hits kmerseek reports for an index holding two proteins, BCL-2 (BCL2_HUMAN)
 and Ced-9 (CED9_CAEEL), at hp_lehninger2 k=12.
 
-Panel a: BCL-2 from a FASTA file searched against the index. The query has the same
-sequence as the BCL2_HUMAN entry, so their keys are equal. Before this change, compare()
-dropped any target with the query's key, so BCL2_HUMAN was missing. Now the entry is
-reported.
-
-Panel b: the index searched against itself (all-vs-all). Each entry is also a query, and its
-hit on itself is still dropped, leaving two rows.
+A target with the same sequence as the query is skipped in every search. Panel a: BCL-2
+from a FASTA file searched against the index lists only CED9_CAEEL. Panel b: the index
+searched against itself (all-vs-all) lists each protein against the other, two rows.
 
 The hits are the ones
-`cargo test --no-default-features --lib query_identical_to_an_entry_hits_it_unless_all_vs_all`
-asserts.
+`cargo test --no-default-features --lib query_identical_to_an_entry_is_skipped` asserts.
 
     python scripts/plot_self_match_skip.py \
         --output docs/images/self_match_skip_bcl2_ced9_hp_lehninger2_k12
@@ -32,8 +27,7 @@ COLUMN_STEP = 2  # wide enough that the entry names under the squares do not ove
 
 # (row label, reported per target) for each panel.
 FASTA_QUERY = [
-    ("before: BCL-2 query", [False, True]),
-    ("after: BCL-2 query", [True, True]),
+    ("BCL-2 query", [False, True]),
 ]
 ALL_VS_ALL = [
     ("BCL2_HUMAN as query", [False, True]),
@@ -41,8 +35,9 @@ ALL_VS_ALL = [
 ]
 
 
-def draw_grid(ax, rows, title):
-    """One square per (row, target): filled when reported, open when dropped."""
+def draw_grid(ax, rows, title, n_rows):
+    """One square per (row, target): filled when reported, open when skipped. `n_rows` sets
+    the vertical span, so squares are the same size in every panel."""
     for y, (_, reported) in enumerate(rows):
         for x, hit in enumerate(reported):
             ax.add_patch(
@@ -55,7 +50,7 @@ def draw_grid(ax, rows, title):
                 )
             )
     ax.set_xlim(-1, (len(TARGETS) - 1) * COLUMN_STEP + 1)
-    ax.set_ylim(len(rows) - 0.4, -0.6)
+    ax.set_ylim(n_rows - 0.4, -0.6)
     ax.set_xticks([i * COLUMN_STEP for i in range(len(TARGETS))], TARGETS)
     ax.set_yticks(range(len(rows)), [label for label, _ in rows])
     ax.set_xlabel("database entry")
@@ -73,10 +68,11 @@ def main():
 
     pf.use_style()
     fig, (a, b) = pf.figure(pf.TWO_COLUMN_MM, 45, ncols=2)
-    draw_grid(a, FASTA_QUERY, "FASTA query against the index")
-    draw_grid(b, ALL_VS_ALL, "index against itself (all-vs-all)")
+    n_rows = max(len(FASTA_QUERY), len(ALL_VS_ALL))
+    draw_grid(a, FASTA_QUERY, "FASTA query against the index", n_rows)
+    draw_grid(b, ALL_VS_ALL, "index against itself (all-vs-all)", n_rows)
     a.plot([], [], "s", color=REPORTED, label="hit reported")
-    a.plot([], [], "s", markerfacecolor="none", color=pf.GREY, label="hit dropped")
+    a.plot([], [], "s", markerfacecolor="none", color=pf.GREY, label="hit skipped (same sequence)")
     pf.shared_legend(fig)
     for ax, letter in zip((a, b), "ab"):
         pf.panel_label(ax, letter)

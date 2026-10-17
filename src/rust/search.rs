@@ -49,10 +49,6 @@ pub struct SearchFilters {
     /// heuristic cutoff on a ranking score, not a statistically calibrated significance
     /// threshold.
     pub min_region_score: f64,
-    /// Drop a target whose key is the query's own (same md5). On for all-vs-all searches of
-    /// one index against itself, where every query would otherwise hit itself; off when a
-    /// FASTA is searched against an index, where the query's identical entry is a real hit.
-    pub skip_self_matches: bool,
 }
 
 impl Default for SearchFilters {
@@ -73,7 +69,6 @@ impl Default for SearchFilters {
             min_shared_kmers: 0,
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
-            skip_self_matches: false,
         }
     }
 }
@@ -1199,7 +1194,6 @@ impl ProteinSearcher {
             min_shared_kmers: 1,
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
-            skip_self_matches: false,
         };
         queries
             .par_iter()
@@ -1606,7 +1600,7 @@ impl ProteinSearcher {
     /// method works directly with references from the index. We collect only the MD5 keys (cheap
     /// String clones) and parallelize over those, looking up the actual signatures in the DashMap.
     /// This avoids cloning the large ProteinSketch objects while still enabling parallel processing.
-    /// Each query's hit on itself is dropped (`SearchFilters::skip_self_matches`).
+    /// The method also automatically skips self-matches by comparing MD5 sums in compare().
     ///
     /// `filters` is forwarded to `search_one`, so failing results are never allocated into the
     /// returned `Vec` (see `SearchFilters`).
@@ -1650,8 +1644,6 @@ impl ProteinSearcher {
         progress.set_message("Searching all-vs-all...");
 
         let total_queries = all_queries.len();
-        // Every query is a target here, so its hit on itself is dropped.
-        let filters = &SearchFilters { skip_self_matches: true, ..*filters };
 
         // Use search_one (inverted index) for each query instead of exhaustive O(N²) iteration
         let all_results: Vec<SearchResult> = all_queries
@@ -1701,11 +1693,10 @@ impl ProteinSearcher {
         filters: &SearchFilters,
         total_queries: usize,
     ) -> Option<SearchResult> {
-        // In an all-vs-all search every query is also a target, and its hit on itself says
-        // nothing. When a FASTA is searched against an index, the query's identical entry is
-        // a real hit (BCL-2 against a database holding BCL2_HUMAN), so the skip is opt-in.
-        if filters.skip_self_matches && query.sketch.signature().md5sum == target.signature().md5sum
-        {
+        // A target with the query's key has the query's own sequence, so it is skipped in
+        // every search, not only all-vs-all: its hit says nothing new, and keeping it would
+        // add one row per query that is in the database.
+        if query.sketch.signature().md5sum == target.signature().md5sum {
             return None;
         }
 
@@ -3233,7 +3224,8 @@ mod tests {
     /// Two entries whose 5-mer sets are equal but whose sequences differ (a poly-A run of 5
     /// and of 8: both hold AAAAA and nothing else the other lacks) are two targets, each
     /// reported with its own residues and coordinates. Keyed by their k-mer set, the second
-    /// entry was dropped. The query has a run of 7, so it is neither entry. Drawn as dot plots in
+    /// entry was dropped. The query has a run of 7, so it is neither entry: a query whose
+    /// key equals a target's is skipped as a self-match. Drawn as dot plots in
     /// `docs/images/same_kmer_set_polyA5_polyA8_protein20_k5.png`
     /// (`scripts/plot_same_kmer_set_targets.py`).
     #[test]
@@ -3319,13 +3311,14 @@ mod tests {
         Ok(())
     }
 
-    /// A FASTA query identical to a database entry hits that entry: BCL-2 searched against an
-    /// index of BCL-2 and Ced-9 lists both. All-vs-all on the same index still drops each
-    /// entry's hit on itself, leaving BCL-2 against Ced-9 and Ced-9 against BCL-2. Drawn in
+    /// A query with the same sequence as a database entry does not hit that entry, whether
+    /// it comes from a FASTA file or the index is searched against itself. BCL-2 searched
+    /// against an index of BCL-2 and Ced-9 lists only Ced-9, and all-vs-all on that index
+    /// lists BCL-2 against Ced-9 and Ced-9 against BCL-2. Drawn in
     /// `docs/images/self_match_skip_bcl2_ced9_hp_lehninger2_k12.png`
     /// (`scripts/plot_self_match_skip.py`).
     #[test]
-    fn query_identical_to_an_entry_hits_it_unless_all_vs_all() -> Result<()> {
+    fn query_identical_to_an_entry_is_skipped() -> Result<()> {
         let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
         let (ced9_name, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
         let temp_dir = TempDir::new()?;
@@ -3337,9 +3330,8 @@ mod tests {
 
         let query = ProteinSketch::from_protein_sequence("bcl2", &bcl2, 12, 1, "hp_lehninger2")?;
         let results = searcher.search_one(&query, &SearchFilters::default(), 1);
-        let mut names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
-        names.sort();
-        assert_eq!(names, [bcl2_name.as_str(), ced9_name.as_str()]);
+        let names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
+        assert_eq!(names, [ced9_name.as_str()]);
 
         let all = searcher.search_all_vs_all(&SearchFilters::default())?;
         let mut pairs: Vec<(&str, &str)> =
@@ -3396,7 +3388,8 @@ mod tests {
         let temp_path = temp_dir.path();
 
         // Use BCL2 as query and CED9 as target - they should match via HP encoding
-        // BCL2 and CED9 are known to match via HP encoding.
+        // WHY: The compare() function skips self-matches by checking MD5 sums, so we
+        // need to use different proteins. BCL2 and CED9 are known to match via HP encoding.
         let query_fasta = TEST_BLC2_FASTA;
         let target_fasta = TEST_CED9_FASTA;
 
@@ -5636,7 +5629,7 @@ mod tests {
         assert!(!results.is_empty(), "a family database should match itself across members");
 
         for result in &results {
-            // search_all_vs_all() drops self-matches by md5, so no protein may match itself.
+            // compare() drops self-matches by md5, so no protein may match itself.
             assert_ne!(
                 result.query_md5, result.target_md5,
                 "self-match leaked into all-vs-all: {}",
