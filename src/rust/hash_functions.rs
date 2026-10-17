@@ -38,7 +38,7 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
              'hp_lehninger2', 'hp_thomas_dill2', 'hp_kyte_doolittle2', \
              'hp_thomas_dill_no_c2', 'hp_lehninger_c_nonpolar2', 'hp_lehninger_hpc3', \
              'hp_pbotc_1st_ed2', \
-             'gbmr4', 'polarity4', 'wwmj5', 'gbmr7', 'funcgroups8', 'sdm12', \
+             'gbmr4', 'polarity4', 'aro_hyd_chg_pol4', 'aro_hyd_arg_chg_pol5', 'wwmj5', 'gbmr7', 'funcgroups8', 'sdm12', \
              'mmseqs12', 'wass14', 'hsdm17', 'uniprot18'",
             moltype
         )),

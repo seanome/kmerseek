@@ -416,6 +416,8 @@ partitions live in `src/rust/alphabets.rs`.
 | `hp_lehninger_hpc3` | 3 | `AFGILMPVWY` `DEHKNQRST` `C` | Lehninger with C in a class of its own |
 | `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
 | `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
+| `aro_hyd_chg_pol4` | 4 | `FWY` `AILMV` `DEKR` `SCGHNPQT` | Aromatic residues kept apart, for phase-separating regions (Martin et al. 2020) |
+| `aro_hyd_arg_chg_pol5` | 5 | `FWY` `AILMV` `R` `DEK` `SCGHNPQT` | `aro_hyd_chg_pol4` with arginine apart (Wang et al. 2018) |
 | `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
 | `dayhoff6` | 6 | `C` `AGPST` `DENQ` `HKR` `ILMV` `FWY` | Dayhoff; also sourmash's `dayhoff` |
 | `gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
@@ -431,6 +433,13 @@ Clusters are listed in the order their classes are numbered. The `hp_` alphabets
 their classes as `h` and `p`, and `hp_lehninger_hpc3` adds `c` for cysteine. Every other
 alphabet writes a class as its first residue in lowercase, so an SDM12-encoded sequence
 shows the `LIVM` class as `l` and can be read against the source residues directly.
+
+![The 20 amino acids in aro_hyd_chg_pol4 (top) and hp_pbotc_1st_ed2 (bottom)](docs/images/aro_hyd_chg_pol4_vs_hp_pbotc_1st_ed2.png)
+
+Each square is one amino acid, coloured by its class in `aro_hyd_chg_pol4` (top) and in
+the two-letter `hp_pbotc_1st_ed2` (bottom). F, W and Y get a class of their own instead of
+sharing `h` with A, I, L, M and V; C and P move from hydrophobic to polar.
+`aro_hyd_arg_chg_pol5` is the same with R split out of the charged class.
 
 The two- and three-class alphabets share an `hp_` prefix because they differ only on
 borderline residues, which keeps a sweep easy to write and to grep. The rest use the
