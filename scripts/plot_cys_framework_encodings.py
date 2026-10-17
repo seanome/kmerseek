@@ -3,8 +3,11 @@
 Two real disulfide-rich peptides, both 36 residues, both with the six cysteines in the
 same positions, from animals in different phyla:
 
-  * O-superfamily conotoxin MiXIVA, Conus miles (cone snail, Mollusca), UniProt P06751
-  * U1-theraphotoxin-Pm1a, Pterinochilus murinus (baboon spider, Arthropoda), P0DQZ2
+  * conopeptide Mi020, Conus miles (cone snail, Mollusca), ConoServer P06751: the mature
+    peptide ConoServer predicts from its precursor, UniProt A0A0E3SVD5. P06751 is a
+    ConoServer protein ID, not a UniProt accession.
+  * Mu/omega-theraphotoxin-Pmu1a, Pterinochilus murinus (baboon spider, Arthropoda),
+    UniProt P0DQZ2
 
 Their shared cysteine pattern is written C-C-CC-C-C: six cysteines in four groups, with
 stretches of other residues between them. Each is read three ways:
@@ -223,8 +226,8 @@ def main():
         "string, cys_hp3 tells them apart and still shows\nwhere the cysteines are, and "
         "hp_pbotc_1st_ed2 tells them apart but hides the cysteines among the other "
         "hydrophobic residues.\n"
-        "Conotoxin MiXIVA (Conus miles, snail, UniProt P06751) and "
-        "U1-theraphotoxin-Pm1a (Pterinochilus murinus, spider, P0DQZ2), 36 residues each, "
+        "Conopeptide Mi020 (Conus miles, snail, ConoServer P06751) and "
+        "Mu/omega-theraphotoxin-Pmu1a (Pterinochilus murinus, spider, UniProt P0DQZ2), 36 residues each, "
         "from\n5124 mature peptides in ConoServer and Swiss-Prot.",
         linespacing=1.6,
         fontsize=6,

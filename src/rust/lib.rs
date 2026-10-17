@@ -2,6 +2,7 @@ pub mod alphabets;
 pub mod aminoacid;
 pub mod config;
 pub mod errors;
+pub mod evalue;
 pub mod hash_functions;
 pub mod index;
 pub mod io;

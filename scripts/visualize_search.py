@@ -167,8 +167,13 @@ def rank_proteins(rows, max_rows):
     stat, _ = ranking(rows)
     best = _target_best_rows(rows)
     # Best statistic first, then the higher region score; on a full tie the reviewed (sp|)
-    # entry represents the protein.
-    order = lambda n: (stat[n], -float(best[n]["region_poisson_score"]), not n.startswith("sp|"))
+    # entry represents the protein, and the name settles the rest so CSV order never does.
+    order = lambda n: (
+        stat[n],
+        -float(best[n]["region_poisson_score"]),
+        not n.startswith("sp|"),
+        n,
+    )
     proteins = []
     for names in fold_entries(rows).values():
         names.sort(key=order)

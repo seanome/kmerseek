@@ -7,7 +7,6 @@ rebuilt from committed code; do not import them from ~/.claude.
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-import numpy as np
 from matplotlib.transforms import ScaledTranslation
 
 MM = 1 / 25.4  # inches per millimetre
@@ -79,8 +78,7 @@ def save(fig, path_stem, formats=("pdf", "svg", "png")):
     """Vector PDF/SVG for the journal, 450 dpi PNG for notebooks and slides.
 
     The PNG is stored as 8-bit with a 256-colour palette, which keeps flat-colour figures
-    a fraction of the size of a full-colour PNG. A figure with a continuous colour bar
-    stays in full colour (see to_256_colours).
+    a fraction of the size of a full-colour PNG.
     """
     path_stem = Path(path_stem)
     path_stem.parent.mkdir(parents=True, exist_ok=True)
@@ -91,48 +89,10 @@ def save(fig, path_stem, formats=("pdf", "svg", "png")):
             to_256_colours(path)
 
 
-# A matplotlib colour bar has 256 shades. On the 336 PNGs in 2024-kmerseek-analysis
-# (2026-10-13), the 15 with a colour bar had 251-256 shades in one run and every other
-# figure at most 29.
-MIN_COLOUR_BAR_SHADES = 100
-
-
-def colour_bar_shades(image, max_step=12, width=8):
-    """Most shades in one straight run of pixels that looks like a colour bar.
-
-    In the run each pixel is at most `max_step` levels from the one before it, and is
-    exactly the colour of the next `width` pixels across the run, as in a bar filled
-    across its width. The soft edge of a curve or a marker fails the second condition,
-    so line and scatter plots score near 0. Same test as the repo's scripts/shrink_png.py.
-    """
-    a = np.asarray(image.convert("RGB")).astype(np.int16)
-    best = 0
-    for arr in (a, a.transpose(1, 0, 2)):  # bars running down, then across
-        step = np.abs(np.diff(arr, axis=0)).max(axis=2)
-        in_bar = step <= max_step
-        for k in range(1, width + 1):
-            same = np.zeros_like(in_bar)
-            same[:, :-k] = (arr[1:, :-k] == arr[1:, k:]).all(axis=2)
-            in_bar &= same
-        shades = np.zeros(in_bar.shape[1], dtype=np.int32)
-        for row_in_bar, row_step in zip(in_bar, step):
-            shades = np.where(row_in_bar, shades + (row_step > 0), 0)
-            best = max(best, int(shades.max()))
-    return best
-
-
 def to_256_colours(path):
-    """Rewrite a PNG in place as 8-bit with a palette of at most 256 colours.
-
-    A figure with a continuous colour bar is left in full colour: at 256 colours the bar
-    shows visible steps (Olga, 2026-10-13).
-    """
+    """Rewrite a PNG in place as 8-bit with a palette of at most 256 colours."""
     from PIL import Image
 
     with Image.open(path) as image:
-        if colour_bar_shades(image) >= MIN_COLOUR_BAR_SHADES:
-            return
-        dpi = image.info.get("dpi")
         palette = image.convert("RGB").quantize(colors=256, dither=Image.Dither.NONE)
-    # quantize() drops the 450 dpi tag; without it the PNG opens at 72 dpi, 6x too large.
-    palette.save(path, optimize=True, **({"dpi": dpi} if dpi else {}))
+    palette.save(path, optimize=True)

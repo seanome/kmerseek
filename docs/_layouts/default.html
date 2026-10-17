@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{ page.title | default: site.title }} | kmerseek</title>
+<link rel="stylesheet" href="{{ '/assets/site.css' | relative_url }}">
+</head>
+<body>
+<canvas id="water" aria-hidden="true"></canvas>
+<main class="prose">
+<p class="back"><a href="{{ '/' | relative_url }}">kmerseek docs</a></p>
+<article>
+{{ content }}
+</article>
+</main>
+<footer>
+<p>Source: <a href="https://github.com/seanome/kmerseek/blob/main/docs/{{ page.path }}">docs/{{ page.path }}</a> in github.com/seanome/kmerseek.</p>
+<button type="button" id="pause" aria-pressed="false">pause the water</button>
+</footer>
+<script src="{{ '/assets/water.js' | relative_url }}"></script>
+</body>
+</html>

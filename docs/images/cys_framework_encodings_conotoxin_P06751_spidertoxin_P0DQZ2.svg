@@ -6,7 +6,7 @@
   <rdf:RDF xmlns:dc="http://purl.org/dc/elements/1.1/" xmlns:cc="http://creativecommons.org/ns#" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
    <cc:Work>
     <dc:type rdf:resource="http://purl.org/dc/dcmitype/StillImage"/>
-    <dc:date>2026-10-16T07:15:35.279952</dc:date>
+    <dc:date>2026-10-17T06:06:42.811294</dc:date>
     <dc:format>image/svg+xml</dc:format>
     <dc:creator>
      <cc:Agent>
@@ -35,7 +35,7 @@ L 120.12974 88.853809
 L 120.12974 149.609505 
 L 110.634561 149.609505 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_3">
     <path d="M 177.100815 88.853809 
@@ -43,7 +43,7 @@ L 186.595995 88.853809
 L 186.595995 149.609505 
 L 177.100815 149.609505 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_4">
     <path d="M 234.071891 88.853809 
@@ -51,7 +51,7 @@ L 243.56707 88.853809
 L 243.56707 149.609505 
 L 234.071891 149.609505 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_5">
     <path d="M 243.56707 88.853809 
@@ -59,7 +59,7 @@ L 253.062249 88.853809
 L 253.062249 149.609505 
 L 243.56707 149.609505 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_6">
     <path d="M 291.042966 88.853809 
@@ -67,7 +67,7 @@ L 300.538145 88.853809
 L 300.538145 149.609505 
 L 291.042966 149.609505 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_7">
     <path d="M 367.0044 88.853809 
@@ -75,7 +75,7 @@ L 376.499579 88.853809
 L 376.499579 149.609505 
 L 367.0044 149.609505 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_8">
     <path d="M 110.634561 202.925729 
@@ -83,7 +83,7 @@ L 120.12974 202.925729
 L 120.12974 263.681426 
 L 110.634561 263.681426 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_9">
     <path d="M 177.100815 202.925729 
@@ -91,7 +91,7 @@ L 186.595995 202.925729
 L 186.595995 263.681426 
 L 177.100815 263.681426 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_10">
     <path d="M 234.071891 202.925729 
@@ -99,7 +99,7 @@ L 243.56707 202.925729
 L 243.56707 263.681426 
 L 234.071891 263.681426 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_11">
     <path d="M 243.56707 202.925729 
@@ -107,7 +107,7 @@ L 253.062249 202.925729
 L 253.062249 263.681426 
 L 243.56707 263.681426 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_12">
     <path d="M 291.042966 202.925729 
@@ -115,7 +115,7 @@ L 300.538145 202.925729
 L 300.538145 263.681426 
 L 291.042966 263.681426 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_13">
     <path d="M 367.0044 202.925729 
@@ -123,7 +123,7 @@ L 376.499579 202.925729
 L 376.499579 263.681426 
 L 367.0044 263.681426 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_14">
     <path d="M 110.634561 316.99765 
@@ -131,7 +131,7 @@ L 120.12974 316.99765
 L 120.12974 377.753346 
 L 110.634561 377.753346 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_15">
     <path d="M 177.100815 316.99765 
@@ -139,7 +139,7 @@ L 186.595995 316.99765
 L 186.595995 377.753346 
 L 177.100815 377.753346 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_16">
     <path d="M 234.071891 316.99765 
@@ -147,7 +147,7 @@ L 243.56707 316.99765
 L 243.56707 377.753346 
 L 234.071891 377.753346 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_17">
     <path d="M 243.56707 316.99765 
@@ -155,7 +155,7 @@ L 253.062249 316.99765
 L 253.062249 377.753346 
 L 243.56707 377.753346 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_18">
     <path d="M 291.042966 316.99765 
@@ -163,7 +163,7 @@ L 300.538145 316.99765
 L 300.538145 377.753346 
 L 291.042966 377.753346 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="patch_19">
     <path d="M 367.0044 316.99765 
@@ -171,7 +171,7 @@ L 376.499579 316.99765
 L 376.499579 377.753346 
 L 367.0044 377.753346 
 z
-" clip-path="url(#p3ed530b01c)" style="fill: #f3d9a4"/>
+" clip-path="url(#p78b4d0453a)" style="fill: #f3d9a4"/>
    </g>
    <g id="text_1">
     <text style="font-size: 5px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif; text-anchor: middle" x="191.343584" y="84.566782" transform="rotate(-0 191.343584 84.566782)">10</text>
@@ -1830,7 +1830,7 @@ z
    <g id="text_551">
     <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(6.18759 8.287637)">Two toxins sharing the C-C-CC-C-C cysteine framework: cys2 reads them as the same string, cys_hp3 tells them apart and still shows</text>
     <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(6.18759 16.450449)">where the cysteines are, and hp_pbotc_1st_ed2 tells them apart but hides the cysteines among the other hydrophobic residues.</text>
-    <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(6.18759 24.707762)">Conotoxin MiXIVA (Conus miles, snail, UniProt P06751) and U1-theraphotoxin-Pm1a (Pterinochilus murinus, spider, P0DQZ2), 36 residues each, from</text>
+    <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(6.18759 24.707762)">Conopeptide Mi020 (Conus miles, snail, ConoServer P06751) and Mu/omega-theraphotoxin-Pmu1a (Pterinochilus murinus, spider, UniProt P0DQZ2), 36 residues each, from</text>
     <text style="font-size: 6px; font-family: 'Arial', 'Helvetica', 'Liberation Sans', 'DejaVu Sans', sans-serif" transform="translate(6.18759 32.959074)">5124 mature peptides in ConoServer and Swiss-Prot.</text>
    </g>
    <g id="legend_1">
@@ -1858,7 +1858,7 @@ L 18.78759 47.429904
   </g>
  </g>
  <defs>
-  <clipPath id="p3ed530b01c">
+  <clipPath id="p78b4d0453a">
    <rect x="1.44" y="1.44" width="512.739677" height="420.330229"/>
   </clipPath>
  </defs>
