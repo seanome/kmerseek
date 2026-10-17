@@ -845,11 +845,15 @@ static POLARITY4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(POL
 // that bind each other, and the stretches between them are "spacers". So the aromatic
 // residues get a letter of their own instead of joining the other hydrophobic ones.
 // Charged residues are pooled (D, E, K, R) because their pattern is measured separately
-// by kappa (Das & Pappu 2013). C, G, P and H go with the polar residues: none of them is
-// aromatic or charged at neutral pH, G and P are the most common spacer residues in
-// low-complexity regions, and C is rare in them.
+// by kappa (Das & Pappu 2013). This alphabet cannot measure that pattern: a k-mer cannot
+// tell a positive stretch from a negative one. Pooling also puts R with K, although Wang
+// et al. (2018) found that K does not substitute for R; ARO_HYD_ARG_CHG_POL5 below keeps
+// them apart, at the cost of one more letter. C, G, P and H go with the polar residues
+// (S first, since the first residue names the letter): none of them is aromatic or
+// charged at neutral pH, G and P are the most common spacer residues in low-complexity
+// regions, and C is rare in them.
 // -----------------------------------------------------------------------------
-const ARO_HYD_CHG_POL4_CLUSTERS: &[&str] = &["FWY", "AILMV", "DEKR", "SNQTGCPH"];
+const ARO_HYD_CHG_POL4_CLUSTERS: &[&str] = &["FWY", "AILMV", "DEKR", "SCGHNPQT"];
 static ARO_HYD_CHG_POL4: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_reduced(ARO_HYD_CHG_POL4_CLUSTERS));
 
@@ -862,7 +866,7 @@ static ARO_HYD_CHG_POL4: LazyLock<HashMap<u8, u8>> =
 // a class of its own and D, E and K stay pooled. Comparing this alphabet with
 // ARO_HYD_CHG_POL4 asks whether the arginine letter adds anything.
 // -----------------------------------------------------------------------------
-const ARO_HYD_ARG_CHG_POL5_CLUSTERS: &[&str] = &["FWY", "AILMV", "R", "DEK", "SNQTGCPH"];
+const ARO_HYD_ARG_CHG_POL5_CLUSTERS: &[&str] = &["FWY", "AILMV", "R", "DEK", "SCGHNPQT"];
 static ARO_HYD_ARG_CHG_POL5: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_reduced(ARO_HYD_ARG_CHG_POL5_CLUSTERS));
 
@@ -979,13 +983,13 @@ mod multi_letter_tests {
 
     #[test]
     fn test_aro_hyd_chg_pol4_partition() {
-        // FWY -> f, AILMV -> a, DEKR -> d, SNQTGCPH -> s
+        // FWY -> f, AILMV -> a, DEKR -> d, SCGHNPQT -> s
         assert_eq!(encode_canonical(Alphabet::AroHydChgPol4), "asddfssadaasssdssaff");
     }
 
     #[test]
     fn test_aro_hyd_arg_chg_pol5_partition() {
-        // FWY -> f, AILMV -> a, R -> r, DEK -> d, SNQTGCPH -> s
+        // FWY -> f, AILMV -> a, R -> r, DEK -> d, SCGHNPQT -> s
         assert_eq!(encode_canonical(Alphabet::AroHydArgChgPol5), "asddfssadaasssrssaff");
     }
 
@@ -1042,6 +1046,8 @@ mod multi_letter_tests {
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
         let expected_sizes = [4usize, 4, 4, 5, 5, 7, 8, 12, 12, 14, 17, 18];
+        // zip stops at the shorter side, so a missing size would skip an alphabet.
+        assert_eq!(expected_sizes.len(), Alphabet::multi_letter().count());
         for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
             let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.

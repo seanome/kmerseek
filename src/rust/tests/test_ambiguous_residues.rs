@@ -91,6 +91,9 @@ mod tests {
     /// A, Q, K and N in one class, so it sees no mismatch at all and every one of its 103
     /// windows is shared. The HP alphabets merge three of the four (S/T, Q/K and K/N are
     /// each polar/polar) and keep only residue 19's S/A.
+    /// aro_hyd_chg_pol4 and aro_hyd_arg_chg_pol5 merge only residue 3's S/T, like
+    /// polarity4, so they lose every window covering residue 19, 37 or 103: windows
+    /// starting at 38-81 at k=22 (44 shared), and at 38-84 and 104-106 at k=19 (50 shared).
     const EXPECTED: &[Expected] = &[
         Expected {
             moltype: "protein20",
