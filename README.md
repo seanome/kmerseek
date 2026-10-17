@@ -286,6 +286,14 @@ query-target pairs with a best region at E <= 1 (one per query), and 250 at E <=
 The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
 errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
 
+![Runs counted against predicted on random sequences, and decoy pairs called at each run E-value cutoff](docs/images/run_evalue_checks.png)
+
+(a) Random sequences: counted minus predicted runs, in Poisson standard deviations, for
+each minimum run length L0. The formula counts start positions a run cannot use at the
+end of each sequence; the dashed line is the shortfall that alone gives, and it explains
+the short L0 the test leaves out. (b) Decoys: pairs called at each cutoff, below the
+calibrated count (black) at every cutoff. Drawn by `scripts/plot_run_evalue_checks.py`.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit

@@ -41,6 +41,7 @@ fn random_protein(rng: &mut SplitMix64, len: usize) -> String {
     let total: f64 = SWISSPROT_2026_03_PERCENT.iter().map(|&(_, p)| p).sum();
     (0..len)
         .map(|_| {
+            // The top 53 bits as a uniform number in [0, 1), scaled to the percent total.
             let mut u = (rng.next_u64() >> 11) as f64 / (1u64 << 53) as f64 * total;
             for &(residue, p) in &SWISSPROT_2026_03_PERCENT {
                 if u < p {
@@ -48,6 +49,7 @@ fn random_protein(rng: &mut SplitMix64, len: usize) -> String {
                 }
                 u -= p;
             }
+            // Floating-point rounding can leave u a hair above the last cumulative sum.
             'Y'
         })
         .collect()
@@ -65,13 +67,19 @@ fn sketches(dir: &Path, fasta: &str, moltype: &str, ksize: u32) -> Vec<ProteinSk
     let index = ProteomeIndex::new(dir, ksize, 1, moltype, true).unwrap();
     index.process_fasta(fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
     index.load_state().unwrap();
+    sorted_by_name(&index)
+}
+
+/// The sketches an index holds, in order of name.
+fn sorted_by_name(index: &ProteomeIndex) -> Vec<ProteinSketch> {
     let mut out: Vec<_> = index.get_signatures().iter().map(|e| e.value().clone()).collect();
     out.sort_by(|a, b| a.signature().name.cmp(&b.signature().name));
     out
 }
 
 /// Exact search of every query in `query_fasta` against `target_fasta`, with every filter
-/// open, and the target sketches for recounting compositions.
+/// open, and the target sketches (read back from the searched index) for recounting
+/// compositions.
 fn exact_search(
     query_fasta: &str,
     target_fasta: &str,
@@ -79,10 +87,12 @@ fn exact_search(
     ksize: u32,
 ) -> (Vec<SearchResult>, Vec<ProteinSketch>, Vec<ProteinSketch>) {
     let dir = TempDir::new().unwrap();
-    let targets = sketches(&dir.path().join("t_all"), target_fasta, moltype, ksize);
     let index = ProteomeIndex::new(dir.path().join("t"), ksize, 1, moltype, true).unwrap();
     index.process_fasta(target_fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
     let searcher = ProteinSearcher::new(index).unwrap();
+    // process_fasta streams sketches to disk; read them back to recount compositions.
+    searcher.index().load_state().unwrap();
+    let targets = sorted_by_name(searcher.index());
     let queries = sketches(&dir.path().join("q"), query_fasta, moltype, ksize);
     let results = searcher.search(&queries, &SearchFilters::default()).unwrap();
     (results, queries, targets)
@@ -134,6 +144,10 @@ fn run_lengths(q: &[u8], t: &[u8]) -> Vec<u32> {
     lengths
 }
 
+/// Seed for the random queries and targets: the date the test was written, 2026-09-24.
+/// Any seed works; this one is fixed so the pinned counts below repeat.
+const RANDOM_SEQUENCE_SEED: u64 = 20_260_924;
+
 /// For each L0: regions the search reported with run_length >= L0, and the sum of E_run at
 /// L0 over every query-target pair, including the pairs that share no k-mer at all.
 fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, usize, f64)> {
@@ -142,7 +156,7 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
     const LENGTH: usize = 1000;
     let dir = TempDir::new().unwrap();
     let (q_fasta, t_fasta) = (dir.path().join("q.fasta"), dir.path().join("t.fasta"));
-    let mut rng = SplitMix64::new(20260924);
+    let mut rng = SplitMix64::new(RANDOM_SEQUENCE_SEED);
     write_random_fasta(&q_fasta, "query", N_QUERIES, LENGTH, &mut rng);
     write_random_fasta(&t_fasta, "target", N_TARGETS, LENGTH, &mut rng);
     let (results, queries, targets) =
@@ -192,6 +206,8 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 /// | gbmr4         | 10 | 16 | 128     | 149.4     | 8.2%   | yes      |
 /// | gbmr4         | 10 | 17 | 50      | 61.4      | 12.8%  | yes      |
 ///
+/// Drawn in `docs/images/run_evalue_checks.png`, panel a, with the edge effect.
+///
 /// The counts are pinned; the sequences are seeded. This checks the code against the
 /// formula. It says nothing about real proteins, whose classes repeat in patterns: see
 /// `region_run_evalue_on_2mer_shuffled_decoys`.
@@ -238,15 +254,60 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
 /// | 12 | 10   | 175               | 250        |
 ///
 /// The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys
-/// it errs toward too large.
+/// it errs toward too large. Every cutoff from 0.3 to 1,000 is drawn in
+/// `docs/images/run_evalue_checks.png`, panel b.
 #[test]
 fn region_run_evalue_on_2mer_shuffled_decoys() {
-    // (k, pairs, run E-value at <= 1 and <= 10)
+    // (k, query-target pairs the search reports, pairs at run E-value <= 1 and <= 10).
+    // The search reports a pair when it shares at least one k-mer; of the 25 x 500 =
+    // 12,500 pairs, 8,762 share a 15-mer and 12,440 a 12-mer. All counts as measured by
+    // this test.
     let expected = [(15, 8762, [6, 165]), (12, 12440, [6, 175])];
     for (ksize, n_pairs, run) in expected {
         let (results, queries, targets) =
             exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize);
         assert_eq!((queries.len(), targets.len(), results.len()), (25, 500, n_pairs));
         assert_eq!([1.0, 10.0].map(|x| pairs_at_or_below(&results, x)), run, "k={ksize}");
+    }
+}
+
+/// Folder, relative to the crate root, for the tables `scripts/plot_run_evalue_checks.py`
+/// draws.
+const FIGURE_DATA_DIR: &str = "docs/images/run_evalue_checks";
+
+/// Writes the numbers behind `docs/images/run_evalue_checks.png`, over more L0 and more
+/// E-value cutoffs than the two tests above pin. Run by hand when either test changes:
+///
+/// ```text
+/// cargo test --no-default-features --lib write_run_evalue_figure_data -- --ignored
+/// python scripts/plot_run_evalue_checks.py
+/// ```
+#[test]
+#[ignore = "writes figure data into docs/images; run by hand"]
+fn write_run_evalue_figure_data() {
+    std::fs::create_dir_all(FIGURE_DATA_DIR).unwrap();
+    let mut runs =
+        std::fs::File::create(Path::new(FIGURE_DATA_DIR).join("random_sequences_runs.tsv"))
+            .unwrap();
+    writeln!(runs, "alphabet\tksize\tl0\tcounted\tpredicted").unwrap();
+    for (moltype, ksize, l0s) in [("hp_lehninger2", 12, 12..=22), ("gbmr4", 10, 10..=19)] {
+        let l0s: Vec<u32> = l0s.collect();
+        for (l0, counted, predicted) in counted_and_predicted(moltype, ksize, &l0s) {
+            writeln!(runs, "{moltype}\t{ksize}\t{l0}\t{counted}\t{predicted}").unwrap();
+        }
+    }
+    let mut decoys =
+        std::fs::File::create(Path::new(FIGURE_DATA_DIR).join("decoys_pairs_at_or_below.tsv"))
+            .unwrap();
+    writeln!(decoys, "alphabet\tksize\tn_queries\tevalue_cutoff\tpairs").unwrap();
+    // Cutoffs from 10^-4 to 10^3, four per factor of ten.
+    let cutoffs: Vec<f64> = (-16..=12).map(|i| 10f64.powf(f64::from(i) / 4.0)).collect();
+    for ksize in [15, 12] {
+        let (results, queries, _) =
+            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize);
+        for &x in &cutoffs {
+            let n = pairs_at_or_below(&results, x);
+            writeln!(decoys, "hp_lehninger2\t{ksize}\t{}\t{x}\t{n}", queries.len()).unwrap();
+        }
     }
 }
