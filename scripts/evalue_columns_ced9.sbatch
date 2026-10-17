@@ -14,15 +14,19 @@
 # then draw the figure with scripts/plot_evalue_columns_ced9.py on ced9_k19_extended.csv.
 set -euo pipefail
 
-module load rust llvm/17.0.6 cmake gcc/14.2.0
+# Same build setup as notebook 342's Sherlock job in 2024-kmerseek-analysis. python/3.12.1
+# brings libtinfo, which LLVM's libclang needs, and a Python new enough for pyo3.
+module load python/3.12.1 rust/1.90.0 llvm/17.0.6 cmake/3.31.4 gcc/14.2.0
 # The llvm module puts libc++ headers on CPATH, which breaks the RocksDB build with g++.
-CPATH=$(echo "${CPATH:-}" | tr ':' '\n' | { grep -v '/share/software/user/open/llvm/17.0.6' || true; } | paste -sd:)
-export CPATH LIBCLANG_PATH=/share/software/user/open/llvm/17.0.6/lib CC=gcc CXX=g++
+LLVM_ROOT=/share/software/user/open/llvm/17.0.6
+CPATH=$(printf '%s' "${CPATH:-}" | tr ':' '\n' | { grep -v "^$LLVM_ROOT" || true; } | paste -sd: -)
+export CPATH LIBCLANG_PATH=$LLVM_ROOT/lib CC=gcc CXX=g++ CARGO_HOME=$SCRATCH/.cargo
 
-cargo build --release --no-default-features --bins
+cargo build --release --bin kmerseek
 KMERSEEK=target/release/kmerseek
 F=tests/testdata/fasta/uniprotkb_BCL2_AND_model_organism_9606_2025_02_06.fasta.gz
 OUT=evalue_columns_ced9
+command rm -rf "$OUT"
 mkdir -p "$OUT"
 
 "$KMERSEEK" index --input "$F" --output "$OUT/idx.db" --ksize 19 --alphabet hp_lehninger2
@@ -31,5 +35,5 @@ for mode in exact extended; do
     [[ $mode == extended ]] && extra=(--extend-mismatch-penalty 2)
     "$KMERSEEK" search --query tests/testdata/fasta/ced9.fasta --target "$OUT/idx.db" \
         --output "$OUT/ced9_k19_$mode.csv" --ksize 19 --alphabet hp_lehninger2 \
-        --min-shared-kmers 0 --max-pvalue 1 "${extra[@]}"
+        --min-shared-kmers 0 --max-pvalue 1 ${extra[@]+"${extra[@]}"}
 done

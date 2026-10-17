@@ -10,6 +10,8 @@ for every region CED9 shares with the 300 human BCL2-search proteins, hp_lehning
     python scripts/plot_evalue_columns_ced9.py ced9_k19_extended.csv \
         -o docs/images/evalue_columns_ced9_bcl2_human_k19
 
+scripts/evalue_columns_ced9.sbatch runs the kmerseek commands as a Sherlock job.
+
 Without --extend-mismatch-penalty every row's region_evalue is its region_run_evalue
 (the x axis); with it, every row whose pair has a positive lambda reports
 region_ka_evalue (the y axis).

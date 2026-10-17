@@ -265,17 +265,17 @@ Three of CED9's regions against the 300 human proteins in
 
 | target | search | query span | length | mismatches | L | `region_run_evalue` | `region_ka_evalue` | `region_evalue` | source |
 |---|---|---|---|---|---|---|---|---|---|
-| RTN3_HUMAN | exact | 198-221 | 23 | 0 | 23 | 1.8 | empty | 1.8 | `run` |
-| RTN3_HUMAN | extended | 198-221 | 23 | 0 | 23 | 1.8 | 9.0 | 9.0 | `ka` |
-| CUL1_HUMAN | exact | 152-172 | 20 | 0 | 20 | 14.9 | empty | 14.9 | `run` |
-| CUL1_HUMAN | extended | 139-188 | 49 | 7 | 20 | 14.9 | 1.3 | 1.3 | `ka` |
-| BCL2_HUMAN | exact | 162-181 | 19 | 0 | 19 | 33.6 | empty | 33.6 | `run` |
-| BCL2_HUMAN | extended | 162-188 | 26 | 2 | 19 | 33.6 | 33.8 | 33.8 | `ka` |
+| RTN3_HUMAN | exact | 198-221 | 23 | 0 | 23 | 1.9 | empty | 1.9 | `run` |
+| RTN3_HUMAN | extended | 198-221 | 23 | 0 | 23 | 1.9 | 9.0 | 9.0 | `ka` |
+| CUL1_HUMAN | exact | 152-172 | 20 | 0 | 20 | 15.2 | empty | 15.2 | `run` |
+| CUL1_HUMAN | extended | 139-188 | 49 | 7 | 20 | 15.2 | 1.3 | 1.3 | `ka` |
+| BCL2_HUMAN | exact | 162-181 | 19 | 0 | 19 | 34.2 | empty | 34.2 | `run` |
+| BCL2_HUMAN | extended | 162-188 | 26 | 2 | 19 | 34.2 | 33.8 | 33.8 | `ka` |
 
 `region_run_evalue` looks only at the longest exact run (L), so for these three regions it
 is the same in both searches. `region_ka_evalue` scores the whole extended region. CUL1's region grew from 20
-to 49 positions with 7 mismatches, and its E-value dropped from 14.9 to 1.3. RTN3's region
-did not grow, and the Karlin-Altschul value is 5 times larger than the run value: the run
+to 49 positions with 7 mismatches, and its E-value dropped from 15.2 to 1.3. RTN3's region
+did not grow, and the Karlin-Altschul value is 4.8 times the run value: the run
 E-value assumes positions are independent, while K for `region_ka_evalue` was fitted on the
 database's own proteins (`r_database` 0.80, K 0.0022 for this index). Over all 59 regions
 of the extended search:
@@ -283,7 +283,7 @@ of the extended search:
 ![region_ka_evalue against region_run_evalue for CED9 vs 300 human proteins](docs/images/evalue_columns_ced9_bcl2_human_k19.png)
 
 Drawn by `scripts/plot_evalue_columns_ced9.py`, which lists the commands that made the CSV.
-For a region with no mismatch (blue circles) `region_ka_evalue` is 1.4 to 4.9 times
+For a region with no mismatch (blue circles) `region_ka_evalue` is 1.4 to 4.8 times
 `region_run_evalue`. For a region that grew past mismatches (orange triangles) it is 0.09
 to 1.0 times: the mismatches it crossed are paid for, and the matches past them count.
 
