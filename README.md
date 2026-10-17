@@ -227,7 +227,8 @@ domain that no single gapless run covers becomes one call. On SCOPe40 domains it
 ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
 transfer, where a call has to cover a domain to carry its label. A chained row's
 `region_ka_evalue` takes the database size as the number of targets times the target's
-length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
+length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical,
+so `region_evalue_source` says `ka_chain` for a chained row and `ka` for a single region.
 
 ## E-values in the CSV
 
@@ -240,34 +241,74 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 |---|---|---|
 | `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
 | `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
-| `region_run_evalue` | (1 − Pr(same)) × m × n × Pr(same)^L | all |
+| `region_run_evalue` | Pr(same)^L × ((1 − Pr(same)) × m × n + diagonals), below | all |
 | `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
 | `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
-| `region_evalue_source` | `ka`, `run`, or `run_upper_bound` (below) | all |
+| `region_evalue_source` | `ka`, `ka_chain` (a chain of regions, above), or `run` | all |
 
 `region_evalue` is never the smaller of the two E-values. Picking the better of two tests
 makes a region look more significant than either test says.
 
-The run E-value is the Karlin-Altschul E-value for +1 per match with no mismatch allowed,
-where λ = ln(1 / Pr(same)) and K = 1 − Pr(same). K is the chance that the position before
-a run disagrees, so each run is counted once, where it starts. Counting shared k-mers
-instead would count a run of L positions L − k + 1 times, since overlapping k-mers share
-k − 1 positions and are not independent. `m` is the query length.
-`n` is the database's residue count, which the index does not store, so it is estimated
-as `scaled × db_n_kmers + (ksize − 1) × db_n_targets`. That comes out low by k-mers that
-repeat within a target and k-mers removed as low-complexity, and the run E-value comes out
-low by the same fraction. How low depends on how often k-mers repeat, so on the alphabet
-and k. On the 25 BCL-2-like test proteins (9,288 residues) the estimate is 0.99 of the
-real count at `hp` k=15, 0.93 at k=12 and 0.47 at k=8, and 1.00 at `protein` k=5. With few
-classes and a short k, the run E-value can be half what it should be.
+### Which one to use
 
-When Pr(same) is above 0.99, both sequences are made almost entirely of one class. There
-1 − Pr(same) is close to 0 and would make every run look significant. The factor is
-dropped, the value is an upper bound, and `region_evalue_source` says `run_upper_bound`.
+Use `region_evalue`. `region_run_evalue` and `region_ka_evalue` are the two values it is
+chosen from, and `region_evalue_source` says which one it is. Which one you get depends
+only on whether the search was run with `--extend-mismatch-penalty`:
+
+- without it, every region is exact and `region_evalue` is `region_run_evalue`;
+- with it, `region_evalue` is `region_ka_evalue` on every row whose pair has λ > 0.
+
+Three of CED9's regions against the 300 human proteins in
+`tests/testdata/fasta/uniprotkb_BCL2_AND_model_organism_9606_2025_02_06.fasta.gz`,
+`hp_lehninger2` k=19, searched once without and once with `--extend-mismatch-penalty 2`
+(query positions as in the CSV, counted from 0):
+
+| target | search | query span | length | mismatches | L | `region_run_evalue` | `region_ka_evalue` | `region_evalue` | source |
+|---|---|---|---|---|---|---|---|---|---|
+| RTN3_HUMAN | exact | 198-221 | 23 | 0 | 23 | 1.9 | empty | 1.9 | `run` |
+| RTN3_HUMAN | extended | 198-221 | 23 | 0 | 23 | 1.9 | 9.0 | 9.0 | `ka` |
+| CUL1_HUMAN | exact | 152-172 | 20 | 0 | 20 | 15.2 | empty | 15.2 | `run` |
+| CUL1_HUMAN | extended | 139-188 | 49 | 7 | 20 | 15.2 | 1.3 | 1.3 | `ka` |
+| BCL2_HUMAN | exact | 162-181 | 19 | 0 | 19 | 34.2 | empty | 34.2 | `run` |
+| BCL2_HUMAN | extended | 162-188 | 26 | 2 | 19 | 34.2 | 33.8 | 33.8 | `ka` |
+
+`region_run_evalue` looks only at the longest exact run (L), so for these three regions it
+is the same in both searches. `region_ka_evalue` scores the whole extended region. CUL1's region grew from 20
+to 49 positions with 7 mismatches, and its E-value dropped from 15.2 to 1.3. RTN3's region
+did not grow, and the Karlin-Altschul value is 4.8 times the run value: the run
+E-value assumes positions are independent, while K for `region_ka_evalue` was fitted on the
+database's own proteins (`r_database` 0.80, K 0.0022 for this index). Over all 59 regions
+of the extended search:
+
+![region_ka_evalue against region_run_evalue for CED9 vs 300 human proteins](docs/images/evalue_columns_ced9_bcl2_human_k19.png)
+
+Drawn by `scripts/plot_evalue_columns_ced9.py`, which lists the commands that made the CSV.
+For a region with no mismatch (blue circles) `region_ka_evalue` is 1.4 to 4.8 times
+`region_run_evalue`. For a region that grew past mismatches (orange triangles) it is 0.09
+to 1.0 times: the mismatches it crossed are paid for, and the matches past them count.
+
+The run E-value counts each run once, where it starts. Inside a diagonal (one offset
+between query and target) a run starts where the position before it disagrees, which
+happens with chance 1 − Pr(same). That part, (1 − Pr(same)) × m × n × Pr(same)^L, is the
+Karlin-Altschul E-value for +1 per match with no mismatch allowed, where λ = ln(1 / Pr(same))
+and K = 1 − Pr(same). The first position of a diagonal has no position before it, so a run
+can start there with no disagreement. A query of m residues against a target of t residues
+has m + t − 1 diagonals, `db_n_targets` × (m − 1) + n over the database, and each adds
+Pr(same)^L. That second part is about 1% of the total at Pr(same) 0.5. It takes over as
+Pr(same) nears 1, when both sequences are almost all one class: then almost no position
+inside a diagonal starts a run, but every diagonal still holds one, so the E-value stays
+large and changes smoothly with Pr(same). Counting k-mers instead of runs would count a run
+of L positions L − k + 1 times, since overlapping k-mers share k − 1 positions.
+
+`m` is the query length and `n` the database's residue count, counted when the index is
+built (kmerseek ≥ 0.5; older indexes must be rebuilt). The value is a little high, never
+low: it counts the last L − 1 positions of each diagonal as possible starts too. For a
+280-residue query against one 400-residue target at Pr(same) 0.5 and L = 19 it is 1.12
+times the exact count.
 
 On sequences whose letters are drawn independently, the formula predicts how many runs
 an exact search reports. At `hp_lehninger2` the search finds 225 runs of 20 or more where
-the formula predicts 200.7; at `gbmr4`, 50 runs of 17 or more against 61.4, both within
+the formula predicts 201.5; at `gbmr4`, 50 runs of 17 or more against 61.6, both within
 3 standard deviations (test `region_run_evalue_matches_runs_between_random_sequences`).
 
 Real proteins are not random, so the run E-value was also measured on decoys. The 25
@@ -279,9 +320,9 @@ query-target pairs with a best region at E <= 1 (one per query), and 250 at E <=
 | k | E <= | `region_run_evalue` | calibrated |
 |---|---|---|---|
 | 15 | 1 | 6 | 25 |
-| 15 | 10 | 165 | 250 |
+| 15 | 10 | 162 | 250 |
 | 12 | 1 | 6 | 25 |
-| 12 | 10 | 175 | 250 |
+| 12 | 10 | 162 | 250 |
 
 The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
 errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
@@ -292,7 +333,8 @@ errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
 each minimum run length L0. The formula counts start positions a run cannot use at the
 end of each sequence; the dashed line is the shortfall that alone gives, and it explains
 the short L0 the test leaves out. (b) Decoys: pairs called at each cutoff, below the
-calibrated count (black) at every cutoff. Drawn by `scripts/plot_run_evalue_checks.py`.
+calibrated count (black) at every cutoff; k = 12 and k = 15 give the same counts, so
+their lines lie on top of each other. Drawn by `scripts/plot_run_evalue_checks.py`.
 
 ## Visualizing hits
 
@@ -636,7 +678,12 @@ and cost nothing. Indexing every reading rather than a chosen subset keeps match
 depending on which reading was kept. A matched region runs through an ambiguous residue in
 the same way: the stored encoded sequence writes the residue as its class where the alphabet
 merges the two readings and as the letter itself where it does not, and the letter agrees
-with either class it stands for.
+with either class it stands for. A window sketched under several readings that both
+sequences share would list the same (query, target) position once per reading, so the
+region search keeps each position once. Without that, topi ribonuclease against itself at
+`protein20` k=10 came back as 427 regions instead of one over all 124 residues
+([figure](docs/images/topi_self_ambiguous_position_dedup.png),
+drawn by `scripts/plot_ambiguous_position_dedup.py`).
 
 Containment, its target-side counterpart and Jaccard count a window once however many
 readings it was sketched under. A true homolog matches one reading per window, so counting

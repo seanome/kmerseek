@@ -171,7 +171,7 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
                 .filter(|region| region.run_length >= l0)
                 .count();
             let predicted: f64 = pairs(&queries, &targets)
-                .map(|(q, t)| run_evalue(pr_same(q, t), l0, q.len() as f64, t.len() as f64))
+                .map(|(q, t)| run_evalue(pr_same(q, t), l0, q.len() as f64, t.len() as f64, 1.0))
                 .sum();
             let scanned = scanned_runs.iter().filter(|&&length| length >= l0).count();
             assert_eq!(counted, scanned, "{moltype} L0={l0}: the search missed or split runs");
@@ -195,16 +195,16 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 ///
 /// | alphabet      | k  | L0 | counted | predicted | spread | asserted |
 /// |---------------|----|----|---------|-----------|--------|----------|
-/// | hp_lehninger2 | 12 | 12 | 49,254  | 50,268.3  | 0.4%   | no       |
-/// | hp_lehninger2 | 12 | 16 | 3,220   | 3,175.9   | 1.8%   | no       |
-/// | hp_lehninger2 | 12 | 18 | 795     | 798.3     | 3.5%   | yes      |
-/// | hp_lehninger2 | 12 | 19 | 402     | 400.2     | 5.0%   | yes      |
-/// | hp_lehninger2 | 12 | 20 | 225     | 200.7     | 7.1%   | yes      |
-/// | gbmr4         | 10 | 10 | 30,439  | 31,258.6  | 0.6%   | no       |
-/// | gbmr4         | 10 | 13 | 2,093   | 2,157.9   | 2.2%   | no       |
-/// | gbmr4         | 10 | 15 | 327     | 363.7     | 5.2%   | yes      |
-/// | gbmr4         | 10 | 16 | 128     | 149.4     | 8.2%   | yes      |
-/// | gbmr4         | 10 | 17 | 50      | 61.4      | 12.8%  | yes      |
+/// | hp_lehninger2 | 12 | 12 | 49,254  | 50,469.8  | 0.4%   | no       |
+/// | hp_lehninger2 | 12 | 16 | 3,220   | 3,188.6   | 1.8%   | no       |
+/// | hp_lehninger2 | 12 | 18 | 795     | 801.5     | 3.5%   | yes      |
+/// | hp_lehninger2 | 12 | 19 | 402     | 401.9     | 5.0%   | yes      |
+/// | hp_lehninger2 | 12 | 20 | 225     | 201.5     | 7.0%   | yes      |
+/// | gbmr4         | 10 | 10 | 30,439  | 31,364.5  | 0.6%   | no       |
+/// | gbmr4         | 10 | 13 | 2,093   | 2,165.2   | 2.1%   | no       |
+/// | gbmr4         | 10 | 15 | 327     | 364.9     | 5.2%   | yes      |
+/// | gbmr4         | 10 | 16 | 128     | 149.9     | 8.2%   | yes      |
+/// | gbmr4         | 10 | 17 | 50      | 61.6      | 12.7%  | yes      |
 ///
 /// Drawn in `docs/images/run_evalue_checks.png`, panel a, with the edge effect.
 ///
@@ -249,12 +249,14 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
 /// | k  | E <= | region_run_evalue | calibrated |
 /// |----|------|-------------------|------------|
 /// | 15 | 1    | 6                 | 25         |
-/// | 15 | 10   | 165               | 250        |
+/// | 15 | 10   | 162               | 250        |
 /// | 12 | 1    | 6                 | 25         |
-/// | 12 | 10   | 175               | 250        |
+/// | 12 | 10   | 162               | 250        |
 ///
 /// The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys
-/// it errs toward too large. Every cutoff from 0.3 to 1,000 is drawn in
+/// it errs toward too large. k changes which pairs share a seed but not a pair's run
+/// E-value, which depends on the run length and the database's residue count only, so the
+/// two k give the same counts here. Every cutoff from 0.3 to 1,000 is drawn in
 /// `docs/images/run_evalue_checks.png`, panel b.
 #[test]
 fn region_run_evalue_on_2mer_shuffled_decoys() {
@@ -262,7 +264,7 @@ fn region_run_evalue_on_2mer_shuffled_decoys() {
     // The search reports a pair when it shares at least one k-mer; of the 25 x 500 =
     // 12,500 pairs, 8,762 share a 15-mer and 12,440 a 12-mer. All counts as measured by
     // this test.
-    let expected = [(15, 8762, [6, 165]), (12, 12440, [6, 175])];
+    let expected = [(15, 8762, [6, 162]), (12, 12440, [6, 162])];
     for (ksize, n_pairs, run) in expected {
         let (results, queries, targets) =
             exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize);

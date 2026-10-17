@@ -15,7 +15,7 @@ use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::{
     fit_scores, fit_scores_with_reference, make_decoy, run_evalue, DecoyNull, EvalueSource,
-    KaCalibration, SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS, RUN_UPPER_BOUND_PR_SAME,
+    KaCalibration, SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
@@ -295,9 +295,18 @@ fn match_probability(p: &ClassComposition, q: &ClassComposition) -> f64 {
 }
 
 /// The sequence a match is counted on: the encoded sequence, or the raw residues for
-/// `protein`, which stores no encoded one. None when the sketch stores no sequence.
+/// `protein`, which stores no encoded one. None when the sketch stores no sequence, and for
+/// any other alphabet when the encoded one is missing: counting a reduced alphabet's matches
+/// on amino-acid letters would give a pr_same near 0 and wrong runs, with no error.
 fn class_sequence(sketch: &ProteinSketch) -> Option<&[u8]> {
-    sketch.get_moltype_sequence().or_else(|| sketch.get_raw_sequence()).map(str::as_bytes)
+    let encoded = sketch.get_moltype_sequence();
+    // `MolType::new` stores sourmash's `protein` as `protein20`.
+    let sequence = if sketch.moltype().get() == "protein20" {
+        encoded.or_else(|| sketch.get_raw_sequence())
+    } else {
+        encoded
+    };
+    sequence.map(str::as_bytes)
 }
 
 /// `match_probability` of a query and one target. The target's composition is counted
@@ -309,33 +318,49 @@ fn pair_pr_same(query: &PreparedQuery<'_>, target: &ProteinSketch) -> Option<f64
 }
 
 /// Set `run_length` on every region, before any chaining, while each region still sits on
-/// one diagonal.
+/// one diagonal. A region whose span does not fit inside both stored sequences keeps
+/// `run_length` 0, which leaves it without a run E-value, and is reported on stderr.
 fn measure_runs(regions: &mut [MatchedRegion], query: &ProteinSketch, target: &ProteinSketch) {
     let (Some(q), Some(t)) = (class_sequence(query), class_sequence(target)) else {
         return;
     };
     let agree = residues_agree(&query.moltype().to_string());
     for region in regions.iter_mut() {
-        region.run_length = longest_agreeing_run(q, t, region, &agree);
+        match longest_agreeing_run(q, t, region, &agree) {
+            Some(run) => region.run_length = run,
+            None => eprintln!(
+                "Warning: region {}..{} on target {}..{} of {} vs {} lies outside the stored \
+                 sequences ({} and {} long); it gets no run E-value",
+                region.start,
+                region.end,
+                region.target_start,
+                region.target_end,
+                query.signature().name,
+                target.signature().name,
+                q.len(),
+                t.len()
+            ),
+        }
     }
 }
 
 /// Longest stretch of agreeing positions inside `region`'s span, walking its diagonal from
-/// (`start`, `target_start`).
+/// (`start`, `target_start`). None when the span runs past the end of either sequence.
 fn longest_agreeing_run(
     q: &[u8],
     t: &[u8],
     region: &MatchedRegion,
     agree: &impl Fn(u8, u8) -> bool,
-) -> u32 {
-    let q_span = q.get(region.start as usize..region.end as usize).unwrap_or_default();
-    let t_span = t.get(region.target_start as usize..).unwrap_or_default();
+) -> Option<u32> {
+    let q_span = q.get(region.start as usize..region.end as usize)?;
+    let t_end = region.target_start as usize + q_span.len();
+    let t_span = t.get(region.target_start as usize..t_end)?;
     let (mut best, mut current) = (0, 0);
     for (&a, &b) in q_span.iter().zip(t_span) {
         current = if agree(a, b) { current + 1 } else { 0 };
         best = best.max(current);
     }
-    best
+    Some(best)
 }
 
 /// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
@@ -486,7 +511,7 @@ pub struct SearchResultCsv {
     /// region_ka_evalue when present, otherwise region_run_evalue (see
     /// MatchedRegion::evalue). Empty only when both are.
     pub region_evalue: Option<f64>,
-    /// `ka`, `run` or `run_upper_bound`: which E-value region_evalue is.
+    /// `ka`, `ka_chain` or `run`: which E-value region_evalue is.
     pub region_evalue_source: Option<EvalueSource>,
 }
 
@@ -639,8 +664,9 @@ pub struct SearchResult {
     /// Higher = matched k-mers are collectively more common in the target DB.
     pub sum_matched_kmer_freq: f64,
 
-    /// Expected number of shared k-mers by chance: Σ freq_target[h]/N over ALL query k-mers.
-    /// Uses this query's specific k-mers, so it is query-dependent.
+    /// Expected number of shared k-mers by chance with this target, given its size: for each
+    /// query k-mer, the chance that a protein with as many k-mers as this target contains it,
+    /// summed. See `ProteinSearcher::calculate_expected_shared_kmers`.
     pub query_expected_shared_kmers: f64,
 
     /// Fold-enrichment: n_intersecting_hashes / query_expected_shared_kmers.
@@ -856,10 +882,10 @@ pub struct MatchedRegion {
     pub pr_same: Option<f64>,
 
     /// Expected number of runs at least `run_length` long between an unrelated query and
-    /// the database: (1 - pr_same) m n pr_same^run_length, with m the query length and n
-    /// the database's residues (`ProteinSearcher::db_n_residues`). See
-    /// `evalue::run_evalue`, including the upper bound used when pr_same > 0.99. None without
-    /// DB context or `pr_same`.
+    /// the database: pr_same^run_length ((1 - pr_same) m n + n_targets (m - 1) + n), with m
+    /// the query length and n the database's residues (`ProteinSearcher::db_n_residues`).
+    /// See `evalue::run_evalue`. None without `pr_same`, or when `run_length` is 0 because
+    /// the region could not be measured (see `measure_runs`).
     pub run_evalue: Option<f64>,
 
     /// The E-value to rank and filter by: `ka_evalue` when there is one, otherwise
@@ -870,6 +896,41 @@ pub struct MatchedRegion {
 
     /// Which of the two `evalue` is (see `EvalueSource`).
     pub evalue_source: Option<EvalueSource>,
+}
+
+/// Expected number of k-mers a query shares by chance with an unrelated target:
+///
+/// ```text
+/// μ = Σ over query k-mers h of  1 - (1 - f(h))^r
+///
+/// f(h)  share of database proteins that hold h          (one entry of `shares`)
+/// r     target's k-mers / mean k-mers per database protein   (`size_ratio`)
+/// μ     the mean of the Poisson that gives the whole-protein p-value (not an E-value)
+/// ```
+///
+/// Each term is the chance that the target holds h. Summing chances gives the expected
+/// count without assuming the k-mers are independent (linearity of expectation).
+///
+/// Where the term comes from. Model an unrelated protein with m distinct k-mers as m
+/// independent draws, each equal to h with probability q(h); it holds h with probability
+/// 1 - (1 - q)^m. The index stores f(h), not q(h), so q(h) is set so that a protein of mean
+/// size m̄ holds h with probability f(h): 1 - (1 - q)^m̄ = f, so 1 - q = (1 - f)^(1/m̄).
+/// For the target, m = m_t: 1 - (1 - f)^(m_t/m̄) = 1 - (1 - f)^r.
+///
+/// At r = 1 the term is f(h). For a rare k-mer it
+/// is about r * f(h): twice the size, twice the chance. It never passes 1, where r * f(h)
+/// would (f = 0.05, r = 48: 2.4 against 0.91).
+///
+/// Approximate in two ways: repeated stretches make a protein's k-mers cluster, and fitting
+/// q(h) at the mean size underestimates it slightly for common k-mers, because f(h) is
+/// really an average over proteins of every size. On the human proteome the observed /
+/// expected count stays between 0.81 and 1.07 across target lengths, where with f(h) alone
+/// it climbs from 0.21 to 2.82:
+/// `docs/images/expected_vs_observed_by_length_ced9_p66_human.png`.
+fn expected_shared_kmers(shares: impl Iterator<Item = f64>, size_ratio: f64) -> f64 {
+    // ln_1p and exp_m1 keep a rare k-mer's precision: 1 - f rounds to 1 for f below about
+    // 1e-16, and then (1 - f)^r would give exactly 0.
+    shares.map(|f| -(size_ratio * (-f).ln_1p()).exp_m1()).sum()
 }
 
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
@@ -915,9 +976,10 @@ fn fold_enrichment(observed: u32, expected: f64) -> f64 {
 /// `freq_target(h)` is how many target signatures contain a k-mer with hash `h`, and `N` is the
 /// total number of target signatures. Note there is no division by the region's length here:
 /// each term in the sum is already a per-k-mer database frequency, and the sum has one term per
-/// k-mer position inside the region. This is the same formula as
-/// `ProteinSearcher::calculate_expected_shared_kmers`, restricted to k-mer positions inside the
-/// region instead of the whole query.
+/// k-mer position inside the region. This is `ProteinSearcher::calculate_expected_shared_kmers`
+/// for a target of mean size (r = 1), restricted to k-mer positions inside the region instead
+/// of the whole query. It does not scale with the target's size, unlike the whole-query count:
+/// see issue 139 in seanome/kmerseek.
 ///
 /// The window is `[start, end - ksize + 1)`, not the region's full span: a k-mer belongs to the
 /// region only if it fits entirely inside. That is what makes the count equal
@@ -993,17 +1055,11 @@ impl MatchedRegion {
 
     /// Set `evalue` and `evalue_source` from `ka_evalue` and `run_evalue`.
     fn choose_evalue(&mut self) {
-        let run_source = |p: f64| {
-            if p > RUN_UPPER_BOUND_PR_SAME {
-                EvalueSource::RunUpperBound
-            } else {
-                EvalueSource::Run
-            }
-        };
-        (self.evalue, self.evalue_source) = match (self.ka_evalue, self.run_evalue, self.pr_same) {
-            (Some(e), _, _) => (Some(e), Some(EvalueSource::Ka)),
-            (None, Some(e), Some(p)) => (Some(e), Some(run_source(p))),
-            _ => (None, None),
+        let ka_source = if self.n_chained > 1 { EvalueSource::KaChain } else { EvalueSource::Ka };
+        (self.evalue, self.evalue_source) = match (self.ka_evalue, self.run_evalue) {
+            (Some(e), _) => (Some(e), Some(ka_source)),
+            (None, Some(e)) => (Some(e), Some(EvalueSource::Run)),
+            (None, None) => (None, None),
         };
     }
 }
@@ -1098,13 +1154,11 @@ pub struct ProteinSearcher {
     /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
     /// on every candidate pair.
     db_n_kmers: usize,
-    /// Residues in the database, n in `run_evalue`. The index does not store it, so it is
-    /// estimated from the k-mer count as `scaled * db_n_kmers + (ksize - 1) * db_n_targets`:
-    /// a sequence of L residues has L - k + 1 k-mers, and a sketch keeps 1 in `scaled` of
-    /// them. `db_n_kmers` counts a k-mer once per target however often it occurs there, and
-    /// leaves out k-mers removed as low-complexity, so this comes out low by those. A low n
-    /// makes every run E-value smaller by the same fraction: on the 25-protein test set,
-    /// 0.99 of the real count at hp k=15 but 0.47 at hp k=8.
+    /// Residues in the database, n in `run_evalue`: `ProteomeIndex::total_residues`, counted
+    /// when the index was built. Estimating it from the k-mer count instead came out low,
+    /// since a k-mer that repeats within a target is counted once and low-complexity k-mers
+    /// are left out: 0.47 of the real count at hp k=8 on the 25-protein test set, which made
+    /// every run E-value half what it should be.
     db_n_residues: f64,
     /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
     extension: Option<ExtensionParams>,
@@ -1403,9 +1457,8 @@ impl ProteinSearcher {
 
     fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
         let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
-        let db_n_kmers: usize = stats.kmer_frequencies.values().sum();
-        let db_n_residues = index.scaled() as f64 * db_n_kmers as f64
-            + (index.ksize() as f64 - 1.0) * stats.total_signatures as f64;
+        let db_n_kmers = stats.kmer_frequencies.values().sum();
+        let db_n_residues = index.total_residues() as f64;
         Self {
             index,
             stats,
@@ -1485,7 +1538,7 @@ impl ProteinSearcher {
     /// A position holding an ambiguous residue (B, J or Z) is recorded under every reading's
     /// hash, so a position can carry several hashes. Their values are added, which keeps the
     /// whole-query total equal to the sum `calculate_expected_shared_kmers` takes over every
-    /// query hash.
+    /// query hash for a target of mean size.
     ///
     /// Sized to the highest k-mer start position actually present in `query.kmer_positions()`,
     /// not to the raw sequence length, since raw sequences are only optionally stored.
@@ -1777,7 +1830,7 @@ impl ProteinSearcher {
         }
 
         let query_expected_shared_kmers =
-            self.calculate_expected_shared_kmers(query.sketch, target);
+            self.calculate_expected_shared_kmers(query.sketch, target_mins.len());
         let query_poisson_pvalue =
             poisson_survival(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
@@ -1854,6 +1907,8 @@ impl ProteinSearcher {
 
         let pr_same = pair_pr_same(query, target);
         measure_runs(&mut result.matched_regions, query.sketch, target);
+        // Query length for both E-values, in the positions matches are counted on.
+        let m = class_sequence(query.sketch).map_or(0, <[u8]>::len) as f64;
 
         // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
         // Only meaningful with a mismatch penalty, which is the score's mismatch term.
@@ -1863,7 +1918,6 @@ impl ProteinSearcher {
             {
                 let ka_lambda = karlin_altschul_lambda(a, params.scoring.mismatch_penalty)
                     * params.ka.r_database;
-                let m = q_enc.len() as f64;
                 let n = self.db_n_kmers as f64;
                 for region in result.matched_regions.iter_mut() {
                     let matches = region.length as f64 - region.n_mismatches as f64;
@@ -1894,7 +1948,7 @@ impl ProteinSearcher {
             }
         }
 
-        self.score_runs(&mut result.matched_regions, pr_same, query.sketch);
+        self.score_runs(&mut result.matched_regions, pr_same, m);
 
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
@@ -1944,17 +1998,13 @@ impl ProteinSearcher {
 
     /// Fill `pr_same`, `run_evalue`, and the `evalue` chosen from it and `ka_evalue`, on
     /// every region of one pair.
-    fn score_runs(
-        &self,
-        regions: &mut [MatchedRegion],
-        pr_same: Option<f64>,
-        query: &ProteinSketch,
-    ) {
-        let m = class_sequence(query).map_or(0, <[u8]>::len) as f64;
+    fn score_runs(&self, regions: &mut [MatchedRegion], pr_same: Option<f64>, m: f64) {
+        let n_targets = self.stats.total_signatures as f64;
         for region in regions.iter_mut() {
             region.pr_same = pr_same;
-            region.run_evalue =
-                pr_same.map(|p| run_evalue(p, region.run_length, m, self.db_n_residues));
+            region.run_evalue = pr_same
+                .filter(|_| region.run_length > 0)
+                .map(|p| run_evalue(p, region.run_length, m, self.db_n_residues, n_targets));
             region.choose_evalue();
         }
     }
@@ -2068,30 +2118,42 @@ impl ProteinSearcher {
             .sum()
     }
 
-    /// Expected number of shared k-mers by chance: Σ freq_target[h]/N over ALL query k-mers.
+    /// Expected number of k-mers the query shares by chance with a target holding
+    /// `target_n_hashes` k-mers.
     ///
-    /// For each k-mer in this specific query, sums its probability of appearing in a random
-    /// target sequence. Query-dependent (changes with different query sequences).
-    /// Compare to n_intersecting_hashes: if observed >> expected, match is significant.
+    /// ```text
+    /// f(h) = freq_target(h) / N             share of database proteins holding h
+    /// r    = target_n_hashes / mean_hashes  target size relative to the mean protein
+    /// μ    = Σ over query k-mers h of  1 - (1 - f(h))^r   the Poisson mean, not an E-value
+    /// ```
+    ///
+    /// `mean_hashes` is `db_n_kmers / N`: the sum of freq_target over every hash counts each
+    /// (protein, k-mer) pair once, so it is the database's total k-mers per protein. A
+    /// protein of mean size has r = 1 and μ = Σ f(h). A longer target holds more k-mers and
+    /// so shares more with any query by chance. Without r, titin (TTN, 35_991 residues, with
+    /// r = 48.6 at hp_lehninger2 k=17) ranked first by fold enrichment and by p-value among the
+    /// human proteins hit by Ced-9 and by P66. The power, rather than
+    /// f(h) * r, keeps each term a probability when f(h) * r would pass 1.
+    ///
+    /// 0.0 when the database or the target is empty, which `poisson_survival` reads as no
+    /// evidence. The target check is needed, not only tidy: a k-mer in every protein has
+    /// f(h) = 1, and at r = 0 its term is 0 * ln(0) = NaN.
     pub fn calculate_expected_shared_kmers(
         &self,
         query_sketch: &ProteinSketch,
-        _target_sketch: &ProteinSketch,
+        target_n_hashes: usize,
     ) -> f64 {
-        let query_mins = query_sketch.signature().minhash.mins();
         let total_signatures = self.stats.total_signatures as f64;
-
-        // For each k-mer in the query (regardless of whether it's in target),
-        // calculate the expected probability it would appear in the target.
+        if total_signatures == 0.0 || self.db_n_kmers == 0 || target_n_hashes == 0 {
+            return 0.0;
+        }
+        let mean_hashes = self.db_n_kmers as f64 / total_signatures;
         // Sequential iter: rayon overhead is unjustified for per-query-sized collections.
-        query_mins
-            .iter()
-            .map(|&hashval| {
-                let db_frequency =
-                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
-                db_frequency / total_signatures
-            })
-            .sum()
+        let shares = query_sketch.signature().minhash.mins().into_iter().map(|hashval| {
+            self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64
+                / total_signatures
+        });
+        expected_shared_kmers(shares, target_n_hashes as f64 / mean_hashes)
     }
 
     /// Get the underlying index
@@ -2694,18 +2756,20 @@ pub fn find_matched_regions(
 /// how many positions the best-scoring extension covers. The score starts at 0 on the seed
 /// edge, so a side whose score never rises above 0 keeps nothing, however far the walk went
 /// before giving up. `extend_regions` calls this once per side; `docs/images/xdrop_walk_bcl2_ced9_bh1.png`
-/// shows both walks on one seed.
+/// shows both walks on one seed. `agree` is `residues_agree`, so an ambiguous residue scores
+/// +1 against either class it stands for, as it did when the seed k-mers were hashed.
 fn xdrop_walk(
     q: &[u8],
     t: &[u8],
     positions: impl Iterator<Item = (usize, usize)>,
     params: ExtensionParams,
+    agree: &impl Fn(u8, u8) -> bool,
 ) -> usize {
     let mut score = 0.0;
     let mut best = 0.0;
     let mut best_len = 0;
     for (n, (qi, ti)) in positions.enumerate() {
-        score += if q[qi] == t[ti] { 1.0 } else { -params.scoring.mismatch_penalty };
+        score += if agree(q[qi], t[ti]) { 1.0 } else { -params.scoring.mismatch_penalty };
         if score > best {
             best = score;
             best_len = n + 1;
@@ -2721,7 +2785,8 @@ fn xdrop_walk(
 ///
 /// `n_shared` is carried from the seeds (summed on merge) and never recomputed from the
 /// extended length, so the Poisson test keeps counting shared k-mers rather than residues.
-/// `n_mismatches` is recounted over the final span. Regions come back sorted by query start.
+/// `n_mismatches` is recounted over the final span, with an ambiguous residue agreeing with
+/// either class it stands for. Regions come back sorted by query start.
 ///
 /// Both sketches must carry encoded and raw sequences; without them the regions are returned
 /// unchanged, which is also what `find_matched_regions` does in that case.
@@ -2743,6 +2808,7 @@ pub fn extend_regions(
         return regions;
     };
     let (q, t) = (q_enc.as_bytes(), t_enc.as_bytes());
+    let agree = residues_agree(&query_sketch.moltype().to_string());
 
     // Extend every seed on its own diagonal.
     let mut extended: Vec<MatchedRegion> = regions
@@ -2750,8 +2816,8 @@ pub fn extend_regions(
         .map(|mut r| {
             let (qs, qe) = (r.start as usize, r.end as usize);
             let (ts, te) = (r.target_start as usize, r.target_end as usize);
-            let right = xdrop_walk(q, t, (qe..q.len()).zip(te..t.len()), params);
-            let left = xdrop_walk(q, t, (0..qs).rev().zip((0..ts).rev()), params);
+            let right = xdrop_walk(q, t, (qe..q.len()).zip(te..t.len()), params, &agree);
+            let left = xdrop_walk(q, t, (0..qs).rev().zip((0..ts).rev()), params, &agree);
             r.start = (qs - left) as u32;
             r.end = (qe + right) as u32;
             r.target_start = (ts - left) as u32;
@@ -2783,7 +2849,8 @@ pub fn extend_regions(
         let (qs, qe) = (r.start as usize, r.end as usize);
         let (ts, te) = (r.target_start as usize, r.target_end as usize);
         r.length = (qe - qs) as u32;
-        r.n_mismatches = q[qs..qe].iter().zip(&t[ts..te]).filter(|(a, b)| a != b).count() as u32;
+        r.n_mismatches =
+            q[qs..qe].iter().zip(&t[ts..te]).filter(|&(&a, &b)| !agree(a, b)).count() as u32;
         r.subseq = q_raw[qs..qe].to_string();
         r.target_subseq = t_raw[ts..te].to_string();
         r.moltype_seq = t_enc[ts..te].to_string();
@@ -2859,8 +2926,9 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
     let agree = residues_agree(pair.moltype);
     let diagonal = |r: &MatchedRegion| r.target_start as i64 - r.start as i64;
     // A member's raw score, counted over its own span with an ambiguous residue agreeing
-    // with either class it stands for, as the chain's recount below does. The region's
-    // stored n_mismatches cannot be used: extend_regions counts B, J and Z as mismatches.
+    // with either class it stands for, as the chain's recount below does. Counted here
+    // rather than read from n_mismatches so that every member is scored by this one rule,
+    // whichever function built it.
     let raw_score = |r: &MatchedRegion| {
         let (qs, qe, ts) = (r.start as usize, r.end as usize, r.target_start as usize);
         let mismatches = q[qs..qe].iter().zip(&t[ts..]).filter(|&(&a, &b)| !agree(a, b)).count();
@@ -2967,8 +3035,10 @@ impl ProteinSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketch::ProteinSketch;
-    use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
+    use crate::sketch::{ProteinSketch, ProteinSketchStore};
+    use crate::tests::test_fixtures::{
+        BCL2_1_32, BCL2_1_32_KMERS_K5, TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ,
+    };
     use approx::assert_relative_eq;
     use needletail::parse_fastx_file;
     use rstest::{fixture, rstest};
@@ -3691,6 +3761,22 @@ mod tests {
             epsilon = 1e-9
         );
         assert_eq!(karlin_altschul_sum_p(2000.0, 2), 0.0, "P itself underflows there");
+    }
+
+    /// B stands for D or N. Under sdm12 D and N are separate classes, so B agrees with
+    /// both. Walking BBB against DDN with penalty 1 and give-up margin 2 keeps all three
+    /// positions when B agrees with either reading, and none when only equal bytes agree.
+    #[test]
+    fn test_xdrop_walk_counts_an_ambiguous_residue_as_agreeing() {
+        let q = crate::hash_functions::encode_by_alphabet("BBB", "sdm12").unwrap();
+        let t = crate::hash_functions::encode_by_alphabet("DDN", "sdm12").unwrap();
+        let params = extension(1.0, 2.0);
+        let walk = |agree: &dyn Fn(u8, u8) -> bool| {
+            xdrop_walk(q.as_bytes(), t.as_bytes(), (0..3).zip(0..3), params, &agree)
+        };
+        println!("{q} {t}");
+        assert_eq!(walk(&residues_agree("sdm12")), 3);
+        assert_eq!(walk(&|a, b| a == b), 0);
     }
 
     #[test]
@@ -5034,8 +5120,8 @@ mod tests {
     /// CED-9 against the 25 BCL-2-like proteins, exact search at hp_lehninger2 k=15. BCL2
     /// shares one 19-residue region with CED-9. An exact region is one unbroken run, so its
     /// run length is its length. pr_same is recounted here from the two HP strings, and the
-    /// run E-value from the formula with m = 280 CED-9 residues and n = db_n_kmers +
-    /// 14 x 25 targets.
+    /// run E-value from the formula with m = 280 CED-9 residues, n the 9,288 residues of the
+    /// 25 targets (summed here from their stored sequences), and 25 targets.
     #[test]
     fn region_run_evalue_on_exact_regions_uses_the_whole_region() -> Result<()> {
         let temp_dir = TempDir::new()?;
@@ -5057,15 +5143,22 @@ mod tests {
             h_fraction(target.get_moltype_sequence().unwrap()),
         );
         let pr_same = hq * ht + (1.0 - hq) * (1.0 - ht);
-        let n = (bcl2.db_n_kmers + 14 * 25) as f64;
+        // n, counted here from the FASTA rather than from the index.
+        let mut reader = needletail::parse_fastx_file(TEST_FASTA_GZ)?;
+        let mut n = 0;
+        while let Some(record) = reader.next() {
+            n += record?.num_bases();
+        }
+        assert_eq!((n, searcher.index.total_residues()), (9288, 9288));
+        let n = n as f64;
         assert_eq!(bcl2.matched_regions.len(), 1);
         let region = &bcl2.matched_regions[0];
         assert_eq!((region.length, region.run_length), (19, 19));
         assert_relative_eq!(region.pr_same.unwrap(), pr_same, epsilon = 1e-12);
         assert_relative_eq!(pr_same, 0.502_375_971_309_025_7, epsilon = 1e-12);
-        let expected = (1.0 - pr_same) * 280.0 * n * pr_same.powi(19);
+        let expected = ((1.0 - pr_same) * 280.0 * n + 25.0 * 279.0 + n) * pr_same.powi(19);
         assert_relative_eq!(region.run_evalue.unwrap(), expected, max_relative = 1e-12);
-        assert_relative_eq!(region.run_evalue.unwrap(), 2.671_370_550_951_629, epsilon = 1e-9);
+        assert_relative_eq!(region.run_evalue.unwrap(), 2.734_975_961_520_32, epsilon = 1e-9);
         Ok(())
     }
 
@@ -5103,7 +5196,7 @@ mod tests {
         // Extension at this penalty runs far past the seed, but the longest stretch without a
         // mismatch is still the 19-residue exact region, with the exact search's run E-value.
         assert_eq!((flat.length, flat.n_mismatches, flat.run_length), (99, 41, 19));
-        assert_relative_eq!(flat.run_evalue.unwrap(), 2.671_370_550_951_629, epsilon = 1e-9);
+        assert_relative_eq!(flat.run_evalue.unwrap(), 2.734_975_961_520_32, epsilon = 1e-9);
         assert_eq!(flat.ka_evalue, None);
         assert_eq!(flat.evalue, flat.run_evalue);
         assert_eq!(flat.evalue_source, Some(EvalueSource::Run));
@@ -5116,21 +5209,21 @@ mod tests {
         Ok(())
     }
 
-    /// Pr(same) above 0.99 marks the run E-value as an upper bound; at or below it, as run.
+    /// A Karlin-Altschul E-value wins over the run E-value, and is labelled `ka_chain` when
+    /// the row is a chain of regions, whose E-value is computed another way.
     #[test]
-    fn choose_evalue_marks_the_upper_bound() {
+    fn choose_evalue_labels_each_source() {
         let unscored = MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap());
-        let with = |pr_same: f64| {
+        let with = |ka: Option<f64>, run: Option<f64>, n_chained: u32| {
             let mut r =
-                MatchedRegion { pr_same: Some(pr_same), run_evalue: Some(3.0), ..unscored.clone() };
+                MatchedRegion { ka_evalue: ka, run_evalue: run, n_chained, ..unscored.clone() };
             r.choose_evalue();
             (r.evalue, r.evalue_source)
         };
-        assert_eq!(with(0.99), (Some(3.0), Some(EvalueSource::Run)));
-        assert_eq!(with(0.995), (Some(3.0), Some(EvalueSource::RunUpperBound)));
-        let mut neither = unscored;
-        neither.choose_evalue();
-        assert_eq!((neither.evalue, neither.evalue_source), (None, None));
+        assert_eq!(with(None, Some(3.0), 1), (Some(3.0), Some(EvalueSource::Run)));
+        assert_eq!(with(Some(2.0), Some(3.0), 1), (Some(2.0), Some(EvalueSource::Ka)));
+        assert_eq!(with(Some(2.0), Some(3.0), 2), (Some(2.0), Some(EvalueSource::KaChain)));
+        assert_eq!(with(None, None, 1), (None, None));
     }
 
     /// An extended region's run is its longest stretch without a mismatch: here positions
@@ -5145,7 +5238,51 @@ mod tests {
             target_end: 10,
             ..MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap())
         };
-        assert_eq!(longest_agreeing_run(b"hhpphhhp", b"pphhpphphp", &region, &agree), 5);
+        assert_eq!(longest_agreeing_run(b"hhpphhhp", b"pphhpphphp", &region, &agree), Some(5));
+    }
+
+    /// A span past the end of either sequence cannot be measured: None, not a run of 0,
+    /// which would give a huge run E-value with no sign anything was wrong.
+    #[test]
+    fn longest_agreeing_run_refuses_a_span_outside_the_sequences() {
+        let agree = residues_agree("hp_lehninger2");
+        let unscored = MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap());
+        let span = |start, end, target_start| MatchedRegion {
+            start,
+            end,
+            target_start,
+            target_end: target_start + (end - start),
+            ..unscored.clone()
+        };
+        let (q, t) = (b"hhpphhhp".as_slice(), b"pphhpphphp".as_slice());
+        // Query end 9 is past the 8-residue query.
+        assert_eq!(longest_agreeing_run(q, t, &span(0, 9, 0), &agree), None);
+        // Target 4..12 is past the 10-residue target.
+        assert_eq!(longest_agreeing_run(q, t, &span(0, 8, 4), &agree), None);
+        // Target 2..10 ends exactly at the target's end.
+        assert_eq!(longest_agreeing_run(q, t, &span(0, 8, 2), &agree), Some(5));
+    }
+
+    /// A reduced alphabet's matches are counted on its encoded letters only. Without them
+    /// there is no class sequence, rather than the amino-acid letters, which would give a
+    /// pr_same near 0. `protein` stores no encoded sequence and uses the raw one.
+    #[test]
+    fn class_sequence_falls_back_to_raw_residues_only_for_protein() -> Result<()> {
+        let with_raw_only = |moltype: &str| -> Result<ProteinSketch> {
+            let mut sketch = ProteinSketch::new("x", 5, 1, moltype)?;
+            sketch.set_efficient_data(ProteinSketchStore::new(
+                "x".into(),
+                vec![],
+                None,
+                HashMap::new(),
+                Some("MKVLAAGIVG".into()),
+                None,
+            ));
+            Ok(sketch)
+        };
+        assert_eq!(class_sequence(&with_raw_only("protein")?), Some(b"MKVLAAGIVG".as_slice()));
+        assert_eq!(class_sequence(&with_raw_only("hp_lehninger2")?), None);
+        Ok(())
     }
 
     /// The same 5 shared k-mers that read as a weak whole-protein match (containment ~0.019
@@ -5470,8 +5607,15 @@ mod tests {
         assert_eq!(sketch.mins_as_set().len(), 33);
         assert_eq!(prepared.position_prefix.len(), 29);
 
-        // Whole-query totals agree with the per-hash sums.
-        let expected_total = searcher.calculate_expected_shared_kmers(&sketch, &sketch);
+        // Whole-query totals agree with the per-hash sums for a target of mean size.
+        let n = searcher.stats.total_signatures as f64;
+        let shares = sketch
+            .signature()
+            .minhash
+            .mins()
+            .into_iter()
+            .map(|h| searcher.stats.kmer_frequencies.get(&h).copied().unwrap_or(1) as f64 / n);
+        let expected_total = expected_shared_kmers(shares, 1.0);
         let total_prefix = *prepared.position_prefix.last().unwrap();
         assert_relative_eq!(total_prefix, expected_total, epsilon = 1e-12);
 
@@ -5485,6 +5629,110 @@ mod tests {
         assert_relative_eq!(expected_total, 1.4, epsilon = 1e-12);
         assert_relative_eq!(prepared.tfidf, 88.74222873518976, epsilon = 1e-12);
 
+        Ok(())
+    }
+
+    /// The chance-shared count follows 1 - (1 - f)^r: at the mean size (r = 1) it is the plain
+    /// sum of shares, at twice the mean a k-mer in half the proteins is shared with
+    /// probability 3/4, a k-mer in every protein stays at 1 however large the target, and a
+    /// k-mer too rare for 1 - f to differ from 1 in f64 still counts.
+    #[test]
+    fn test_expected_shared_kmers_scales_with_target_size() {
+        let shares = [0.5, 0.1, 1.0];
+        assert_relative_eq!(expected_shared_kmers(shares.into_iter(), 1.0), 1.6, epsilon = 1e-12);
+        assert_relative_eq!(
+            expected_shared_kmers(shares.into_iter(), 2.0),
+            0.75 + 0.19 + 1.0,
+            epsilon = 1e-12
+        );
+        assert_relative_eq!(expected_shared_kmers([1.0].into_iter(), 60.0), 1.0, epsilon = 1e-12);
+        assert_relative_eq!(
+            expected_shared_kmers([1e-18].into_iter(), 50.0),
+            5e-17,
+            max_relative = 1e-9
+        );
+    }
+
+    /// A target with no k-mers shares none by chance. Without the guard, a k-mer in every
+    /// protein (here the single protein of a one-protein database, f = 1/1) gives
+    /// 0 * ln(0) = NaN.
+    #[test]
+    fn test_empty_target_expects_no_shared_kmers() -> Result<()> {
+        let ksize = 5;
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
+        let sig = index.create_protein_signature(BCL2_1_32, "bcl2")?;
+        index.store_signatures(vec![sig])?;
+        let searcher = ProteinSearcher::new(index)?;
+        assert_eq!(searcher.stats.total_signatures, 1);
+        let sketch =
+            ProteinSketch::from_protein_sequence("bcl2", BCL2_1_32, ksize, 1, "protein20")?;
+        assert_eq!(searcher.calculate_expected_shared_kmers(&sketch, 0), 0.0);
+        Ok(())
+    }
+
+    /// On a real index, a larger target is expected to share more k-mers with the same query,
+    /// so the same observed count is less surprising against it.
+    ///
+    /// The fixture holds 25 proteins and 9_167 (protein, k-mer) pairs at protein20 k=5, so the
+    /// mean protein has 9_167 / 25 = 366.68 k-mers. Targets of 91 and 1_466 k-mers have
+    /// r = 0.248 and r = 3.998. The query's 28 k-mers are held 30 times across the 25
+    /// proteins, so the shares f(h) sum to 30 / 25 = 1.2, the count at r = 1. The small
+    /// target's count, 0.303, is close to 0.248 * 1.2 = 0.298, as it should be when most f(h)
+    /// are small. The large target's, 4.482, is below 3.998 * 1.2 = 4.798 because the common
+    /// k-mers' terms are capped below 1. The exact values below are what the code returns;
+    /// the arithmetic above is the check on them.
+    #[test]
+    fn test_larger_target_expects_more_shared_kmers() -> Result<()> {
+        let ksize = 5;
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+        let sketch =
+            ProteinSketch::from_protein_sequence("bcl2", BCL2_1_32, ksize, 1, "protein20")?;
+        assert_eq!(searcher.stats.total_signatures, 25);
+        assert_eq!(searcher.db_n_kmers, 9_167);
+        assert_eq!(sketch.signature().minhash.mins().len(), BCL2_1_32_KMERS_K5);
+        // How many fixture proteins hold each query k-mer, summed: the count at r = 1 is this
+        // over 25, computed here without the formula under test.
+        let proteins_holding: usize = sketch
+            .signature()
+            .minhash
+            .mins()
+            .into_iter()
+            .map(|h| searcher.stats.kmer_frequencies.get(&h).copied().unwrap_or(1))
+            .sum();
+        assert_eq!(proteins_holding, 30);
+        let small = searcher.calculate_expected_shared_kmers(&sketch, 91);
+        let large = searcher.calculate_expected_shared_kmers(&sketch, 1_466);
+        assert_relative_eq!(small, 0.303_034_684_314_427_2, epsilon = 1e-12);
+        assert_relative_eq!(large, 4.482_198_746_795_942, epsilon = 1e-12);
+        // Three shared k-mers: p = 0.0037 against the small target, 0.82 against the large one.
+        assert_relative_eq!(
+            poisson_survival(3, small),
+            3.701_531_296_595_339_5e-3,
+            epsilon = 1e-15
+        );
+        assert_relative_eq!(poisson_survival(3, large), 0.824_409_746_294_393_1, epsilon = 1e-12);
+        Ok(())
+    }
+
+    /// With no proteins indexed there is no mean protein size to scale by (0 / 0), so the
+    /// expected count is 0.0 rather than NaN, and the p-value reads it as no evidence.
+    #[test]
+    fn test_empty_database_expects_no_shared_kmers() -> Result<()> {
+        let ksize = 5;
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
+        let searcher = ProteinSearcher::new(index)?;
+        assert_eq!(searcher.stats.total_signatures, 0);
+        assert_eq!(searcher.db_n_kmers, 0);
+        let sketch =
+            ProteinSketch::from_protein_sequence("bcl2", BCL2_1_32, ksize, 1, "protein20")?;
+        let expected = searcher.calculate_expected_shared_kmers(&sketch, BCL2_1_32_KMERS_K5);
+        assert_eq!(expected, 0.0);
+        assert_eq!(poisson_survival(3, expected), 1.0);
         Ok(())
     }
 
@@ -5538,14 +5786,14 @@ mod tests {
     /// Complements `test_pvalue_scopes_combine_with_or`'s BCL2/CED9 example, where the region
     /// scope rescues a hit the query scope rejects, with a real case running the other
     /// direction. BCL2 vs RTN3 (reticulon-3) at k=9, in the same 25-sequence fixture database,
-    /// is an overwhelming whole-protein match (152 shared k-mers scattered across 217 short
-    /// regions) with no single region concentrated enough to pass on its own. Its strongest
-    /// region only reaches p=0.0533 (score ~1.27), below the ~1.301 default cap (p=0.05).
-    /// This shows the OR only needs one scope to hold, in either direction.
+    /// passes as a whole protein (152 shared k-mers scattered across 217 short regions,
+    /// against 130.5 expected by chance, p=0.035) with no single region concentrated enough
+    /// to pass on its own. Its strongest region only reaches p=0.0533 (score ~1.27), below the
+    /// ~1.301 default cap (p=0.05). This shows the OR only needs one scope to hold, in either
+    /// direction.
     ///
-    /// The pair used to be BCL2A1 vs ASPP2 (115 k-mers, 333 regions, best p=0.0956). Chaining
-    /// seeds per diagonal merges the pieces a repeated k-mer used to split, and that pair's
-    /// best region became 13 residues at p=0.0491, just over the cap.
+    /// The whole-protein pass is weak because RTN3 is long: 1_032 residues, 2.8 times the
+    /// fixture's mean of 371.5, so it shares more k-mers with any query by chance.
     #[test]
     fn test_query_scope_alone_keeps_a_diffuse_match_with_no_standout_region() -> Result<()> {
         let ksize = 9;
@@ -5577,7 +5825,7 @@ mod tests {
 
         assert_eq!(hit.n_intersecting_hashes, 152);
         assert_eq!(hit.matched_regions.len(), 217);
-        assert_relative_eq!(hit.query_poisson_pvalue, 9.961_523_828e-10, epsilon = 1e-18);
+        assert_relative_eq!(hit.query_poisson_pvalue, 3.535_276_869_141_546e-2, epsilon = 1e-12);
         assert!(hit.query_poisson_pvalue < 0.05, "whole-query scope should clearly pass");
 
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring

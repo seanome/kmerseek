@@ -1,5 +1,11 @@
 # kmerseek Project Instructions
 
+## Skills
+`.agents/skills/` holds the review and writing rules for this repo: small PRs, Rust review,
+the "are you sure?" pass before calling work done, plain writing, and figures. Read the
+matching `SKILL.md` before opening a PR, reviewing Rust, or drawing a figure. The table in
+`.agents/skills/README.md` says which skill covers what.
+
 ## Project Overview
 Rust protein k-mer search tool using HP/Dayhoff/protein encodings and MinHash sketches.
 - Key files: `src/rust/index.rs`, `src/rust/search.rs`, `src/rust/main.rs`, `Cargo.toml`

@@ -497,38 +497,38 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EvalueSource {
-    /// `region_ka_evalue`: the region was extended and its pair has a positive lambda.
+    /// `region_ka_evalue` of one extended region whose pair has a positive lambda:
+    /// K m n exp(-lambda S), with n = `db_n_kmers`.
     Ka,
+    /// `region_ka_evalue` of a chain of extended regions: the sum P-value times the number
+    /// of targets (see `search::chain_regions`). Close to `Ka` on the same evidence, not
+    /// equal.
+    KaChain,
     /// `region_run_evalue`.
     Run,
-    /// `region_run_evalue` at pr_same above `RUN_UPPER_BOUND_PR_SAME`, an upper bound.
-    RunUpperBound,
 }
 
-/// Above this `pr_same`, `run_evalue` drops its (1 - pr_same) factor and returns an upper
-/// bound.
-pub const RUN_UPPER_BOUND_PR_SAME: f64 = 0.99;
-
 /// Expected number of runs of at least `run_length` class-identical positions between an
-/// unrelated query of `m` residues and a database of `n` residues:
+/// unrelated query of `m` residues and a database of `n` residues in `n_targets` sequences:
 ///
-/// E_run = (1 - pr_same) m n pr_same^run_length
+/// E_run = pr_same^run_length ((1 - pr_same) m n + n_targets (m - 1) + n)
 ///
 /// `pr_same` is the chance that one query position and one target position fall in the
-/// same class, from the pair's class compositions (`search::match_probability`). This is
-/// the Karlin-Altschul E-value for +1 per match with no mismatch allowed, where lambda is
-/// ln(1 / pr_same) and K is 1 - pr_same. The K factor is the chance that the position before
-/// a run disagrees, so each run is counted once, at its start, and not once for every
-/// k-mer inside it. Positions are drawn independently, so real proteins, whose classes
-/// repeat in patterns, give more long runs than this predicts.
-///
-/// When `pr_same` is above `RUN_UPPER_BOUND_PR_SAME` (both sequences almost all one class),
-/// 1 - pr_same goes to 0 and would make a run look significant only because nearly every
-/// position starts none. The factor is dropped there, which counts every position as a
-/// possible start: an upper bound on the expected count.
-pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64) -> f64 {
-    let starts = if pr_same > RUN_UPPER_BOUND_PR_SAME { 1.0 } else { 1.0 - pr_same };
-    starts * m * n * pr_same.powi(run_length as i32)
+/// same class, from the pair's class compositions (`search::match_probability`). A run is
+/// counted once, where it starts. Inside a diagonal a run starts where the position before
+/// it disagrees, chance 1 - pr_same, which gives the first term: the Karlin-Altschul
+/// E-value for +1 per match with no mismatch allowed, with lambda ln(1 / pr_same) and K
+/// 1 - pr_same. The first position of a diagonal has no position before it, so a run can
+/// start there with no disagreement; a query of m residues against a target of t has
+/// m + t - 1 diagonals, n_targets (m - 1) + n over the database. That second term is small
+/// for ordinary pr_same and takes over as pr_same nears 1, where almost no position inside
+/// a diagonal starts a run but every diagonal still holds one. Counting every cell of the
+/// grid as a possible start, including the last L - 1 of each diagonal, makes the value a
+/// little high, never low. Positions are drawn independently, so real proteins, whose
+/// classes repeat in patterns, give more long runs than this predicts.
+pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64, n_targets: f64) -> f64 {
+    let starts = (1.0 - pr_same) * m * n + n_targets * (m - 1.0) + n;
+    starts * pr_same.powi(run_length as i32)
 }
 
 /// Which sequences are searched to fit r_database and K: the database sequences
@@ -877,34 +877,58 @@ pub fn write_survival_csv(
 mod tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_BLC2_FASTA;
-    use approx::assert_relative_eq;
     use serde_json::{json, Value};
 
-    /// E_run = (1 - pr_same) m n pr_same^L, worked by hand. The first two use a 300-residue
-    /// query against 3,000 residues of targets: two equal classes at L = 16 is
-    /// 0.5 x 900,000 / 2^16, and four equal classes at L = 8 is 0.75 x 900,000 / 4^8.
+    /// E_run = pr_same^L ((1 - pr_same) m n + n_targets (m - 1) + n), worked by hand. A
+    /// 300-residue query against 10 targets of 300 residues has 10 x 299 + 3,000 = 5,990
+    /// diagonals. Two equal classes at L = 16: (0.5 x 900,000 + 5,990) / 2^16. Four equal
+    /// classes at L = 8: (0.75 x 900,000 + 5,990) / 4^8. At pr_same 1 no run starts inside
+    /// a diagonal, and every diagonal is one run: 99 + 1,000 = 1,099 for a 100-residue query
+    /// against one 1,000-residue target.
     #[test]
     fn test_run_evalue_by_hand() {
-        assert_eq!(run_evalue(0.5, 16, 300.0, 3000.0), 6.866_455_078_125);
-        assert_eq!(run_evalue(0.25, 8, 300.0, 3000.0), 10.299_682_617_187_5);
-        // At the cutoff the factor stays: 0.01 x 100 x 1,000 x 0.99^50.
-        assert_relative_eq!(
-            run_evalue(0.99, 50, 100.0, 1000.0),
-            605.006_067_137_536_3,
-            epsilon = 1e-9
-        );
+        assert_eq!(run_evalue(0.5, 16, 300.0, 3000.0, 10.0), 6.957_855_224_609_375);
+        assert_eq!(run_evalue(0.25, 8, 300.0, 3000.0, 10.0), 10.391_082_763_671_875);
+        assert_eq!(run_evalue(1.0, 100, 100.0, 1000.0, 1.0), 1099.0);
     }
 
-    /// Above pr_same 0.99 the (1 - pr_same) factor is dropped: 100 x 1,000 x 0.995^100, not
-    /// 0.005 of it, which would call a 100-residue run of one class in two sequences made
-    /// of that class significant (E = 303).
+    /// The exact expected number of runs of at least L on one diagonal of D positions, D >= L,
+    /// is pr_same^L (1 + (D - L)(1 - pr_same)): the first position starts a run with no
+    /// disagreement before it, and each of the next D - L needs one. Summed over every
+    /// diagonal of an m x t grid, it is never above `run_evalue`, which also counts the
+    /// last L - 1 positions of each diagonal as starts.
     #[test]
-    fn test_run_evalue_upper_bound_above_099() {
-        assert_relative_eq!(
-            run_evalue(0.995, 100, 100.0, 1000.0),
-            60_577.043_649_072_795,
-            epsilon = 1e-9
-        );
+    fn test_run_evalue_never_below_the_exact_count() {
+        let exact = |p: f64, l: usize, m: usize, t: usize| -> f64 {
+            (0..m + t - 1)
+                .map(|d| {
+                    // Diagonal d starts at query position max(0, d - (t - 1)).
+                    let (q0, t0) = (d.saturating_sub(t - 1), (t - 1).saturating_sub(d));
+                    (m - q0).min(t - t0)
+                })
+                .filter(|&len| len >= l)
+                .map(|len| p.powi(l as i32) * (1.0 + (len - l) as f64 * (1.0 - p)))
+                .sum()
+        };
+        for (p, l, m, t) in
+            [(0.5, 5, 30, 40), (0.5, 19, 280, 400), (0.95, 20, 30, 40), (1.0, 10, 50, 60)]
+        {
+            let formula = run_evalue(p, l as u32, m as f64, t as f64, 1.0);
+            let truth = exact(p, l, m, t);
+            assert!(formula >= truth - 1e-12, "p={p} L={l}: {formula} < {truth}");
+        }
+        // At a protein's size the extra count is small: 12% at pr_same 0.5, L 19.
+        let (formula, truth) = (run_evalue(0.5, 19, 280.0, 400.0, 1.0), exact(0.5, 19, 280, 400));
+        assert!(formula / truth < 1.15, "{formula} / {truth}");
+    }
+
+    /// No step in pr_same: 0.989 and 0.991 give E-values within 12% of each other, where
+    /// dropping the (1 - pr_same) factor above 0.99 used to make them 100 times apart.
+    #[test]
+    fn test_run_evalue_is_smooth_near_pr_same_one() {
+        let below = run_evalue(0.989, 100, 100.0, 1000.0, 1.0);
+        let above = run_evalue(0.991, 100, 100.0, 1000.0, 1.0);
+        assert!((above / below - 1.0).abs() < 0.12, "{below} vs {above}");
     }
 
     /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
