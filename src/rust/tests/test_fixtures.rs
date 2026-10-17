@@ -2,6 +2,10 @@ pub const TEST_FASTA_GZ: &str =
     "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
 pub const TEST_CED9_FASTA: &str = "tests/testdata/fasta/ced9.fasta";
 pub const TEST_BLC2_FASTA: &str = "tests/testdata/fasta/bcl2.fasta";
+/// BCL2_HUMAN (UniProt P10415) residues 1-32, the first 32 residues of the protein.
+pub const BCL2_1_32: &str = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDA";
+/// k-mers in `BCL2_1_32` at k=5: 32 - 5 + 1 windows, all distinct.
+pub const BCL2_1_32_KMERS_K5: usize = 28;
 pub const TEST_FASTA_ZST: &str = "tests/testdata/fasta/test_compression.fasta.zst";
 
 pub const TEST_FASTA_CONTENT: &str =

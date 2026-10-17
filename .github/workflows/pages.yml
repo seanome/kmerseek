@@ -1,4 +1,5 @@
 # Publish the docs/ folder to GitHub Pages on every push to main that touches it.
+# Jekyll renders the .md pages with docs/_layouts/default.html and copies the rest as is.
 # One-time setup: Settings > Pages > Build and deployment > Source: "GitHub Actions".
 name: Publish docs to GitHub Pages
 
@@ -29,8 +30,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: actions/configure-pages@v5
+      - uses: actions/jekyll-build-pages@v1
+        with:
+          source: ./docs
+          destination: ./_site
       - uses: actions/upload-pages-artifact@v3
         with:
-          path: docs
+          path: _site
       - id: deployment
         uses: actions/deploy-pages@v4

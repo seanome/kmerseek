@@ -29,3 +29,14 @@ jobs:
 
       - name: Check clippy
         run: cargo clippy --all -- --deny warnings
+
+      # A parameter named `_name` tells rustc not to warn that it is never used, so neither
+      # rustc nor clippy reports it. A function that ignores an input it takes looks as if
+      # it depends on that input, and nothing flags the mistake. Drop the parameter instead.
+      # Matches `(_name:`, `, _name:` and a parameter on its own line; a bare `_` is allowed.
+      - name: No function parameter silenced with a leading underscore
+        run: |
+          if grep -rnE '(\(|,)[[:space:]]*_[a-z][a-z0-9_]*[[:space:]]*:[^:]|^[[:space:]]+_[a-z][a-z0-9_]*[[:space:]]*:[[:space:]]*[&A-Za-z(]' src/rust; then
+            echo "Unused parameters above: remove them, or use them." >&2
+            exit 1
+          fi
