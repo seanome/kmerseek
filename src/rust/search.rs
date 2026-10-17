@@ -1248,9 +1248,10 @@ impl ProteinSearcher {
 
     /// The r_database and K a search should use for `settings.scoring`, and where they
     /// came from, in order of preference: `explicit` (`--ka-k`, with `--ka-r-database` or
-    /// else the closed-form lambda, r_database 1); a fit stored in the index for this scoring, whatever null it used; a fresh
-    /// fit on `settings.n_queries` calibration queries if that is nonzero. Otherwise an
-    /// error: an E-value without a fit for its own index is not printed.
+    /// else the closed-form lambda, r_database 1); a fit stored in the index for this
+    /// scoring, whatever null it used; a fresh fit on `settings.n_queries` calibration
+    /// queries if that is nonzero. Otherwise an error: an E-value without a fit for its
+    /// own index is not printed.
     pub fn resolve_ka(
         &mut self,
         explicit: Option<KaParams>,

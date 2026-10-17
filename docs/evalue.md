@@ -94,7 +94,10 @@ with the same pair reads them back; a search with another pair fits its own on
 
 `--ka-k` alone keeps the closed-form λ (r_database 1). `--ka-k` with `--ka-r-database` is a
 whole fit given by hand, such as the one another index stored: copy `k` and `r_database`
-from that index's `kmerseek index --ka-survival-out` CSV. Two indexes searched with one fit
+from that index's `kmerseek index --ka-survival-out` CSV. A fit holds only for the
+mismatch penalty C and give-up margin X it was made with, which the CSV's
+`mismatch_penalty` and `xdrop` columns give, so search with the same
+`--extend-mismatch-penalty` and `--extend-xdrop`; nothing checks this. Two indexes searched with one fit
 differ only in their size n, so their E-values differ by the factor n₁ / n₂ for the same
 score.
 
