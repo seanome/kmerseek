@@ -2909,8 +2909,17 @@ mod tests {
 
     /// Two entries whose 5-mer sets are identical but whose sequences differ (a poly-A run of
     /// 5 and of 8: both hold AAAAA once and nothing else new) are two targets, each reported
-    /// with its own residues and coordinates. In 0.4.0 the second became an alias of the first,
-    /// so its hits carried the first sequence's coordinates and residues.
+    /// with its own residues and coordinates. Keyed by k-mer set, the second became an alias
+    /// of the first and its hits carried the first sequence's coordinates and residues:
+    ///
+    /// ```text
+    ///            0         10        20
+    /// short:     MKTWLRDEHPAAAAACYFNQSGV
+    /// long:      MKTWLRDEHPAAAAAAAACYFNQSGV
+    /// query:               AAAAAAAACYFNQSGV
+    ///                      ||||||||||||||||   long 10..26, its own residues
+    /// keyed by k-mer set:  AAAAACYFNQSGV      reported as long 10..23, short's residues
+    /// ```
     #[test]
     fn same_kmer_set_different_sequence_is_its_own_target() -> Result<()> {
         let short = "MKTWLRDEHPAAAAACYFNQSGV";
@@ -2956,8 +2965,9 @@ mod tests {
         index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
         let mut searcher = ProteinSearcher::new(index)?;
         searcher.set_extension(Some(ExtensionParams {
-            mismatch_penalty: 0.14,
-            xdrop: 0.56,
+            // The CLI defaults.
+            mismatch_penalty: 2.0,
+            xdrop: 8.0,
             ka_k: 0.1,
             ka_lambda_scale: 1.0,
             chain_max_gap: 30,

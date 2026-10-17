@@ -680,11 +680,10 @@ impl ProteinSketch {
 /// sequences are identical (the later names become aliases), so the key has to tell apart
 /// any two sequences that differ.
 ///
-/// Before 0.4.1 the key was the sum of the sketch's k-mer hashes, which two different
-/// sequences share whenever their k-mer sets are equal: "MKTWLRDEHPAAAAACYFNQSGV" and the
-/// same with eight A's both have AAAAA as their only poly-A 5-mer. The second was then
-/// stored as an alias of the first and reported with the first one's coordinates and
-/// residues.
+/// It hashes the residues, not the k-mer set, because different sequences can have equal
+/// k-mer sets: "MKTWLRDEHPAAAAACYFNQSGV" and the same with eight A's both have AAAAA as
+/// their only poly-A 5-mer. A key over the k-mer set would store the second as an alias of
+/// the first and report it with the first one's coordinates and residues.
 pub fn sequence_key(sequence: &str) -> String {
     format!("{:x}", sourmash::_hash_murmur(sequence.as_bytes(), SEED))
 }
