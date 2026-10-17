@@ -840,6 +840,8 @@ impl ProteomeIndex {
     ///
     /// A sketch whose key was already written is stored once, under the name it was first
     /// seen with; the later names go to `aliases_{md5}`, so search reports each of them.
+    /// A name already recorded for that sequence is not added again, so ingesting the same
+    /// FASTA twice does not make search report each hit twice.
     fn ingest(&self, sketches: Vec<ProteinSketch>, retain: bool) -> IndexResult<()> {
         use rayon::prelude::*;
 
@@ -850,6 +852,9 @@ impl ProteomeIndex {
 
         let mut state = self.ingest.lock();
         let mut batch = WriteBatch::default();
+        // Names of the entries first stored by this call. Their `sig_{md5}` is still in
+        // `batch`, so a later copy in the same call cannot read the name from the database.
+        let mut stored_here: HashMap<u64, String> = HashMap::new();
         for (sketch, bytes) in sketches.into_iter().zip(serialized) {
             let md5 = sketch.signature().md5sum.clone();
             let key = u64::from_str_radix(&md5, 16).map_err(|_| IndexError::ValidationError {
@@ -857,12 +862,20 @@ impl ProteomeIndex {
             })?;
             if !state.seen.insert(key) {
                 state.duplicates_skipped += 1;
+                let name = &sketch.signature().name;
+                let stored_name = match stored_here.get(&key) {
+                    Some(stored) => Some(stored.clone()),
+                    None => self.stored_name(&md5)?,
+                };
                 let names = state.aliases.entry(md5.clone()).or_default();
-                names.push(sketch.signature().name.clone());
-                batch.put(format!("aliases_{md5}").into_bytes(), bincode::serialize(names)?);
-                state.saved = false;
+                if stored_name.as_ref() != Some(name) && !names.contains(name) {
+                    names.push(name.clone());
+                    batch.put(format!("aliases_{md5}").into_bytes(), bincode::serialize(names)?);
+                    state.saved = false;
+                }
                 continue;
             }
+            stored_here.insert(key, sketch.signature().name.clone());
             let idx = u32::try_from(state.next_idx).map_err(|_| IndexError::ValidationError {
                 message: format!("index cannot hold more than {} targets", u32::MAX),
             })?;
@@ -1257,6 +1270,16 @@ impl ProteomeIndex {
             }
         }
         Ok(Some(SearchCache { target_list, inverted_index, kmer_frequencies }))
+    }
+
+    /// The name a stored sequence was first indexed under, read from its `sig_{md5}` entry
+    /// without rebuilding the sketch. `None` if no entry has that key.
+    fn stored_name(&self, md5: &str) -> IndexResult<Option<String>> {
+        let Some(data) = self.db.get(format!("sig_{md5}").as_bytes())? else {
+            return Ok(None);
+        };
+        let store: ProteinSketchStore = bincode::deserialize(&data)?;
+        Ok(Some(store.name))
     }
 
     /// Load a single signature from RocksDB by its MD5 sum.
@@ -4146,6 +4169,30 @@ mod tests {
         assert_eq!(
             index.aliases()?,
             HashMap::from([(sequence_key(TEST_PROTEIN), vec!["b".to_string(), "c".to_string()])])
+        );
+        Ok(())
+    }
+
+    /// Ingesting the same FASTA a second time adds no aliases: every name is already
+    /// recorded for its sequence, either as the stored entry or as an alias. Otherwise search
+    /// would report each hit to those entries twice.
+    #[test]
+    fn test_reingesting_same_fasta_adds_no_aliases() -> Result<()> {
+        let dir = tempdir()?;
+        let fasta = dir.path().join("dup.fasta");
+        std::fs::write(
+            &fasta,
+            format!(">a\n{TEST_PROTEIN}\n>b\n{TEST_PROTEIN}\n>c\n{TEST_KMER}\n"),
+        )?;
+        let index = ProteomeIndex::new(dir.path().join("dup.db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, 1000)?;
+        index.process_fasta(&fasta, 0, 1000)?;
+        index.save_state()?;
+
+        assert_eq!(index.signature_count(), 2);
+        assert_eq!(
+            index.aliases()?,
+            HashMap::from([(sequence_key(TEST_PROTEIN), vec!["b".to_string()])])
         );
         Ok(())
     }
