@@ -227,7 +227,8 @@ domain that no single gapless run covers becomes one call. On SCOPe40 domains it
 ranking little (chains form in 2% of regions at 30/10); its purpose is region-level
 transfer, where a call has to cover a domain to carry its label. A chained row's
 `region_ka_evalue` takes the database size as the number of targets times the target's
-length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
+length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical,
+so `region_evalue_source` says `ka_chain` for a chained row and `ka` for a single region.
 
 ## E-values in the CSV
 
@@ -240,10 +241,10 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 |---|---|---|
 | `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
 | `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
-| `region_run_evalue` | (1 − Pr(same)) × m × n × Pr(same)^L | all |
+| `region_run_evalue` | Pr(same)^L × ((1 − Pr(same)) × m × n + diagonals), below | all |
 | `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
 | `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
-| `region_evalue_source` | `ka`, `run`, or `run_upper_bound` (below) | all |
+| `region_evalue_source` | `ka`, `ka_chain` (a chain of regions, above), or `run` | all |
 
 `region_evalue` is never the smaller of the two E-values. Picking the better of two tests
 makes a region look more significant than either test says.
@@ -286,22 +287,24 @@ For a region with no mismatch (blue circles) `region_ka_evalue` is 1.4 to 4.9 ti
 `region_run_evalue`. For a region that grew past mismatches (orange triangles) it is 0.09
 to 1.0 times: the mismatches it crossed are paid for, and the matches past them count.
 
-The run E-value is the Karlin-Altschul E-value for +1 per match with no mismatch allowed,
-where λ = ln(1 / Pr(same)) and K = 1 − Pr(same). K is the chance that the position before
-a run disagrees, so each run is counted once, where it starts. Counting shared k-mers
-instead would count a run of L positions L − k + 1 times, since overlapping k-mers share
-k − 1 positions and are not independent. `m` is the query length.
-`n` is the database's residue count, which the index does not store, so it is estimated
-as `scaled × db_n_kmers + (ksize − 1) × db_n_targets`. That comes out low by k-mers that
-repeat within a target and k-mers removed as low-complexity, and the run E-value comes out
-low by the same fraction. How low depends on how often k-mers repeat, so on the alphabet
-and k. On the 25 BCL-2-like test proteins (9,288 residues) the estimate is 0.99 of the
-real count at `hp` k=15, 0.93 at k=12 and 0.47 at k=8, and 1.00 at `protein` k=5. With few
-classes and a short k, the run E-value can be half what it should be.
+The run E-value counts each run once, where it starts. Inside a diagonal (one offset
+between query and target) a run starts where the position before it disagrees, which
+happens with chance 1 − Pr(same). That part, (1 − Pr(same)) × m × n × Pr(same)^L, is the
+Karlin-Altschul E-value for +1 per match with no mismatch allowed, where λ = ln(1 / Pr(same))
+and K = 1 − Pr(same). The first position of a diagonal has no position before it, so a run
+can start there with no disagreement. A query of m residues against a target of t residues
+has m + t − 1 diagonals, `db_n_targets` × (m − 1) + n over the database, and each adds
+Pr(same)^L. That second part is about 1% of the total at Pr(same) 0.5. It takes over as
+Pr(same) nears 1, when both sequences are almost all one class: then almost no position
+inside a diagonal starts a run, but every diagonal still holds one, so the E-value stays
+large and changes smoothly with Pr(same). Counting k-mers instead of runs would count a run
+of L positions L − k + 1 times, since overlapping k-mers share k − 1 positions.
 
-When Pr(same) is above 0.99, both sequences are made almost entirely of one class. There
-1 − Pr(same) is close to 0 and would make every run look significant. The factor is
-dropped, the value is an upper bound, and `region_evalue_source` says `run_upper_bound`.
+`m` is the query length and `n` the database's residue count, counted when the index is
+built (kmerseek ≥ 0.5; older indexes must be rebuilt). The value is a little high, never
+low: it counts the last L − 1 positions of each diagonal as possible starts too. For a
+280-residue query against one 400-residue target at Pr(same) 0.5 and L = 19 it is 1.12
+times the exact count.
 
 ## Visualizing hits
 

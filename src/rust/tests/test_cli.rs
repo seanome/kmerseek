@@ -1383,12 +1383,17 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     let chain = ["--chain-max-gap", "30", "--chain-max-shift", "10"];
     // Rows by region_evalue_source. At penalty 2 every pair here has a positive lambda
     // (HP pairs sit near pr_same 0.5, below 2/3); at 0.67 none does (the cutoff is 0.401).
+    // Chaining joins two of the 322 extended regions into the one `ka_chain` row.
     type Search<'a> = (&'a str, Vec<&'a str>, &'a [(&'a str, usize)]);
     let searches: [Search; 4] = [
         ("exact", vec![], &[("run", 330)]),
         ("extended", extend.to_vec(), &[("ka", 322)]),
         ("no_lambda", no_lambda.to_vec(), &[("run", 118)]),
-        ("chained", [extend.as_slice(), chain.as_slice()].concat(), &[("ka", 321)]),
+        (
+            "chained",
+            [extend.as_slice(), chain.as_slice()].concat(),
+            &[("ka", 320), ("ka_chain", 1)],
+        ),
     ];
     for (name, extra, expected) in searches {
         let out = temp_dir.path().join(format!("{name}.csv"));

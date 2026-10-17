@@ -28,8 +28,13 @@ LABELLED = {"BCL2_HUMAN", "CUL1_HUMAN", "AKT1_HUMAN"}
 
 
 def read_rows(path):
-    rows = []
+    """Rows that have both E-values. region_ka_evalue is empty when the pair has no
+    positive lambda, and region_run_evalue when the region could not be measured."""
+    rows, skipped = [], 0
     for row in csv.DictReader(open(path)):
+        if not row["region_run_evalue"] or not row["region_ka_evalue"]:
+            skipped += 1
+            continue
         rows.append(
             {
                 "target": row["target_name"].split("|")[2].split()[0],
@@ -38,6 +43,7 @@ def read_rows(path):
                 "mismatches": int(row["region_n_mismatches"]),
             }
         )
+    print(f"{len(rows)} rows drawn, {skipped} skipped for an empty E-value")
     return rows
 
 

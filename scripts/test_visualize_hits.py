@@ -133,15 +133,16 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
     # region_tail_probability directly since they exercise the probability, not the score.
     if region_tail_probability is None:
         region_tail_probability = 10.0**-region_poisson_score
-    # CED9 searched at k=10 against MULTI_FASTA. Each protein of L residues has L - 9
-    # 10-mers, so the database has 9,288 - 9 x 25 = 9,063, counting none as repeated.
-    # kmerseek estimates the residue count back from that as db_n_kmers + 9 x 25.
+    # CED9 searched at k=10 against MULTI_FASTA: 9,288 residues in 25 proteins, so
+    # 25 x (CED9_LEN - 1) + 9,288 diagonals where a run can start with nothing before it.
     ksize = 10
+    # Each protein of L residues has L - 9 10-mers, none repeated.
     db_n_kmers = MULTI_N_RESIDUES - (ksize - 1) * MULTI_N_PROTEINS
-    db_n_residues = db_n_kmers + (ksize - 1) * MULTI_N_PROTEINS
+    starts_inside = (1 - 0.5) * CED9_LEN * MULTI_N_RESIDUES
+    diagonals = MULTI_N_PROTEINS * (CED9_LEN - 1) + MULTI_N_RESIDUES
     # Two HP classes at about half each.
     pr_same = 0.5
-    run_evalue = (1 - pr_same) * CED9_LEN * db_n_residues * pr_same**region_length
+    run_evalue = (starts_inside + diagonals) * pr_same**region_length
     return {
         "query_name": query_name,
         "query_md5": "qmd5",
