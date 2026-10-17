@@ -1600,7 +1600,8 @@ impl ProteinSearcher {
     /// method works directly with references from the index. We collect only the MD5 keys (cheap
     /// String clones) and parallelize over those, looking up the actual signatures in the DashMap.
     /// This avoids cloning the large ProteinSketch objects while still enabling parallel processing.
-    /// The method also automatically skips self-matches by comparing MD5 sums in compare().
+    /// `compare()` skips every target with the query's sequence, so a protein is never paired
+    /// with itself, nor with another entry name stored under the same sequence.
     ///
     /// `filters` is forwarded to `search_one`, so failing results are never allocated into the
     /// returned `Vec` (see `SearchFilters`).
@@ -3341,6 +3342,38 @@ mod tests {
             pairs,
             [(bcl2_name.as_str(), ced9_name.as_str()), (ced9_name.as_str(), bcl2_name.as_str())]
         );
+        Ok(())
+    }
+
+    /// Two entries with different names and the same sequence are one stored sequence, so
+    /// all-vs-all never pairs them: the skip in `compare()` is by sequence, not by name.
+    /// Each still matches CED9_CAEEL.
+    #[test]
+    fn entries_sharing_a_sequence_are_not_paired() -> Result<()> {
+        let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let (ced9_name, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let copy_name = "BCL2_COPY";
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(
+            &fasta,
+            format!(">{bcl2_name}\n{bcl2}\n>{copy_name}\n{bcl2}\n>{ced9_name}\n{ced9}\n"),
+        )?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+
+        let all = searcher.search_all_vs_all(&SearchFilters::default())?;
+        let bcl2_names = [bcl2_name.as_str(), copy_name];
+        assert!(all.iter().all(|r| !(bcl2_names.contains(&r.query_name.as_str())
+            && bcl2_names.contains(&r.target_name.as_str()))));
+        let mut targets_of_ced9: Vec<&str> = all
+            .iter()
+            .filter(|r| r.query_name == ced9_name)
+            .map(|r| r.target_name.as_str())
+            .collect();
+        targets_of_ced9.sort_unstable();
+        assert_eq!(targets_of_ced9, [copy_name, bcl2_name.as_str()]);
         Ok(())
     }
 
