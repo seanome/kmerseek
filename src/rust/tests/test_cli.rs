@@ -1388,7 +1388,10 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     let searches: [Search; 4] = [
         ("exact", vec![], &[("run", 330)]),
         ("extended", extend.to_vec(), &[("ka", 322)]),
-        ("no_lambda", no_lambda.to_vec(), &[("run", 118)]),
+        // 69 since PR 136 scaled the chance count of shared k-mers with the target's size:
+        // ASPP2 (33 rows) and FBX10 (24) now fail the whole-protein p-value cut, and the
+        // shorter B2CL1 (8) passes it. 118 - 33 - 24 + 8 = 69.
+        ("no_lambda", no_lambda.to_vec(), &[("run", 69)]),
         (
             "chained",
             [extend.as_slice(), chain.as_slice()].concat(),
