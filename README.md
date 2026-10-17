@@ -464,6 +464,29 @@ cys_hp3   c p p p p h p c p p h h h p c c p p p c p p p p c
 pbotc2    h p p p p h p h p p h h h p h h p p p h p p p p h
 ```
 
+The row labels are the alphabet names `cys2` and `hp_pbotc_1st_ed_hpc3` and
+`hp_pbotc_1st_ed2`, shortened here to fit the block.
+
+What each reading keeps is easier to judge on two peptides than on one. Conopeptide Mi020
+(*Conus miles*, a cone snail, ConoServer P06751, the mature peptide ConoServer predicts
+from UniProt precursor A0A0E3SVD5) and Mu/omega-theraphotoxin-Pmu1a (*Pterinochilus
+murinus*, a baboon spider, UniProt P0DQZ2) are both 36 residues long and hold their six cysteines
+in the same positions, the framework C-C-CC-C-C, although the animals are in different
+phyla:
+
+![Three readings of two toxins that share the C-C-CC-C-C cysteine framework](docs/images/cys_framework_encodings_conotoxin_P06751_spidertoxin_P0DQZ2.png)
+
+([SVG version](docs/images/cys_framework_encodings_conotoxin_P06751_spidertoxin_P0DQZ2.svg),
+drawn by `scripts/plot_cys_framework_encodings.py`)
+
+Under `cys2` the two peptides encode to the same 36 symbols, so all 22 of their 15-residue
+windows match and cys2 cannot tell them apart. Under `hp_pbotc_1st_ed_hpc3` and under
+`hp_pbotc_1st_ed2` the same 25 of 36 positions agree and no window matches, so on this
+pair the two read the peptides apart equally well. What the third class buys is that the
+six cysteines stay visible: `hp_pbotc_1st_ed2` writes them as `h`, 6 of the 14 `h`
+positions in the snail peptide and 6 of the 17 in the spider, so the framework cannot be
+recovered from the encoded string.
+
 ### Choosing a class count
 
 Peterson et al. (2009) benchmarked over 150 published clustering schemes against DALI
