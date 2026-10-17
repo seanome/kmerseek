@@ -2,8 +2,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
 use kmerseek::search::{
-    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_MISMATCH_PENALTY,
-    DEFAULT_XDROP,
+    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource,
+    DEFAULT_MISMATCH_PENALTY, DEFAULT_XDROP,
 };
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
@@ -225,6 +225,16 @@ enum Commands {
         /// Used only with --extend-mismatch-penalty.
         #[arg(long)]
         ka_k: Option<f64>,
+
+        /// r_database to use with --ka-k: the factor on every pair's closed-form lambda,
+        /// as a fit stores it. With --ka-k and --ka-r-database together a search uses a
+        /// fit made on another index, so two indexes can be searched with one fit and
+        /// differ only in their size n. Copy both numbers from the other index's
+        /// `kmerseek index --ka-survival-out` CSV (columns `k` and `r_database`), and search
+        /// with the `mismatch_penalty` and `xdrop` from the same CSV, since a fit holds only
+        /// for those. Without it --ka-k uses r_database 1, the closed form.
+        #[arg(long, requires = "ka_k")]
+        ka_r_database: Option<f64>,
 
         /// Calibration queries to fit r_database and K on when the index has no fit for
         /// this penalty and give-up margin and --ka-k is unset. 0 refuses to search without
@@ -576,6 +586,7 @@ fn main() -> IndexResult<()> {
             extend_mismatch_penalty,
             extend_xdrop,
             ka_k,
+            ka_r_database,
             ka_queries,
             ka_seed,
             ka_null,
@@ -694,6 +705,17 @@ fn main() -> IndexResult<()> {
                         .into());
                     }
                 }
+                if let Some(r) = ka_r_database {
+                    if r <= 0.0 || !r.is_finite() {
+                        return Err(anyhow::anyhow!(
+                            "--ka-r-database must be positive and finite (got {r}); it \
+                             multiplies every pair's lambda"
+                        )
+                        .into());
+                    }
+                }
+                let explicit =
+                    ka_k.map(|k| KaParams { k, r_database: ka_r_database.unwrap_or(1.0) });
                 let settings = KaCalibrationSettings {
                     scoring,
                     null: ka_null,
@@ -702,7 +724,7 @@ fn main() -> IndexResult<()> {
                     n_queries: ka_queries,
                     seed: ka_seed,
                 };
-                let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
+                let (ka, source) = searcher.resolve_ka(explicit, settings)?;
                 eprintln!(
                     "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
                     ka.k, ka.r_database
