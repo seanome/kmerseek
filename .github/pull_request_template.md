@@ -10,7 +10,8 @@ A nightly job copies them into the Kmerseek PRs database in Notion.
 
 ## Why this PR (Olga)
 
-<!-- One to three sentences: what question this answers, and which figure or claim it feeds. -->
+<!-- One to three sentences: what question this answers, and which figure or claim it feeds.
+     Required before merging. -->
 
 ## What I learned (Olga)
 
@@ -21,4 +22,4 @@ A nightly job copies them into the Kmerseek PRs database in Notion.
 
 ## Figure / claim it feeds
 
-<!-- Figure 1, 2, 3, 4, Methods/SF1, kmerseek tool, or Other -->
+<!-- Optional. Figure 1, 2, 3, 4, Methods/SF1, kmerseek tool, or Other -->
