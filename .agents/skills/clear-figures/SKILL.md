@@ -127,7 +127,7 @@ Rules 7i to 7t come from Olga's chat messages, August to October 2026 (collected
     dashed lines are too hard to tell apart; use two clearly different colours (for example
     red and blue), and keep the dash pattern as a second cue at most. Where two curves
     cross, the caption says whether the crossing means anything; if it does not, say so.
-    Olga, analysis PR 54 (added 2026-10-13): "Does the intersection of Cohen's Cappa [kappa]
+    Olga, analysis PR 54 (added 2026-10-13): "Does the intersection of Cohen's kappa
     and the mean longest run mean something?", and asked for colours "like red and blue"
     because the dotted and dashed lines were too hard to tell apart.
 
