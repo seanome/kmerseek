@@ -50,7 +50,7 @@ questions that have found real bugs in these repos:
 - **A version bump changes every pin.** When a tool's version changes in one place, grep
   the repo for its old version and change every pin: `environment*.yml`, the CI workflows
   under `.github/workflows/`, `.pre-commit-config.yaml`, Dockerfiles and pixi or lock files.
-  Olga, analysis PR 111 (added 2026-10-13): "Andis this updated/pinned in the github
+  Olga, analysis PR 111 (added 2026-10-13): "And is this updated/pinned in the github
   actions, too?"
 
 ## 3. Check the output against something you did not compute
