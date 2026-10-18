@@ -743,7 +743,6 @@ function dotPlot(m, container) {
   let lastRight = -Infinity;
   m.query.domains.forEach(d => {
     const box = svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.query.label} ${d.start}–${d.end}`, x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 });
-    box.appendChild(svgEl("title", {}, `${d.name}: ${m.query.label} ${d.start}–${d.end}`));
     svg.appendChild(box);
     const cx = sx((d.start + d.end) / 2), half = d.name.length * CHAR_W / 2;
     if (cx - half > lastRight + 4) {
@@ -756,7 +755,6 @@ function dotPlot(m, container) {
   let lastBottom = -Infinity;
   for (const d of m.target.domains) {
     const box = svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.target.label} ${d.start}–${d.end}`, x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 });
-    box.appendChild(svgEl("title", {}, `${d.name}: ${m.target.label} ${d.start}–${d.end}`));
     svg.appendChild(box);
     const cy = sy((d.start + d.end) / 2) + 4;
     if (Math.abs(cy - lastBottom) > 11) {
