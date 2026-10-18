@@ -5,7 +5,7 @@ database, so the effect of `--ka-null` on a reported E-value is visible.
     python scripts/plot_evalue_by_null.py -o docs/images/evalue_by_null_swissprot.png
 
 E = K m n e^(-r_database x) for a 200-residue query (m) against all of Swiss-Prot
-(n = 210 M residues), with r_database and K from the 15,000-sequence Swiss-Prot sample
+(n = 209 M residues), with r_database and K from the 15,000-sequence Swiss-Prot sample
 fitted three ways (the curves under docs/images/ka_fit_curves).
 """
 
@@ -20,7 +20,7 @@ import matplotlib.pyplot as plt
 
 CURVES = "docs/images/ka_fit_curves/swissprot_sample15000_{}.csv"
 QUERY_RESIDUES = 200
-DATABASE_RESIDUES = 210e6
+DATABASE_RESIDUES = 209_017_843  # UniProt Swiss-Prot 2026_03, all 575,748 sequences
 CUTOFF = 0.01
 FITS = [
     ("database", "database sequences as they are (--ka-null database, the default)", "#1f77b4", "-"),

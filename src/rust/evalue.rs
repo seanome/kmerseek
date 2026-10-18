@@ -64,9 +64,9 @@ pub struct KaCalibration {
     pub n_queries: usize,
     /// Residues in the calibration queries added up: L in ln(K L N).
     pub query_residues: u64,
-    /// The database size the E-value uses for n: the index's k-mer count stands in for its
-    /// residue count.
-    pub database_kmers: u64,
+    /// Residues in the database (`ProteomeIndex::total_residues`): N in ln(K L N), and n in
+    /// every Karlin-Altschul E-value searched with this fit.
+    pub database_residues: u64,
     /// Regions the calibration queries produced, at any score.
     pub n_regions: usize,
     /// Chance that two positions drawn from the sampled database sequences share a class
@@ -135,7 +135,7 @@ impl KaCalibration {
             seed: 0,
             n_queries: 0,
             query_residues: 0,
-            database_kmers: 0,
+            database_residues: 0,
             n_regions: 0,
             match_probability: 0.0,
             lambda_analytic: 0.0,
@@ -498,7 +498,7 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
 #[serde(rename_all = "snake_case")]
 pub enum EvalueSource {
     /// `region_ka_evalue` of one extended region whose pair has a positive lambda:
-    /// K m n exp(-lambda S), with n = `db_n_kmers`.
+    /// K m n exp(-lambda S), with n the database's residues.
     Ka,
     /// `region_ka_evalue` of a chain of extended regions: the sum P-value times the number
     /// of targets (see `search::chain_regions`). Close to `Ka` on the same evidence, not
@@ -542,8 +542,8 @@ pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64, n_targets: f64)
 /// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
 /// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
 /// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on the Swiss-Prot
-/// sample real sequences give 0.87, a plain shuffle 1.0, and keeping dipeptides already
-/// pulls the shuffle to 0.94, so hydrophobic runs alone explain about half of the gap.
+/// sample real sequences give 0.88, a plain shuffle 0.99, and keeping dipeptides pulls the
+/// shuffle to 0.95, so hydrophobic runs alone explain about two fifths of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
@@ -832,14 +832,14 @@ pub fn write_survival_csv(
         "n_reference_queries",
         "n_reference_regions",
         "query_residues",
-        "database_kmers",
+        "database_residues",
         "bin_width",
     ])?;
     // The fit is a line through ln(regions in the bin at x); its survival is the same line
     // divided by (1 - e^(-r_database w)).
     let per_bin = 1.0 - (-fit.r_database * fit.bin_width).exp();
     let ln_intercept =
-        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+        (fit.k * fit.query_residues as f64 * fit.database_residues as f64 * per_bin).ln();
     let reference: std::collections::HashMap<i64, u64> =
         fit.reference_survival.iter().copied().collect();
     for &(bin, count) in &fit.survival {
@@ -865,7 +865,7 @@ pub fn write_survival_csv(
             report.n_reference_queries.to_string(),
             report.n_reference_regions.to_string(),
             fit.query_residues.to_string(),
-            fit.database_kmers.to_string(),
+            fit.database_residues.to_string(),
             fit.bin_width.to_string(),
         ])?;
     }
