@@ -770,7 +770,12 @@ function dotPlot(m, container) {
     const x = sx(qTicks[i]), w = String(qTicks[i]).length * CHAR_W;
     if (keepX.every(k => Math.abs(k - x) > w + 3)) keepX.push(x), svg.appendChild(svgEl("text", { class: "ax", x, y: y0 + ph + 12, "text-anchor": "middle" }, qTicks[i]));
   }
-  for (const p of ticks(tL)) svg.appendChild(svgEl("text", { class: "ax", x: x0 - 5, y: sy(p) + 4, "text-anchor": "end" }, p));
+  // The same for the target's numbers, which are 11px tall.
+  const tTicks = ticks(tL), keepY = [];
+  for (let i = tTicks.length - 1; i >= 0; i--) {
+    const y = sy(tTicks[i]);
+    if (keepY.every(k => Math.abs(k - y) > 12)) keepY.push(y), svg.appendChild(svgEl("text", { class: "ax", x: x0 - 5, y: y + 4, "text-anchor": "end" }, tTicks[i]));
+  }
   svg.appendChild(svgEl("text", { x: x0 + pw / 2, y: H - 3, "text-anchor": "middle" }, `${m.query.label} position (aa)`));
   svg.appendChild(svgEl("text", { x: 11, y: y0 + ph / 2, "text-anchor": "middle", transform: `rotate(-90 11 ${y0 + ph / 2})` }, `${m.target.label} position (aa)`));
   if (m.structure) for (const seg of pathSegments(m.structure.pairs)) {
