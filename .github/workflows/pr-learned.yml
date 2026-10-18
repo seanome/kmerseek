@@ -23,14 +23,16 @@ jobs:
           import os, re, sys
 
           body = os.environ.get("BODY") or ""
-          # Drop HTML comments (the template's instructions) before reading the sections.
-          body = re.sub(r"<!--.*?-->", "", body, flags=re.S)
 
           def section(name):
               m = re.search(
                   rf"^##\s*{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)", body, flags=re.M | re.S
               )
-              return m.group(1).strip() if m else None
+              if not m:
+                  return None
+              # Drop HTML comments (the template's instructions) inside this section only,
+              # so a stray comment cannot hide the next heading.
+              return re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip()
 
           missing = []
           for name in ("Why this PR (Olga)", "What I learned (Olga)"):
