@@ -84,8 +84,9 @@ Nothing else matters if the code is wrong. Look for:
 - **Error handling that destroys information** — `.ok()`, `let _ =`, `map_err(|_| ...)`,
   a `?` that converts a specific error into a stringly-typed one.
 - **Recomputing at load what the index already saved** — a search that rebuilds IDF, k-mer
-  strings or any other value `kmerseek index` computed and stored, instead of reading the
-  stored value. It throws away work and lets the two copies drift apart. Blocking unless the
+  strings or any other database-side or target-side value `kmerseek index` computed and
+  stored, instead of reading the stored value. Values that come from the query (its
+  `PreparedQuery` mins, its k-mers) are computed at search time and are fine. It throws away work and lets the two copies drift apart. Blocking unless the
   PR says why the stored value cannot be used. Added 2026-10-13 from kmerseek PR 137: "Why
   isn't it just reading the idf that was already computed at index time?" (asked three
   times there, and before in PR 36: "Can't we use the saved kmers from the index?").
