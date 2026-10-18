@@ -10,6 +10,8 @@ on:
   pull_request:
     types: [opened, edited, synchronize, reopened, ready_for_review]
 
+permissions: {}
+
 jobs:
   notes:
     if: github.event.pull_request.draft == false
