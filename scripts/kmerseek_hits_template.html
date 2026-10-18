@@ -345,7 +345,9 @@ function gappedOf(row, i) { const m = row.model.runs[i]; return GAPPED && m && m
 function identityOf(row, i) { return identity(row, i); }
 function identity(row, i) {
   // The count on the run itself comes from the pair model when there is one; row.runs may carry the gapped count instead.
-  const r = row.runs[i], m = row.model && row.model.runs ? row.model.runs[i] : null, g = gappedOf(row, i);
+  const r = row.runs[i];
+  if (!r) return { identical: 0, of: 0, exact: 0, gapped: false };  // a row with no run
+  const m = row.model && row.model.runs ? row.model.runs[i] : null, g = gappedOf(row, i);
   const exact = m && m.identical !== undefined ? m.identical : r.identical;
   return g ? { identical: g.identical, of: g.aligned, exact, gapped: true } : { identical: exact, of: r.length, exact, gapped: false };
 }
@@ -354,7 +356,7 @@ const bin = frac => frac < 0.2 ? 0 : frac < 0.4 ? 1 : frac < 0.6 ? 2 : frac < 0.
 // Rows carry a stable rank (their order by the score). Everything else is computed here.
 const ROWS = R.rows.map(row => {
   const best = row.runs[0] || { length: 0, identical: 0, query_start: 0, query_end: 0 };
-  const id0 = row.runs.length ? identityOf(row, 0) : { identical: 0, of: 0 };
+  const id0 = identityOf(row, 0);
   return { ...row, best, bestIdent: id0.identical, bestOf: id0.of, bestPct: id0.of ? 100 * id0.identical / id0.of : 0, regions: regionsHit(row), primary: PRIMARY ? scoreOf(row, PRIMARY) : null };
 });
 function regionsHit(row) {
@@ -592,6 +594,8 @@ function rowEl(row) {
   if (isFragment(row)) { const t = el("span", "tag", "fragment"); s.appendChild(t); }
   if (row.n_entries > 1) { const t = el("span", "tag", `+${row.n_entries - 1}`); t.title = `${row.n_entries - 1} more ${row.n_entries > 2 ? "entries" : "entry"} of this gene: ${row.other_entries.join(", ")}`; s.appendChild(t); }
   name.appendChild(s); g.appendChild(name);
+  // A row can have no run: kmerseek search chains k-mers across diagonals into a region,
+  // and the pair view only counts 2 or more shared k-mers in a row on one diagonal.
   const id = identity(row, 0);
   const cells = [[row.length], [row.runs.length], [row.best.length], [row.runs.length ? `${Math.round(row.bestPct)}%` : "\u2013", row.runs.length ? (GAPPED ? `${row.bestIdent} of ${id.of} aligned columns; ${id.exact} on the run itself` : `${row.bestIdent} of the run's ${id.of} residues`) : ""], [row.n_shared]];
   for (const sc of SCORES) { const v = scoreOf(row, sc); cells.push([fmtScore(v), v === null ? `${sc.label}: not computed for this row` : `${sc.label} ${v}`, v === null]); }
@@ -732,20 +736,46 @@ function dotPlot(m, container) {
   for (const d of m.query.domains) svg.appendChild(svgEl("rect", { fill: "var(--domain)", opacity: 0.7, x: sx(d.start), y: y0, width: (d.end - d.start + 1) * scale, height: ph }));
   for (const d of m.target.domains) svg.appendChild(svgEl("rect", { fill: "var(--domain)", opacity: 0.7, x: x0, y: sy(d.end + 1), width: pw, height: (d.end - d.start + 1) * scale }));
   svg.appendChild(svgEl("line", { class: "pl", x1: sx(1), x2: sx(qL + 1), y1: mt + tw * 0.6, y2: mt + tw * 0.6 }));
-  m.query.domains.forEach(d => {
-    svg.appendChild(svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.query.label} ${d.start}–${d.end}`, x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 }));
-    svg.appendChild(svgEl("text", { class: "dom", x: sx((d.start + d.end) / 2), y: mt + tw * 0.28, "text-anchor": "middle" }, d.name));
+  // A domain name is written only where it fits without running into the last one written;
+  // on a short protein drawn to scale against a long one most do not, and the box's tooltip
+  // carries the name instead.
+  const CHAR_W = 5.5;
+  let lastRight = -Infinity;
+  [...m.query.domains].sort((a, b) => a.start - b.start).forEach(d => {
+    const box = svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.query.label} ${d.start}–${d.end}`, x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 });
+    svg.appendChild(box);
+    const cx = sx((d.start + d.end) / 2), half = d.name.length * CHAR_W / 2;
+    if (cx - half > lastRight + 4) {
+      svg.appendChild(svgEl("text", { class: "dom", x: cx, y: mt + tw * 0.28, "text-anchor": "middle" }, d.name));
+      lastRight = cx + half;
+    }
   });
   const tx = x0 + pw + 6;
   svg.appendChild(svgEl("line", { class: "pl", x1: tx + tw * 0.4, x2: tx + tw * 0.4, y1: sy(1), y2: sy(tL + 1) }));
-  for (const d of m.target.domains) {
-    svg.appendChild(svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.target.label} ${d.start}–${d.end}`, x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 }));
-    svg.appendChild(svgEl("text", { class: "dom", x: tx + tw * 0.75, y: sy((d.start + d.end) / 2) + 4 }, d.name));
+  let lastBottom = -Infinity;
+  for (const d of [...m.target.domains].sort((a, b) => a.start - b.start)) {
+    const box = svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.target.label} ${d.start}–${d.end}`, x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 });
+    svg.appendChild(box);
+    const cy = sy((d.start + d.end) / 2) + 4;
+    if (Math.abs(cy - lastBottom) > 11) {
+      svg.appendChild(svgEl("text", { class: "dom", x: tx + tw * 0.75, y: cy }, d.name));
+      lastBottom = cy;
+    }
   }
   svg.appendChild(svgEl("rect", { x: x0, y: y0, width: pw, height: ph, fill: "none", stroke: "var(--axis)" }));
   const ticks = L => { const step = L <= 600 ? 100 : L <= 1500 ? 200 : 500; return [1, ...Array.from({ length: Math.floor((L - 1) / step) }, (_, i) => (i + 1) * step).filter(t => L - t > L * 0.06), L]; };
-  for (const p of ticks(qL)) svg.appendChild(svgEl("text", { class: "ax", x: sx(p), y: y0 + ph + 12, "text-anchor": "middle" }, p));
-  for (const p of ticks(tL)) svg.appendChild(svgEl("text", { class: "ax", x: x0 - 5, y: sy(p) + 4, "text-anchor": "end" }, p));
+  // Tick numbers that would touch the previous one are left out; the protein's length, the last tick, is always kept.
+  const qTicks = ticks(qL), keepX = [];
+  for (let i = qTicks.length - 1; i >= 0; i--) {
+    const x = sx(qTicks[i]), w = String(qTicks[i]).length * CHAR_W;
+    if (keepX.every(k => Math.abs(k - x) > w + 3)) keepX.push(x), svg.appendChild(svgEl("text", { class: "ax", x, y: y0 + ph + 12, "text-anchor": "middle" }, qTicks[i]));
+  }
+  // The same for the target's numbers, which are 11px tall.
+  const tTicks = ticks(tL), keepY = [];
+  for (let i = tTicks.length - 1; i >= 0; i--) {
+    const y = sy(tTicks[i]);
+    if (keepY.every(k => Math.abs(k - y) > 12)) keepY.push(y), svg.appendChild(svgEl("text", { class: "ax", x: x0 - 5, y: y + 4, "text-anchor": "end" }, tTicks[i]));
+  }
   svg.appendChild(svgEl("text", { x: x0 + pw / 2, y: H - 3, "text-anchor": "middle" }, `${m.query.label} position (aa)`));
   svg.appendChild(svgEl("text", { x: 11, y: y0 + ph / 2, "text-anchor": "middle", transform: `rotate(-90 11 ${y0 + ph / 2})` }, `${m.target.label} position (aa)`));
   if (m.structure) for (const seg of pathSegments(m.structure.pairs)) {
