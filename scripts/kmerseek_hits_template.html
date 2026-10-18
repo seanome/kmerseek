@@ -741,7 +741,7 @@ function dotPlot(m, container) {
   // carries the name instead.
   const CHAR_W = 5.5;
   let lastRight = -Infinity;
-  m.query.domains.forEach(d => {
+  [...m.query.domains].sort((a, b) => a.start - b.start).forEach(d => {
     const box = svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.query.label} ${d.start}–${d.end}`, x: sx(d.start), y: mt + tw * 0.35, width: (d.end - d.start + 1) * scale, height: tw * 0.5, rx: 1.5 });
     svg.appendChild(box);
     const cx = sx((d.start + d.end) / 2), half = d.name.length * CHAR_W / 2;
@@ -753,7 +753,7 @@ function dotPlot(m, container) {
   const tx = x0 + pw + 6;
   svg.appendChild(svgEl("line", { class: "pl", x1: tx + tw * 0.4, x2: tx + tw * 0.4, y1: sy(1), y2: sy(tL + 1) }));
   let lastBottom = -Infinity;
-  for (const d of m.target.domains) {
+  for (const d of [...m.target.domains].sort((a, b) => a.start - b.start)) {
     const box = svgEl("rect", { class: "dom", "data-name": d.name, "data-range": `${m.target.label} ${d.start}–${d.end}`, x: tx + tw * 0.15, y: sy(d.end + 1), width: tw * 0.5, height: (d.end - d.start + 1) * scale, rx: 1.5 });
     svg.appendChild(box);
     const cy = sy((d.start + d.end) / 2) + 4;
