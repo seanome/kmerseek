@@ -272,7 +272,7 @@ class SearchReport:
     def rows_for(self, query_name, rows, workdir):
         # With --min-runs, proteins are taken in rank order and one with fewer runs is skipped
         # until --max-rows are kept, so every protein is ranked first and the cap comes last.
-        ranked = rank_proteins(rows, None if self.args.min_runs else self.args.max_rows)
+        ranked = rank_proteins(rows, None if self.args.min_runs > 0 else self.args.max_rows)
         best = _target_best_rows(rows)
         ksize, moltype = int(rows[0]["ksize"]), rows[0]["moltype"]
         query_fasta = os.path.join(workdir, "query.fasta")
