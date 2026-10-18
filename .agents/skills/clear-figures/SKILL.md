@@ -81,7 +81,7 @@ redoing these by hand.
     human-mouse GENCODE genes) at the k-mer sizes actually run: HP k of 19 or more,
     never k=9 ("completely unreasonable", kmerseek PR #62; kmerseek PR #38).
 
-Rules 7i to 7r come from Olga's chat messages, August to October 2026 (collected
+Rules 7i to 7t come from Olga's chat messages, August to October 2026 (collected
 2026-10-01), including the MultiQC figure spec she pasted on 2026-09-03.
 
 7i. **Numbers go on an x-y plot, not in bars.** "Anytime the categories are actually
