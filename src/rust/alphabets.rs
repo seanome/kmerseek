@@ -149,6 +149,12 @@ impl Alphabet {
         }
     }
 
+    /// Every moltype in [`Self::all`] order, joined by ", ", for "expected one of" errors.
+    pub fn moltype_names() -> String {
+        let names: Vec<&str> = Self::all().iter().map(Alphabet::to_moltype).collect();
+        names.join(", ")
+    }
+
     /// Parse a moltype. Returns `None` for anything unrecognized.
     ///
     /// Takes kmerseek names only. sourmash's `protein`, `dayhoff` and `hp` arrive here
@@ -1112,5 +1118,22 @@ mod sourmash_compat_tests {
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
         }
+    }
+}
+
+#[cfg(test)]
+mod moltype_names_tests {
+    use super::*;
+
+    /// The list printed in "expected one of" errors, in `Alphabet::all()` order.
+    #[test]
+    fn moltype_names_lists_every_alphabet_in_order() {
+        assert_eq!(
+            Alphabet::moltype_names(),
+            "protein20, dayhoff6, hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, \
+             hp_thomas_dill_no_c2, hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, \
+             hp_pbotc_1st_ed2, gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
+             wass14, hsdm17, uniprot18"
+        );
     }
 }

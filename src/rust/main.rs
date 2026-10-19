@@ -1,4 +1,5 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use kmerseek::alphabets::Alphabet;
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
 use kmerseek::search::{
@@ -378,29 +379,44 @@ enum ProteinAlphabet {
     ReducedUniprot18,
 }
 
-impl From<ProteinAlphabet> for &'static str {
+impl From<ProteinAlphabet> for Alphabet {
     fn from(encoding: ProteinAlphabet) -> Self {
         match encoding {
-            ProteinAlphabet::Protein => "protein20",
-            ProteinAlphabet::Dayhoff => "dayhoff6",
-            ProteinAlphabet::HpLehninger => "hp_lehninger2",
-            ProteinAlphabet::HpThomasDill => "hp_thomas_dill2",
-            ProteinAlphabet::HpKyteDoolittle => "hp_kyte_doolittle2",
-            ProteinAlphabet::HpThomasDillNoC => "hp_thomas_dill_no_c2",
-            ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
-            ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
-            ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
-            ProteinAlphabet::ReducedGbmr4 => "gbmr4",
-            ProteinAlphabet::ReducedPolarity4 => "polarity4",
-            ProteinAlphabet::ReducedWwmj5 => "wwmj5",
-            ProteinAlphabet::ReducedGbmr7 => "gbmr7",
-            ProteinAlphabet::ReducedFuncGroups8 => "funcgroups8",
-            ProteinAlphabet::ReducedSdm12 => "sdm12",
-            ProteinAlphabet::ReducedMmseqs12 => "mmseqs12",
-            ProteinAlphabet::ReducedWass14 => "wass14",
-            ProteinAlphabet::ReducedHsdm17 => "hsdm17",
-            ProteinAlphabet::ReducedUniprot18 => "uniprot18",
+            ProteinAlphabet::Protein => Alphabet::Protein20,
+            ProteinAlphabet::Dayhoff => Alphabet::Dayhoff6,
+            ProteinAlphabet::HpLehninger => Alphabet::HpLehninger2,
+            ProteinAlphabet::HpThomasDill => Alphabet::HpThomasDill2,
+            ProteinAlphabet::HpKyteDoolittle => Alphabet::HpKyteDoolittle2,
+            ProteinAlphabet::HpThomasDillNoC => Alphabet::HpThomasDillNoC2,
+            ProteinAlphabet::HpLehningerCNonpolar => Alphabet::HpLehningerCNonpolar2,
+            ProteinAlphabet::HpLehningerHpc => Alphabet::HpLehningerHpc3,
+            ProteinAlphabet::HpPBotC1stEd => Alphabet::HpPBotC1stEd2,
+            ProteinAlphabet::ReducedGbmr4 => Alphabet::Gbmr4,
+            ProteinAlphabet::ReducedPolarity4 => Alphabet::Polarity4,
+            ProteinAlphabet::ReducedWwmj5 => Alphabet::Wwmj5,
+            ProteinAlphabet::ReducedGbmr7 => Alphabet::Gbmr7,
+            ProteinAlphabet::ReducedFuncGroups8 => Alphabet::FuncGroups8,
+            ProteinAlphabet::ReducedSdm12 => Alphabet::Sdm12,
+            ProteinAlphabet::ReducedMmseqs12 => Alphabet::Mmseqs12,
+            ProteinAlphabet::ReducedWass14 => Alphabet::Wass14,
+            ProteinAlphabet::ReducedHsdm17 => Alphabet::Hsdm17,
+            ProteinAlphabet::ReducedUniprot18 => Alphabet::Uniprot18,
         }
+    }
+}
+
+impl From<Alphabet> for ProteinAlphabet {
+    fn from(alphabet: Alphabet) -> Self {
+        *ProteinAlphabet::value_variants()
+            .iter()
+            .find(|variant| Alphabet::from(**variant) == alphabet)
+            .expect("every Alphabet has a --alphabet value")
+    }
+}
+
+impl From<ProteinAlphabet> for &'static str {
+    fn from(encoding: ProteinAlphabet) -> Self {
+        Alphabet::from(encoding).to_moltype()
     }
 }
 
@@ -1078,40 +1094,19 @@ fn assign_encoding(
     // the enum type for comparison.
     // Indexes built before class counts were added to the HP names store the old
     // "hp_<name>" moltype. Alphabet::from_moltype() still parses those, so normalizing
-    // here lets the match below deal only in current names.
+    // here lets the lookup below deal only in current names.
     let canonical = MolType::new(detected_moltype)
         .map(|moltype| moltype.get().to_string())
         .unwrap_or_else(|_| detected_moltype.to_string());
 
-    let detected_alphabet = match canonical.as_str() {
-        "protein20" => ProteinAlphabet::Protein,
-        "dayhoff6" => ProteinAlphabet::Dayhoff,
-        "hp_lehninger2" => ProteinAlphabet::HpLehninger,
-        "hp_thomas_dill2" => ProteinAlphabet::HpThomasDill,
-        "hp_kyte_doolittle2" => ProteinAlphabet::HpKyteDoolittle,
-        "hp_thomas_dill_no_c2" => ProteinAlphabet::HpThomasDillNoC,
-        "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
-        "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
-        "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
-        "gbmr4" => ProteinAlphabet::ReducedGbmr4,
-        "polarity4" => ProteinAlphabet::ReducedPolarity4,
-        "wwmj5" => ProteinAlphabet::ReducedWwmj5,
-        "gbmr7" => ProteinAlphabet::ReducedGbmr7,
-        "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
-        "sdm12" => ProteinAlphabet::ReducedSdm12,
-        "mmseqs12" => ProteinAlphabet::ReducedMmseqs12,
-        "wass14" => ProteinAlphabet::ReducedWass14,
-        "hsdm17" => ProteinAlphabet::ReducedHsdm17,
-        "uniprot18" => ProteinAlphabet::ReducedUniprot18,
-        _ => {
+    let detected_alphabet = match Alphabet::from_moltype(&canonical) {
+        Some(alphabet) => ProteinAlphabet::from(alphabet),
+        None => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
-                     hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
-                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-                     gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
-                     wass14, hsdm17, uniprot18",
-                    detected_moltype
+                    "Unknown alphabet in database: {}. Expected one of: {}",
+                    detected_moltype,
+                    Alphabet::moltype_names()
                 ),
             });
         }
@@ -1202,4 +1197,37 @@ fn validate_and_assign_parameters(
     let final_alphabet = assign_encoding(user_encoding, detected_moltype)?;
 
     Ok((final_ksize, final_scaled, final_alphabet))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every alphabet the library knows has a `--alphabet` value that maps back to it.
+    #[test]
+    fn every_alphabet_has_a_cli_value() {
+        for alphabet in Alphabet::all() {
+            assert_eq!(Alphabet::from(ProteinAlphabet::from(*alphabet)), *alphabet);
+        }
+        assert_eq!(ProteinAlphabet::value_variants().len(), Alphabet::all().len());
+    }
+
+    /// An index built with each alphabet is read back as that alphabet.
+    #[test]
+    fn assign_encoding_reads_every_stored_moltype() {
+        for alphabet in Alphabet::all() {
+            let detected = assign_encoding(ProteinAlphabet::Protein, alphabet.to_moltype());
+            assert_eq!(Alphabet::from(detected.unwrap()), *alphabet);
+        }
+    }
+
+    /// Adding an alphabet must not need a hand edit to this message.
+    #[test]
+    fn unknown_alphabet_error_names_every_alphabet() {
+        let message =
+            assign_encoding(ProteinAlphabet::Protein, "not_an_alphabet").unwrap_err().to_string();
+        for alphabet in Alphabet::all() {
+            assert!(message.contains(alphabet.to_moltype()), "{message}");
+        }
+    }
 }
