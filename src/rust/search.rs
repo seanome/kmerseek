@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -317,9 +318,12 @@ fn pair_pr_same(query: &PreparedQuery<'_>, target: &ProteinSketch) -> Option<f64
     Some(match_probability(q_composition, &class_composition(class_sequence(target)?)))
 }
 
+/// Set once the first out-of-range region has been reported (see `measure_runs`).
+static WARNED_REGION_OUTSIDE_SEQUENCE: AtomicBool = AtomicBool::new(false);
+
 /// Set `run_length` on every region, before any chaining, while each region still sits on
 /// one diagonal. A region whose span does not fit inside both stored sequences keeps
-/// `run_length` 0, which leaves it without a run E-value, and is reported on stderr.
+/// `run_length` 0, which leaves it without a run E-value, and is reported once on stderr.
 fn measure_runs(regions: &mut [MatchedRegion], query: &ProteinSketch, target: &ProteinSketch) {
     let (Some(q), Some(t)) = (class_sequence(query), class_sequence(target)) else {
         return;
@@ -328,18 +332,25 @@ fn measure_runs(regions: &mut [MatchedRegion], query: &ProteinSketch, target: &P
     for region in regions.iter_mut() {
         match longest_agreeing_run(q, t, region, &agree) {
             Some(run) => region.run_length = run,
-            None => eprintln!(
-                "Warning: region {}..{} on target {}..{} of {} vs {} lies outside the stored \
-                 sequences ({} and {} long); it gets no run E-value",
-                region.start,
-                region.end,
-                region.target_start,
-                region.target_end,
-                query.signature().name,
-                target.signature().name,
-                q.len(),
-                t.len()
-            ),
+            None => {
+                // One warning per process: truncated stored sequences would otherwise print
+                // a line per region per pair and bury the progress and `Total matches` lines.
+                if !WARNED_REGION_OUTSIDE_SEQUENCE.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "Warning: region {}..{} on target {}..{} of {} vs {} lies outside the \
+                         stored sequences ({} and {} long); it gets no run E-value. Further \
+                         regions like it are not reported",
+                        region.start,
+                        region.end,
+                        region.target_start,
+                        region.target_end,
+                        query.signature().name,
+                        target.signature().name,
+                        q.len(),
+                        t.len()
+                    );
+                }
+            }
         }
     }
 }
