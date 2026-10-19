@@ -97,9 +97,11 @@ whole fit given by hand, such as the one another index stored: copy `k` and `r_d
 from that index's `kmerseek index --ka-survival-out` CSV. A fit holds only for the
 mismatch penalty C and give-up margin X it was made with, which the CSV's
 `mismatch_penalty` and `xdrop` columns give, so search with the same
-`--extend-mismatch-penalty` and `--extend-xdrop`; nothing checks this. Two indexes searched with one fit
-differ only in their size n, so their E-values differ by the factor n₁ / n₂ for the same
-score.
+`--extend-mismatch-penalty` and `--extend-xdrop`; nothing checks this. If two indexes
+have the same class composition and length distribution, then searched with one fit they
+differ only in their size n, and their E-values differ by the factor n₁ / n₂ for the same
+score. If their compositions differ, the closed-form λ differs per pair and the ratio is
+not n₁ / n₂.
 
 How the fit works:
 

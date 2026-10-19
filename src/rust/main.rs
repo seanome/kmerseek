@@ -229,7 +229,8 @@ enum Commands {
         /// r_database to use with --ka-k: the factor on every pair's closed-form lambda,
         /// as a fit stores it. With --ka-k and --ka-r-database together a search uses a
         /// fit made on another index, so two indexes can be searched with one fit and
-        /// differ only in their size n. Copy both numbers from the other index's
+        /// differ only in their size n, if their class composition and length distribution
+        /// match. Copy both numbers from the other index's
         /// `kmerseek index --ka-survival-out` CSV (columns `k` and `r_database`), and search
         /// with the `mismatch_penalty` and `xdrop` from the same CSV, since a fit holds only
         /// for those. Without it --ka-k uses r_database 1, the closed form.
