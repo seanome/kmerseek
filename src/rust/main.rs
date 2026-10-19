@@ -697,9 +697,9 @@ fn main() -> IndexResult<()> {
             let mut searcher = ProteinSearcher::load(&target)?;
             if let Some(scoring) = scoring {
                 if let Some(k) = ka_k {
-                    if k <= 0.0 || k.is_nan() {
+                    if k <= 0.0 || !k.is_finite() {
                         return Err(anyhow::anyhow!(
-                            "--ka-k must be positive (got {k}); K is the fraction of the m x n \
+                            "--ka-k must be positive and finite (got {k}); K is the fraction of the m x n \
                              cells that can start a region"
                         )
                         .into());
