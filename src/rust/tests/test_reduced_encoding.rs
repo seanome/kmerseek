@@ -11,6 +11,7 @@
 mod tests {
     use crate::alphabets::Alphabet;
     use crate::sketch::ProteinSketch;
+    use crate::tests::test_fixtures::TEST_HNRNPA1_FASTA;
 
     /// CED-9 (P41958) residues 121-181, spanning the BH1 region.
     const CED9_FRAGMENT: &str = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
@@ -189,8 +190,8 @@ mod tests {
     /// `r`, while D214 and D242 stay `d`.
     #[test]
     fn test_hnrnpa1_stickers_are_their_own_letter() {
-        let fasta = std::fs::read_to_string("tests/testdata/fasta/hnrnpa1_P09651.fasta")
-            .expect("hnRNPA1 fixture is readable");
+        let fasta =
+            std::fs::read_to_string(TEST_HNRNPA1_FASTA).expect("hnRNPA1 fixture is readable");
         let protein: String = fasta.lines().filter(|line| !line.starts_with('>')).collect();
         assert_eq!(protein.len(), 372, "canonical P09651 isoform");
         // 1-based residues 186-245.
