@@ -340,8 +340,8 @@ impl ProteinSketch {
             minhash.add_many(&data.mins)?;
         }
 
-        // The key is stored, not recomputed: it hashes the sequence, which the store does not
-        // always hold.
+        // The key hashes the sequence, which the store does not always hold, so it is read
+        // from the store.
         let md5sum = data.md5sum.clone();
         let name = data.name.clone();
 
@@ -626,9 +626,9 @@ impl ProteinSketch {
 /// sequences are identical (the later names become aliases), so the key has to tell apart
 /// any two sequences that differ.
 ///
-/// A key over the sketch's k-mer set (the sum of its hashes) does not:
-/// "MKTWLRDEHPAAAAACYFNQSGV" and the same with eight A's have the same 5-mers, since a
-/// poly-A run of any length from 5 up adds only AAAAA.
+/// The key is over the residues, not the k-mer set, because two sequences can share a
+/// k-mer set: "MKTWLRDEHPAAAAACYFNQSGV" and the same with eight A's have the same 5-mers,
+/// since a poly-A run of any length from 5 up adds only AAAAA.
 pub fn sequence_key(sequence: &str) -> String {
     format!("{:x}", sourmash::_hash_murmur(sequence.as_bytes(), SEED))
 }
