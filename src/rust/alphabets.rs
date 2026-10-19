@@ -177,7 +177,13 @@ impl Alphabet {
             Self::Wass14 => 14,
             Self::Hsdm17 => 17,
             Self::Uniprot18 => 18,
-            _ => 2,
+            Self::HpLehninger2
+            | Self::HpThomasDill2
+            | Self::HpKyteDoolittle2
+            | Self::HpThomasDillNoC2
+            | Self::HpLehningerCNonpolar2
+            | Self::HpPBotC1stEd2
+            | Self::Cys2 => 2,
         }
     }
 
@@ -221,7 +227,7 @@ impl Alphabet {
     }
 
     /// The residue clusters in the order the source paper lists them. `None` for the HP
-    /// family and the two sourmash-encoded alphabets, which are not defined that way.
+    /// family, `cys2` and the two sourmash-encoded alphabets, which are not defined that way.
     pub fn clusters(&self) -> Option<&'static [&'static str]> {
         Some(match self {
             Self::Gbmr4 => GBMR4_CLUSTERS,
