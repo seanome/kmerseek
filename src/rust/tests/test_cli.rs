@@ -1265,6 +1265,8 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
             out.to_str().unwrap(),
             "--extend-mismatch-penalty",
             "2",
+            "--extend-xdrop",
+            "8",
         ]);
         cmd.args(extra);
         Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
