@@ -258,6 +258,8 @@ pub struct ScoreBins(BTreeMap<i64, u64>);
 impl ScoreBins {
     /// Count one region's score. A score that is not finite is left out: `as i64` would
     /// saturate it to the end of the integer range and `per_bin` would try to span that.
+    /// A finite score past about 9e18 saturates the same way and is not stopped here;
+    /// `per_bin` allocates one entry for every bin from the lowest to the highest used.
     pub fn add(&mut self, score: f64) {
         if score.is_finite() {
             *self.0.entry(score.floor() as i64).or_insert(0) += 1;
