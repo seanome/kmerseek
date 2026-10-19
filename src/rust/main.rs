@@ -695,25 +695,25 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
+            if let Some(k) = ka_k {
+                if k <= 0.0 || !k.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-k must be positive and finite (got {k}); K is the fraction of the m x n \
+                         cells that can start a region"
+                    )
+                    .into());
+                }
+            }
+            if let Some(r) = ka_r_database {
+                if r <= 0.0 || !r.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-r-database must be positive and finite (got {r}); it \
+                         multiplies every pair's lambda"
+                    )
+                    .into());
+                }
+            }
             if let Some(scoring) = scoring {
-                if let Some(k) = ka_k {
-                    if k <= 0.0 || !k.is_finite() {
-                        return Err(anyhow::anyhow!(
-                            "--ka-k must be positive and finite (got {k}); K is the fraction of the m x n \
-                             cells that can start a region"
-                        )
-                        .into());
-                    }
-                }
-                if let Some(r) = ka_r_database {
-                    if r <= 0.0 || !r.is_finite() {
-                        return Err(anyhow::anyhow!(
-                            "--ka-r-database must be positive and finite (got {r}); it \
-                             multiplies every pair's lambda"
-                        )
-                        .into());
-                    }
-                }
                 let explicit =
                     ka_k.map(|k| KaParams { k, r_database: ka_r_database.unwrap_or(1.0) });
                 let settings = KaCalibrationSettings {
