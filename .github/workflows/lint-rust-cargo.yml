@@ -43,7 +43,7 @@ jobs:
             { cfg_test = ($0 ~ /^#\[cfg\(test\)\]/) }
             /#!?\[(allow|expect)\(([^)]*[ ,])?(dead_code|unused)/ { print FILENAME ":" FNR ": " $0; found = 1 }
             END { exit !found }
-          ' $(find src/rust -name '*.rs'); then
+          ' $(find src/rust benches examples tests -name '*.rs'); then
             echo "Code kept only by an allow attribute above: remove it, or use it." >&2
             exit 1
           fi
