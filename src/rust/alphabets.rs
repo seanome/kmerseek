@@ -76,6 +76,9 @@ pub enum Alphabet {
     /// Physical Biology of the Cell, 1st edition.
     HpPBotC1stEd2,
 
+    /// Cysteine against everything else, so a k-mer records only where the cysteines are.
+    Cys2,
+
     /// Solis & Rackovsky 2000, 4 classes.
     Gbmr4,
     /// Ball, Hill & Scott 2014, 4 classes on polarity and charge.
@@ -111,6 +114,7 @@ impl Alphabet {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::Cys2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
             Alphabet::Wwmj5,
@@ -136,6 +140,7 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => "hp_lehninger_c_nonpolar2",
             Self::HpLehningerHpc3 => "hp_lehninger_hpc3",
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
+            Self::Cys2 => "cys2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
             Self::Wwmj5 => "wwmj5",
@@ -172,7 +177,13 @@ impl Alphabet {
             Self::Wass14 => 14,
             Self::Hsdm17 => 17,
             Self::Uniprot18 => 18,
-            _ => 2,
+            Self::HpLehninger2
+            | Self::HpThomasDill2
+            | Self::HpKyteDoolittle2
+            | Self::HpThomasDillNoC2
+            | Self::HpLehningerCNonpolar2
+            | Self::HpPBotC1stEd2
+            | Self::Cys2 => 2,
         }
     }
 
@@ -201,6 +212,7 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => &LEHNINGER_C_NONPOLAR_HP,
             Self::HpLehningerHpc3 => &LEHNINGER_HPC,
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
+            Self::Cys2 => &CYS2,
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
             Self::Wwmj5 => &WWMJ5,
@@ -215,7 +227,7 @@ impl Alphabet {
     }
 
     /// The residue clusters in the order the source paper lists them. `None` for the HP
-    /// family and the two sourmash-encoded alphabets, which are not defined that way.
+    /// family, `cys2` and the two sourmash-encoded alphabets, which are not defined that way.
     pub fn clusters(&self) -> Option<&'static [&'static str]> {
         Some(match self {
             Self::Gbmr4 => GBMR4_CLUSTERS,
@@ -391,6 +403,35 @@ static LEHNINGER_HPC: LazyLock<HashMap<u8, u8>> =
 // -----------------------------------------------------------------------------
 static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFILMPVWY", b"DEGHKNQRST"));
+
+// -----------------------------------------------------------------------------
+// Cysteine against everything else.
+//
+// Not a hydrophobicity scheme, so its name does not start with `hp_` and the
+// HP-family tests skip it. The only thing a cys2 k-mer records is which of its
+// positions are cysteine, which is the cysteine spacing of a stretch of sequence
+// and nothing else. Written for toxin peptides, whose families are defined by
+// that spacing: a conotoxin framework such as C-C-CC-C-C is a statement about
+// which positions hold cysteine and how many residues sit between them.
+//
+// Two consequences worth knowing before indexing anything with it. A stretch with
+// no cysteine encodes to a run of one symbol, so every such k-mer in a proteome
+// collapses to the same hash and low-complexity removal drops all of them. And
+// the 19 residues sharing the 'x' symbol are not a chemical class; 'x' means
+// "not cysteine", nothing more.
+//
+//   c: C                         (1 residue)
+//   x: A D E F G H I K L M N P Q R S T V W Y   (19 residues)
+// -----------------------------------------------------------------------------
+static CYS2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
+    // 20 residues plus the stop codon.
+    let mut m = HashMap::with_capacity(21);
+    for &r in CANONICAL_AA {
+        m.insert(r, if r == b'C' { b'c' } else { b'x' });
+    }
+    m.insert(b'*', b'*'); // stop codon pass-through
+    m
+});
 
 /// The partition of an alphabet that has one, for tests that compare tables directly.
 #[cfg(test)]
@@ -1112,5 +1153,90 @@ mod sourmash_compat_tests {
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
         }
+    }
+}
+
+#[cfg(test)]
+mod cys2_tests {
+    use super::*;
+
+    /// Encode a peptide through cys2, for tests that compare whole strings.
+    fn encode(peptide: &str) -> String {
+        let table = test_partition(Alphabet::Cys2);
+        peptide.bytes().map(|r| table[&r] as char).collect()
+    }
+
+    #[test]
+    fn only_cysteine_gets_its_own_symbol() {
+        let table = test_partition(Alphabet::Cys2);
+        assert_eq!(table.len(), 21, "20 residues plus the stop codon");
+        assert_eq!(table[&b'C'], b'c');
+        for &residue in CANONICAL_AA {
+            if residue == b'C' {
+                continue;
+            }
+            assert_eq!(
+                table[&residue], b'x',
+                "residue {} should be 'x', meaning not cysteine",
+                residue as char
+            );
+        }
+        assert_eq!(table[&b'*'], b'*', "stop codon passes through");
+    }
+
+    #[test]
+    fn two_classes_named_in_the_moltype() {
+        assert_eq!(Alphabet::Cys2.to_moltype(), "cys2");
+        assert_eq!(Alphabet::from_moltype("cys2"), Some(Alphabet::Cys2));
+        assert_eq!(Alphabet::Cys2.size(), 2);
+
+        let symbols: std::collections::HashSet<u8> = test_partition(Alphabet::Cys2)
+            .iter()
+            .filter(|(residue, _)| **residue != b'*')
+            .map(|(_, symbol)| *symbol)
+            .collect();
+        assert_eq!(symbols.len(), Alphabet::Cys2.size());
+        assert!(Alphabet::Cys2.to_moltype().ends_with(&Alphabet::Cys2.size().to_string()));
+    }
+
+    /// cys2 splits on cysteine, not on hydrophobicity, so it must stay out of the HP
+    /// family. The HP tests assert every scheme agrees on 15 of the 20 residues, and cys2
+    /// puts all 19 non-cysteine residues in one class, which would make that false.
+    #[test]
+    fn not_part_of_the_hp_family() {
+        assert!(!Alphabet::hp_family().any(|a| *a == Alphabet::Cys2));
+        assert!(!Alphabet::Cys2.to_moltype().starts_with("hp_"));
+        assert!(Alphabet::all().contains(&Alphabet::Cys2));
+        assert!(Alphabet::Cys2.clusters().is_none());
+        assert!(!Alphabet::Cys2.uses_sourmash_encoder());
+    }
+
+    /// What the alphabet is for: the encoding of a peptide is its cysteine spacing, so two
+    /// made-up peptides that put cysteine in the same positions encode identically however
+    /// much the residues between them differ, and moving one cysteine changes the encoding.
+    #[test]
+    fn encoding_is_the_cysteine_spacing() {
+        assert_eq!(encode("GGCDERCMNPCC"), "xxcxxxcxxxcc");
+        assert_eq!(encode("AACKLMCWYACC"), "xxcxxxcxxxcc");
+        assert_eq!(
+            encode("GGCDERCMNPCC"),
+            encode("AACKLMCWYACC"),
+            "same cysteine positions, different residues between them"
+        );
+
+        assert_ne!(
+            encode("GGCDERCMNPCC"),
+            encode("GGCDERCMNCPC"),
+            "moving one cysteine must change the encoding"
+        );
+    }
+
+    /// A peptide with no cysteine encodes to a run of one symbol, so every such k-mer in a
+    /// proteome hashes to the same value. Anyone indexing with cys2 needs to know this.
+    #[test]
+    fn a_peptide_without_cysteine_is_one_repeated_symbol() {
+        let encoded = encode("PLANTANDANIMALGENES");
+        assert_eq!(encoded, "x".repeat(19));
+        assert_eq!(encoded.chars().collect::<std::collections::HashSet<_>>().len(), 1);
     }
 }
