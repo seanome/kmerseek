@@ -1240,6 +1240,18 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     let first = reader.records().next().expect("one row per score bin")?;
     let k = first[column("k")].to_string();
     let r_database = first[column("r_database")].to_string();
+    // Those strings must parse back to exactly the fit the index stored, on every row.
+    let stored_fit = crate::index::ProteomeIndex::open_for_search(&index_path)?
+        .ka_calibration(crate::search::ExtensionScoring::new(2.0, 8.0)?)?
+        .expect("the index stores a fit for C 2, X 8")
+        .ka_params();
+    for row in reader.records() {
+        let row = row?;
+        assert_eq!(&row[column("k")], k);
+        assert_eq!(&row[column("r_database")], r_database);
+    }
+    assert_eq!(k.parse::<f64>()?, stored_fit.k);
+    assert_eq!(r_database.parse::<f64>()?, stored_fit.r_database);
 
     let search = |out: &std::path::Path, extra: &[&str]| {
         let mut cmd = Command::cargo_bin("kmerseek")?;
