@@ -307,7 +307,7 @@ run E-value by Pr(same). So the runs that pass E <= 10 have E-values anywhere fr
 `protein20` (about 0.06). The mid-p run E-value (Lancaster 1961) averages the expected
 counts of runs of at least L and of more than L, which puts the cut halfway along one step.
 It is closer to calibrated in every row at E <= 10 and lets through too many at `gbmr4`
-E <= 1. It is reported beside `region_run_evalue` and is never `region_evalue`. Neither
+(E <= 1 and E <= 10). It is reported beside `region_run_evalue` and is never `region_evalue`. Neither
 replaces measuring the cut on decoys of your own database.
 
 The run model itself counts chance runs well: at `hp_lehninger2` k=15, 23,595 runs of 15
