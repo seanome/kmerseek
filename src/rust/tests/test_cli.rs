@@ -16,6 +16,9 @@ use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_G
 /// per diagonal merged the pieces a repeated k-mer used to split.
 const CED9_ROWS_HP_K12_MAX_PVALUE_0_7: usize = 218;
 
+/// The same search with the default seed extension, against an index that holds a fit.
+const CED9_ROWS_HP_K12_MAX_PVALUE_0_7_EXTENDED: usize = 217;
+
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
     let mut cmd = Command::cargo_bin("kmerseek")?;
@@ -687,9 +690,9 @@ fn test_cli_search_output_is_reproducible() -> Result<(), Box<dyn std::error::Er
     let first = search("run1.csv")?;
     let second = search("run2.csv")?;
 
-    // Header plus one line per row. The index holds a fit, so the search extends by
-    // default: 217 rows, where the exact search gives 218.
-    assert_eq!(first.lines().count(), 217 + 1);
+    // Header plus one line per row. The index holds a fit, so the search extends by default
+    // and gives fewer rows than the exact search (CED9_ROWS_HP_K12_MAX_PVALUE_0_7).
+    assert_eq!(first.lines().count(), CED9_ROWS_HP_K12_MAX_PVALUE_0_7_EXTENDED + 1);
     assert_eq!(first, second);
     Ok(())
 }
