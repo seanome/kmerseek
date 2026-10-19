@@ -414,14 +414,15 @@ impl From<ProteinAlphabet> for &'static str {
     }
 }
 
-/// The mismatch penalty and give-up margin `kmerseek search` extends with, or None to keep
-/// regions exact. A penalty that is given decides on its own (0 is off); an omitted one
-/// follows the index's stored Karlin-Altschul fit (`scoring_from_stored_fits`).
-fn extension_scoring(
+/// Checks the extension flags of `kmerseek search` before the index is opened, so a bad
+/// value fails at once. Only a penalty of exactly 0 turns extension off; a negative, NaN or
+/// infinite one is an error, as it is for `kmerseek index`. `--ka-k` is checked whether or
+/// not extension ends up on.
+fn check_extension_flags(
     penalty: Option<f64>,
     xdrop: Option<f64>,
-    index: &ProteomeIndex,
-) -> IndexResult<Option<ExtensionScoring>> {
+    ka_k: Option<f64>,
+) -> IndexResult<()> {
     if let Some(x) = xdrop.filter(|x| x.is_nan() || *x < 0.0) {
         return Err(anyhow::anyhow!(
             "--extend-xdrop must be 0 or more (got {x}); a negative give-up margin would end \
@@ -429,9 +430,31 @@ fn extension_scoring(
         )
         .into());
     }
+    if let Some(p) = penalty.filter(|p| *p != 0.0) {
+        ExtensionScoring::new(p, xdrop.unwrap_or(DEFAULT_XDROP))
+            .map_err(|message| anyhow::anyhow!(message))?;
+    }
+    if let Some(k) = ka_k.filter(|k| *k <= 0.0 || k.is_nan()) {
+        return Err(anyhow::anyhow!(
+            "--ka-k must be positive (got {k}); K is the fraction of the m x n cells that can \
+             start a region"
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The mismatch penalty and give-up margin `kmerseek search` extends with, or None to keep
+/// regions exact. A penalty that is given decides on its own (0 is off); an omitted one
+/// follows the index's stored Karlin-Altschul fit (`scoring_from_stored_fits`). The flags
+/// have passed `check_extension_flags`.
+fn extension_scoring(
+    penalty: Option<f64>,
+    xdrop: Option<f64>,
+    index: &ProteomeIndex,
+) -> IndexResult<Option<ExtensionScoring>> {
     match penalty {
-        // `new` rejects an infinite penalty, which `p > 0.0` lets through.
-        Some(p) if p > 0.0 => ExtensionScoring::new(p, xdrop.unwrap_or(DEFAULT_XDROP))
+        Some(p) if p != 0.0 => ExtensionScoring::new(p, xdrop.unwrap_or(DEFAULT_XDROP))
             .map(Some)
             .map_err(|message| anyhow::anyhow!(message).into()),
         Some(_) => Ok(None),
@@ -703,6 +726,8 @@ fn main() -> IndexResult<()> {
                 false
             };
 
+            check_extension_flags(extend_mismatch_penalty, extend_xdrop, ka_k)?;
+
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
@@ -713,15 +738,6 @@ fn main() -> IndexResult<()> {
                     "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
                     scoring.mismatch_penalty, scoring.xdrop, chain_max_gap, chain_max_shift
                 );
-                if let Some(k) = ka_k {
-                    if k <= 0.0 || k.is_nan() {
-                        return Err(anyhow::anyhow!(
-                            "--ka-k must be positive (got {k}); K is the fraction of the m x n \
-                             cells that can start a region"
-                        )
-                        .into());
-                    }
-                }
                 let settings = KaCalibrationSettings {
                     scoring,
                     null: ka_null,

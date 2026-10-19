@@ -453,7 +453,11 @@ fn test_cli_search_rejects_an_infinite_penalty_or_nan_margin(
         .args(["--ka-queries", "0"])
         .assert()
         .success();
-    let cases: [(&[&str], &str); 3] = [
+    let cases: [(&[&str], &str); 6] = [
+        (&["--extend-mismatch-penalty=-2"], "--extend-mismatch-penalty must be above 0 (got -2)"),
+        (&["--extend-mismatch-penalty", "nan"], "--extend-mismatch-penalty must be above 0"),
+        // `--ka-k` is checked even when extension is off.
+        (&["--extend-mismatch-penalty", "0", "--ka-k=-1"], "--ka-k must be positive (got -1)"),
         (
             &["--extend-mismatch-penalty", "inf"],
             "--extend-mismatch-penalty must be above 0 (got inf)",
