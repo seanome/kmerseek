@@ -454,6 +454,13 @@ fn test_partition(alphabet: Alphabet) -> &'static HashMap<u8, u8> {
     alphabet.partition().expect("these alphabets all reduce")
 }
 
+/// Encode a peptide through an alphabet, for tests that compare whole strings.
+#[cfg(test)]
+fn encode(alphabet: Alphabet, peptide: &[u8]) -> String {
+    let table = test_partition(alphabet);
+    peptide.iter().map(|r| table[r] as char).collect()
+}
+
 #[cfg(test)]
 mod hp_tests {
     use super::*;
@@ -989,11 +996,6 @@ mod pbotc_hpc_tests {
     /// Its six cysteines are the framework written C-C-CC-C-C.
     const MVIIA: &[u8] = b"CKGKGAKCSRLMYDCCTGSCRSGKC";
 
-    fn encode(alphabet: Alphabet, sequence: &[u8]) -> String {
-        let table = test_partition(alphabet);
-        sequence.iter().map(|r| table[r] as char).collect()
-    }
-
     /// Cysteine is the only residue the two place differently, which is the whole point of
     /// the three-class variant: every other residue keeps the class PBotC 1st ed gives it.
     #[test]
@@ -1236,12 +1238,6 @@ mod sourmash_compat_tests {
 mod cys2_tests {
     use super::*;
 
-    /// Encode a peptide through cys2, for tests that compare whole strings.
-    fn encode(peptide: &str) -> String {
-        let table = test_partition(Alphabet::Cys2);
-        peptide.bytes().map(|r| table[&r] as char).collect()
-    }
-
     #[test]
     fn only_cysteine_gets_its_own_symbol() {
         let table = test_partition(Alphabet::Cys2);
@@ -1292,17 +1288,17 @@ mod cys2_tests {
     /// much the residues between them differ, and moving one cysteine changes the encoding.
     #[test]
     fn encoding_is_the_cysteine_spacing() {
-        assert_eq!(encode("GGCDERCMNPCC"), "xxcxxxcxxxcc");
-        assert_eq!(encode("AACKLMCWYACC"), "xxcxxxcxxxcc");
+        assert_eq!(encode(Alphabet::Cys2, b"GGCDERCMNPCC"), "xxcxxxcxxxcc");
+        assert_eq!(encode(Alphabet::Cys2, b"AACKLMCWYACC"), "xxcxxxcxxxcc");
         assert_eq!(
-            encode("GGCDERCMNPCC"),
-            encode("AACKLMCWYACC"),
+            encode(Alphabet::Cys2, b"GGCDERCMNPCC"),
+            encode(Alphabet::Cys2, b"AACKLMCWYACC"),
             "same cysteine positions, different residues between them"
         );
 
         assert_ne!(
-            encode("GGCDERCMNPCC"),
-            encode("GGCDERCMNCPC"),
+            encode(Alphabet::Cys2, b"GGCDERCMNPCC"),
+            encode(Alphabet::Cys2, b"GGCDERCMNCPC"),
             "moving one cysteine must change the encoding"
         );
     }
@@ -1311,7 +1307,7 @@ mod cys2_tests {
     /// proteome hashes to the same value. Anyone indexing with cys2 needs to know this.
     #[test]
     fn a_peptide_without_cysteine_is_one_repeated_symbol() {
-        let encoded = encode("PLANTANDANIMALGENES");
+        let encoded = encode(Alphabet::Cys2, b"PLANTANDANIMALGENES");
         assert_eq!(encoded, "x".repeat(19));
         assert_eq!(encoded.chars().collect::<std::collections::HashSet<_>>().len(), 1);
     }
