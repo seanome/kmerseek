@@ -424,6 +424,7 @@ static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
 //   x: A D E F G H I K L M N P Q R S T V W Y   (19 residues)
 // -----------------------------------------------------------------------------
 static CYS2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
+    // 20 residues plus the stop codon.
     let mut m = HashMap::with_capacity(21);
     for &r in CANONICAL_AA {
         m.insert(r, if r == b'C' { b'c' } else { b'x' });
