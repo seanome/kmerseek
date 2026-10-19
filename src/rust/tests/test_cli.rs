@@ -97,7 +97,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     // failure. Built from the alphabet lists rather than hardcoded, so a newly added
     // alphabet is covered without editing this test.
     let alphabets: Vec<&str> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
-    assert_eq!(alphabets.len(), 20, "every alphabet must be exercised here");
+    assert_eq!(alphabets.len(), 21, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
@@ -119,6 +119,21 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
 
         // Check that the output database was created
         assert!(output_path.exists());
+
+        // And that it can be searched: indexing and searching name alphabets in separate
+        // tables, and an alphabet missing from the search side only fails at search time.
+        let csv_path = temp_dir.path().join(format!("test_output_{}.csv", alphabet));
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            output_path.to_str().unwrap(),
+            "--output",
+            csv_path.to_str().unwrap(),
+        ]);
+        search_cmd.assert().success();
     }
 
     Ok(())
