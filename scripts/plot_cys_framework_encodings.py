@@ -20,9 +20,9 @@ The figure is the evidence for the claim in the README's HP family section: cys_
 carries the cysteine positions and the hydrophobic/polar pattern of the stretches
 between them at the same time, which cys2 drops and the two-class reading blurs.
 
-Peptide sequences and the framework string come from
-2024-kmerseek-analysis-cys-frameworks/tables/cys_frameworks/queries.csv, which holds
-5124 mature peptides from ConoServer and Swiss-Prot.
+Both peptide sequences are written out below, so the script runs from this repository
+alone. The h/p/c residue classes are pinned to src/rust/alphabets.rs by
+scripts/test_plot_cys_framework_encodings.py.
 
 Run from the repository root:
 
