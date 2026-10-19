@@ -30,8 +30,10 @@ jobs:
       - name: Check clippy
         run: cargo clippy --all -- --deny warnings
 
-      # rustc warns on dead code and unused items, and clippy above turns warnings into
-      # errors, so an allow attribute is the only way unused code survives. Test modules
+      # rustc warns on private dead code and unused items, and clippy above turns warnings
+      # into errors, so an allow attribute is the only way unused private code survives.
+      # rustc never flags pub items of the library crate, so this step does not cover them.
+      # Test modules
       # (#[cfg(test)] followed by a `mod name {` block, closed by a `}` in column 0) are
       # skipped: test fixtures may hold fields that only some tests read.
       - name: No dead_code or unused lint silenced outside test modules
