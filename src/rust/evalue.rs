@@ -540,13 +540,13 @@ pub fn scoring_from_stored_fits(
     fits: &[KaCalibration],
     xdrop: Option<f64>,
 ) -> Option<ExtensionScoring> {
-    let usable: Vec<ExtensionScoring> =
-        fits.iter().map(|f| f.scoring).filter(|s| xdrop.is_none_or(|x| s.xdrop == x)).collect();
-    usable
-        .iter()
-        .find(|s| s.mismatch_penalty == DEFAULT_MISMATCH_PENALTY)
-        .or(usable.first())
-        .copied()
+    let mut usable = fits.iter().map(|f| f.scoring).filter(|s| xdrop.is_none_or(|x| s.xdrop == x));
+    let first = usable.next()?;
+    Some(if first.mismatch_penalty == DEFAULT_MISMATCH_PENALTY {
+        first
+    } else {
+        usable.find(|s| s.mismatch_penalty == DEFAULT_MISMATCH_PENALTY).unwrap_or(first)
+    })
 }
 
 /// Which sequences are searched to fit r_database and K: the database sequences
