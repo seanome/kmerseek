@@ -119,6 +119,29 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
 
         // Check that the output database was created
         assert!(output_path.exists());
+
+        // Search the database just built, so an alphabet that indexes but is missing from
+        // the detected-alphabet match in main.rs fails here.
+        let results_path = temp_dir.path().join(format!("test_results_{}.csv", alphabet));
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            output_path.to_str().unwrap(),
+            "--output",
+            results_path.to_str().unwrap(),
+            "--ksize",
+            "8",
+            "--alphabet",
+            alphabet,
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "1",
+        ]);
+        search_cmd.assert().success();
     }
 
     Ok(())
