@@ -41,6 +41,15 @@ use crate::types::MolType;
 /// sequences kept under `aliases_{md5}`.
 pub const SCHEMA_VERSION: u32 = 5;
 
+/// The alias names sorted within each md5, so two indexes compare equal whatever order
+/// their duplicates were ingested in.
+fn sorted_aliases(mut aliases: HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
+    for names in aliases.values_mut() {
+        names.sort();
+    }
+    aliases
+}
+
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
@@ -1313,7 +1322,7 @@ impl ProteomeIndex {
         other.finalize()?;
         if self.signature_count() != other.signature_count()
             || self.unique_kmer_count() != other.unique_kmer_count()
-            || self.aliases()? != other.aliases()?
+            || sorted_aliases(self.aliases()?) != sorted_aliases(other.aliases()?)
         {
             return Ok(false);
         }
@@ -1340,8 +1349,11 @@ impl ProteomeIndex {
         for item in self.db.iterator(IteratorMode::From(b"aliases_", Direction::Forward)) {
             let (key, value) = item?;
             let Some(md5) = key.strip_prefix(b"aliases_") else { break };
+            let md5 = std::str::from_utf8(md5).map_err(|e| {
+                IndexError::CorruptIndex(format!("alias key is not valid UTF-8: {e}"))
+            })?;
             let names: Vec<String> = bincode::deserialize(&value)?;
-            aliases.insert(String::from_utf8_lossy(md5).into_owned(), names);
+            aliases.insert(md5.to_string(), names);
         }
         Ok(aliases)
     }
