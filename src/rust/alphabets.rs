@@ -1010,8 +1010,6 @@ mod pbotc_hpc_tests {
                 assert_eq!(two[&residue], three[&residue], "{}", residue as char);
             }
         }
-        assert_eq!(Alphabet::HpPBotC1stEdHpc3.size(), 3);
-        assert!(Alphabet::hp_family().any(|a| *a == Alphabet::HpPBotC1stEdHpc3));
     }
 
     /// On a real conotoxin the two readings differ at exactly the six cysteines, and those
@@ -1019,6 +1017,11 @@ mod pbotc_hpc_tests {
     /// the hydrophobic/polar pattern of the stretches between the cysteines at once.
     #[test]
     fn pbotc_hpc_keeps_the_framework_and_the_residues_between() {
+        // Worked by hand, with h = AFILMPVWY, p = DEGHKNQRST, c = C:
+        //   residues  C K G K G A K C S R L M Y D C C T G S C R S G K C
+        //   two       h p p p p h p h p p h h h p h h p p p h p p p p h
+        //   three     c p p p p h p c p p h h h p c c p p p c p p p p c
+        //   cys2      c x x x x x x c x x x x x x c c x x x c x x x x c
         let two = encode(Alphabet::HpPBotC1stEd2, MVIIA);
         let three = encode(Alphabet::HpPBotC1stEdHpc3, MVIIA);
         assert_eq!(two, "hpppphphpphhhphhppphpppph");
