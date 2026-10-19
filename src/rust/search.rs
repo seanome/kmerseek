@@ -5589,6 +5589,44 @@ mod ka_calibration_tests {
         Ok((temp_dir, ProteinSearcher::new(index)?))
     }
 
+    /// `calibration_bins` counts regions as each target is compared. It must give the bins
+    /// that searching each query with `search_one`, dropping the query's own database
+    /// entry and binning every region's score, gives.
+    #[test]
+    fn test_calibration_bins_match_search_one_scores() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        searcher.extension = Some(ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 2.0, xdrop: DEFAULT_XDROP },
+            ka: KaParams { k: 1.0, r_database: 1.0 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        });
+        let (queries, _) = searcher.calibration_queries(DecoyNull::Shuffled, 25, 1, 1)?;
+        let filters = SearchFilters {
+            threshold: 0.0,
+            min_shared_kmers: 1,
+            max_query_pvalue: f64::INFINITY,
+            min_region_score: f64::NEG_INFINITY,
+        };
+        let mut scores = Vec::new();
+        for (source_md5, query) in &queries {
+            for result in searcher.search_one(query, &filters, queries.len()) {
+                if &result.target_md5 != source_md5 {
+                    scores.extend(
+                        result
+                            .matched_regions
+                            .iter()
+                            .map(|r| r.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH),
+                    );
+                }
+            }
+        }
+        let bins = searcher.calibration_bins(&queries);
+        assert!(bins.n_regions() > 1000, "{}", bins.n_regions());
+        assert_eq!(bins, scores.into_iter().collect::<ScoreBins>());
+        Ok(())
+    }
+
     /// The fit is reproducible from the seed, is stored under its scoring and found again
     /// by `resolve_ka`, which otherwise runs it when asked and refuses when not allowed
     /// to, and `--ka-k` wins over it.
