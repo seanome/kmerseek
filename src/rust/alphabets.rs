@@ -406,16 +406,17 @@ static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
 // -----------------------------------------------------------------------------
 // PBotC 1st ed HPC: 3-letter extension of PBotC1stEd, built the same way as
 // LehningerHpc. Keeps the PBotC split for the other 19 residues and gives
-// cysteine its own symbol, so a cysteine no longer matches an ordinary
-// hydrophobic residue.
+// cysteine its own symbol, so a cysteine does not match an ordinary
+// hydrophobic residue. Cys and Tyr are drawn in parentheses in the original
+// figure, indicating borderline H status, which is the reason to pull C out.
 //
 //   h: A F I L M P V W Y         (9 residues; = PBotC 1st ed's h, C excluded)
 //   p: D E G H K N Q R S T       (10 residues; = PBotC 1st ed's p)
 //   c: C                         (1 residue)
 //
-// Reference:
-//   Phillips, R., Kondev, J., Theriot, J. (2008). Physical Biology of
-//   the Cell, 1st ed. Garland Science. Figure 8.30.
+// The h/p split is Phillips et al. 2008 (Physical Biology of the Cell, 1st ed.,
+// Garland Science), Figure 8.30. Moving C into a class of its own is not in
+// that figure.
 // -----------------------------------------------------------------------------
 static PBOTC_1ST_ED_HPC: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hpc(b"AFILMPVWY", b"DEGHKNQRST", b"C"));
