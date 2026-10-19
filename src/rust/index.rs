@@ -35,8 +35,9 @@ use crate::types::MolType;
 ///
 /// History: 1 = first versioned layout; 2 = `remove_low_complexity` in the metadata;
 /// 3 = streaming index (`sig_{md5}`, `targets_{n}`, `ii_shard_{s}` keys, no combined
-/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped.
-pub const SCHEMA_VERSION: u32 = 4;
+/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped;
+/// 5 = `total_residues` in the metadata.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
@@ -90,6 +91,8 @@ struct ProteomeIndexMetadata {
     remove_low_complexity: bool,
     /// Distinct k-mer hashes across every signature; the number of inverted index keys.
     unique_kmers: usize,
+    /// Residues summed over every stored sequence (see `ProteomeIndex::total_residues`).
+    total_residues: u64,
     /// Inverted index shards on disk.
     shards: usize,
     /// Target md5s per `targets_{n}` key.
@@ -132,6 +135,8 @@ struct IngestState {
     /// still gets a (empty) cache; true after opening a saved one.
     saved: bool,
     unique_kmers: usize,
+    /// Residues of every sequence written so far that stores one.
+    total_residues: u64,
     duplicates_skipped: usize,
     /// Frequency summary gathered while the shards were last written.
     stats: Option<KmerFrequencySummary>,
@@ -148,6 +153,7 @@ impl IngestState {
             shards_written: false,
             saved: false,
             unique_kmers: 0,
+            total_residues: 0,
             duplicates_skipped: 0,
             stats: None,
         }
@@ -543,6 +549,13 @@ impl ProteomeIndex {
         self.scaled
     }
 
+    /// Residues summed over every stored sequence: the encoded sequence, or the raw one
+    /// for `protein`. A target stored without its sequence adds nothing, and neither does a
+    /// repeated sequence, which is skipped. This is n in the run E-value.
+    pub fn total_residues(&self) -> u64 {
+        self.ingest.lock().total_residues
+    }
+
     /// Get the molecular type
     pub fn moltype(&self) -> &str {
         &self.moltype
@@ -856,6 +869,8 @@ impl ProteomeIndex {
             })?;
 
             batch.put(format!("sig_{md5}").into_bytes(), &bytes);
+            let stored = sketch.get_moltype_sequence().or_else(|| sketch.get_raw_sequence());
+            state.total_residues += stored.map_or(0, str::len) as u64;
             for hash in sketch.signature().minhash.mins() {
                 state.postings.push((hash, idx));
             }
@@ -1043,6 +1058,7 @@ impl ProteomeIndex {
             store_raw_sequences: self.store_raw_sequences,
             remove_low_complexity: self.remove_low_complexity,
             unique_kmers: state.unique_kmers,
+            total_residues: state.total_residues,
             shards: INVERTED_INDEX_SHARDS,
             target_chunk: self.target_chunk,
         };
@@ -1112,6 +1128,7 @@ impl ProteomeIndex {
         let mut state = IngestState::empty();
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
+        state.total_residues = metadata.total_residues;
         state.shards_written = true;
         state.saved = true;
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
@@ -1205,6 +1222,7 @@ impl ProteomeIndex {
         let mut state = IngestState::empty();
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
+        state.total_residues = metadata.total_residues;
         state.shards_written = true;
         state.saved = true;
         *index.ingest.lock() = state;
@@ -2402,6 +2420,23 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// The residue count, n in the run E-value, survives save -> open_for_search, and a
+    /// repeated sequence adds nothing: the 25 test proteins hold 9,288 residues, and
+    /// ingesting the same file twice keeps it at 9,288.
+    #[test]
+    fn test_total_residues_persists_and_skips_repeats() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("residues.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 10, 1, "hp_lehninger2", true)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+            assert_eq!(index.total_residues(), 9288);
+        }
+        assert_eq!(ProteomeIndex::open_for_search(&db_path)?.total_residues(), 9288);
         Ok(())
     }
 

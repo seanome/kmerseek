@@ -896,9 +896,8 @@ fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Err
 /// chance two random positions agree is u = 0.510714 x 0.610879 + 0.489286 x 0.389121 =
 /// 0.502376, and the positive root of u e^x + (1 - u) e^(-2x) = 1 is lambda = 0.474339.
 /// bits = (lambda S - ln K) / ln 2 = (9.48678 + 3.50656) / 0.693147 = 18.7454, and
-/// E = K m n e^(-lambda S) with m = 280 query residues and n = 8340 (`db_n_kmers`: distinct
-/// sketched k-mers per target, summed over targets) is
-/// 0.03 x 280 x 8340 x e^(-9.48678) = 5.31363.
+/// E = K m n e^(-lambda S) with m = 280 query residues and n = 9,288 (the database's
+/// residues) is 0.03 x 280 x 9288 x e^(-9.48678) = 5.9176.
 #[test]
 fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::Error>> {
     const KSIZE: u32 = 12;
@@ -1016,9 +1015,9 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     assert_eq!((grown.region_n_shared_kmers, grown.region_n_mismatches), (8, 2));
     assert_eq!(grown.db_n_kmers, 8340);
     assert_relative_eq!(grown.region_ka_bits, 18.745416480655074, epsilon = 1e-9);
-    assert_relative_eq!(grown.region_evalue, 5.313631588881071, epsilon = 1e-9);
-    // Without extension there is no score: 0 bits, E infinite.
-    assert_eq!((seed.region_ka_bits, seed.region_evalue), (0.0, f64::INFINITY));
+    assert_relative_eq!(grown.region_ka_evalue.unwrap(), 5.917_627_122_005_681_5, epsilon = 1e-9);
+    // Without extension there is no score: 0 bits and an empty E-value field.
+    assert_eq!((seed.region_ka_bits, seed.region_ka_evalue), (0.0, None));
     Ok(())
 }
 
@@ -1068,9 +1067,9 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     // 200 queries asked for, 25 in the index: all of them, 9838 regions, the line read
     // off x 7.5..11.5 nats below the relatives.
     search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
-        "Karlin-Altschul: K 0.0115, r_database 0.806 (fitted now: 25 database queries, 9838 \
+        "Karlin-Altschul: K 0.0103, r_database 0.806 (fitted now: 25 database queries, 9838 \
          regions; r_database 0.806 per nat of lambda_pair S (1 = closed form holds; closed \
-         form 0.481 at the database's match probability 0.500), K 0.0115, fit on x \
+         form 0.481 at the database's match probability 0.500), K 0.0103, fit on x \
          7.5..11.5, rms 0.086; shuffled-dipeptide reference slope 0.760 over the same bins",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
@@ -1088,9 +1087,9 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     // Shuffled queries have no relatives, so no reference is searched and none is reported.
     search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.0768, r_database 0.913 (fitted now: 25 shuffled queries, \
+            "Karlin-Altschul: K 0.0690, r_database 0.913 (fitted now: 25 shuffled queries, \
              9570 regions; r_database 0.913 per nat of lambda_pair S (1 = closed form holds; \
-             closed form 0.609 at the database's match probability 0.500), K 0.0768, fit on \
+             closed form 0.609 at the database's match probability 0.500), K 0.0690, fit on \
              x 8.5..12.5, rms 0.156)\n",
         ),
     );
@@ -1163,7 +1162,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         .stderr(predicate::str::contains(
             "fitted now: 25 database queries, 9838 regions; r_database 0.806 per nat of lambda_pair S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
-             0.500), K 0.0115, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
+             0.500), K 0.0103, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
              slope 0.760 over the same bins",
         ))
         .stderr(predicate::str::contains(
@@ -1187,7 +1186,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         };
 
     search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
-        "Karlin-Altschul: K 0.0115, r_database 0.806 (stored in the index: 25 database queries, 9838 regions",
+        "Karlin-Altschul: K 0.0103, r_database 0.806 (stored in the index: 25 database queries, 9838 regions",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
@@ -1199,7 +1198,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     );
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.1264, r_database 0.962 (fitted now: 25 database queries, 9854 regions; r_database 0.962",
+            "Karlin-Altschul: K 0.1135, r_database 0.962 (fitted now: 25 database queries, 9854 regions; r_database 0.962",
         ),
     );
     Ok(())
@@ -1262,7 +1261,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
         .stderr(predicate::str::contains(
             "fitted now: 3 shuffled queries, 789 regions; r_database 0.896 per nat of lambda_pair S",
         ))
-        .stderr(predicate::str::contains("K 0.0191, fit on x 6.5..8.5, rms 0.070\n"));
+        .stderr(predicate::str::contains("K 0.0172, fit on x 6.5..8.5, rms 0.070\n"));
 
     let survival = temp_dir.path().join("survival.csv");
     index("3", "database", &survival)?
@@ -1275,7 +1274,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
         .stderr(predicate::str::contains(
             "fitted now: 3 database queries, 903 regions; r_database 0.730 per nat of lambda_pair S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
-             0.500), K 0.0082, fit on x 6.0..9.0, rms 0.184; shuffled-dipeptide reference \
+             0.500), K 0.0074, fit on x 6.0..9.0, rms 0.184; shuffled-dipeptide reference \
              slope 0.712 over the same bins",
         ))
         .stderr(predicate::str::contains(
@@ -1320,7 +1319,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "n_reference_queries",
             "n_reference_regions",
             "query_residues",
-            "database_kmers",
+            "database_residues",
             "bin_width",
         ]
     );
@@ -1346,7 +1345,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
         constants(&rows[0]),
         [
             "0.7304804242524211",
-            "0.008235243224364983",
+            "0.0073946951433251475",
             "0.48120853696601995",
             "0.5000011360087127",
             "database",
@@ -1357,9 +1356,80 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "3",
             "864",
             "762",
-            "8340",
+            "9288",
             "0.5"
         ]
     );
+    Ok(())
+}
+
+/// No column of `kmerseek search` output holds `inf` or `NaN`, exact, extended with and
+/// without a positive lambda, or chained. A missing value is an empty field: an awk filter
+/// reads "inf" as 0, so `E <= 10000` kept every row that had no E-value. Every row has a
+/// `region_evalue` and a `region_evalue_source`, since the fixture stores its sequences.
+#[test]
+fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let target_index_path = temp_dir.path().join("target_index.db");
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output"])
+        .arg(&target_index_path)
+        .args(["--ksize", "12", "--alphabet", "hp", "--ka-queries", "0"])
+        .assert()
+        .success();
+    let extend = ["--extend-mismatch-penalty", "2", "--ka-k", "0.03"];
+    let no_lambda = ["--extend-mismatch-penalty", "0.67", "--ka-k", "0.03"];
+    let chain = ["--chain-max-gap", "30", "--chain-max-shift", "10"];
+    // Rows by region_evalue_source. At penalty 2 every pair here has a positive lambda
+    // (HP pairs sit near pr_same 0.5, below 2/3); at 0.67 none does (the cutoff is 0.401).
+    // Chaining joins two of the 322 extended regions into the one `ka_chain` row.
+    type Search<'a> = (&'a str, Vec<&'a str>, &'a [(&'a str, usize)]);
+    let searches: [Search; 4] = [
+        ("exact", vec![], &[("run", 330)]),
+        ("extended", extend.to_vec(), &[("ka", 322)]),
+        // The whole-protein p-value cut, which scales the chance count of shared k-mers
+        // with the target's size, decides which targets reach this search's rows: here
+        // ASPP2 (33 rows) and FBX10 (24) fail it and the shorter B2CL1 (8) passes.
+        ("no_lambda", no_lambda.to_vec(), &[("run", 69)]),
+        (
+            "chained",
+            [extend.as_slice(), chain.as_slice()].concat(),
+            &[("ka", 320), ("ka_chain", 1)],
+        ),
+    ];
+    for (name, extra, expected) in searches {
+        let out = temp_dir.path().join(format!("{name}.csv"));
+        Command::cargo_bin("kmerseek")?
+            .args(["search", "--query", TEST_CED9_FASTA, "--target"])
+            .arg(&target_index_path)
+            .arg("--output")
+            .arg(&out)
+            .args(["--ksize", "12", "--alphabet", "hp", "--min-shared-kmers", "0"])
+            .args(extra)
+            .assert()
+            .success();
+        let mut reader = csv::Reader::from_path(&out)?;
+        let header = reader.headers()?.clone();
+        let column = |name: &str| header.iter().position(|h| h == name).unwrap();
+        let (evalue, source) = (column("region_evalue"), column("region_evalue_source"));
+        let mut sources: Vec<(String, usize)> = Vec::new();
+        for record in reader.records() {
+            let record = record?;
+            for (h, field) in header.iter().zip(record.iter()) {
+                // Whole fields only: a residue string can hold the letters I, N, F in a row.
+                let lower = field.to_ascii_lowercase();
+                let not_finite = ["inf", "-inf", "infinity", "-infinity", "nan"];
+                assert!(!not_finite.contains(&lower.as_str()), "{name}: {h} = {field}");
+            }
+            assert_ne!(&record[evalue], "", "{name}");
+            match sources.iter_mut().find(|(s, _)| s == &record[source]) {
+                Some((_, n)) => *n += 1,
+                None => sources.push((record[source].to_string(), 1)),
+            }
+        }
+        let expected: Vec<(String, usize)> =
+            expected.iter().map(|&(s, n)| (s.to_string(), n)).collect();
+        assert_eq!(sources, expected, "{name}");
+    }
     Ok(())
 }

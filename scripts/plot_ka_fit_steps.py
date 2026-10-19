@@ -81,7 +81,7 @@ def load(path):
 def draw_fit(ax, path):
     x, real, reference, window, meta = load(path)
     r, k, width = float(meta["r_database"]), float(meta["k"]), float(meta["bin_width"])
-    scale = k * float(meta["query_residues"]) * float(meta["database_kmers"]) * (1 - math.exp(-r * width))
+    scale = k * float(meta["query_residues"]) * float(meta["database_residues"]) * (1 - math.exp(-r * width))
     ax.axvspan(window[0], window[-1] + width, color=WINDOW, zorder=0)
     ax.plot([s for s, c in zip(x, reference) if c > 0], [c for c in reference if c > 0], "^", mfc="none", color=REFERENCE, ms=6, zorder=2)
     ax.plot(x, real, "o", color=REAL, ms=4, zorder=3)
