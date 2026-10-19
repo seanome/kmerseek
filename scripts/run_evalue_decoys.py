@@ -77,8 +77,15 @@ def main():
     queries = read_fasta_gz(QUERIES)
     decoys = read_fasta_gz(DECOYS)
     # Each decoy is named "<source header>_shuffle<i>".
-    source = [next(i for i, (qn, _) in enumerate(queries) if dn.startswith(qn + "_shuffle"))
-              for dn, _ in decoys]
+    # A decoy must match exactly one query, or a header that is a prefix of another would
+    # put it under the wrong query.
+    matches = [[i for i, (qn, _) in enumerate(queries) if dn.startswith(qn + "_shuffle")]
+               for dn, _ in decoys]
+    assert all(len(m) == 1 for m in matches), "every decoy must match exactly one query"
+    source = [m[0] for m in matches]
+    per_query = Counter(source)
+    assert len(per_query) == len(queries) and set(per_query.values()) == {20}, \
+        "expected 20 decoys per query"
     for alphabet, k in CASES:
         table = {a: g[0].lower() for g in ALPHABETS[alphabet] for a in g}
         enc = lambda s: "".join(table.get(a, "X") for a in s.upper())
