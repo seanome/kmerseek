@@ -1180,7 +1180,6 @@ mod tests {
         assert_eq!(fit_scores(&vec![0.25; 5_000]), None);
     }
 
-    /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.
     /// The calibration counts each query's regions separately and in parallel, then adds
     /// the counts up. Counts made in parts and merged in any order must give the same bins,
     /// survival curve and fit as the scores kept in one list, which is what the fit read
@@ -1219,6 +1218,7 @@ mod tests {
         assert_eq!(ScoreBins::default().per_bin(), Vec::new());
     }
 
+    /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.
     #[test]
     fn test_bin_counts() {
         assert_eq!(
