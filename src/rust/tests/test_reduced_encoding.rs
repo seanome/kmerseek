@@ -11,6 +11,7 @@
 mod tests {
     use crate::alphabets::Alphabet;
     use crate::sketch::ProteinSketch;
+    use crate::tests::test_fixtures::TEST_HNRNPA1_FASTA;
 
     /// CED-9 (P41958) residues 121-181, spanning the BH1 region.
     const CED9_FRAGMENT: &str = "TIFEKKHAENFETFCEQLLAVPRISFSLYQDVVRTVGNAQTDQCPMSYGRLIGLISFGGFV";
@@ -55,7 +56,7 @@ mod tests {
     }
 
     /// The stored encoded_sequence must be the fragment written in the reduced alphabet,
-    /// not the raw amino acids. Spelled out for six alphabets spanning the size range so
+    /// not the raw amino acids. Spelled out for eight alphabets spanning the size range so
     /// that a wrong cluster constant shows up as a diff on a real sequence.
     #[test]
     fn test_encoded_sequence_matches_published_partition() {
@@ -69,6 +70,14 @@ mod tests {
             (Alphabet::Sdm12, "tlykkkhaknyktycktllalpkltytlytdllktlgnattdtcpltygkllglltyggyl"),
             (Alphabet::Hsdm17, "tlfkkkhaknfktfckqllalprlsfslyqdllrtlgnaqtdqcpmsygrllgllsfggfl"),
             (Alphabet::Uniprot18, "tifekkhaenfetfceqhhaverisfshyqdvvrtvgnaqtdqcemsygrhighisfggfv"),
+            (
+                Alphabet::AroHydChgPol4,
+                "safdddsadsfdsfsdsaaaasdasfsafsdaadsassassdsssasfsdaasaasfssfa",
+            ),
+            (
+                Alphabet::AroHydArgChgPol5,
+                "safdddsadsfdsfsdsaaaasrasfsafsdaarsassassdsssasfsraasaasfssfa",
+            ),
         ];
 
         for (alphabet, want) in expected {
@@ -154,6 +163,74 @@ mod tests {
                     distinct(fine)
                 );
             }
+        }
+    }
+
+    /// The aromatic residues of a phase-separating region must come out as their own letter,
+    /// `f`, under both sticker alphabets. That is the reason these alphabets exist: Martin et
+    /// al. 2020 showed that the number and even spacing of aromatic "stickers" in the hnRNPA1
+    /// low-complexity domain set whether it phase-separates.
+    ///
+    /// The stretch is human hnRNPA1 (UniProt P09651, canonical 372-residue isoform) residues
+    /// 186-245: the first 60 residues after the second RNA-binding domain, which UniProt ends
+    /// at residue 185. It is read from `tests/testdata/fasta/hnrnpa1_P09651.fasta`.
+    ///
+    /// ```text
+    /// position              186       196       206       216       226       236
+    /// protein               MASASSSQRGRSGSGNFGGGRGGGFGGNDNFGRGGNFSGRGGFGGSRGGGGYGGSGDGYN
+    /// aro_hyd_chg_pol4      aasassssdsdsssssfsssdsssfsssdsfsdsssfssdssfsssdssssfssssdsfs
+    /// aro_hyd_arg_chg_pol5  aasassssrsrsssssfsssrsssfsssdsfsrsssfssrssfsssrssssfssssdsfs
+    /// hp_pbotc_1st_ed2      hhphpppppppppppphppppppphppppphppppphppppphpppppppphpppppphp
+    /// ```
+    ///
+    /// The seven aromatic residues (F202, F210, F216, F222, F228, Y237, Y244) sit 6 to 9
+    /// residues apart. In `hp_pbotc_1st_ed2` they are `h`, the same letter as M186 and
+    /// A187, so a k-mer cannot tell a sticker from any other hydrophobic residue. In the
+    /// five-letter alphabet the six arginines of the RGG repeats also get their own letter,
+    /// `r`, while D214 and D242 stay `d`.
+    #[test]
+    fn test_hnrnpa1_stickers_are_their_own_letter() {
+        let fasta =
+            std::fs::read_to_string(TEST_HNRNPA1_FASTA).expect("hnRNPA1 fixture is readable");
+        let protein: String = fasta.lines().filter(|line| !line.starts_with('>')).collect();
+        assert_eq!(protein.len(), 372, "canonical P09651 isoform");
+        // 1-based residues 186-245.
+        let stretch = &protein[185..245];
+        assert_eq!(stretch, "MASASSSQRGRSGSGNFGGGRGGGFGGNDNFGRGGNFSGRGGFGGSRGGGGYGGSGDGYN");
+
+        let expected = [
+            (
+                Alphabet::AroHydChgPol4,
+                "aasassssdsdsssssfsssdsssfsssdsfsdsssfssdssfsssdssssfssssdsfs",
+            ),
+            (
+                Alphabet::AroHydArgChgPol5,
+                "aasassssrsrsssssfsssrsssfsssdsfsrsssfssrssfsssrssssfssssdsfs",
+            ),
+            (
+                Alphabet::HpPBotC1stEd2,
+                "hhphpppppppppppphppppppphppppphppppphppppphpppppppphpppppphp",
+            ),
+        ];
+        for (alphabet, want) in expected {
+            let moltype = alphabet.to_moltype();
+            let sketch =
+                ProteinSketch::from_protein_sequence("hnrnpa1_186_245", stretch, 8, 1, moltype)
+                    .unwrap();
+            let got = sketch
+                .get_moltype_sequence()
+                .unwrap_or_else(|| panic!("{moltype}: encoded_sequence is None"));
+            assert_eq!(got, want, "{moltype}");
+        }
+
+        // Every `f` is an aromatic residue and every aromatic residue is an `f`.
+        let aromatic: Vec<usize> =
+            stretch.char_indices().filter(|(_, c)| "FWY".contains(*c)).map(|(i, _)| i).collect();
+        assert_eq!(aromatic, [16, 24, 30, 36, 42, 51, 58]);
+        for (alphabet, want) in &expected[..2] {
+            let f_positions: Vec<usize> =
+                want.char_indices().filter(|(_, c)| *c == 'f').map(|(i, _)| i).collect();
+            assert_eq!(f_positions, aromatic, "{}", alphabet.to_moltype());
         }
     }
 
