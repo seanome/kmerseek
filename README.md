@@ -431,9 +431,9 @@ partitions live in `src/rust/alphabets.rs`.
 
 Clusters are listed in the order their classes are numbered. The `hp_` alphabets write
 their classes as `h` and `p`, and the two three-class alphabets add `c` for cysteine.
-Every other
-alphabet writes a class as its first residue in lowercase, so an SDM12-encoded sequence
-shows the `LIVM` class as `l` and can be read against the source residues directly.
+Every other alphabet writes a class as its first residue in lowercase, so an
+SDM12-encoded sequence shows the `LIVM` class as `l` and can be read against the source
+residues directly.
 
 The two- and three-class alphabets share an `hp_` prefix because they differ only on
 borderline residues, which keeps a sweep easy to write and to grep. The rest use the
@@ -463,6 +463,9 @@ cys2      c x x x x x x c x x x x x x c c x x x c x x x x c
 cys_hp3   c p p p p h p c p p h h h p c c p p p c p p p p c
 pbotc2    h p p p p h p h p p h h h p h h p p p h p p p p h
 ```
+
+`cys_hp3` is `hp_pbotc_1st_ed_hpc3` and `pbotc2` is `hp_pbotc_1st_ed2`. In `cys2` the `x`
+stands for any residue that is not cysteine.
 
 ### Choosing a class count
 
