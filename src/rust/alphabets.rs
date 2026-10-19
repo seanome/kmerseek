@@ -177,7 +177,13 @@ impl Alphabet {
             Self::Wass14 => 14,
             Self::Hsdm17 => 17,
             Self::Uniprot18 => 18,
-            _ => 2,
+            Self::HpLehninger2
+            | Self::HpThomasDill2
+            | Self::HpKyteDoolittle2
+            | Self::HpThomasDillNoC2
+            | Self::HpLehningerCNonpolar2
+            | Self::HpPBotC1stEd2
+            | Self::Cys2 => 2,
         }
     }
 
