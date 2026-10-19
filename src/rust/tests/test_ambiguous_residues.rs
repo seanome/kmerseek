@@ -61,7 +61,7 @@ mod tests {
     /// keeps D/N and E/Q apart, the readings are the sum of 2^n over windows holding n
     /// ambiguous residues: at most 4 per window at k=10, giving 541; 617 at k=11; 709 at
     /// k=12; 933 at k=14; 1984 at k=19; 3250 at k=22. Where it merges both pairs (dayhoff6,
-    /// gbmr4, gbmr7, mmseqs12 and the HP family), the readings are the windows. The densest
+    /// gbmr4, gbmr7, mmseqs12, cys2 and the HP family), the readings are the windows. The densest
     /// window, 12 ambiguous residues at k=43, is under the two-class alphabets, where it is
     /// not ambiguous at all.
     ///
@@ -69,7 +69,9 @@ mod tests {
     /// the windows that cover none of the four real mismatches, less any the alphabet merges
     /// away. protein20, uniprot18, wass14 and hsdm17 keep all four apart. gbmr4 puts S, T,
     /// A, Q, K and N in one class, so it sees no mismatch at all and every one of its 103
-    /// windows is shared. The HP alphabets merge three of the four (S/T, Q/K and K/N are
+    /// windows is shared. cys2 does the same: it only sees a change to or from cysteine, and
+    /// none of the four real mismatches involves one, so all 82 of its windows are shared.
+    /// The HP alphabets merge three of the four (S/T, Q/K and K/N are
     /// each polar/polar) and keep only residue 19's S/A.
     const EXPECTED: &[Expected] = &[
         Expected {
