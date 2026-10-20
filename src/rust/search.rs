@@ -1181,17 +1181,23 @@ impl ProteinSearcher {
         Ok((queries, match_probability))
     }
 
+    /// The filters calibration searches with: every candidate target and every region is
+    /// kept, so the fit sees the whole score distribution.
+    fn calibration_filters() -> SearchFilters {
+        SearchFilters {
+            threshold: 0.0,
+            min_shared_kmers: 1,
+            max_query_pvalue: f64::INFINITY,
+            min_region_score: f64::NEG_INFINITY,
+        }
+    }
+
     /// Normalised score x = lambda_pair S of every region the calibration queries produce,
     /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
     /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
     /// exactly lambda_pair S with the closed-form per-pair lambda.
     fn calibration_bins(&self, queries: &[(String, ProteinSketch)]) -> ScoreBins {
-        let filters = SearchFilters {
-            threshold: 0.0,
-            min_shared_kmers: 1,
-            max_query_pvalue: f64::INFINITY,
-            min_region_score: f64::NEG_INFINITY,
-        };
+        let filters = Self::calibration_filters();
         // One query at a time, its candidate targets in parallel, and each target's regions
         // counted into the bins and dropped as soon as it is compared. Holding the scores
         // instead, or every query's results at once, grows with the database: under cys2
@@ -5602,12 +5608,7 @@ mod ka_calibration_tests {
             chain_max_shift: 0,
         });
         let (queries, _) = searcher.calibration_queries(DecoyNull::Shuffled, 25, 1, 1)?;
-        let filters = SearchFilters {
-            threshold: 0.0,
-            min_shared_kmers: 1,
-            max_query_pvalue: f64::INFINITY,
-            min_region_score: f64::NEG_INFINITY,
-        };
+        let filters = ProteinSearcher::calibration_filters();
         let mut scores = Vec::new();
         for (source_md5, query) in &queries {
             for result in searcher.search_one(query, &filters, queries.len()) {
