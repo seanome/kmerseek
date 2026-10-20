@@ -603,6 +603,26 @@ fn main() -> IndexResult<()> {
             eprintln!("Query: {}", query.display());
             eprintln!("Target: {}", target.display());
 
+            // Reject bad values before any index is opened, so a typo fails at once.
+            if let Some(k) = ka_k {
+                if k <= 0.0 || !k.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-k must be positive and finite (got {k}); K is the fraction of the m x n \
+                         cells that can start a region"
+                    )
+                    .into());
+                }
+            }
+            if let Some(r) = ka_r_database {
+                if r <= 0.0 || !r.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-r-database must be positive and finite (got {r}); it \
+                         multiplies every pair's lambda"
+                    )
+                    .into());
+                }
+            }
+
             // Autodetect parameters from the target database
             eprintln!("Autodetecting parameters from target database...");
             let (detected_ksize, detected_scaled, detected_moltype) =
@@ -693,25 +713,6 @@ fn main() -> IndexResult<()> {
                 false
             };
 
-            // Reject bad values before the index is opened.
-            if let Some(k) = ka_k {
-                if k <= 0.0 || !k.is_finite() {
-                    return Err(anyhow::anyhow!(
-                        "--ka-k must be positive and finite (got {k}); K is the fraction of the m x n \
-                         cells that can start a region"
-                    )
-                    .into());
-                }
-            }
-            if let Some(r) = ka_r_database {
-                if r <= 0.0 || !r.is_finite() {
-                    return Err(anyhow::anyhow!(
-                        "--ka-r-database must be positive and finite (got {r}); it \
-                         multiplies every pair's lambda"
-                    )
-                    .into());
-                }
-            }
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
