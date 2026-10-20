@@ -3,7 +3,7 @@
 
 Reproduces the numbers the README and `region_run_evalue_on_2mer_shuffled_decoys` quote
 for runs seen against runs predicted: the 25 BCL-2-like test proteins against their 500
-dipeptide-shuffled decoys, exact matching, split into a query against its own 20 shuffles
+dipeptide-shuffled decoys, exact matching, split into a query against its own 20 shuffles (DECOYS_PER_QUERY)
 and a query against the 480 shuffles of other proteins.
 
 A run is a maximal stretch of positions where query and decoy are in the same class, on
@@ -28,6 +28,7 @@ import numpy as np
 HERE = Path(__file__).resolve().parent.parent
 QUERIES = HERE / "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz"
 DECOYS = HERE / "tests/testdata/fasta/bcl2_25_shuffled_2mer_20x_seed1.fasta.gz"
+DECOYS_PER_QUERY = 20  # shuffles per query in DECOYS; change with the file
 
 # hp_lehninger2 is sourmash's aa_to_hp; gbmr4 is GBMR4_CLUSTERS in src/rust/alphabets.rs.
 ALPHABETS = {
@@ -84,8 +85,8 @@ def main():
     assert all(len(m) == 1 for m in matches), "every decoy must match exactly one query"
     source = [m[0] for m in matches]
     per_query = Counter(source)
-    assert len(per_query) == len(queries) and set(per_query.values()) == {20}, \
-        "expected 20 decoys per query"
+    assert len(per_query) == len(queries) and set(per_query.values()) == {DECOYS_PER_QUERY}, \
+        f"expected {DECOYS_PER_QUERY} decoys per query; update DECOYS_PER_QUERY if the file changed"
     for alphabet, k in CASES:
         table = {a: g[0].lower() for g in ALPHABETS[alphabet] for a in g}
         enc = lambda s: "".join(table.get(a, "X") for a in s.upper())
@@ -112,8 +113,8 @@ def main():
                 for L in lengths:
                     seen[source[ti] == qi][L] += run >= L
         print(f"{alphabet} k={k}")
-        for own, label in ((True, "a query vs its own 20 shuffles"),
-                           (False, "a query vs the 480 shuffles of other proteins")):
+        for own, label in ((True, f"a query vs its own {DECOYS_PER_QUERY} shuffles"),
+                           (False, f"a query vs the {len(decoys) - DECOYS_PER_QUERY} shuffles of other proteins")):
             parts = [f"L>={L}: {seen[own][L]:_} seen, {pred[own][L]:_.0f} predicted" for L in lengths]
             print(f"  {label}: " + "; ".join(parts))
 
