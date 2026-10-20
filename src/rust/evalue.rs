@@ -531,6 +531,22 @@ pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64) -> f64 {
     starts * m * n * pr_same.powi(run_length as i32)
 }
 
+/// The mid-p run E-value: the average of the expected counts of runs of at least
+/// `run_length` and of more than `run_length`:
+///
+/// E_mid = E_run (1 + pr_same) / 2
+///
+/// Run lengths are whole numbers, and each extra position multiplies `run_evalue` by
+/// `pr_same`. So the runs that pass a cut `E_run <= x` have E-values anywhere from
+/// `pr_same x` to `x`, and fewer than `x` chance runs get through: on dipeptide-shuffled
+/// decoys at hp_lehninger2 k=15, 160 query-target pairs pass `E_run <= 10` where 240 would
+/// be calibrated. The mid-p value (Lancaster 1961) puts the cut halfway along that step.
+/// It moves the count toward calibrated but does not reach it everywhere, and it can
+/// overshoot (gbmr4 at E <= 1): see `region_run_evalue_on_2mer_shuffled_decoys`.
+pub fn run_evalue_midp(pr_same: f64, run_length: u32, m: f64, n: f64) -> f64 {
+    run_evalue(pr_same, run_length, m, n) * (1.0 + pr_same) / 2.0
+}
+
 /// The mismatch penalty and give-up margin a search extends with when it is not given
 /// `--extend-mismatch-penalty`: those of a fit stored in the index, so the search needs no
 /// fit of its own. With `xdrop` given, only fits for that give-up margin count. Among the
@@ -911,6 +927,14 @@ mod tests {
             605.006_067_137_536_3,
             epsilon = 1e-9
         );
+    }
+
+    /// E_mid = E_run (1 + pr_same) / 2: 6.866... x 0.75 at two equal classes, and
+    /// 10.2996... x 0.625 at four.
+    #[test]
+    fn test_run_evalue_midp_by_hand() {
+        assert_eq!(run_evalue_midp(0.5, 16, 300.0, 3000.0), 5.149_841_308_593_75);
+        assert_eq!(run_evalue_midp(0.25, 8, 300.0, 3000.0), 6.437_301_635_742_187_5);
     }
 
     /// Above pr_same 0.99 the (1 - pr_same) factor is dropped: 100 x 1,000 x 0.995^100, not
