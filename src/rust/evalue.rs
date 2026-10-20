@@ -35,6 +35,8 @@
 //! integer step, the record of a fit (`KaCalibration`), and the code that makes decoys.
 //! `ProteinSearcher::calibrate_ka` produces the scores and the record.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::errors::IndexResult;
@@ -243,42 +245,90 @@ pub struct ScoreFit {
     pub reference_lambda: Option<f64>,
 }
 
+/// Regions counted per score bin. Bin s holds every score in [s, s + 1), scores being in
+/// units of `BIN_WIDTH`; a fractional score falls into the bin below.
+///
+/// Everything the fit reads is a count per bin, so a calibration counts its regions into
+/// this as it finds them rather than keeping every score. It holds one entry per bin used,
+/// a few hundred, however many regions the calibration queries meet: under cys2 on a full
+/// Swiss-Prot that is billions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScoreBins(BTreeMap<i64, u64>);
+
+impl ScoreBins {
+    /// Count one region's score. A score that is not finite is left out: `as i64` would
+    /// saturate it to the end of the integer range and `per_bin` would try to span that.
+    /// A finite score past about 9e18 saturates the same way and is not stopped here;
+    /// `per_bin` allocates one entry for every bin from the lowest to the highest used.
+    pub fn add(&mut self, score: f64) {
+        if score.is_finite() {
+            *self.0.entry(score.floor() as i64).or_insert(0) += 1;
+        }
+    }
+
+    /// Both sets of counts in one, for counts made in parallel.
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        let (mut into, from) =
+            if self.0.len() >= other.0.len() { (self, other) } else { (other, self) };
+        for (bin, count) in from.0 {
+            *into.0.entry(bin).or_insert(0) += count;
+        }
+        into
+    }
+
+    /// Regions counted.
+    pub fn n_regions(&self) -> u64 {
+        self.0.values().sum()
+    }
+
+    /// Regions with score exactly s (in the bin s), for every s from the lowest bin used to
+    /// the highest, empty bins included as 0.
+    pub fn per_bin(&self) -> Vec<(i64, u64)> {
+        let (Some((&lo, _)), Some((&hi, _))) = (self.0.first_key_value(), self.0.last_key_value())
+        else {
+            return Vec::new();
+        };
+        (lo..=hi).map(|s| (s, self.0.get(&s).copied().unwrap_or(0))).collect()
+    }
+
+    /// Regions with score >= s, for every s from the lowest bin used to the highest.
+    pub fn survival(&self) -> Vec<(i64, u64)> {
+        let mut running = 0u64;
+        let mut out: Vec<(i64, u64)> = self
+            .per_bin()
+            .into_iter()
+            .rev()
+            .map(|(s, c)| {
+                running += c;
+                (s, running)
+            })
+            .collect();
+        out.reverse();
+        out
+    }
+}
+
+impl FromIterator<f64> for ScoreBins {
+    fn from_iter<I: IntoIterator<Item = f64>>(scores: I) -> Self {
+        let mut bins = Self::default();
+        for score in scores {
+            bins.add(score);
+        }
+        bins
+    }
+}
+
 /// Count of regions with score >= s for every integer s from the smallest to the largest
-/// score in `scores`. Fractional scores (a non-integer penalty) fall into the bin below.
-/// A score that is not finite is left out: `as i64` would saturate it to the end of the
-/// integer range and the bin vector would try to span that.
+/// score in `scores`; see `ScoreBins::survival`.
 pub fn survival_counts(scores: &[f64]) -> Vec<(i64, u64)> {
-    let bins: Vec<i64> =
-        scores.iter().filter(|s| s.is_finite()).map(|s| s.floor() as i64).collect();
-    let (Some(&lo), Some(&hi)) = (bins.iter().min(), bins.iter().max()) else {
-        return Vec::new();
-    };
-    let mut per_bin = vec![0u64; (hi - lo + 1) as usize];
-    for b in bins {
-        per_bin[(b - lo) as usize] += 1;
-    }
-    let mut running = 0u64;
-    let mut out: Vec<(i64, u64)> = Vec::with_capacity(per_bin.len());
-    for (i, c) in per_bin.iter().enumerate().rev() {
-        running += c;
-        out.push((lo + i as i64, running));
-    }
-    out.reverse();
-    out
+    scores.iter().copied().collect::<ScoreBins>().survival()
 }
 
 /// Count of regions with score exactly s (fractional scores in the bin below), for every
-/// integer s from the smallest to the largest score in `scores`.
+/// integer s from the smallest to the largest score in `scores`; see `ScoreBins::per_bin`.
 pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
-    let survival = survival_counts(scores);
-    survival
-        .iter()
-        .enumerate()
-        .map(|(i, &(s, at_least))| {
-            let above = survival.get(i + 1).map_or(0, |&(_, c)| c);
-            (s, at_least - above)
-        })
-        .collect()
+    scores.iter().copied().collect::<ScoreBins>().per_bin()
 }
 
 /// The bin of x in [0, `BIN_WIDTH`). It collects every region that has no score: a pair
@@ -351,8 +401,13 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 /// line is then read off the highest `FIT_WINDOW` bins that made it in, the ones nearest
 /// the scores that decide a hit. None when fewer than `MIN_FIT_POINTS` bins qualify.
 pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
+    fit_bins(&scores.iter().copied().collect())
+}
+
+/// `fit_scores` on scores already counted per bin.
+pub fn fit_bins(bins: &ScoreBins) -> Option<ScoreFit> {
     let usable: Vec<(i64, u64)> =
-        tail_bins(&bin_counts(scores)).into_iter().filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
+        tail_bins(&bins.per_bin()).into_iter().filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
     if usable.len() < MIN_FIT_POINTS {
         return None;
     }
@@ -380,7 +435,7 @@ pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
         score_hi: window[window.len() - 1].0,
         bend_score,
         rms_residual: rms_residual(window, slope, ln_intercept),
-        survival: survival_counts(scores),
+        survival: bins.survival(),
         reference_survival: Vec::new(),
         reference_lambda: None,
     })
@@ -404,9 +459,14 @@ const REFERENCE_BASE: usize = 8;
 /// which the step test could not.
 /// The line is then read off the highest `FIT_WINDOW` accepted bins, as in `fit_scores`.
 pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<ScoreFit> {
+    fit_bins_with_reference(&scores.iter().copied().collect(), &reference.iter().copied().collect())
+}
+
+/// `fit_scores_with_reference` on scores already counted per bin.
+pub fn fit_bins_with_reference(bins: &ScoreBins, reference: &ScoreBins) -> Option<ScoreFit> {
     let reference_bins: std::collections::HashMap<i64, u64> =
-        bin_counts(reference).into_iter().collect();
-    let usable: Vec<(i64, u64, u64)> = tail_bins(&bin_counts(scores))
+        reference.per_bin().into_iter().collect();
+    let usable: Vec<(i64, u64, u64)> = tail_bins(&bins.per_bin())
         .into_iter()
         .filter_map(|(s, c)| {
             let r = *reference_bins.get(&s)?;
@@ -450,8 +510,8 @@ pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<Sc
         score_hi: window[window.len() - 1].0,
         bend_score,
         rms_residual: rms_residual(&window, slope, ln_intercept),
-        survival: survival_counts(scores),
-        reference_survival: survival_counts(reference),
+        survival: bins.survival(),
+        reference_survival: reference.survival(),
         reference_lambda: Some(-line_through(&reference_window).0),
     })
 }
@@ -1120,6 +1180,44 @@ mod tests {
 
         // The spike alone is not a curve: nothing above it to fit, and no panic.
         assert_eq!(fit_scores(&vec![0.25; 5_000]), None);
+    }
+
+    /// The calibration counts each query's regions separately and in parallel, then adds
+    /// the counts up. Counts made in parts and merged in any order must give the same bins,
+    /// survival curve and fit as the scores kept in one list, which is what the fit read
+    /// before it took `ScoreBins`. Fractional and non-finite scores are in the mix, since
+    /// both are binned by a rule (floor, and left out) that the parts must follow too.
+    #[test]
+    fn test_score_bins_in_parts_match_one_list() {
+        const N_SEED: f64 = 4000.0;
+        const SEED_SCORE: i64 = 12;
+        const TRUE_LAMBDA: f64 = 0.4;
+        let at_least =
+            |x: i64| (N_SEED * (-TRUE_LAMBDA * (x - SEED_SCORE) as f64).exp()).round() as i64;
+        let mut scores = Vec::new();
+        for s in SEED_SCORE..=30 {
+            let exactly = (at_least(s) - at_least(s + 1)).max(0) as usize;
+            // Spread each bin's regions over [s, s + 1) so flooring is exercised.
+            scores.extend((0..exactly).map(|i| s as f64 + (i % 10) as f64 / 10.0));
+        }
+        scores.extend([f64::INFINITY, f64::NAN, f64::NEG_INFINITY]);
+        let whole: ScoreBins = scores.iter().copied().collect();
+        // Three uneven parts, merged in an order different from the one they were cut in.
+        let (a, rest) = scores.split_at(scores.len() / 7);
+        let (b, c) = rest.split_at(rest.len() / 2);
+        let part = |xs: &[f64]| xs.iter().copied().collect::<ScoreBins>();
+        let merged = part(c).merge(part(a)).merge(part(b));
+        assert_eq!(merged, whole);
+        assert_eq!(merged.n_regions(), scores.len() as u64 - 3);
+        assert_eq!(merged.per_bin(), bin_counts(&scores));
+        assert_eq!(merged.survival(), survival_counts(&scores));
+        assert_eq!(fit_bins(&merged), fit_scores(&scores));
+        assert!(fit_bins(&merged).is_some());
+        assert_eq!(
+            fit_bins_with_reference(&merged, &whole),
+            fit_scores_with_reference(&scores, &scores)
+        );
+        assert_eq!(ScoreBins::default().per_bin(), Vec::new());
     }
 
     /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.

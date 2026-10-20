@@ -14,7 +14,7 @@ use statrs::function::factorial::ln_factorial;
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::{
-    fit_scores, fit_scores_with_reference, make_decoy, DecoyNull, KaCalibration, SplitMix64,
+    fit_bins, fit_bins_with_reference, make_decoy, DecoyNull, KaCalibration, ScoreBins, SplitMix64,
     BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
 };
 use crate::hash_functions::residue_encoder;
@@ -1078,20 +1078,20 @@ impl ProteinSearcher {
         let KaCalibrationSettings { scoring, null, reference, reference_shuffles, n_queries, seed } =
             settings;
         let (queries, match_probability) = self.calibration_queries(null, n_queries, 1, seed)?;
-        let scores = self.calibration_scores(&queries);
+        let bins = self.calibration_bins(&queries);
         // For the database null the fit stops where the counts rise above the same queries
         // shuffled (`reference`), each of them `reference_shuffles` times.
         let (fit, n_reference_queries, n_reference_regions) = if null == DecoyNull::Database {
             let (shuffled, _) =
                 self.calibration_queries(reference, n_queries, reference_shuffles, seed)?;
-            let reference_scores = self.calibration_scores(&shuffled);
+            let reference_bins = self.calibration_bins(&shuffled);
             (
-                fit_scores_with_reference(&scores, &reference_scores),
+                fit_bins_with_reference(&bins, &reference_bins),
                 shuffled.len(),
-                reference_scores.len(),
+                reference_bins.n_regions() as usize,
             )
         } else {
-            (fit_scores(&scores), 0, 0)
+            (fit_bins(&bins), 0, 0)
         };
         let n_queries = queries.len();
         let query_residues: u64 =
@@ -1105,7 +1105,7 @@ impl ProteinSearcher {
             n_queries,
             query_residues,
             database_kmers,
-            n_regions: scores.len(),
+            n_regions: bins.n_regions() as usize,
             match_probability,
             lambda_analytic,
             // The fit ran on x / BIN_WIDTH, so its slope per bin is r_database x width.
@@ -1128,7 +1128,7 @@ impl ProteinSearcher {
             fitted,
             match_probability,
             n_queries,
-            n_regions: scores.len(),
+            n_regions: bins.n_regions() as usize,
             n_reference_queries,
             n_reference_regions,
         })
@@ -1181,31 +1181,41 @@ impl ProteinSearcher {
         Ok((queries, match_probability))
     }
 
-    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
-    /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
-    /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
-    /// exactly lambda_pair S with the closed-form per-pair lambda.
-    fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
-        let filters = SearchFilters {
+    /// The filters calibration searches with: every candidate target and every region is
+    /// kept, so the fit sees the whole score distribution.
+    fn calibration_filters() -> SearchFilters {
+        SearchFilters {
             threshold: 0.0,
             min_shared_kmers: 1,
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
-        };
-        queries
-            .par_iter()
-            .flat_map_iter(|(source_md5, query)| {
-                self.search_one(query, &filters, queries.len())
-                    .into_iter()
-                    .filter(|r| &r.target_md5 != source_md5)
-                    .flat_map(|r| {
-                        r.matched_regions
-                            .into_iter()
-                            .map(|region| region.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH)
-                    })
-                    .collect::<Vec<f64>>()
-            })
-            .collect()
+        }
+    }
+
+    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
+    /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
+    /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
+    /// exactly lambda_pair S with the closed-form per-pair lambda.
+    fn calibration_bins(&self, queries: &[(String, ProteinSketch)]) -> ScoreBins {
+        let filters = Self::calibration_filters();
+        // One query at a time, its candidate targets in parallel, and each target's regions
+        // counted into the bins and dropped as soon as it is compared. Holding the scores
+        // instead, or every query's results at once, grows with the database: under cys2
+        // the fit on a full Swiss-Prot was killed at 700 GB (2024-kmerseek-analysis PR 145).
+        queries.iter().fold(ScoreBins::default(), |bins, (source_md5, query)| {
+            let prepared = self.prepare_query(query);
+            let found = self
+                .candidate_results(&prepared, &filters, queries.len())
+                .filter(|r| &r.target_md5 != source_md5)
+                .fold(ScoreBins::default, |mut bins, r| {
+                    for region in &r.matched_regions {
+                        bins.add(region.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH);
+                    }
+                    bins
+                })
+                .reduce(ScoreBins::default, ScoreBins::merge);
+            bins.merge(found)
+        })
     }
 
     /// The calibration query for one target, built the way a search query would be, or
@@ -1481,6 +1491,54 @@ impl ProteinSearcher {
         Ok(sorted_results)
     }
 
+    /// Every candidate target compared with `prepared`, in parallel and in no set order:
+    /// the work of `search_one` before its results are collected and sorted.
+    ///
+    /// A candidate is a target that shares at least one k-mer with the query, found through
+    /// the inverted k-mer index, so targets with no k-mer in common are never compared.
+    /// Results that fail `filters` are never built. Returning the iterator rather than a
+    /// `Vec` lets a caller that needs only part of each result, as the Karlin-Altschul fit
+    /// needs only region scores, use each one and drop it, instead of holding every
+    /// region of every target at once.
+    fn candidate_results<'s>(
+        &'s self,
+        prepared: &'s PreparedQuery<'s>,
+        filters: &'s SearchFilters,
+        total_queries: usize,
+    ) -> impl ParallelIterator<Item = SearchResult> + 's {
+        let mut candidate_set: HashSet<u32> = HashSet::new();
+        for &kmer in &prepared.mins {
+            if let Some(indices) = self.inverted_index.get(&kmer) {
+                candidate_set.extend(indices.iter().copied());
+            }
+        }
+
+        // Three paths for signature access (checked in order of cost):
+        //   1. In-memory DashMap (populated in slow path for old DBs): zero-copy O(1) lookup
+        //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
+        //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
+        let sigs = self.index.get_signatures();
+        candidate_set.into_par_iter().filter_map(move |idx| {
+            let md5 = &self.target_list[idx as usize];
+
+            // Path 1: in-memory signatures (slow path for old DBs without search cache)
+            if let Some(entry) = sigs.get(md5.as_str()) {
+                return self.compare(prepared, entry.value(), filters, total_queries);
+            }
+
+            // Path 2: sig_cache hit (target was loaded by an earlier query)
+            if let Some(entry) = self.sig_cache.get(md5.as_str()) {
+                return self.compare(prepared, entry.value(), filters, total_queries);
+            }
+
+            // Path 3: first-time load from RocksDB; store in cache for future queries
+            let target = self.index.get_signature_by_md5(md5).ok()??;
+            let result = self.compare(prepared, &target, filters, total_queries);
+            self.sig_cache.insert(md5.clone(), target);
+            result
+        })
+    }
+
     /// Search a single query against all targets in the index
     ///
     /// WHY: This enables streaming search where queries are processed one at a time
@@ -1501,46 +1559,8 @@ impl ProteinSearcher {
         total_queries: usize,
     ) -> Vec<SearchResult> {
         let prepared = self.prepare_query(query);
-
-        // Find candidate targets via inverted index: only compare against targets
-        // that share at least one k-mer with the query
-        let mut candidate_set: HashSet<u32> = HashSet::new();
-        for &kmer in &prepared.mins {
-            if let Some(indices) = self.inverted_index.get(&kmer) {
-                for &idx in indices {
-                    candidate_set.insert(idx);
-                }
-            }
-        }
-
-        // Compare only against candidates, in parallel.
-        // Three paths for signature access (checked in order of cost):
-        //   1. In-memory DashMap (populated in slow path for old DBs): zero-copy O(1) lookup
-        //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
-        //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
-        let sigs = self.index.get_signatures();
-        let mut results: Vec<SearchResult> = candidate_set
-            .par_iter()
-            .filter_map(|&idx| {
-                let md5 = &self.target_list[idx as usize];
-
-                // Path 1: in-memory signatures (slow path for old DBs without search cache)
-                if let Some(entry) = sigs.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value(), filters, total_queries);
-                }
-
-                // Path 2: sig_cache hit (target was loaded by an earlier query)
-                if let Some(entry) = self.sig_cache.get(md5.as_str()) {
-                    return self.compare(&prepared, entry.value(), filters, total_queries);
-                }
-
-                // Path 3: first-time load from RocksDB; store in cache for future queries
-                let target = self.index.get_signature_by_md5(md5).ok()??;
-                let result = self.compare(&prepared, &target, filters, total_queries);
-                self.sig_cache.insert(md5.clone(), target);
-                result
-            })
-            .collect();
+        let mut results: Vec<SearchResult> =
+            self.candidate_results(&prepared, filters, total_queries).collect();
         sort_results(&mut results);
         results
     }
@@ -5573,6 +5593,64 @@ mod ka_calibration_tests {
         let index = ProteomeIndex::new(&index_path, 12, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
         Ok((temp_dir, ProteinSearcher::new(index)?))
+    }
+
+    /// Mismatch penalty for the `calibration_bins` tests, the one the fit tests below use.
+    const BINS_TEST_MISMATCH_PENALTY: f64 = 2.0;
+    /// Queries drawn for the `calibration_bins` tests: all 25 proteins of the fixture.
+    const BINS_TEST_N_QUERIES: usize = 25;
+    /// The comparison below is exact, so this only guards against comparing two empty
+    /// bins. 25 shuffled queries at penalty 2 give 9,561 regions in the fit test below.
+    const BINS_TEST_MIN_REGIONS: u64 = 1000;
+
+    /// `calibration_bins` counts regions as each target is compared. It must give the bins
+    /// that searching each query with `search_one`, dropping the query's own database
+    /// entry and binning every region's score, gives. With `repeats` decoys made from each
+    /// target, several queries share one `source_md5`, as in the fit's reference curve.
+    fn check_calibration_bins_match_search_one(repeats: usize) -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25()?;
+        searcher.extension = Some(ExtensionParams {
+            scoring: ExtensionScoring {
+                mismatch_penalty: BINS_TEST_MISMATCH_PENALTY,
+                xdrop: DEFAULT_XDROP,
+            },
+            ka: KaParams { k: 1.0, r_database: 1.0 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        });
+        let (queries, _) =
+            searcher.calibration_queries(DecoyNull::Shuffled, BINS_TEST_N_QUERIES, repeats, 1)?;
+        assert_eq!(queries.len(), BINS_TEST_N_QUERIES * repeats);
+        let filters = ProteinSearcher::calibration_filters();
+        let mut scores = Vec::new();
+        for (source_md5, query) in &queries {
+            for result in searcher.search_one(query, &filters, queries.len()) {
+                if &result.target_md5 != source_md5 {
+                    // Written out again on purpose: an independent check of the bin
+                    // formula in `calibration_bins`, not a call to shared code.
+                    scores.extend(
+                        result
+                            .matched_regions
+                            .iter()
+                            .map(|r| r.ka_bits * std::f64::consts::LN_2 / BIN_WIDTH),
+                    );
+                }
+            }
+        }
+        let bins = searcher.calibration_bins(&queries);
+        assert!(bins.n_regions() > BINS_TEST_MIN_REGIONS, "{}", bins.n_regions());
+        assert_eq!(bins, scores.into_iter().collect::<ScoreBins>());
+        Ok(())
+    }
+
+    #[test]
+    fn test_calibration_bins_match_search_one_scores() -> Result<()> {
+        check_calibration_bins_match_search_one(1)
+    }
+
+    #[test]
+    fn test_calibration_bins_match_search_one_scores_with_repeated_decoys() -> Result<()> {
+        check_calibration_bins_match_search_one(2)
     }
 
     /// The fit is reproducible from the seed, is stored under its scoring and found again
