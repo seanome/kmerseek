@@ -164,6 +164,7 @@ mod tests {
             "hp_lehninger_c_nonpolar2",
             "hp_lehninger_hpc3",
             "hp_pbotc_1st_ed2",
+            "hp_pbotc_1st_ed_hpc3",
         ];
 
         for moltype in alphabets {
