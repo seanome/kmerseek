@@ -3,16 +3,16 @@
 //! the figures.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
-//! unrelated query of m residues and a database of n residues. lambda is solved per pair
-//! from the two class compositions (`search::karlin_altschul_lambda`), so a pair of two
-//! hydrophobic sequences, whose agreement is what their compositions do by chance, gets
-//! lambda 0 and no significance. K, and whether that per-pair lambda has the right scale,
+//! unrelated query of m residues and a database of n residues. lambda is solved per region
+//! from its pr_same (`search::karlin_altschul_lambda`), so a region between two
+//! hydrophobic stretches, whose agreement is what their compositions do by chance, gets
+//! lambda 0 and no significance. K, and whether that closed-form lambda has the right scale,
 //! can be read off a search: a few hundred sequences are searched against the index and
-//! every region's score in nats, x = lambda_pair S, is binned. Under the model the count
+//! every region's score in nats, x = lambda S, is binned. Under the model the count
 //! at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the database residues and
 //! w the bin width, so ln(count) against x is a line of slope -1 and intercept
 //! ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). Minus the fitted slope is
-//! r_database, the factor every pair's lambda is multiplied by at search time; 1 means
+//! r_database, the factor every region's lambda is multiplied by at search time; 1 means
 //! the closed form holds. Related pairs lift the counts at high x; the fit stops below
 //! that, where the real curve starts to rise above the same queries shuffled. The fit
 //! goes to the count at each x, not the count at or above it, because a plateau of
@@ -47,7 +47,7 @@ use crate::search::{
 /// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
 /// at search time by its `scoring`. The seed length and alphabet are the index's.
 ///
-/// The fit is a straight line through ln(regions in each bin of x = lambda_pair S).
+/// The fit is a straight line through ln(regions in each bin of x = lambda S).
 /// Minus its slope is `r_database`; its height gives `k` (see `line_through`). Bins are
 /// `bin_width` nats wide, so every field named "score" below is a bin index: bin b covers
 /// x in [b w, (b + 1) w).
@@ -75,9 +75,9 @@ pub struct KaCalibration {
     pub match_probability: f64,
     /// The closed-form lambda at `match_probability`, for reporting next to `r_database`.
     pub lambda_analytic: f64,
-    /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
-    /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
-    /// lambda by this.
+    /// Minus the slope of ln(count) against x = lambda S, per nat. 1 means the
+    /// closed-form lambda has the right scale; a search multiplies every region's lambda
+    /// by this.
     pub r_database: f64,
     /// Karlin-Altschul K: the line's height with the query residues, database size and bin
     /// width divided out.
@@ -114,7 +114,7 @@ impl KaCalibration {
         KaParams { k: self.k, r_database: self.r_database }
     }
 
-    /// The fit window in nats of x = lambda_pair S.
+    /// The fit window in nats of x = lambda S.
     pub fn x_range(&self) -> (f64, f64) {
         (self.score_lo as f64 * self.bin_width, (self.score_hi + 1) as f64 * self.bin_width)
     }
@@ -159,7 +159,7 @@ impl std::fmt::Display for KaCalibration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {} queries, {} regions; r_database {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
+            "{} {} queries, {} regions; r_database {:.3} per nat of lambda S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
             self.n_queries,
             self.null,
             self.n_regions,
@@ -191,7 +191,7 @@ impl std::fmt::Display for KaCalibration {
     }
 }
 
-/// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
+/// Width of one bin of the normalised score x = lambda S, in nats. Half a nat is about
 /// one raw score unit at lambda 0.45.
 pub const BIN_WIDTH: f64 = 0.5;
 
@@ -283,7 +283,7 @@ pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
 
 /// The bin of x in [0, `BIN_WIDTH`). It collects every region that has no score: a pair
 /// with no positive lambda leaves `ka_bits` at 0, and a negative score is rounded up to
-/// 0. Pairs whose lambda is small but positive land here too, since x = lambda_pair S
+/// 0. Pairs whose lambda is small but positive land here too, since x = lambda S
 /// stays near zero however long the region is. None of these say how scores decay, so
 /// this bin is barred from being the peak; see `tail_bins`.
 const DEGENERATE_BIN: i64 = 0;
@@ -514,7 +514,7 @@ pub enum EvalueSource {
 /// E_run = pr_same^run_length ((1 - pr_same) m n + n_targets (m - 1) + n)
 ///
 /// `pr_same` is the chance that one query position and one target position fall in the
-/// same class, from the pair's class compositions (`search::match_probability`). A run is
+/// same class, counted from the region (`search::region_pr_same`). A run is
 /// counted once, where it starts. Inside a diagonal a run starts where the position before
 /// it disagrees, chance 1 - pr_same, which gives the first term: the Karlin-Altschul
 /// E-value for +1 per match with no mismatch allowed, with lambda ln(1 / pr_same) and K
@@ -805,7 +805,7 @@ fn refused_fit_message(report: &KaCalibrationReport) -> String {
     )
 }
 
-/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
+/// One row per bin of x = lambda S: the count of regions at or above it, the fitted
 /// line's count, the reference count, and whether the bin was inside the fit window.
 /// `scripts/plot_ka_survival.py` draws it.
 pub fn write_survival_csv(

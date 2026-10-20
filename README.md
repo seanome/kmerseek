@@ -194,11 +194,13 @@ bits = (λS - ln K) / ln 2
 database, counted when the index is built: the same `n` as the run E-value below. `K` is
 fitted with that same `n`, and takes up the scaled factor, so a `K` measured at one
 `--scaled` does not carry over to another. `λ` is solved
-per pair from the two sequences' class compositions (Schäffer et al. 2001): the chance
-`u` that a random position from each falls in the same class gives λ as the positive
-root of `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists,
-which is what two hydrophobic runs look like, and the region gets 0 bits and an empty
-`region_ka_evalue`: agreement is what those two compositions do by default. Its
+per region from class compositions (after Schäffer et al. 2001): the chance `u` that a
+query and a target position fall in the same class, `region_pr_same`, counted from the
+region's own positions (see [Pr(same) in low-complexity
+regions](#prsame-in-low-complexity-regions)), gives λ as the positive root of
+`u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists, which is
+what two hydrophobic runs look like, and the region gets 0 bits and an empty
+`region_ka_evalue`: agreement is what those two stretches do by default. Its
 `region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
 seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
@@ -240,7 +242,7 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 | column | what it is | on which rows |
 |---|---|---|
 | `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
-| `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
+| `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, counted from the region's own positions (below; `--pr-same-from protein` counts it from the two whole proteins) | all |
 | `region_run_evalue` | Pr(same)^L × ((1 − Pr(same)) × m × n + diagonals), below | all |
 | `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
 | `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
@@ -317,15 +319,16 @@ search. Each decoy is one of the proteins shuffled with its dipeptide counts kep
 protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value gives about 25
 query-target pairs with a best region at E <= 1 (one per query), and 250 at E <= 10:
 
-| k | E <= | `region_run_evalue` | calibrated |
-|---|---|---|---|
-| 15 | 1 | 6 | 25 |
-| 15 | 10 | 162 | 250 |
-| 12 | 1 | 6 | 25 |
-| 12 | 10 | 162 | 250 |
+| k | E <= | Pr(same) from the region | from the whole proteins | calibrated |
+|---|---|---|---|---|
+| 15 | 1 | 4 | 6 | 25 |
+| 15 | 10 | 112 | 162 | 250 |
+| 12 | 1 | 4 | 6 | 25 |
+| 12 | 10 | 112 | 162 | 250 |
 
 The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
-errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
+errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`). The figure below
+shows Pr(same) from the whole proteins.
 
 ![Runs counted against predicted on random sequences, and decoy pairs called at each run E-value cutoff](docs/images/run_evalue_checks.png)
 
@@ -335,6 +338,47 @@ end of each sequence; the dashed line is the shortfall that alone gives, and it 
 the short L0 the test leaves out. (b) Decoys: pairs called at each cutoff, below the
 calibrated count (black) at every cutoff; k = 12 and k = 15 give the same counts, so
 their lines lie on top of each other. Drawn by `scripts/plot_run_evalue_checks.py`.
+
+### Pr(same) in low-complexity regions
+
+Both E-values depend on Pr(same). Counted from the two whole proteins, they were 10 to 113
+times too small for proteins of 300 residues or more that SEG marks as at least 15%
+low-complexity (notebook 344, seanome/2024-kmerseek-analysis PR 174). Inside such a
+region nearly every position on both sides is in one class, so a long run of agreeing
+positions is expected there, but the whole proteins can still give Pr(same) near 0.5.
+
+kmerseek now counts Pr(same) from each region's own positions. A region is found because
+its positions agree, so its residues lean toward the classes that agree most, and their
+plain composition would make every E-value too large. The count undoes that lean. If both
+sequences are locally random with the same class shares, an agreeing position is in class
+c with chance proportional to the square of that share. So the shares f_c of the
+region's agreeing positions give
+
+```text
+Pr(same) = 1 / (sum over classes c of sqrt(f_c))^2
+```
+
+with 2 pseudo-counts per class taken from the whole proteins, for alphabets whose classes
+a short region does not all show. A run all in one class gets Pr(same) 1, which is no
+evidence. Between random two-class sequences this gives 0.43 to 0.55 of the expected
+chance runs, against 0.59 to 0.78 from the whole proteins and 0.19 to 0.25 from the
+region's plain composition (`scripts/region_pr_same_null.py`).
+
+![The DSPP decoy against TBC1D10B residue by residue, the E-value under each rule for three examples, and decoy pairs called at each cutoff under both rules](docs/images/region_pr_same_nb344.png)
+
+(a) Notebook 344's worst run E-value: a dipeptide shuffle of DSPP against the KE repeat of
+TBC1D10B. (b) What each rule reports for that region, for a dipeptide shuffle of elastin
+against FMN2's proline-rich stretch, and for CED-9 against BCL2, a real match.
+`--seg-mask` (SEG, window 12, 2.2 and 2.5 bits) drops seeds that touch a low-complexity
+residue: it removes both chance regions, and it would also hide any real match between
+low-complexity regions, so it is off by default. (c) The cost on ordinary sequence: on the
+BCL-2 decoys above, counting from the region calls 112 pairs at E <= 10 where the whole
+proteins call 162 (250 is calibrated). Tests `region_run_evalue_holds_in_a_low_complexity_region`
+and `nb344_examples_under_each_pr_same_rule`; drawn by `scripts/plot_region_pr_same_nb344.py`.
+
+On the 500 decoys against the 25 BCL-2-like proteins at hp k = 8 (3.2 million regions),
+counting from the region took 1.14 times as long as from the whole proteins, and SEG
+masking 1.10 times (median of 7 searches each; test `time_each_pr_same_rule`).
 
 ## Visualizing hits
 

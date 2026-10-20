@@ -2,8 +2,8 @@ use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
 use kmerseek::search::{
-    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_MISMATCH_PENALTY,
-    DEFAULT_XDROP,
+    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, PrSameScope,
+    DEFAULT_MISMATCH_PENALTY, DEFAULT_XDROP,
 };
 use kmerseek::types::{MolType, Scaled};
 use kmerseek::{pair, search::ProteinSearcher, ProteomeIndex};
@@ -268,6 +268,22 @@ enum Commands {
         /// region. 0 chains only along one diagonal. Used with --chain-max-gap.
         #[arg(long, default_value = "0")]
         chain_max_shift: u32,
+
+        /// Where each region's chance of two positions sharing a class (`region_pr_same`,
+        /// which sets both E-values) is counted from. `region` (default): the region's own
+        /// agreeing positions, so a match between two low-complexity stretches, nearly all
+        /// one class on both sides, is not called significant. `protein`: the two whole
+        /// proteins, as before kmerseek 0.4.0; that gave E-values 10 to 113 times too small
+        /// in low-complexity regions.
+        #[arg(long, value_enum, default_value_t = PrSameScope::Region)]
+        pr_same_from: PrSameScope,
+
+        /// Mask low-complexity residues of query and target with SEG (window 12, 2.2 and
+        /// 2.5 bits) before regions are built: a shared k-mer touching a masked residue
+        /// seeds nothing. Off by default, since it also hides real matches between
+        /// low-complexity regions. Needs an index built at --scaled 1.
+        #[arg(long, default_value = "false")]
+        seg_mask: bool,
 
         /// Whether to output detailed match info to stderr (always extracts k-mers)
         #[arg(long, default_value = "false")]
@@ -586,6 +602,8 @@ fn main() -> IndexResult<()> {
             ka_reference_shuffles,
             chain_max_gap,
             chain_max_shift,
+            pr_same_from,
+            seg_mask,
             verbose,
             query_is_index,
             batch_size,
@@ -687,6 +705,18 @@ fn main() -> IndexResult<()> {
             // Load the target database
             eprintln!("Loading target database...");
             let mut searcher = ProteinSearcher::load(&target)?;
+            if seg_mask && final_scaled > 1 {
+                return Err(anyhow::anyhow!(
+                    "--seg-mask needs an index built at --scaled 1 (this one is {final_scaled})"
+                )
+                .into());
+            }
+            searcher.set_pr_same_scope(pr_same_from);
+            searcher.set_seg_mask(seg_mask);
+            eprintln!(
+                "  Pr(same class) from: {pr_same_from:?}; SEG mask: {}",
+                if seg_mask { "on" } else { "off" }
+            );
             if let Some(scoring) = scoring {
                 if let Some(k) = ka_k {
                     if k <= 0.0 || k.is_nan() {
