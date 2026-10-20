@@ -438,11 +438,11 @@ fn search_stderr_with_ka_queries(
     Ok(String::from_utf8(search.get_output().stderr.clone())?)
 }
 
-/// An infinite mismatch penalty or a NaN give-up margin stops the search with the reason,
-/// whether or not the penalty is given.
+/// A bad extension flag stops the search with the reason: a negative, NaN or infinite
+/// mismatch penalty, a NaN give-up margin, or a non-positive `--ka-k` (even with extension
+/// off).
 #[test]
-fn test_cli_search_rejects_an_infinite_penalty_or_nan_margin(
-) -> Result<(), Box<dyn std::error::Error>> {
+fn test_cli_search_rejects_a_bad_extension_flag() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("target_index.db");
     let index_path = index_path.to_str().unwrap();
