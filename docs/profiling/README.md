@@ -59,3 +59,47 @@ read the index from a cold disk cache and is left out of the means.
 - `commit.txt`, `inputs.md5`: the kmerseek commit and the md5 of Swiss-Prot and the queries.
 - Rerun on Sherlock: `sbatch scripts/profile_search_steps.sbatch`; redraw:
   `python scripts/plot_search_profile.py`.
+
+# Filtering candidates before reading targets (hp_lehninger2, k=19)
+
+![Thread-seconds per step before and after counting shared k-mers first, and wall time per k-mer cap](../images/candidate_filter_swissprot_hp_lehninger2_k19.png)
+
+Commit fa352ce counts each candidate's shared k-mers from the posting lists. It drops
+candidates below `--min-shared-kmers` (2 by default) or the containment threshold before
+their signature is read from disk. A posting list names each target once, so the count is
+exactly the number `compare` checks later. The search results do not change: the CSVs are
+byte-identical to the runs above (`candidate_filter/identical.md5`).
+
+- Targets compared per query fell from 66,658 to 40,659. The 39% dropped shared only one k-mer.
+- Time spent on shared k-mers fell from 292 to 243 thread-seconds, and reading targets from
+  130 to 102. Target reads fell only from 446,070 to 435,401, because most dropped targets
+  are still read for another query.
+- Finding matched regions is unchanged at 604 thread-seconds: every pair that reaches it
+  was going to be a result.
+- Wall time went from 181 s to 167 s (8% faster); CPU time from 1,012 s to 952 s.
+
+`--max-kmer-targets N` (off by default) keeps a pair only if it shares at least one k-mer
+found in no more than N targets. On this index it does not pay:
+
+| Cap | Wall time | Pairs kept | Top 1% of pairs by region score kept |
+|---|---|---|---|
+| none | 167 s | 4,065,945 (100%) | 100% |
+| 10,000 | 171 s | 99.7% | 100% |
+| 1,000 | 160 s | 89.0% | 98.8% |
+| 100 | 2 s | 0 | 0 |
+
+A cap of 100 leaves nothing because every k-mer of these 100 queries occurs in more than 100
+Swiss-Prot proteins. With 2^19 possible k-mers and 209 million residues, no hp_lehninger2
+k=19 k-mer is rare. A cap of 1,000 costs 11% of the pairs for 4% less time.
+
+The work is per pair, and the 4 million pairs pass the default filter of two shared k-mers.
+In an alphabet this small, two shared k-mers are expected by chance alone. Two changes could
+cut the pairs:
+
+- a default minimum that grows with the number of k-mers two random proteins would share;
+- storing each k-mer's position in the posting lists, so pairs whose shared k-mers do not lie
+  on one diagonal can be dropped before the target is read. This changes the index format.
+
+Both change which results are reported, so neither is in this PR. Rerun with
+`sbatch scripts/profile_candidate_filter.sbatch` and redraw with
+`python scripts/plot_candidate_filter.py`.
