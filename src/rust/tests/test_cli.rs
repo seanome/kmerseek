@@ -142,6 +142,14 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
             "1",
         ]);
         search_cmd.assert().success();
+
+        // Ced9 against itself must match under every alphabet except cys2, whose sketches
+        // are empty for this protein. Header plus at least one data row.
+        assert!(results_path.exists(), "no results file for {}", alphabet);
+        if *alphabet != "cys2" {
+            let rows = std::fs::read_to_string(&results_path)?.lines().count();
+            assert!(rows >= 2, "no result rows for {}", alphabet);
+        }
     }
 
     Ok(())
