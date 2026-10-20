@@ -5597,17 +5597,26 @@ mod ka_calibration_tests {
 
     /// `calibration_bins` counts regions as each target is compared. It must give the bins
     /// that searching each query with `search_one`, dropping the query's own database
-    /// entry and binning every region's score, gives.
-    #[test]
-    fn test_calibration_bins_match_search_one_scores() -> Result<()> {
+    /// entry and binning every region's score, gives. With `repeats` decoys made from each
+    /// target, several queries share one `source_md5`, as in the fit's reference curve.
+    fn check_calibration_bins_match_search_one(repeats: usize) -> Result<()> {
         let (_dir, mut searcher) = searcher_on_first25()?;
         searcher.extension = Some(ExtensionParams {
-            scoring: ExtensionScoring { mismatch_penalty: 2.0, xdrop: DEFAULT_XDROP },
+            scoring: ExtensionScoring {
+                mismatch_penalty: 2.0,
+                xdrop: DEFAULT_XDROP,
+            },
             ka: KaParams { k: 1.0, r_database: 1.0 },
             chain_max_gap: 0,
             chain_max_shift: 0,
         });
-        let (queries, _) = searcher.calibration_queries(DecoyNull::Shuffled, 25, 1, 1)?;
+        let (queries, _) = searcher.calibration_queries(
+            DecoyNull::Shuffled,
+            25,
+            repeats,
+            1,
+        )?;
+        assert_eq!(queries.len(), 25 * repeats);
         let filters = ProteinSearcher::calibration_filters();
         let mut scores = Vec::new();
         for (source_md5, query) in &queries {
@@ -5626,6 +5635,16 @@ mod ka_calibration_tests {
         assert!(bins.n_regions() > 1000, "{}", bins.n_regions());
         assert_eq!(bins, scores.into_iter().collect::<ScoreBins>());
         Ok(())
+    }
+
+    #[test]
+    fn test_calibration_bins_match_search_one_scores() -> Result<()> {
+        check_calibration_bins_match_search_one(1)
+    }
+
+    #[test]
+    fn test_calibration_bins_match_search_one_scores_with_repeated_decoys() -> Result<()> {
+        check_calibration_bins_match_search_one(2)
     }
 
     /// The fit is reproducible from the seed, is stored under its scoring and found again
