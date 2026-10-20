@@ -407,8 +407,9 @@ static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
 // PBotC 1st ed HPC: 3-letter extension of PBotC1stEd, built the same way as
 // LehningerHpc. Keeps the PBotC split for the other 19 residues and gives
 // cysteine its own symbol, so a cysteine does not match an ordinary
-// hydrophobic residue. Cys and Tyr are drawn in parentheses in the original
-// figure, indicating borderline H status, which is the reason to pull C out.
+// hydrophobic residue. Cys and Tyr are both drawn in parentheses in the original
+// figure, indicating borderline H status. Only Cys gets its own class here, the
+// same residue the cys2 and Lehninger HPC alphabets single out; Tyr stays in h.
 //
 //   h: A F I L M P V W Y         (9 residues; = PBotC 1st ed's h, C excluded)
 //   p: D E G H K N Q R S T       (10 residues; = PBotC 1st ed's p)
