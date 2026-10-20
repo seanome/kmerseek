@@ -693,9 +693,7 @@ fn main() -> IndexResult<()> {
                 false
             };
 
-            // Load the target database
-            eprintln!("Loading target database...");
-            let mut searcher = ProteinSearcher::load(&target)?;
+            // Reject bad values before the index is opened.
             if let Some(k) = ka_k {
                 if k <= 0.0 || !k.is_finite() {
                     return Err(anyhow::anyhow!(
@@ -714,6 +712,9 @@ fn main() -> IndexResult<()> {
                     .into());
                 }
             }
+            // Load the target database
+            eprintln!("Loading target database...");
+            let mut searcher = ProteinSearcher::load(&target)?;
             if let Some(scoring) = scoring {
                 let explicit =
                     ka_k.map(|k| KaParams { k, r_database: ka_r_database.unwrap_or(1.0) });
