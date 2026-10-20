@@ -273,8 +273,8 @@ fn is_own_shuffle(r: &SearchResult) -> bool {
 /// each extra position multiplies the run E-value by Pr(same), so the runs passing E <= 10
 /// have E-values from 10 Pr(same) to 10: from 5 at hp_lehninger2 (Pr(same) about 0.5) and
 /// from 0.6 at protein20 (about 0.06). The mid-p value moves the cut halfway along that
-/// step. It recovers part of the shortfall everywhere, and overshoots at gbmr4 (E <= 1 and
-/// E <= 10).
+/// step. It recovers part of the shortfall wherever the run E-value is below calibrated, and
+/// overshoots at gbmr4 (E <= 1 and E <= 10).
 #[test]
 fn region_run_evalue_on_2mer_shuffled_decoys() {
     // (alphabet, k, pairs with a region against other decoys, run E-value at <= 1 and
