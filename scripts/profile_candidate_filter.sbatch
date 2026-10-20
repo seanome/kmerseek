@@ -41,7 +41,7 @@ for spec in "${RUNS[@]}"; do
         name=$alphabet.k$k.cap$cap.run$run
         /usr/bin/time -v -o "$OUT/time_$name.txt" "$BIN" search --query "$QUERIES" \
             --target "$BEFORE/swissprot.$alphabet.k$k.db" --output "$OUT/search_$name.csv" \
-            --ksize "$k" --alphabet "$alphabet" "${cap_arg[@]}" > "$OUT/search_$name.log" 2>&1
+            --ksize "$k" --alphabet "$alphabet" ${cap_arg[@]+"${cap_arg[@]}"} > "$OUT/search_$name.log" 2>&1
         python3 - "$OUT/time_$name.txt" "$OUT/search_$name.csv" \
             "$alphabet" "$k" "$cap" "$run" >> "$OUT/timing.tsv" <<'PY'
 import sys
