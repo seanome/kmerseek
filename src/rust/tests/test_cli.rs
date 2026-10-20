@@ -97,7 +97,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     // failure. Built from the alphabet lists rather than hardcoded, so a newly added
     // alphabet is covered without editing this test.
     let alphabets: Vec<&str> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
-    assert_eq!(alphabets.len(), 19, "every alphabet must be exercised here");
+    assert_eq!(alphabets.len(), 20, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
@@ -119,6 +119,37 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
 
         // Check that the output database was created
         assert!(output_path.exists());
+
+        // Search the database just built, so an alphabet that indexes but is missing from
+        // the detected-alphabet match in main.rs fails here.
+        let results_path = temp_dir.path().join(format!("test_results_{}.csv", alphabet));
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            output_path.to_str().unwrap(),
+            "--output",
+            results_path.to_str().unwrap(),
+            "--ksize",
+            "8",
+            "--alphabet",
+            alphabet,
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "1",
+        ]);
+        search_cmd.assert().success();
+
+        // Ced9 against itself must match under every alphabet except cys2, whose sketches
+        // are empty for this protein. Header plus at least one data row.
+        assert!(results_path.exists(), "no results file for {}", alphabet);
+        if *alphabet != "cys2" {
+            let rows = std::fs::read_to_string(&results_path)?.lines().count();
+            assert!(rows >= 2, "no result rows for {}", alphabet);
+        }
     }
 
     Ok(())

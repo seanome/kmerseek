@@ -346,6 +346,10 @@ enum ProteinAlphabet {
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
     #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
+    /// Cysteine against everything else, 2 classes: a k-mer records only the
+    /// cysteine spacing. Not a hydrophobicity scheme
+    #[value(name = "cys2")]
+    Cys2,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
     #[value(name = "gbmr4")]
     ReducedGbmr4,
@@ -390,6 +394,7 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
             ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
             ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
+            ProteinAlphabet::Cys2 => "cys2",
             ProteinAlphabet::ReducedGbmr4 => "gbmr4",
             ProteinAlphabet::ReducedPolarity4 => "polarity4",
             ProteinAlphabet::ReducedWwmj5 => "wwmj5",
@@ -1083,39 +1088,23 @@ fn assign_encoding(
         .map(|moltype| moltype.get().to_string())
         .unwrap_or_else(|_| detected_moltype.to_string());
 
-    let detected_alphabet = match canonical.as_str() {
-        "protein20" => ProteinAlphabet::Protein,
-        "dayhoff6" => ProteinAlphabet::Dayhoff,
-        "hp_lehninger2" => ProteinAlphabet::HpLehninger,
-        "hp_thomas_dill2" => ProteinAlphabet::HpThomasDill,
-        "hp_kyte_doolittle2" => ProteinAlphabet::HpKyteDoolittle,
-        "hp_thomas_dill_no_c2" => ProteinAlphabet::HpThomasDillNoC,
-        "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
-        "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
-        "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
-        "gbmr4" => ProteinAlphabet::ReducedGbmr4,
-        "polarity4" => ProteinAlphabet::ReducedPolarity4,
-        "wwmj5" => ProteinAlphabet::ReducedWwmj5,
-        "gbmr7" => ProteinAlphabet::ReducedGbmr7,
-        "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
-        "sdm12" => ProteinAlphabet::ReducedSdm12,
-        "mmseqs12" => ProteinAlphabet::ReducedMmseqs12,
-        "wass14" => ProteinAlphabet::ReducedWass14,
-        "hsdm17" => ProteinAlphabet::ReducedHsdm17,
-        "uniprot18" => ProteinAlphabet::ReducedUniprot18,
-        _ => {
-            return Err(kmerseek::errors::IndexError::ValidationError {
+    // One lookup over the CLI enum, so a new alphabet needs no edit here and the error
+    // text lists whatever the enum lists.
+    let detected_alphabet = ProteinAlphabet::value_variants()
+        .iter()
+        .copied()
+        .find(|variant| <&'static str>::from(*variant) == canonical)
+        .ok_or_else(|| {
+            let expected: Vec<&'static str> =
+                ProteinAlphabet::value_variants().iter().map(|v| (*v).into()).collect();
+            kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
-                     hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
-                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-                     gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
-                     wass14, hsdm17, uniprot18",
-                    detected_moltype
+                    "Unknown alphabet in database: {}. Expected one of: {}",
+                    detected_moltype,
+                    expected.join(", ")
                 ),
-            });
-        }
-    };
+            }
+        })?;
 
     // Validate encoding: if user provided encoding doesn't match database, error
     // WHY: The database encoding is authoritative. If the user explicitly provides
