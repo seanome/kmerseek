@@ -5618,12 +5618,8 @@ mod ka_calibration_tests {
             chain_max_gap: 0,
             chain_max_shift: 0,
         });
-        let (queries, _) = searcher.calibration_queries(
-            DecoyNull::Shuffled,
-            BINS_TEST_N_QUERIES,
-            repeats,
-            1,
-        )?;
+        let (queries, _) =
+            searcher.calibration_queries(DecoyNull::Shuffled, BINS_TEST_N_QUERIES, repeats, 1)?;
         assert_eq!(queries.len(), BINS_TEST_N_QUERIES * repeats);
         let filters = ProteinSearcher::calibration_filters();
         let mut scores = Vec::new();
