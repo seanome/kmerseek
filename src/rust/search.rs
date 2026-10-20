@@ -19,6 +19,7 @@ use crate::evalue::{
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
+use crate::seg;
 use crate::significance;
 use crate::sketch::ProteinSketch;
 use crate::types::MolType;
@@ -150,8 +151,8 @@ pub struct ExtensionParams {
     pub chain_max_shift: u32,
 }
 
-/// The two constants of the E-value a search runs with: E = K m n e^(-lambda_pair
-/// r_database S).
+/// The two constants of the E-value a search runs with: E = K m n e^(-lambda
+/// r_database S), lambda the closed form at the region's `pr_same`.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct KaParams {
     /// Karlin-Altschul K, the fraction of the m x n cells that can start a region. It
@@ -309,12 +310,114 @@ fn class_sequence(sketch: &ProteinSketch) -> Option<&[u8]> {
     sequence.map(str::as_bytes)
 }
 
-/// `match_probability` of a query and one target. The target's composition is counted
-/// here, once per pair: one pass over a few hundred bytes, next to `find_matched_regions`'
-/// walk over both sequences.
-fn pair_pr_same(query: &PreparedQuery<'_>, target: &ProteinSketch) -> Option<f64> {
+/// Where `MatchedRegion::pr_same` is counted from. See `region_pr_same` for why the default
+/// is the region.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum PrSameScope {
+    /// The positions inside each region (`region_pr_same`).
+    #[default]
+    Region,
+    /// The two whole proteins' class compositions (`match_probability`): one value for
+    /// every region of a pair. Kept to reproduce searches made before `Region`.
+    Protein,
+}
+
+/// Pseudo-counts per class that `region_pr_same` adds to a region's counts, spread over the
+/// classes by the whole proteins' compositions. They matter for alphabets with more classes,
+/// where a short region does not show every class. Between random 6-class sequences, runs
+/// of 4 or more at E <= 0.01, 0.1 and 1 came out at 0.22-0.23 of the expected count with 2
+/// per class and 0.02-0.12 with none (0.36-0.65 with whole-protein compositions). Between
+/// random 2-class sequences they change little: 0.43-0.55 with 2 per class, 0.43-0.57 with
+/// none, 0.59-0.78 with whole-protein compositions. From `scripts/region_pr_same_null.py`.
+pub const PR_SAME_PSEUDOCOUNTS_PER_CLASS: f64 = 2.0;
+
+/// One pair's whole-protein class statistics: `match_probability` of the two compositions,
+/// and the share of agreeing positions each class would take if the two proteins were
+/// random sequences with those compositions, p_c q_c / sum p q. Counted once per pair:
+/// one pass over the target's sequence, next to `find_matched_regions`' walk over both.
+pub struct PairClasses {
+    /// Chance that a query position and a target position share a class.
+    pub pr_same: f64,
+    /// Expected class shares of an agreeing position.
+    pub agree_shares: ClassComposition,
+    /// Classes present in both proteins.
+    pub n_classes: usize,
+}
+
+/// `PairClasses` of a query and one target. None when either sequence is not stored, or
+/// the two share no class.
+fn pair_classes(query: &PreparedQuery<'_>, target: &ProteinSketch) -> Option<PairClasses> {
     let q_composition = query.composition.as_ref()?;
-    Some(match_probability(q_composition, &class_composition(class_sequence(target)?)))
+    let t_composition = class_composition(class_sequence(target)?);
+    let pr_same = match_probability(q_composition, &t_composition);
+    if pr_same <= 0.0 {
+        return None;
+    }
+    let mut agree_shares = [0.0; 256];
+    let mut n_classes = 0;
+    for (c, share) in agree_shares.iter_mut().enumerate() {
+        *share = q_composition[c] * t_composition[c] / pr_same;
+        n_classes += usize::from(*share > 0.0);
+    }
+    Some(PairClasses { pr_same, agree_shares, n_classes })
+}
+
+/// Chance that a query and a target position share a class, inside `region`:
+///
+/// ```text
+/// pr_same = 1 / (sum over classes c of sqrt(f_c))^2
+///
+/// f_c = (a_c + alpha s_c) / (A + alpha)
+/// a_c    agreeing positions of the region in class c (both residues the same letter),
+///        on its diagonal from (start, target_start); A their sum
+/// s_c    the share of agreeing positions in class c that the whole proteins predict
+///        (`PairClasses::agree_shares`)
+/// alpha  PR_SAME_PSEUDOCOUNTS_PER_CLASS x the classes present in both proteins
+/// ```
+///
+/// Why not the whole proteins. A region between two low-complexity stretches has nearly
+/// every position in one class on both sides, so inside it Pr(same) is close to 1, while
+/// the whole proteins can give 0.5. Notebook 344 found the run and Karlin-Altschul E-values
+/// 10 to 113 times too small this way, in proteins of 300 residues or more that SEG marks
+/// as at least 15% low-complexity.
+///
+/// Why not the region's composition, sum_c p_c q_c over its two sides. A region is found
+/// because its positions agree, so its own residues are biased toward whatever class pairs
+/// agree most, and between random two-class sequences that rule gave 0.19-0.25 of the
+/// expected chance runs, 4 to 5 times too few. If the query and target are locally random
+/// with the same composition p, an agreeing position is in class c with chance
+/// p_c^2 / sum p^2, so the observed shares f_c give p_c = sqrt(f_c) / sum sqrt(f), and
+/// sum p_c^2 is the formula above. Between random two-class sequences it gave 0.43-0.55 of
+/// the expected chance runs, against 0.59-0.78 from the whole proteins
+/// (`PR_SAME_PSEUDOCOUNTS_PER_CLASS`).
+///
+/// For a pure run of one class it is 1, so the run is no evidence at all; for a run whose
+/// classes come in the shares the proteins predict it is close to the whole-protein value.
+/// Positions are paired along the region's first diagonal, so in a chain whose members
+/// shift diagonal the later members' positions are paired off by the shift. None when the
+/// region lies outside either stored sequence.
+fn region_pr_same(q: &[u8], t: &[u8], region: &MatchedRegion, pair: &PairClasses) -> Option<f64> {
+    let q_span = q.get(region.start as usize..region.end as usize)?;
+    let t_span = t.get(region.target_start as usize..)?;
+    let mut counts = [0u32; 256];
+    let mut n_agree = 0u32;
+    for (&a, &b) in q_span.iter().zip(t_span) {
+        if a == b {
+            counts[a as usize] += 1;
+            n_agree += 1;
+        }
+    }
+    let alpha = PR_SAME_PSEUDOCOUNTS_PER_CLASS * pair.n_classes as f64;
+    let total = n_agree as f64 + alpha;
+    if total <= 0.0 {
+        return None;
+    }
+    let root_sum: f64 = counts
+        .iter()
+        .zip(&pair.agree_shares)
+        .map(|(&a, &s)| ((a as f64 + alpha * s) / total).sqrt())
+        .sum();
+    Some((1.0 / (root_sum * root_sum)).min(1.0))
 }
 
 /// Set `run_length` on every region, before any chaining, while each region still sits on
@@ -844,9 +947,9 @@ pub struct MatchedRegion {
     pub mean_idf: f64,
     /// Karlin-Altschul bit score of the region as an ungapped alignment in the encoded
     /// alphabet: (lambda * S - ln K) / ln 2, where S = matches - penalty * mismatches over the
-    /// region and lambda is the root of sum_ij p_i q_j exp(lambda s_ij) = 1 for THIS pair's
-    /// class compositions (Karlin & Altschul 1990; per-pair composition after Schaffer et
-    /// al. 2001). Zero when the pair's expected score per position is not negative, which is
+    /// region and lambda is the root of pr_same e^lambda + (1 - pr_same) e^(-penalty lambda)
+    /// = 1 at the region's `pr_same` (Karlin & Altschul 1990; local composition after
+    /// Schaffer et al. 2001). Zero when the expected score per position is not negative, which is
     /// what two hydrophobic runs or two low-complexity stretches look like: no positive
     /// lambda exists, so no length of agreement counts as evidence. The Poisson count has no
     /// such floor: it sees a transmembrane helix against any other as a long exact run.
@@ -876,9 +979,10 @@ pub struct MatchedRegion {
     /// members'.
     pub run_length: u32,
 
-    /// Chance that one query position and one target position fall in the same class, from
-    /// this pair's class compositions (`match_probability`). The same for every region of a
-    /// pair. None when either sequence is not stored.
+    /// Chance that one query position and one target position fall in the same class: from
+    /// the region's agreeing positions (`region_pr_same`), or with `PrSameScope::Protein`
+    /// from the two whole proteins' class compositions (`match_probability`). None when
+    /// either sequence is not stored.
     pub pr_same: Option<f64>,
 
     /// Expected number of runs at least `run_length` long between an unrelated query and
@@ -1109,10 +1213,13 @@ pub struct PreparedQuery<'a> {
     /// rescanning every one of the query's k-mers per region per target (see
     /// `ProteinSearcher::build_position_prefix`).
     pub position_prefix: Vec<f64>,
-    /// Class composition of the query's encoded sequence, for the per-pair Karlin-Altschul
-    /// lambda. Built once here rather than once per candidate pair. None when the sketch
+    /// Class composition of the query's encoded sequence, for `pair_classes`. Built once
+    /// here rather than once per candidate pair. None when the sketch
     /// carries no encoded sequence.
     pub composition: Option<ClassComposition>,
+    /// With `ProteinSearcher::set_seg_mask`, the query's SEG-masked residues as prefix
+    /// counts (`masked_prefix`). None when masking is off or no raw sequence is stored.
+    pub seg_masked: Option<Vec<u32>>,
 }
 
 impl SearchStats {
@@ -1163,6 +1270,11 @@ pub struct ProteinSearcher {
     db_n_residues: f64,
     /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
     extension: Option<ExtensionParams>,
+    /// Where each region's `pr_same` is counted from, set via `set_pr_same_scope()`.
+    pr_same_scope: PrSameScope,
+    /// Drop shared k-mers that touch a low-complexity residue before regions are built,
+    /// set via `set_seg_mask()`. See `seg::seg_mask`.
+    seg_mask: bool,
 }
 
 /// Puts results in one fixed order, so the same search writes the same CSV on every run.
@@ -1188,6 +1300,19 @@ impl ProteinSearcher {
         self.extension = params;
     }
 
+    /// Count each region's `pr_same` from the region (the default) or from the two whole
+    /// proteins. See `region_pr_same`.
+    pub fn set_pr_same_scope(&mut self, scope: PrSameScope) {
+        self.pr_same_scope = scope;
+    }
+
+    /// Mask low-complexity residues of query and target with SEG before regions are built:
+    /// a shared k-mer that touches a masked residue on either side seeds nothing. Off by
+    /// default. Needs scaled 1, where a region is a run of consecutive shared k-mers.
+    pub fn set_seg_mask(&mut self, on: bool) {
+        self.seg_mask = on;
+    }
+
     /// Fit r_database and K of this index for one mismatch penalty and give-up margin by searching
     /// `n_queries` calibration queries built from the index's own sequences (`DecoyNull`)
     /// and reading the slope and intercept off ln(regions with score S) against S
@@ -1202,7 +1327,7 @@ impl ProteinSearcher {
         settings: KaCalibrationSettings,
     ) -> IndexResult<KaCalibrationReport> {
         let previous = self.extension;
-        // K = 1 and r_database = 1, so a region's `ka_bits` x ln 2 is lambda_pair S.
+        // K = 1 and r_database = 1, so a region's `ka_bits` x ln 2 is lambda S.
         self.extension = Some(ExtensionParams {
             scoring: settings.scoring,
             ka: KaParams { k: 1.0, r_database: 1.0 },
@@ -1321,10 +1446,10 @@ impl ProteinSearcher {
         Ok((queries, match_probability))
     }
 
-    /// Normalised score x = lambda_pair S of every region the calibration queries produce,
+    /// Normalised score x = lambda S of every region the calibration queries produce,
     /// in units of `BIN_WIDTH`, a query's own database entry excluded. The searcher runs
     /// with K = 1 and r_database 1 during calibration, so a region's `ka_bits` x ln 2 is
-    /// exactly lambda_pair S with the closed-form per-pair lambda.
+    /// exactly lambda S with the closed-form lambda of the region's `pr_same`.
     fn calibration_scores(&self, queries: &[(String, ProteinSketch)]) -> Vec<f64> {
         let filters = SearchFilters {
             threshold: 0.0,
@@ -1471,6 +1596,8 @@ impl ProteinSearcher {
             db_n_kmers,
             db_n_residues,
             extension: None,
+            pr_same_scope: PrSameScope::default(),
+            seg_mask: false,
         }
     }
 
@@ -1499,6 +1626,11 @@ impl ProteinSearcher {
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
             composition: class_sequence(query).map(class_composition),
+            seg_masked: if self.seg_mask {
+                query.get_raw_sequence().map(masked_prefix)
+            } else {
+                None
+            },
         }
     }
 
@@ -1859,6 +1991,18 @@ impl ProteinSearcher {
         let query_enrichment =
             fold_enrichment(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
+        // SEG costs one pass over the target per pair, next to the walk over both sequences
+        // that built the regions.
+        if let (Some(q_masked), Some(t_raw)) = (&query.seg_masked, target.get_raw_sequence()) {
+            result.matched_regions = drop_masked_seeds(
+                std::mem::take(&mut result.matched_regions),
+                q_masked,
+                &masked_prefix(t_raw),
+                query.sketch,
+                target,
+            );
+        }
+
         if let Some(params) = self.extension {
             result.matched_regions = extend_regions(
                 std::mem::take(&mut result.matched_regions),
@@ -1906,27 +2050,33 @@ impl ProteinSearcher {
             region.mean_idf = region.tfidf / n_shared as f64;
         }
 
-        let pr_same = pair_pr_same(query, target);
+        let classes = pair_classes(query, target);
         measure_runs(&mut result.matched_regions, query.sketch, target);
+        self.set_pr_same(&mut result.matched_regions, query.sketch, target, classes.as_ref());
         // Query length for both E-values, in the positions matches are counted on.
         let m = class_sequence(query.sketch).map_or(0, <[u8]>::len) as f64;
 
-        // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
+        // Karlin-Altschul bits and E-value per region, on its own pr_same (`set_pr_same`).
         // Only meaningful with a mismatch penalty, which is the score's mismatch term.
         if let Some(params) = self.extension {
-            if let (Some(q_enc), Some(t_enc), Some(a)) =
-                (query.sketch.get_moltype_sequence(), target.get_moltype_sequence(), pr_same)
+            if let (Some(q_enc), Some(t_enc), Some(classes)) =
+                (query.sketch.get_moltype_sequence(), target.get_moltype_sequence(), &classes)
             {
-                let ka_lambda = karlin_altschul_lambda(a, params.scoring.mismatch_penalty)
-                    * params.ka.r_database;
+                let lambda = |pr_same: f64| {
+                    karlin_altschul_lambda(pr_same, params.scoring.mismatch_penalty)
+                        * params.ka.r_database
+                };
+                // The whole pair's lambda: chaining is tried only when it is positive.
+                let ka_lambda = lambda(classes.pr_same);
                 let n = self.db_n_residues;
                 for region in result.matched_regions.iter_mut() {
                     let matches = region.length as f64 - region.n_mismatches as f64;
                     let raw =
                         matches - params.scoring.mismatch_penalty * region.n_mismatches as f64;
-                    if ka_lambda > 0.0 && params.ka.k > 0.0 {
-                        region.ka_bits = params.ka.bits(ka_lambda, raw);
-                        region.ka_evalue = Some(params.ka.evalue(ka_lambda, raw, m, n));
+                    let region_lambda = region.pr_same.map_or(0.0, lambda);
+                    if region_lambda > 0.0 && params.ka.k > 0.0 {
+                        region.ka_bits = params.ka.bits(region_lambda, raw);
+                        region.ka_evalue = Some(params.ka.evalue(region_lambda, raw, m, n));
                     }
                 }
                 if params.chain_max_gap > 0 && ka_lambda > 0.0 && params.ka.k > 0.0 {
@@ -1949,7 +2099,11 @@ impl ProteinSearcher {
             }
         }
 
-        self.score_runs(&mut result.matched_regions, pr_same, m);
+        // A chain's span holds positions none of its members did; count its pr_same again.
+        if result.matched_regions.iter().any(|r| r.n_chained > 1) {
+            self.set_pr_same(&mut result.matched_regions, query.sketch, target, classes.as_ref());
+        }
+        self.score_runs(&mut result.matched_regions, m);
 
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
@@ -1997,13 +2151,37 @@ impl ProteinSearcher {
         Some(result)
     }
 
-    /// Fill `pr_same`, `run_evalue`, and the `evalue` chosen from it and `ka_evalue`, on
-    /// every region of one pair.
-    fn score_runs(&self, regions: &mut [MatchedRegion], pr_same: Option<f64>, m: f64) {
+    /// Set `pr_same` on every region of one pair, by `self.pr_same_scope`. With `Region`
+    /// scope a region outside either stored sequence gets None, as `measure_runs` gives it
+    /// no run length.
+    fn set_pr_same(
+        &self,
+        regions: &mut [MatchedRegion],
+        query: &ProteinSketch,
+        target: &ProteinSketch,
+        classes: Option<&PairClasses>,
+    ) {
+        let (Some(classes), Some(q), Some(t)) =
+            (classes, class_sequence(query), class_sequence(target))
+        else {
+            regions.iter_mut().for_each(|r| r.pr_same = None);
+            return;
+        };
+        for region in regions.iter_mut() {
+            region.pr_same = match self.pr_same_scope {
+                PrSameScope::Protein => Some(classes.pr_same),
+                PrSameScope::Region => region_pr_same(q, t, region, classes),
+            };
+        }
+    }
+
+    /// Fill `run_evalue`, and the `evalue` chosen from it and `ka_evalue`, on every region
+    /// of one pair, from the `pr_same` that `set_pr_same` gave each.
+    fn score_runs(&self, regions: &mut [MatchedRegion], m: f64) {
         let n_targets = self.stats.total_signatures as f64;
         for region in regions.iter_mut() {
-            region.pr_same = pr_same;
-            region.run_evalue = pr_same
+            region.run_evalue = region
+                .pr_same
                 .filter(|_| region.run_length > 0)
                 .map(|p| run_evalue(p, region.run_length, m, self.db_n_residues, n_targets));
             region.choose_evalue();
@@ -2860,6 +3038,82 @@ pub fn extend_regions(
     merged
 }
 
+/// Prefix counts of SEG-masked residues (`seg::seg_mask`): entry i is how many of the first
+/// i residues are masked, so a window's masked count is two lookups.
+fn masked_prefix(residues: &str) -> Vec<u32> {
+    let mut prefix = Vec::with_capacity(residues.len() + 1);
+    prefix.push(0);
+    let mut total = 0;
+    for masked in seg::seg_mask(residues.as_bytes()) {
+        total += u32::from(masked);
+        prefix.push(total);
+    }
+    prefix
+}
+
+/// Drop every shared k-mer that touches a SEG-masked residue on either side, and split each
+/// exact region where it loses one: what is left is the regions that seeding on the masked
+/// sequences would have found. `q_masked` and `t_masked` are `masked_prefix` counts.
+///
+/// An exact region is `n_shared` consecutive shared k-mers on one diagonal, k-mer j
+/// starting at (start + j, target_start + j). The regions must come from
+/// `find_matched_regions` at scaled 1 and not yet be extended; a region that does not fit
+/// that shape, or lies outside the sequences, is kept as it is.
+fn drop_masked_seeds(
+    regions: Vec<MatchedRegion>,
+    q_masked: &[u32],
+    t_masked: &[u32],
+    query: &ProteinSketch,
+    target: &ProteinSketch,
+) -> Vec<MatchedRegion> {
+    let (Some(q_raw), Some(t_raw)) = (query.get_raw_sequence(), target.get_raw_sequence()) else {
+        return regions;
+    };
+    let t_enc = target.get_moltype_sequence();
+    let k = query.protein_ksize() as usize;
+    let masked = |prefix: &[u32], start: usize| prefix[start + k] > prefix[start];
+    let mut out = Vec::with_capacity(regions.len());
+    for region in regions {
+        let (qs, ts, n) = (region.start as usize, region.target_start as usize, region.n_shared);
+        let exact = region.length == n + k as u32 - 1;
+        if !exact
+            || region.end as usize >= q_masked.len()
+            || region.target_end as usize >= t_masked.len()
+        {
+            out.push(region);
+            continue;
+        }
+        let kept = |j: usize| !masked(q_masked, qs + j) && !masked(t_masked, ts + j);
+        let mut j = 0;
+        while j < n as usize {
+            if !kept(j) {
+                j += 1;
+                continue;
+            }
+            let first = j;
+            while j < n as usize && kept(j) {
+                j += 1;
+            }
+            let (start, end) = (qs + first, qs + j - 1 + k);
+            let (t_start, t_end) = (ts + first, ts + j - 1 + k);
+            let mut piece = region.clone();
+            piece.start = start as u32;
+            piece.end = end as u32;
+            piece.target_start = t_start as u32;
+            piece.target_end = t_end as u32;
+            piece.length = (end - start) as u32;
+            piece.n_shared = (j - first) as u32;
+            piece.subseq = q_raw[start..end].to_string();
+            piece.target_subseq = t_raw[t_start..t_end].to_string();
+            if !piece.moltype_seq.is_empty() {
+                piece.moltype_seq = t_enc.map_or(String::new(), |t| t[t_start..t_end].to_string());
+            }
+            out.push(piece);
+        }
+    }
+    out
+}
+
 /// The pair `chain_regions` works on: its sequences, the extension settings, and the
 /// numbers the sum statistic needs, built once per pair in `ProteinSearcher::compare`.
 pub struct ChainContext<'a> {
@@ -2876,7 +3130,8 @@ pub struct ChainContext<'a> {
     pub moltype: &'a str,
     /// Mismatch penalty, K and the chaining caps.
     pub params: ExtensionParams,
-    /// This pair's lambda, r_database applied.
+    /// This pair's lambda from the whole proteins, r_database applied: the lambda of a
+    /// member that carries no `pr_same` of its own.
     pub ka_lambda: f64,
     /// Query length in residues, m.
     pub m: f64,
@@ -2943,8 +3198,14 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
     let mut chain: Vec<MatchedRegion> = Vec::new();
     let ln_mn = (pair.m * pair.n_t).ln();
     let ln_kmn = params.ka.k.ln() + ln_mn;
-    // lambda S_i - ln(K m n_t): a member's score in nats less the size of the search.
-    let normalised = |r: &MatchedRegion| pair.ka_lambda * raw_score(r) - ln_kmn;
+    // lambda_i S_i - ln(K m n_t): a member's score in nats less the size of the search, at
+    // the lambda of the member's own pr_same, the one its ka_evalue was computed with.
+    let member_lambda = |r: &MatchedRegion| {
+        r.pr_same.map_or(pair.ka_lambda, |p| {
+            karlin_altschul_lambda(p, params.scoring.mismatch_penalty) * params.ka.r_database
+        })
+    };
+    let normalised = |r: &MatchedRegion| member_lambda(r) * raw_score(r) - ln_kmn;
     // Called only with a member in the chain: every call site checks the chain is not
     // empty first.
     let flush = |chain: &mut Vec<MatchedRegion>, out: &mut Vec<MatchedRegion>| {
@@ -3039,7 +3300,8 @@ mod tests {
     use super::*;
     use crate::sketch::{ProteinSketch, ProteinSketchStore};
     use crate::tests::test_fixtures::{
-        BCL2_1_32, BCL2_1_32_KMERS_K5, TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ,
+        BCL2_1_32, BCL2_1_32_KMERS_K5, NB344_DECOYS_FASTA, NB344_TARGETS_FASTA, TEST_BLC2_FASTA,
+        TEST_CED9_FASTA, TEST_DECOYS_2MER_GZ, TEST_FASTA_GZ,
     };
     use approx::assert_relative_eq;
     use needletail::parse_fastx_file;
@@ -4002,6 +4264,8 @@ mod tests {
         // apart, and chaining joins them into one region with the sum statistic's E-value.
         let dir = TempDir::new()?;
         let mut searcher = searcher_on_flipped_target(&dir)?;
+        // pr_same from the whole proteins, so both members have the lambda worked out below.
+        searcher.set_pr_same_scope(PrSameScope::Protein);
         let (q, _) = one_flip_pair();
         let strict = ExtensionParams {
             scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
@@ -4468,6 +4732,8 @@ mod tests {
             db_n_kmers: 0,
             db_n_residues: 0.0,
             extension: None,
+            pr_same_scope: PrSameScope::default(),
+            seg_mask: false,
         };
 
         let tfidf = searcher.calculate_tfidf(&query);
@@ -5129,7 +5395,8 @@ mod tests {
         let temp_dir = TempDir::new()?;
         let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
-        let searcher = ProteinSearcher::new(index)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        searcher.set_pr_same_scope(PrSameScope::Protein);
         let query_index =
             ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
@@ -5161,6 +5428,25 @@ mod tests {
         let expected = ((1.0 - pr_same) * 280.0 * n + 25.0 * 279.0 + n) * pr_same.powi(19);
         assert_relative_eq!(region.run_evalue.unwrap(), expected, max_relative = 1e-12);
         assert_relative_eq!(region.run_evalue.unwrap(), 2.734_975_961_520_32, epsilon = 1e-9);
+
+        // From the region (the default): its 19 positions all agree, n_h of them h. With
+        // the shares s_h = hq ht / pr_same, s_p = (1 - hq)(1 - ht) / pr_same, and 2
+        // pseudo-counts for each of the 2 classes, f_h = (n_h + 4 s_h) / 23 and
+        // pr_same = 1 / (sqrt f_h + sqrt f_p)^2.
+        searcher.set_pr_same_scope(PrSameScope::Region);
+        let results = searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+        let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+        let local = &bcl2.matched_regions[0];
+        let q_enc = query.get_moltype_sequence().unwrap().as_bytes();
+        let n_h =
+            q_enc[local.start as usize..local.end as usize].iter().filter(|&&b| b == b'h').count();
+        let s_h = hq * ht / pr_same;
+        let f_h = (n_h as f64 + 4.0 * s_h) / 23.0;
+        let by_hand = 1.0 / (f_h.sqrt() + (1.0 - f_h).sqrt()).powi(2);
+        assert_relative_eq!(local.pr_same.unwrap(), by_hand, epsilon = 1e-12);
+        let expected = ((1.0 - by_hand) * 280.0 * n + 25.0 * 279.0 + n) * by_hand.powi(19);
+        assert_relative_eq!(local.run_evalue.unwrap(), expected, max_relative = 1e-12);
+        println!("CED-9/BCL2 region: n_h {n_h} of 19, pr_same {by_hand:.6}, run E {expected:.6}");
         Ok(())
     }
 
@@ -5180,6 +5466,8 @@ mod tests {
         query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
         query_index.load_state()?;
         let query = query_index.get_signatures().iter().next().unwrap().value().clone();
+        // The penalties below are chosen around the whole proteins' pr_same.
+        searcher.set_pr_same_scope(PrSameScope::Protein);
         let mut best_bcl2_region = |mismatch_penalty: f64| -> Result<MatchedRegion> {
             searcher.set_extension(Some(ExtensionParams {
                 scoring: ExtensionScoring { mismatch_penalty, xdrop: 8.0 },
@@ -5286,6 +5574,259 @@ mod tests {
         };
         assert_eq!(class_sequence(&with_raw_only("protein")?), Some(b"MKVLAAGIVG".as_slice()));
         assert_eq!(class_sequence(&with_raw_only("hp_lehninger2")?), None);
+        Ok(())
+    }
+
+    /// Residues and proteins of the QfO 2020_04 human proteome, which notebook 344 searched.
+    const NB344_HUMAN_RESIDUES: f64 = 11_395_293.0;
+    const NB344_HUMAN_PROTEINS: usize = 20_600;
+
+    /// The notebook 344 search on its two worst decoys: hp_lehninger2 k=19, scaled 1,
+    /// mismatch penalty 2, give-up margin 8, and the K 0.0008 and r_database 0.738 its index
+    /// fitted. The database here is TBC1D10B and FMN2 only, so m, n and the number of targets
+    /// are set to the human proteome's, which puts the E-values on notebook 344's scale.
+    /// Returns the region notebook 344 showed for each decoy (0-based starts: DSPP's at 1057
+    /// on TBC1D10B 715, elastin's at 45 on FMN2 869), or an error naming the first that is
+    /// not found.
+    fn nb344_regions(
+        configure: impl Fn(&mut ProteinSearcher),
+    ) -> Result<(MatchedRegion, MatchedRegion)> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 19, 1, "hp_lehninger2", true)?;
+        index.process_fasta(NB344_TARGETS_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        searcher.set_extension(Some(ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 2.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.0008, r_database: 0.738 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        }));
+        searcher.db_n_residues = NB344_HUMAN_RESIDUES;
+        searcher.stats.total_signatures = NB344_HUMAN_PROTEINS;
+        configure(&mut searcher);
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 19, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(NB344_DECOYS_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let queries: Vec<ProteinSketch> =
+            query_index.get_signatures().iter().map(|e| e.value().clone()).collect();
+        let results = searcher.search(&queries, &SearchFilters::default())?;
+        let region_at = |query: &str, target: &str, start: u32, target_start: u32| {
+            results
+                .iter()
+                .filter(|r| r.query_name.starts_with(query) && r.target_name.contains(target))
+                .flat_map(|pair| &pair.matched_regions)
+                .find(|r| (r.start, r.target_start) == (start, target_start))
+                .cloned()
+                .ok_or_else(|| {
+                    anyhow::anyhow!("no {query} x {target} region at {start}, {target_start}")
+                })
+        };
+        Ok((
+            region_at("Q9NZW4__", "TB10B_HUMAN", 1057, 715)?,
+            region_at("P15502__", "FMN2_HUMAN", 45, 869)?,
+        ))
+    }
+
+    /// Notebook 344's worst run E-value: a dipeptide shuffle of DSPP against the KE repeat of
+    /// TBC1D10B, decoy 1058-1117 on target 716-775 (1-based), 60 positions all in one class
+    /// and 58 of them polar on each side. Counted from the two whole proteins (DSPP 15%
+    /// hydrophobic, TBC1D10B 53%) Pr(same class) is 0.477, which made the run E-value
+    /// 4.2e-10 for what is a chance match between two polar stretches. With Pr(same) from
+    /// the region it is not significant.
+    #[test]
+    fn region_run_evalue_holds_in_a_low_complexity_region() -> Result<()> {
+        let (dspp, _) = nb344_regions(|_| {})?;
+        assert_eq!(dspp.end, 1117);
+        assert_eq!(dspp.run_length, 60);
+        let run_evalue = dspp.run_evalue.unwrap();
+        assert!(run_evalue > 1.0, "run E-value {run_evalue:.3e} on a chance region");
+        assert!(dspp.ka_evalue.is_none_or(|e| e > 1.0), "KA E-value {:?}", dspp.ka_evalue);
+        Ok(())
+    }
+
+    /// The two notebook 344 decoys and the CED-9/BCL2 match under the three ways of counting
+    /// chance: Pr(same) from the whole proteins (before), from the region (the default now),
+    /// and from the whole proteins with SEG masking. `nb344_example_table` holds the checks
+    /// and returns the table `write_region_pr_same_figure_data` saves.
+    ///
+    /// Elastin's decoy against FMN2's proline-rich stretch: 407 positions, 358 in one class,
+    /// mostly hydrophobic on both sides. From the whole proteins its Karlin-Altschul E-value
+    /// was 1.6e-18; from the region it gets no lambda, as pr_same is past 2/3, the most at
+    /// which mismatch penalty 2 still leaves a positive one. SEG masks both stretches, so
+    /// neither decoy keeps a region at all. CED-9/BCL2 is a real match in ordinary sequence
+    /// (k=15, same penalty and human-sized database): from the region its E-values grow by
+    /// less than three times, and SEG leaves it alone.
+    #[test]
+    fn nb344_examples_under_each_pr_same_rule() -> Result<()> {
+        print!("{}", nb344_example_table()?);
+        Ok(())
+    }
+
+    /// Folder, relative to the crate root, for the tables `scripts/plot_region_pr_same_nb344.py`
+    /// draws.
+    const PR_SAME_FIGURE_DATA_DIR: &str = "docs/images/region_pr_same_nb344";
+
+    /// Writes `examples.tsv` behind `docs/images/region_pr_same_nb344.png`. Run by hand:
+    ///
+    /// ```text
+    /// cargo test --no-default-features --lib write_region_pr_same_figure_data -- --ignored
+    /// cargo test --no-default-features --lib write_region_pr_same_decoy_data -- --ignored
+    /// python scripts/plot_region_pr_same_nb344.py
+    /// ```
+    #[test]
+    #[ignore = "writes figure data into docs/images; run by hand"]
+    fn write_region_pr_same_figure_data() -> Result<()> {
+        std::fs::create_dir_all(PR_SAME_FIGURE_DATA_DIR)?;
+        let path = Path::new(PR_SAME_FIGURE_DATA_DIR).join("examples.tsv");
+        std::fs::write(path, nb344_example_table()?)?;
+        Ok(())
+    }
+
+    /// The checks of `nb344_examples_under_each_pr_same_rule`, and the table of what each rule
+    /// gave: one row per case and rule, `NA` where there is no value.
+    fn nb344_example_table() -> Result<String> {
+        let protein = |s: &mut ProteinSearcher| s.set_pr_same_scope(PrSameScope::Protein);
+        let seg = |s: &mut ProteinSearcher| {
+            s.set_pr_same_scope(PrSameScope::Protein);
+            s.set_seg_mask(true);
+        };
+        let (dspp_before, eln_before) = nb344_regions(protein)?;
+        let (dspp_after, eln_after) = nb344_regions(|_| {})?;
+        // What notebook 344 reported for these two regions.
+        assert_relative_eq!(dspp_before.pr_same.unwrap(), 0.477, epsilon = 5e-4);
+        assert_relative_eq!(dspp_before.run_evalue.unwrap(), 4.19e-10, max_relative = 1e-2);
+        assert_eq!((eln_before.end, eln_before.n_mismatches), (452, 49));
+        assert_relative_eq!(eln_before.pr_same.unwrap(), 0.565, epsilon = 5e-4);
+        assert!(eln_before.ka_evalue.unwrap() < 1e-17);
+        // From the region, neither is significant.
+        assert!(dspp_after.pr_same.unwrap() > 0.7);
+        assert!(dspp_after.evalue.unwrap() > 1.0);
+        assert!(eln_after.pr_same.unwrap() > 2.0 / 3.0);
+        assert_eq!(eln_after.ka_evalue, None);
+        assert!(eln_after.evalue.unwrap() > 1.0);
+        // With SEG neither decoy has a region against its target.
+        assert!(nb344_regions(seg).is_err_and(|e| e.to_string().contains("no ")));
+
+        let ced9_bcl2 = |configure: &dyn Fn(&mut ProteinSearcher)| -> Result<MatchedRegion> {
+            let temp_dir = TempDir::new()?;
+            let index =
+                ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+            let mut searcher = ProteinSearcher::new(index)?;
+            searcher.set_extension(Some(ExtensionParams {
+                scoring: ExtensionScoring { mismatch_penalty: 2.0, xdrop: 8.0 },
+                ka: KaParams { k: 0.0008, r_database: 0.738 },
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            }));
+            searcher.db_n_residues = NB344_HUMAN_RESIDUES;
+            searcher.stats.total_signatures = NB344_HUMAN_PROTEINS;
+            configure(&mut searcher);
+            let query_index =
+                ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+            query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+            query_index.load_state()?;
+            let query = query_index.get_signatures().iter().next().unwrap().value().clone();
+            let results =
+                searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+            let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+            Ok(bcl2.matched_regions.iter().max_by_key(|r| r.run_length).unwrap().clone())
+        };
+        let bcl2_before = ced9_bcl2(&protein)?;
+        let bcl2_after = ced9_bcl2(&|_| {})?;
+        let bcl2_seg = ced9_bcl2(&seg)?;
+        assert_eq!((bcl2_before.length, bcl2_before.run_length), (26, 19));
+        let growth = bcl2_after.evalue.unwrap() / bcl2_before.evalue.unwrap();
+        assert!((1.0..3.0).contains(&growth), "CED-9/BCL2 E-value grew {growth:.2} times");
+        assert_eq!(bcl2_seg.evalue, bcl2_before.evalue);
+
+        let fmt = |x: Option<f64>| x.map_or("NA".to_string(), |v| format!("{v:.4e}"));
+        let mut table = String::from(
+            "case\trule\tpr_same\trun_length\tlength\trun_evalue\tka_evalue\tevalue\n",
+        );
+        let mut row = |case: &str, rule: &str, r: Option<&MatchedRegion>| {
+            table += &match r {
+                Some(r) => format!(
+                    "{case}\t{rule}\t{}\t{}\t{}\t{}\t{}\t{}\n",
+                    fmt(r.pr_same),
+                    r.run_length,
+                    r.length,
+                    fmt(r.run_evalue),
+                    fmt(r.ka_evalue),
+                    fmt(r.evalue)
+                ),
+                None => format!("{case}\t{rule}\tNA\t0\t0\tNA\tNA\tNA\n"),
+            }
+        };
+        for (case, before, after) in [
+            ("DSPP decoy x TBC1D10B", &dspp_before, &dspp_after),
+            ("ELN decoy x FMN2", &eln_before, &eln_after),
+        ] {
+            row(case, "protein", Some(before));
+            row(case, "region", Some(after));
+            row(case, "protein + SEG", None);
+        }
+        row("CED-9 x BCL2", "protein", Some(&bcl2_before));
+        row("CED-9 x BCL2", "region", Some(&bcl2_after));
+        row("CED-9 x BCL2", "protein + SEG", Some(&bcl2_seg));
+        Ok(table)
+    }
+
+    /// What each rule costs: the 500 dipeptide-shuffled decoys of the 25 BCL-2-like
+    /// proteins searched against those 25, with notebook 344's extension settings at hp k=8,
+    /// under each rule. Prints the median of 7 timed searches per rule. Ignored by default;
+    /// run with `cargo test --release -- --ignored time_each_pr_same_rule --nocapture`.
+    #[test]
+    #[ignore]
+    fn time_each_pr_same_rule() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 8, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        searcher.set_extension(Some(ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 2.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.0008, r_database: 0.738 },
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        }));
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 8, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_DECOYS_2MER_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let queries: Vec<ProteinSketch> =
+            query_index.get_signatures().iter().map(|e| e.value().clone()).collect();
+        let rules: [(&str, PrSameScope, bool); 3] = [
+            ("protein", PrSameScope::Protein, false),
+            ("region", PrSameScope::Region, false),
+            ("protein + SEG", PrSameScope::Protein, true),
+        ];
+        let mut medians = Vec::new();
+        for (name, scope, seg) in rules {
+            searcher.set_pr_same_scope(scope);
+            searcher.set_seg_mask(seg);
+            let mut times = Vec::new();
+            let mut n_regions = 0;
+            for _ in 0..7 {
+                let start = std::time::Instant::now();
+                let results = searcher.search(&queries, &SearchFilters::default())?;
+                times.push(start.elapsed().as_secs_f64());
+                n_regions = results.iter().map(|r| r.matched_regions.len()).sum::<usize>();
+            }
+            times.sort_by(f64::total_cmp);
+            medians.push(times[3]);
+            println!(
+                "time_rule\t{name}\t{} queries\t{n_regions} regions\tmedian {:.4} s\tmin {:.4} s",
+                queries.len(),
+                times[3],
+                times[0]
+            );
+        }
+        println!(
+            "time_rule\tregion / protein {:.3}\tSEG / protein {:.3}",
+            medians[1] / medians[0],
+            medians[2] / medians[0]
+        );
         Ok(())
     }
 
@@ -5902,7 +6443,10 @@ mod ka_calibration_tests {
         let index_path = temp_dir.path().join("index");
         let index = ProteomeIndex::new(&index_path, 12, 1, "hp_lehninger2", true)?;
         index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
-        Ok((temp_dir, ProteinSearcher::new(index)?))
+        let mut searcher = ProteinSearcher::new(index)?;
+        // The fits below are worked out with lambda from the whole proteins.
+        searcher.set_pr_same_scope(PrSameScope::Protein);
+        Ok((temp_dir, searcher))
     }
 
     /// The fit is reproducible from the seed, is stored under its scoring and found again
@@ -5917,7 +6461,7 @@ mod ka_calibration_tests {
         assert_eq!(searcher.extension, None, "calibration restores the extension setting");
         // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
         // 9,288 query residues against the database's 9,288 residues, no homolog excess, the line
-        // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
+        // read off the top 8 bins of x = lambda S (half a nat each) with at least 30
         // regions, x 7.5 to 11.5 nats.
         assert_eq!((fit.n_queries, fit.n_regions), (25, 9561));
         assert_eq!((fit.query_residues, fit.database_residues), (9288, 9288));

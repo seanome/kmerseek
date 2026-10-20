@@ -7,7 +7,9 @@ use tempfile::TempDir;
 
 use crate::evalue::{run_evalue, SplitMix64};
 use crate::index::ProteomeIndex;
-use crate::search::{ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE};
+use crate::search::{
+    PrSameScope, ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE,
+};
 use crate::sketch::ProteinSketch;
 use crate::tests::test_fixtures::{TEST_DECOYS_2MER_GZ, TEST_FASTA_GZ};
 
@@ -85,11 +87,13 @@ fn exact_search(
     target_fasta: &str,
     moltype: &str,
     ksize: u32,
+    scope: PrSameScope,
 ) -> (Vec<SearchResult>, Vec<ProteinSketch>, Vec<ProteinSketch>) {
     let dir = TempDir::new().unwrap();
     let index = ProteomeIndex::new(dir.path().join("t"), ksize, 1, moltype, true).unwrap();
     index.process_fasta(target_fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
-    let searcher = ProteinSearcher::new(index).unwrap();
+    let mut searcher = ProteinSearcher::new(index).unwrap();
+    searcher.set_pr_same_scope(scope);
     // process_fasta streams sketches to disk; read them back to recount compositions.
     searcher.index().load_state().unwrap();
     let targets = sorted_by_name(searcher.index());
@@ -159,8 +163,13 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
     let mut rng = SplitMix64::new(RANDOM_SEQUENCE_SEED);
     write_random_fasta(&q_fasta, "query", N_QUERIES, LENGTH, &mut rng);
     write_random_fasta(&t_fasta, "target", N_TARGETS, LENGTH, &mut rng);
-    let (results, queries, targets) =
-        exact_search(q_fasta.to_str().unwrap(), t_fasta.to_str().unwrap(), moltype, ksize);
+    let (results, queries, targets) = exact_search(
+        q_fasta.to_str().unwrap(),
+        t_fasta.to_str().unwrap(),
+        moltype,
+        ksize,
+        PrSameScope::Region,
+    );
     let scanned_runs: Vec<u32> =
         pairs(&queries, &targets).flat_map(|(q, t)| run_lengths(q, t)).collect();
     l0s.iter()
@@ -244,17 +253,20 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
 /// Test 3 of the run E-value, on decoys: the 25 BCL-2-like proteins against 500 sequences
 /// shuffled with their 2-mer counts kept, exact search at hp_lehninger2. A calibrated
 /// E-value gives about 25 query-target pairs with a best region at E <= 1 (one per query)
-/// and 250 at E <= 10. Pinned as measured, nothing tuned:
+/// and 250 at E <= 10. Pinned as measured, nothing tuned, with pr_same from the region
+/// (the default) and from the two whole proteins:
 ///
-/// | k  | E <= | region_run_evalue | calibrated |
-/// |----|------|-------------------|------------|
-/// | 15 | 1    | 6                 | 25         |
-/// | 15 | 10   | 162               | 250        |
-/// | 12 | 1    | 6                 | 25         |
-/// | 12 | 10   | 162               | 250        |
+/// | k  | E <= | region | whole proteins | calibrated |
+/// |----|------|--------|----------------|------------|
+/// | 15 | 1    | 4      | 6              | 25         |
+/// | 15 | 10   | 112    | 162            | 250        |
+/// | 12 | 1    | 4      | 6              | 25         |
+/// | 12 | 10   | 112    | 162            | 250        |
 ///
 /// The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys
-/// it errs toward too large. k changes which pairs share a seed but not a pair's run
+/// it errs toward too large, and from the region a little more so: these proteins have no
+/// long low-complexity stretch for the region rule to correct, and it pays the small
+/// extra caution `region_pr_same` describes. k changes which pairs share a seed but not a pair's run
 /// E-value, which depends on the run length and the database's residue count only, so the
 /// two k give the same counts here. Every cutoff from 0.3 to 1,000 is drawn in
 /// `docs/images/run_evalue_checks.png`, panel b.
@@ -264,12 +276,39 @@ fn region_run_evalue_on_2mer_shuffled_decoys() {
     // The search reports a pair when it shares at least one k-mer; of the 25 x 500 =
     // 12,500 pairs, 8,762 share a 15-mer and 12,440 a 12-mer. All counts as measured by
     // this test.
-    let expected = [(15, 8762, [6, 162]), (12, 12440, [6, 162])];
-    for (ksize, n_pairs, run) in expected {
+    let expected = [
+        (15, 8762, PrSameScope::Region, [4, 112]),
+        (15, 8762, PrSameScope::Protein, [6, 162]),
+        (12, 12440, PrSameScope::Region, [4, 112]),
+        (12, 12440, PrSameScope::Protein, [6, 162]),
+    ];
+    for (ksize, n_pairs, scope, run) in expected {
         let (results, queries, targets) =
-            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize);
+            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize, scope);
         assert_eq!((queries.len(), targets.len(), results.len()), (25, 500, n_pairs));
-        assert_eq!([1.0, 10.0].map(|x| pairs_at_or_below(&results, x)), run, "k={ksize}");
+        let counts = [1.0, 10.0].map(|x| pairs_at_or_below(&results, x));
+        assert_eq!(counts, run, "k={ksize} {scope:?}");
+    }
+}
+
+/// Decoy pairs at or below each run E-value cutoff, with pr_same from the region and from
+/// the whole proteins, for panel c of `docs/images/region_pr_same_nb344.png`. Run by hand
+/// with `write_region_pr_same_figure_data` (see there).
+#[test]
+#[ignore = "writes figure data into docs/images; run by hand"]
+fn write_region_pr_same_decoy_data() {
+    let dir = Path::new("docs/images/region_pr_same_nb344");
+    std::fs::create_dir_all(dir).unwrap();
+    let mut out = std::fs::File::create(dir.join("decoys_pairs_at_or_below.tsv")).unwrap();
+    writeln!(out, "alphabet\tksize\trule\tevalue_cutoff\tpairs").unwrap();
+    let cutoffs: Vec<f64> = (-16..=12).map(|i| 10f64.powf(f64::from(i) / 4.0)).collect();
+    for (rule, scope) in [("region", PrSameScope::Region), ("protein", PrSameScope::Protein)] {
+        let (results, _, _) =
+            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", 15, scope);
+        for &x in &cutoffs {
+            let n = pairs_at_or_below(&results, x);
+            writeln!(out, "hp_lehninger2\t15\t{rule}\t{x}\t{n}").unwrap();
+        }
     }
 }
 
@@ -304,9 +343,15 @@ fn write_run_evalue_figure_data() {
     writeln!(decoys, "alphabet\tksize\tn_queries\tevalue_cutoff\tpairs").unwrap();
     // Cutoffs from 10^-4 to 10^3, four per factor of ten.
     let cutoffs: Vec<f64> = (-16..=12).map(|i| 10f64.powf(f64::from(i) / 4.0)).collect();
+    // The figure shows pr_same from the whole proteins, as when it was drawn.
     for ksize in [15, 12] {
-        let (results, queries, _) =
-            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize);
+        let (results, queries, _) = exact_search(
+            TEST_FASTA_GZ,
+            TEST_DECOYS_2MER_GZ,
+            "hp_lehninger2",
+            ksize,
+            PrSameScope::Protein,
+        );
         for &x in &cutoffs {
             let n = pairs_at_or_below(&results, x);
             writeln!(decoys, "hp_lehninger2\t{ksize}\t{}\t{x}\t{n}", queries.len()).unwrap();

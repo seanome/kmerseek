@@ -2,6 +2,15 @@ pub const TEST_FASTA_GZ: &str =
     "tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz";
 pub const TEST_CED9_FASTA: &str = "tests/testdata/fasta/ced9.fasta";
 pub const TEST_BLC2_FASTA: &str = "tests/testdata/fasta/bcl2.fasta";
+/// Two decoys from notebook 344 (seanome/2024-kmerseek-analysis PR 174): dipeptide shuffles,
+/// replicate 2, of DSPP and of elastin, rebuilt from the QfO 2020_04 human proteome with that
+/// notebook's seeds. The search there called a chance region between each and a real protein
+/// significant: DSPP's against TBC1D10B's KE repeat, elastin's against FMN2's proline-rich
+/// stretch.
+pub const NB344_DECOYS_FASTA: &str =
+    "tests/testdata/fasta/nb344_decoys_dspp_eln_dipeptide_r2.fasta";
+/// TBC1D10B and FMN2 from the same proteome: the two targets of `NB344_DECOYS_FASTA`.
+pub const NB344_TARGETS_FASTA: &str = "tests/testdata/fasta/nb344_targets_tbc1d10b_fmn2.fasta";
 /// The 25 BCL-2-like proteins of TEST_FASTA_GZ, each shuffled 20 times with its 2-mer
 /// (dipeptide) counts kept, so a decoy has the composition of a real protein and nothing
 /// else in common with any query. Made with
