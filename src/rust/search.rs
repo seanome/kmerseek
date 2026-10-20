@@ -50,6 +50,11 @@ pub struct SearchFilters {
     /// heuristic cutoff on a ranking score, not a statistically calibrated significance
     /// threshold.
     pub min_region_score: f64,
+    /// A k-mer found in more targets than this is common: a pair needs at least one shared
+    /// k-mer that is not. None, the default, treats every k-mer alike. Common k-mers still
+    /// count towards `min_shared_kmers` and still make up regions; they only cannot be a
+    /// pair's sole evidence.
+    pub max_kmer_targets: Option<usize>,
 }
 
 impl Default for SearchFilters {
@@ -70,6 +75,7 @@ impl Default for SearchFilters {
             min_shared_kmers: 0,
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
+            max_kmer_targets: None,
         }
     }
 }
@@ -1192,6 +1198,7 @@ impl ProteinSearcher {
             min_shared_kmers: 1,
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
+            max_kmer_targets: None,
         };
         queries
             .par_iter()
@@ -1506,18 +1513,10 @@ impl ProteinSearcher {
             self.prepare_query(query)
         };
 
-        // Find candidate targets via inverted index: only compare against targets
-        // that share at least one k-mer with the query
-        let lookup_timer = Timer::start(Step::CandidateLookup);
-        let mut candidate_set: HashSet<u32> = HashSet::new();
-        for &kmer in &prepared.mins {
-            if let Some(indices) = self.inverted_index.get(&kmer) {
-                for &idx in indices {
-                    candidate_set.insert(idx);
-                }
-            }
-        }
-        drop(lookup_timer);
+        let candidates = {
+            let _timer = Timer::start(Step::CandidateLookup);
+            self.candidate_targets(&prepared, filters)
+        };
 
         // Compare only against candidates, in parallel.
         // Three paths for signature access (checked in order of cost):
@@ -1525,7 +1524,7 @@ impl ProteinSearcher {
         //   2. sig_cache (DashMap populated on demand): avoids repeated RocksDB reads for hot targets
         //   3. On-demand RocksDB loading: first access per target; result stored in sig_cache
         let sigs = self.index.get_signatures();
-        let mut results: Vec<SearchResult> = candidate_set
+        let mut results: Vec<SearchResult> = candidates
             .par_iter()
             .filter_map(|&idx| {
                 let md5 = &self.target_list[idx as usize];
@@ -1553,6 +1552,39 @@ impl ProteinSearcher {
         let _timer = Timer::start(Step::SortResults);
         sort_results(&mut results);
         results
+    }
+
+    /// Targets that can pass `filters`, found from the inverted index alone.
+    ///
+    /// Each query k-mer's posting list adds one to every target it names. A posting list
+    /// names a target once, so a target's count is exactly how many k-mers it shares with
+    /// the query: the `n_intersecting_hashes` that `compare` checks against
+    /// `min_shared_kmers` and the containment threshold. Applying those checks here drops
+    /// the same targets `compare` would, before their signatures are read from disk.
+    /// With `max_kmer_targets` set, a target must also share at least one k-mer whose
+    /// posting list is no longer than that.
+    fn candidate_targets(&self, query: &PreparedQuery<'_>, filters: &SearchFilters) -> Vec<u32> {
+        let max_targets = filters.max_kmer_targets.unwrap_or(usize::MAX);
+        // Per target: shared k-mers, and whether one of them is not common.
+        let mut counts: HashMap<u32, (usize, bool)> = HashMap::new();
+        for kmer in &query.mins {
+            let Some(targets) = self.inverted_index.get(kmer) else { continue };
+            let rare = targets.len() <= max_targets;
+            for &idx in targets {
+                let entry = counts.entry(idx).or_insert((0, false));
+                entry.0 += 1;
+                entry.1 |= rare;
+            }
+        }
+        let n_kmers = query.n_kmers as f64;
+        counts
+            .into_iter()
+            .filter(|&(_, (shared, rare))| {
+                rare && shared >= filters.min_shared_kmers
+                    && shared as f64 / n_kmers >= filters.threshold
+            })
+            .map(|(idx, _)| idx)
+            .collect()
     }
 
     /// Perform all-vs-all search without cloning signatures
@@ -3351,6 +3383,80 @@ mod tests {
         )?;
         assert!(pvalue_filtered.is_empty(), "capping both scopes at their extremes rejects all");
 
+        Ok(())
+    }
+
+    /// The sketch of the first protein in `fasta`, built through a throwaway index the same
+    /// way a search builds its queries.
+    fn sketch_first_record(fasta: &str, ksize: u32, alphabet: &str) -> ProteinSketch {
+        let temp_dir = TempDir::new().expect("temp dir");
+        let index = ProteomeIndex::new(temp_dir.path(), ksize, 1, alphabet, false).expect("index");
+        index.process_fasta(fasta, 0, DEFAULT_BATCH_SIZE).expect("process fasta");
+        index.load_state().expect("load state");
+        let first = index.get_signatures().iter().next().expect("one record").value().clone();
+        first
+    }
+
+    /// `candidate_targets` counts shared k-mers from posting lists only. The counts must
+    /// equal the intersections `compare` computes from the signatures, or the early filter
+    /// would drop pairs `compare` keeps. Checked for BCL2 (k=15, hp_lehninger2) against every
+    /// protein in the test FASTA, at each `min_shared_kmers` from 1 to 3.
+    #[test]
+    fn test_candidate_targets_match_signature_intersections() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target_index = ProteomeIndex::new(temp_dir.path(), 15, 1, "hp_lehninger2", true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index)?;
+        let query = sketch_first_record(TEST_BLC2_FASTA, 15, "hp_lehninger2");
+        let prepared = searcher.prepare_query(&query);
+
+        let mut n_candidates = Vec::new();
+        for min_shared_kmers in 1..=3 {
+            let filters = SearchFilters { min_shared_kmers, ..SearchFilters::default() };
+            let mut found = searcher.candidate_targets(&prepared, &filters);
+            found.sort_unstable();
+            let expected: Vec<u32> = (0..searcher.target_list.len() as u32)
+                .filter(|&idx| {
+                    let md5 = &searcher.target_list[idx as usize];
+                    let target = searcher
+                        .index
+                        .get_signature_by_md5(md5)
+                        .unwrap()
+                        .expect("stored signature");
+                    prepared.mins.intersection(&target.mins_as_set()).count() >= min_shared_kmers
+                })
+                .collect();
+            assert_eq!(found, expected, "min_shared_kmers = {min_shared_kmers}");
+            n_candidates.push(found.len());
+        }
+        println!("candidates at min_shared_kmers 1, 2, 3: {n_candidates:?}");
+        assert_eq!(n_candidates, vec![22, 18, 17]);
+        Ok(())
+    }
+
+    /// `max_kmer_targets` drops a target whose shared k-mers are all common. With a cap of 0
+    /// every k-mer is common, so nothing is left; with no cap, and with a cap no posting list
+    /// can exceed, the candidates are the same.
+    #[test]
+    fn test_max_kmer_targets_needs_one_rare_shared_kmer() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target_index = ProteomeIndex::new(temp_dir.path(), 15, 1, "hp_lehninger2", true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index)?;
+        let query = sketch_first_record(TEST_BLC2_FASTA, 15, "hp_lehninger2");
+        let prepared = searcher.prepare_query(&query);
+        let candidates = |cap| {
+            let filters = SearchFilters { max_kmer_targets: cap, ..SearchFilters::default() };
+            let mut found = searcher.candidate_targets(&prepared, &filters);
+            found.sort_unstable();
+            found
+        };
+
+        assert_eq!(candidates(Some(0)), Vec::<u32>::new());
+        // A cap of 1 keeps only targets sharing a k-mer that no other protein holds.
+        println!("candidates with a cap of 1: {}", candidates(Some(1)).len());
+        assert_eq!(candidates(Some(1)).len(), 1);
+        assert_eq!(candidates(Some(searcher.target_list.len())), candidates(None));
         Ok(())
     }
 

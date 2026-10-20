@@ -164,6 +164,12 @@ enum Commands {
         #[arg(long, default_value = "2")]
         min_shared_kmers: usize,
 
+        /// Call a k-mer common when more than this many targets contain it, and report a
+        /// match only if it shares at least one k-mer that is not common. Common k-mers still
+        /// count towards --min-shared-kmers and still make up regions. Off by default.
+        #[arg(long)]
+        max_kmer_targets: Option<usize>,
+
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
         /// A match is reported if either this or --min-region-score passes.
         #[arg(long, default_value = "0.05")]
@@ -570,6 +576,7 @@ fn main() -> IndexResult<()> {
             alphabet,
             threshold,
             min_shared_kmers,
+            max_kmer_targets,
             max_query_pvalue,
             min_region_score,
             max_pvalue,
@@ -666,8 +673,13 @@ fn main() -> IndexResult<()> {
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters =
-                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
+            let filters = SearchFilters {
+                threshold,
+                min_shared_kmers,
+                max_query_pvalue,
+                min_region_score,
+                max_kmer_targets,
+            };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
