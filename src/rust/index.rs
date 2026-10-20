@@ -4155,6 +4155,46 @@ mod tests {
         Ok(())
     }
 
+    /// Two indexes whose repeated sequences were ingested under the same names in a
+    /// different order are equivalent, and `aliases()` lists the names sorted.
+    #[test]
+    fn test_aliases_are_sorted_and_equivalence_ignores_ingest_order() -> Result<()> {
+        let dir = tempdir()?;
+        let build = |name: &str, headers: &[&str]| -> Result<ProteomeIndex> {
+            let fasta = dir.path().join(format!("{name}.fasta"));
+            let body: String = headers.iter().map(|h| format!(">{h}\n{TEST_PROTEIN}\n")).collect();
+            std::fs::write(&fasta, body)?;
+            let index = ProteomeIndex::new(dir.path().join(name), 5, 1, "protein20", true)?;
+            index.process_fasta(&fasta, 0, 1000)?;
+            index.save_state()?;
+            Ok(index)
+        };
+        let forward = build("forward.db", &["a", "b", "c"])?;
+        let backward = build("backward.db", &["a", "c", "b"])?;
+        let expected = vec!["b".to_string(), "c".to_string()];
+        assert_eq!(forward.aliases()?[&sequence_key(TEST_PROTEIN)], expected);
+        assert_eq!(backward.aliases()?[&sequence_key(TEST_PROTEIN)], expected);
+        assert!(forward.is_equivalent_to(&backward)?);
+        Ok(())
+    }
+
+    /// An `aliases_` key that is not UTF-8 is a corrupt index, not a lossy name.
+    #[test]
+    fn test_non_utf8_alias_key_is_reported_as_corrupt() -> Result<()> {
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("badalias.db"), 5, 1, "protein20", true)?;
+        let mut key = b"aliases_".to_vec();
+        key.push(0xff);
+        index.db.put(key, bincode::serialize(&vec!["x".to_string()])?)?;
+        match index.aliases() {
+            Err(crate::errors::IndexError::CorruptIndex(message)) => {
+                assert!(message.contains("alias key is not valid UTF-8"), "{message}");
+            }
+            other => panic!("expected CorruptIndex, got {:?}", other.map(|a| a.len())),
+        }
+        Ok(())
+    }
+
     /// A shard missing from a finalized index means the write was interrupted. That must
     /// surface as an error, never as a search that silently lacks those k-mers.
     #[test]
