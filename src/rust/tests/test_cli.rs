@@ -478,6 +478,17 @@ fn test_cli_search_rejects_a_bad_extension_flag() -> Result<(), Box<dyn std::err
             .failure()
             .stderr(predicate::str::contains(message));
     }
+    // The flags are checked before the target is opened: with a target that does not exist,
+    // the flag message is still the one reported, not an open error.
+    Command::cargo_bin("kmerseek")?
+        .args(["search", "--query", TEST_CED9_FASTA])
+        .args(["--target", temp_dir.path().join("missing.db").to_str().unwrap()])
+        .args(["--output", temp_dir.path().join("hits.csv").to_str().unwrap()])
+        .args(common)
+        .args(["--extend-mismatch-penalty=-2"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--extend-mismatch-penalty must be above 0 (got -2)"));
     Ok(())
 }
 

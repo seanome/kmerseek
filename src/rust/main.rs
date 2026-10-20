@@ -649,6 +649,9 @@ fn main() -> IndexResult<()> {
             query_is_index,
             batch_size,
         } => {
+            // The flags need no index, so a bad one fails before the target is opened.
+            check_extension_flags(extend_mismatch_penalty, extend_xdrop, ka_k)?;
+
             eprintln!("Searching query sequences against target database");
             eprintln!("Query: {}", query.display());
             eprintln!("Target: {}", target.display());
@@ -725,8 +728,6 @@ fn main() -> IndexResult<()> {
             } else {
                 false
             };
-
-            check_extension_flags(extend_mismatch_penalty, extend_xdrop, ka_k)?;
 
             // Load the target database
             eprintln!("Loading target database...");
