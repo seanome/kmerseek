@@ -19,6 +19,7 @@ use crate::evalue::{
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
+use crate::profile::{Step, Timer};
 use crate::significance;
 use crate::sketch::ProteinSketch;
 use crate::types::MolType;
@@ -1500,10 +1501,14 @@ impl ProteinSearcher {
         filters: &SearchFilters,
         total_queries: usize,
     ) -> Vec<SearchResult> {
-        let prepared = self.prepare_query(query);
+        let prepared = {
+            let _timer = Timer::start(Step::PrepareQuery);
+            self.prepare_query(query)
+        };
 
         // Find candidate targets via inverted index: only compare against targets
         // that share at least one k-mer with the query
+        let lookup_timer = Timer::start(Step::CandidateLookup);
         let mut candidate_set: HashSet<u32> = HashSet::new();
         for &kmer in &prepared.mins {
             if let Some(indices) = self.inverted_index.get(&kmer) {
@@ -1512,6 +1517,7 @@ impl ProteinSearcher {
                 }
             }
         }
+        drop(lookup_timer);
 
         // Compare only against candidates, in parallel.
         // Three paths for signature access (checked in order of cost):
@@ -1535,12 +1541,16 @@ impl ProteinSearcher {
                 }
 
                 // Path 3: first-time load from RocksDB; store in cache for future queries
-                let target = self.index.get_signature_by_md5(md5).ok()??;
+                let target = {
+                    let _timer = Timer::start(Step::SignatureLoad);
+                    self.index.get_signature_by_md5(md5).ok()??
+                };
                 let result = self.compare(&prepared, &target, filters, total_queries);
                 self.sig_cache.insert(md5.clone(), target);
                 result
             })
             .collect();
+        let _timer = Timer::start(Step::SortResults);
         sort_results(&mut results);
         results
     }
@@ -1654,6 +1664,7 @@ impl ProteinSearcher {
             return None;
         }
 
+        let intersection_timer = Timer::start(Step::Intersection);
         // Use pre-computed query.mins from PreparedQuery and compute target mins once.
         // WHY: query.mins is already a HashSet built in prepare_query(). Using it directly
         // avoids recomputing the query HashSet on every comparison. target_mins is computed
@@ -1702,7 +1713,10 @@ impl ProteinSearcher {
         let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&shared_hashes);
         let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&shared_hashes);
 
+        drop(intersection_timer);
+
         // Build the similarity result using the pre-computed intersection and mins sets
+        let regions_timer = Timer::start(Step::MatchedRegions);
         let mut result = calculate_similarity_from_precomputed(
             query.sketch,
             &query.mins,
@@ -1710,6 +1724,7 @@ impl ProteinSearcher {
             &target_mins,
             &intersection,
         )?;
+        drop(regions_timer);
         if result.containment < filters.threshold {
             return None;
         }
@@ -1718,6 +1733,7 @@ impl ProteinSearcher {
             fold_enrichment(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
         if let Some(params) = self.extension {
+            let _timer = Timer::start(Step::Extension);
             result.matched_regions = extend_regions(
                 std::mem::take(&mut result.matched_regions),
                 query.sketch,
@@ -1728,6 +1744,7 @@ impl ProteinSearcher {
 
         // Rescope the same Poisson test to each matched region individually, so a tight local
         // match doesn't get diluted by the whole protein's k-mer count.
+        let scoring_timer = Timer::start(Step::RegionScoring);
         let ksize = query.sketch.protein_ksize() as usize;
         // Listing the shared windows costs (query copies × target copies) per repeated
         // k-mer, so skip it when there is no region to score.
@@ -1764,9 +1781,12 @@ impl ProteinSearcher {
             region.mean_idf = region.tfidf / n_shared as f64;
         }
 
+        drop(scoring_timer);
+
         // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
         // Only meaningful with a mismatch penalty, which is the score's mismatch term.
         if let Some(params) = self.extension {
+            let _timer = Timer::start(Step::KarlinAltschul);
             if let (Some(q_enc), Some(t_enc), Some(q_composition)) = (
                 query.sketch.get_moltype_sequence(),
                 target.get_moltype_sequence(),
@@ -1807,6 +1827,7 @@ impl ProteinSearcher {
             }
         }
 
+        let _metrics_timer = Timer::start(Step::ResultMetrics);
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
         // one.
