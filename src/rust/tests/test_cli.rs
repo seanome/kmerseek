@@ -1315,6 +1315,36 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     Ok(())
 }
 
+/// A bad `--ka-k` or `--ka-r-database` is refused even with seed extension off, and before
+/// the target index is opened (the target here does not exist).
+#[test]
+fn test_cli_ka_bad_values_fail_with_scoring_off() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let missing_index = temp_dir.path().join("no_such_index.db");
+    let out = temp_dir.path().join("out.csv");
+    let run = |extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            missing_index.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            "0",
+        ]);
+        cmd.args(extra);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+    run(&["--ka-r-database=-3", "--ka-k", "0.03"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-r-database must be positive"));
+    run(&["--ka-k", "inf"])?.failure().stderr(predicate::str::contains("--ka-k must be positive"));
+    Ok(())
+}
+
 /// One calibration query gives too few score bins to fit, so nothing is stored; three
 /// give a fit that leans on the seed end of the curve, which the index step says out
 /// loud and writes out as a survival curve.
