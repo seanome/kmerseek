@@ -41,15 +41,6 @@ use crate::types::MolType;
 /// sequences kept under `aliases_{md5}`.
 pub const SCHEMA_VERSION: u32 = 5;
 
-/// The alias names sorted within each md5, so two indexes compare equal whatever order
-/// their duplicates were ingested in.
-fn sorted_aliases(mut aliases: HashMap<String, Vec<String>>) -> HashMap<String, Vec<String>> {
-    for names in aliases.values_mut() {
-        names.sort();
-    }
-    aliases
-}
-
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
 const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
@@ -1322,7 +1313,7 @@ impl ProteomeIndex {
         other.finalize()?;
         if self.signature_count() != other.signature_count()
             || self.unique_kmer_count() != other.unique_kmer_count()
-            || sorted_aliases(self.aliases()?) != sorted_aliases(other.aliases()?)
+            || self.aliases()? != other.aliases()?
         {
             return Ok(false);
         }
@@ -1343,7 +1334,8 @@ impl ProteomeIndex {
     }
 
     /// Every entry name whose sequence was already stored under another name, by that
-    /// sequence's md5. Search reports a hit on the md5 once more under each of these names.
+    /// sequence's md5, sorted within each md5 so the order does not depend on ingest order.
+    /// Search reports a hit on the md5 once more under each of these names.
     pub fn aliases(&self) -> IndexResult<HashMap<String, Vec<String>>> {
         let mut aliases = HashMap::new();
         for item in self.db.iterator(IteratorMode::From(b"aliases_", Direction::Forward)) {
@@ -1352,7 +1344,8 @@ impl ProteomeIndex {
             let md5 = std::str::from_utf8(md5).map_err(|e| {
                 IndexError::CorruptIndex(format!("alias key is not valid UTF-8: {e}"))
             })?;
-            let names: Vec<String> = bincode::deserialize(&value)?;
+            let mut names: Vec<String> = bincode::deserialize(&value)?;
+            names.sort();
             aliases.insert(md5.to_string(), names);
         }
         Ok(aliases)
