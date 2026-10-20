@@ -134,6 +134,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
             csv_path.to_str().unwrap(),
         ]);
         search_cmd.assert().success();
+        assert!(csv_path.exists(), "{alphabet}: search exited 0 but wrote no output CSV");
     }
 
     Ok(())
