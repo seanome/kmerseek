@@ -5595,6 +5595,14 @@ mod ka_calibration_tests {
         Ok((temp_dir, ProteinSearcher::new(index)?))
     }
 
+    /// Mismatch penalty for the `calibration_bins` tests, the one the fit tests below use.
+    const BINS_TEST_MISMATCH_PENALTY: f64 = 2.0;
+    /// Queries drawn for the `calibration_bins` tests: all 25 proteins of the fixture.
+    const BINS_TEST_N_QUERIES: usize = 25;
+    /// The comparison below is exact, so this only guards against comparing two empty
+    /// bins. 25 shuffled queries at penalty 2 give 9,561 regions in the fit test below.
+    const BINS_TEST_MIN_REGIONS: u64 = 1000;
+
     /// `calibration_bins` counts regions as each target is compared. It must give the bins
     /// that searching each query with `search_one`, dropping the query's own database
     /// entry and binning every region's score, gives. With `repeats` decoys made from each
@@ -5603,7 +5611,7 @@ mod ka_calibration_tests {
         let (_dir, mut searcher) = searcher_on_first25()?;
         searcher.extension = Some(ExtensionParams {
             scoring: ExtensionScoring {
-                mismatch_penalty: 2.0,
+                mismatch_penalty: BINS_TEST_MISMATCH_PENALTY,
                 xdrop: DEFAULT_XDROP,
             },
             ka: KaParams { k: 1.0, r_database: 1.0 },
@@ -5612,16 +5620,18 @@ mod ka_calibration_tests {
         });
         let (queries, _) = searcher.calibration_queries(
             DecoyNull::Shuffled,
-            25,
+            BINS_TEST_N_QUERIES,
             repeats,
             1,
         )?;
-        assert_eq!(queries.len(), 25 * repeats);
+        assert_eq!(queries.len(), BINS_TEST_N_QUERIES * repeats);
         let filters = ProteinSearcher::calibration_filters();
         let mut scores = Vec::new();
         for (source_md5, query) in &queries {
             for result in searcher.search_one(query, &filters, queries.len()) {
                 if &result.target_md5 != source_md5 {
+                    // Written out again on purpose: an independent check of the bin
+                    // formula in `calibration_bins`, not a call to shared code.
                     scores.extend(
                         result
                             .matched_regions
@@ -5632,7 +5642,7 @@ mod ka_calibration_tests {
             }
         }
         let bins = searcher.calibration_bins(&queries);
-        assert!(bins.n_regions() > 1000, "{}", bins.n_regions());
+        assert!(bins.n_regions() > BINS_TEST_MIN_REGIONS, "{}", bins.n_regions());
         assert_eq!(bins, scores.into_iter().collect::<ScoreBins>());
         Ok(())
     }
