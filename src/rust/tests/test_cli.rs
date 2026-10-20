@@ -1242,7 +1242,10 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     let r_database = first[column("r_database")].to_string();
     // Those strings must parse back to exactly the fit the index stored, on every row.
     let stored_fit = crate::index::ProteomeIndex::open_for_search(&index_path)?
-        .ka_calibration(crate::search::ExtensionScoring::new(2.0, 8.0)?)?
+        .ka_calibration(crate::search::ExtensionScoring::new(
+            crate::search::DEFAULT_MISMATCH_PENALTY,
+            crate::search::DEFAULT_XDROP,
+        )?)?
         .expect("the index stores a fit for C 2, X 8")
         .ka_params();
     for row in reader.records() {
@@ -1253,6 +1256,8 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     assert_eq!(k.parse::<f64>()?, stored_fit.k);
     assert_eq!(r_database.parse::<f64>()?, stored_fit.r_database);
 
+    let penalty = crate::search::DEFAULT_MISMATCH_PENALTY.to_string();
+    let xdrop = crate::search::DEFAULT_XDROP.to_string();
     let search = |out: &std::path::Path, extra: &[&str]| {
         let mut cmd = Command::cargo_bin("kmerseek")?;
         cmd.args([
@@ -1264,9 +1269,9 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
             "--output",
             out.to_str().unwrap(),
             "--extend-mismatch-penalty",
-            "2",
+            &penalty,
             "--extend-xdrop",
-            "8",
+            &xdrop,
         ]);
         cmd.args(extra);
         Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
