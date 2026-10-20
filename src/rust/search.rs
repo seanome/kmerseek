@@ -3225,8 +3225,8 @@ mod tests {
     /// Two entries whose 5-mer sets are equal but whose sequences differ (a poly-A run of 5
     /// and of 8: both hold AAAAA and nothing else the other lacks) are two targets, each
     /// reported with its own residues and coordinates, because the index keys entries by
-    /// their residues, not their k-mer set. The query has a run of 7, so it is neither entry: a query whose
-    /// key equals a target's is skipped as a self-match. Drawn as dot plots in
+    /// their residues, not their k-mer set. The query has a run of 7, so it is neither
+    /// entry: a query whose key equals a target's is skipped as a self-match. Drawn as dot plots in
     /// `docs/images/same_kmer_set_polyA5_polyA8_protein20_k5.png`
     /// (`scripts/plot_same_kmer_set_targets.py`).
     #[test]
