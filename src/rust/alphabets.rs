@@ -271,6 +271,23 @@ fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
     m
 }
 
+fn build_two_class(a_residues: &[u8], a: u8, b_residues: &[u8], b: u8) -> HashMap<u8, u8> {
+    assert_eq!(
+        a_residues.len() + b_residues.len(),
+        20,
+        "two-class table must cover all 20 canonical amino acids"
+    );
+    let mut m = HashMap::with_capacity(21);
+    for &r in a_residues {
+        m.insert(r, a);
+    }
+    for &r in b_residues {
+        m.insert(r, b);
+    }
+    m.insert(b'*', b'*'); // stop codon pass-through
+    m
+}
+
 fn build_hpc(h_residues: &[u8], p_residues: &[u8], c_residues: &[u8]) -> HashMap<u8, u8> {
     assert_eq!(
         h_residues.len() + p_residues.len() + c_residues.len(),
@@ -441,14 +458,8 @@ static PBOTC_1ST_ED_HPC: LazyLock<HashMap<u8, u8>> =
 //   c: C                         (1 residue)
 //   x: A D E F G H I K L M N P Q R S T V W Y   (19 residues)
 // -----------------------------------------------------------------------------
-static CYS2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
-    let mut m = HashMap::with_capacity(21);
-    for &r in CANONICAL_AA {
-        m.insert(r, if r == b'C' { b'c' } else { b'x' });
-    }
-    m.insert(b'*', b'*'); // stop codon pass-through
-    m
-});
+static CYS2: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_two_class(b"C", b'c', b"ADEFGHIKLMNPQRSTVWY", b'x'));
 
 /// The partition of an alphabet that has one, for tests that compare tables directly.
 #[cfg(test)]
