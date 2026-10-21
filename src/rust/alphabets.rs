@@ -278,6 +278,8 @@ fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
     m
 }
 
+/// Builds a two-class table. `a` and `b` are the class symbols; `a_residues` and
+/// `b_residues` are the residues in each class.
 fn build_two_class(a_residues: &[u8], a: u8, b_residues: &[u8], b: u8) -> HashMap<u8, u8> {
     assert_covers_canonical("two-class", &[a_residues, b_residues]);
     let mut m = HashMap::with_capacity(21);
