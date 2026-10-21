@@ -254,12 +254,19 @@ impl Alphabet {
     }
 }
 
-fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
+/// Panics unless the residue lists together hold each of the 20 canonical residues exactly
+/// once. A length check alone passes a list with one residue repeated and another missing.
+fn assert_covers_canonical(table: &str, classes: &[&[u8]]) {
+    let mut all: Vec<u8> = classes.concat();
+    all.sort_unstable();
     assert_eq!(
-        h_residues.len() + p_residues.len(),
-        20,
-        "HP table must cover all 20 canonical amino acids"
+        all, CANONICAL_AA,
+        "{table} table must cover each of the 20 canonical amino acids exactly once"
     );
+}
+
+fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
+    assert_covers_canonical("HP", &[h_residues, p_residues]);
     let mut m = HashMap::with_capacity(21);
     for &r in h_residues {
         m.insert(r, b'h');
@@ -272,11 +279,7 @@ fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
 }
 
 fn build_two_class(a_residues: &[u8], a: u8, b_residues: &[u8], b: u8) -> HashMap<u8, u8> {
-    assert_eq!(
-        a_residues.len() + b_residues.len(),
-        20,
-        "two-class table must cover all 20 canonical amino acids"
-    );
+    assert_covers_canonical("two-class", &[a_residues, b_residues]);
     let mut m = HashMap::with_capacity(21);
     for &r in a_residues {
         m.insert(r, a);
@@ -289,11 +292,7 @@ fn build_two_class(a_residues: &[u8], a: u8, b_residues: &[u8], b: u8) -> HashMa
 }
 
 fn build_hpc(h_residues: &[u8], p_residues: &[u8], c_residues: &[u8]) -> HashMap<u8, u8> {
-    assert_eq!(
-        h_residues.len() + p_residues.len() + c_residues.len(),
-        20,
-        "HPC table must cover all 20 canonical amino acids"
-    );
+    assert_covers_canonical("HPC", &[h_residues, p_residues, c_residues]);
     let mut m = HashMap::with_capacity(21);
     for &r in h_residues {
         m.insert(r, b'h');
