@@ -702,15 +702,16 @@ fn main() -> IndexResult<()> {
                 false
             };
 
-            // Load the target database
-            eprintln!("Loading target database...");
-            let mut searcher = ProteinSearcher::load(&target)?;
             if seg_mask && final_scaled > 1 {
                 return Err(anyhow::anyhow!(
                     "--seg-mask needs an index built at --scaled 1 (this one is {final_scaled})"
                 )
                 .into());
             }
+
+            // Load the target database
+            eprintln!("Loading target database...");
+            let mut searcher = ProteinSearcher::load(&target)?;
             searcher.set_pr_same_scope(pr_same_from);
             searcher.set_seg_mask(seg_mask);
             eprintln!(
