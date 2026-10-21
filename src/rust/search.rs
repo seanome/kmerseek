@@ -4109,18 +4109,31 @@ mod tests {
         members: &[(u32, u32, u32, u32)],
         params: ExtensionParams,
     ) -> Vec<MatchedRegion> {
+        chain_hp_pr_same(t_pattern, members, &[], params)
+    }
+
+    /// `chain_hp` with each member's `pr_same`, in member order; a member past the end of
+    /// `pr_same` gets None, so it is scored at the pair's lambda.
+    fn chain_hp_pr_same(
+        t_pattern: &str,
+        members: &[(u32, u32, u32, u32)],
+        pr_same: &[Option<f64>],
+        params: ExtensionParams,
+    ) -> Vec<MatchedRegion> {
         let q = sketch_from_hp_pattern("q", HP_PATTERN);
         let t = sketch_from_hp_pattern("t", t_pattern);
         let base = find_matched_regions(&q, &q, &q.intersect(&q)).remove(0);
         let regions = members
             .iter()
-            .map(|&(start, end, target_start, n_mismatches)| MatchedRegion {
+            .enumerate()
+            .map(|(i, &(start, end, target_start, n_mismatches))| MatchedRegion {
                 start,
                 end,
                 target_start,
                 target_end: target_start + (end - start),
                 length: end - start,
                 n_mismatches,
+                pr_same: pr_same.get(i).copied().flatten(),
                 ..base.clone()
             })
             .collect();
@@ -4138,6 +4151,32 @@ mod tests {
             n_targets: 100.0,
         };
         chain_regions(regions, &pair)
+    }
+
+    #[test]
+    fn test_chain_regions_scores_each_member_at_its_own_lambda() {
+        // At mismatch penalty 1 the lambda is closed-form: u e^x + (1-u) e^-x = 1 has the
+        // root e^x = (1-u)/u, so lambda = ln((1-u)/u). Members with pr_same 0.25 and 0.1
+        // have lambda ln 3 and ln 9. Two exact runs on one diagonal, 12 and 8 residues, so
+        // the raw scores are 12 and 8 and ln(K m n_t) = ln(0.1 * 25 * 25).
+        let params = ExtensionParams { chain_max_gap: 5, ..extension(1.0, 8.0) };
+        let members = [(0, 12, 0, 0), (14, 22, 14, 0)];
+        let ln_kmn = (0.1f64 * 25.0 * 25.0).ln();
+        let chained_e = |pr_same: &[Option<f64>]| {
+            let out = chain_hp_pr_same(HP_PATTERN, &members, pr_same, params);
+            assert_eq!(out.len(), 1, "{out:?}");
+            assert_eq!(out[0].n_chained, 2);
+            out[0].ka_evalue.unwrap()
+        };
+        let (l1, l2) = (3f64.ln(), 9f64.ln());
+        let t_sum = (l1 * 12.0 - ln_kmn) + (l2 * 8.0 - ln_kmn);
+        let by_hand = karlin_altschul_sum_ln_p(t_sum, 2).exp() * 100.0;
+        assert_relative_eq!(chained_e(&[Some(0.25), Some(0.1)]), by_hand, max_relative = 1e-9);
+        // With no pr_same the pair's lambda 2 scores both members, a different sum.
+        let pair_sum = 2.0 * 12.0 - ln_kmn + 2.0 * 8.0 - ln_kmn;
+        let at_pair = karlin_altschul_sum_ln_p(pair_sum, 2).exp() * 100.0;
+        assert_relative_eq!(chained_e(&[]), at_pair, max_relative = 1e-9);
+        assert!((by_hand / at_pair - 1.0).abs() > 0.1, "{by_hand} {at_pair}");
     }
 
     #[test]
@@ -4300,6 +4339,37 @@ mod tests {
             (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
             epsilon = 1e-12
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_search_counts_pr_same_again_over_a_chains_span() -> Result<()> {
+        // Same search as above at the default Region scope. The chain's pr_same is counted
+        // over its 25-residue span, which holds the gap's positions neither member had.
+        let dir = TempDir::new()?;
+        let mut searcher = searcher_on_flipped_target(&dir)?;
+        let (q, t) = one_flip_pair();
+        searcher.set_extension(Some(ExtensionParams {
+            scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
+            ka: KaParams { k: 0.03, r_database: 1.0 },
+            chain_max_gap: 5,
+            chain_max_shift: 0,
+        }));
+        let found = searcher.search(std::slice::from_ref(&q), &SearchFilters::default())?;
+        let regions = &found[0].matched_regions;
+        assert_eq!(regions.len(), 1, "{regions:?}");
+        let chain = &regions[0];
+        assert_eq!((chain.start, chain.end, chain.n_chained), (0, 25, 2));
+        let (q_seq, t_seq) = (class_sequence(&q).unwrap(), class_sequence(&t).unwrap());
+        let (q_comp, t_comp) = (class_composition(q_seq), class_composition(t_seq));
+        let pr_same = match_probability(&q_comp, &t_comp);
+        let mut agree_shares = [0.0; 256];
+        for (c, share) in agree_shares.iter_mut().enumerate() {
+            *share = q_comp[c] * t_comp[c] / pr_same;
+        }
+        let classes = PairClasses { pr_same, agree_shares, n_classes: 2 };
+        let by_hand = region_pr_same(q_seq, t_seq, chain, &classes).unwrap();
+        assert_relative_eq!(chain.pr_same.unwrap(), by_hand, epsilon = 1e-12);
         Ok(())
     }
 
