@@ -3432,6 +3432,10 @@ mod tests {
             n_candidates.push(found.len());
         }
         println!("candidates at min_shared_kmers 1, 2, 3: {n_candidates:?}");
+        // 22, 18 and 17 are the counts this test printed for the BCL2 query on the test FASTA
+        // when written. The loop above checks each count against a brute-force intersection
+        // of the stored signatures; these numbers pin the data, so change them only if
+        // the test FASTA or the BCL2 query changes.
         assert_eq!(n_candidates, vec![22, 18, 17]);
         Ok(())
     }
@@ -3457,6 +3461,8 @@ mod tests {
         assert_eq!(candidates(Some(0)), Vec::<u32>::new());
         // A cap of 1 keeps only targets sharing a k-mer that no other protein holds.
         println!("candidates with a cap of 1: {}", candidates(Some(1)).len());
+        // One target holds a k-mer that no other test protein has (the count this test
+        // printed when written; it changes only if the test FASTA or the BCL2 query does).
         assert_eq!(candidates(Some(1)).len(), 1);
         assert_eq!(candidates(Some(searcher.target_list.len())), candidates(None));
         Ok(())
