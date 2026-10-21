@@ -1859,7 +1859,6 @@ impl ProteinSearcher {
             }
         }
 
-        let _metrics_timer = Timer::start(Step::ResultMetrics);
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
         // one.
@@ -1871,6 +1870,9 @@ impl ProteinSearcher {
         if !filters.scopes_pass(query_poisson_pvalue, best_region_score) {
             return None;
         }
+
+        // Timed only for a kept result, as the doc on `Step::ResultMetrics` says.
+        let _metrics_timer = Timer::start(Step::ResultMetrics);
 
         // Fill in database-specific metrics
         // joint_kmer_freq = Σ freq_query[h] * freq_target[h] for h in intersection.
