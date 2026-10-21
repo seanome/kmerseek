@@ -243,8 +243,10 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
 
 /// Decoys: the 25 BCL-2-like proteins against 500 sequences
 /// shuffled with their 2-mer counts kept, exact search at hp_lehninger2. A calibrated
-/// E-value gives about 25 query-target pairs with a best region at E <= 1 (one per query)
-/// and 250 at E <= 10. Pinned as measured, nothing tuned:
+/// E-value is one where the expected number of chance hits at E <= x is x. Each of the 25
+/// queries is searched once, so a calibrated E-value gives about 25 query-target pairs with
+/// a best region at E <= 1 (1 per query) and 250 at E <= 10. Pinned as measured, nothing
+/// tuned:
 ///
 /// | k  | E <= | region_run_evalue | calibrated |
 /// |----|------|-------------------|------------|

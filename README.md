@@ -314,8 +314,10 @@ the formula predicts 201.5; at `gbmr4`, 50 runs of 17 or more against 61.6, both
 Real proteins are not random, so the run E-value was also measured on decoys. The 25
 BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
 search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
-protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value gives about 25
-query-target pairs with a best region at E <= 1 (one per query), and 250 at E <= 10:
+protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value is one where the
+expected number of chance hits at E <= x is x. Each of the 25 queries is searched once, so
+a calibrated E-value gives about 25 query-target pairs with a best region at E <= 1 (1 per
+query), and 250 at E <= 10:
 
 | k | E <= | `region_run_evalue` | calibrated |
 |---|---|---|---|
