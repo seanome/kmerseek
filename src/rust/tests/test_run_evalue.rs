@@ -221,7 +221,9 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 ///
 /// Drawn in `docs/images/run_evalue_checks.png`, panel a, with the edge effect.
 ///
-/// The counts are pinned; the sequences are seeded. This checks the code against the
+/// The counts are pinned; the sequences are seeded. Every counted value above is in
+/// `docs/images/run_evalue_checks/random_sequences_runs.tsv`; `write_run_evalue_figure_data`
+/// (below) regenerates it. This checks the code against the
 /// formula. It says nothing about real proteins, whose classes repeat in patterns: see
 /// `region_run_evalue_on_2mer_shuffled_decoys`.
 #[test]
@@ -280,8 +282,11 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
 fn region_run_evalue_on_2mer_shuffled_decoys() {
     // (k, query-target pairs the search reports, pairs at run E-value <= 1 and <= 10).
     // The search reports a pair when it shares at least one k-mer; of the 25 x 500 =
-    // 12,500 pairs, 8,762 share a 15-mer and 12,440 a 12-mer. All counts as measured by
-    // this test.
+    // 12,500 pairs, 8,762 share a 15-mer and 12,440 a 12-mer. The 8,762 and 12,440 are
+    // `results.len()` and are not in the figure tables: a failing `assert_eq!` below prints
+    // the measured value. The pairs at E <= 1 and E <= 10 are the rows at cutoffs 1 and 10
+    // in `docs/images/run_evalue_checks/decoys_pairs_at_or_below.tsv`, which
+    // `write_run_evalue_figure_data` (below) regenerates.
     let expected = [(15, 8762, [6, 162]), (12, 12440, [6, 162])];
     for (ksize, n_pairs, run) in expected {
         let (results, queries, targets) =
