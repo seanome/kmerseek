@@ -11,6 +11,18 @@ use crate::search::{ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_
 use crate::sketch::ProteinSketch;
 use crate::tests::test_fixtures::{TEST_DECOYS_2MER_GZ, TEST_FASTA_GZ};
 
+/// `scaled` of 1 keeps every k-mer in the sketch, so the search is exact and the counts can
+/// be compared with a walk along every diagonal.
+const SCALED_ALL_KMERS: u32 = 1;
+
+/// The count tests assert that the counted number of runs is within this many Poisson
+/// standard deviations of the predicted number.
+const MAX_STANDARD_DEVIATIONS: f64 = 3.0;
+
+/// The count tests assert only where the Poisson spread (sd / predicted) is below this. The
+/// largest spread asserted is 12.8% (see the table above the test), so 0.15 admits it.
+const MAX_RELATIVE_SPREAD: f64 = 0.15;
+
 /// Amino-acid composition of UniProtKB/Swiss-Prot release 2026_03, in percent
 /// (web.expasy.org/docs/relnotes/relstat.html), in alphabetical order of one-letter code.
 const SWISSPROT_2026_03_PERCENT: [(u8, f64); 20] = [
@@ -64,7 +76,7 @@ fn write_random_fasta(path: &Path, prefix: &str, n: usize, len: usize, rng: &mut
 
 /// Every sketch of a FASTA, indexed at `moltype` and `ksize`, with sequences stored.
 fn sketches(dir: &Path, fasta: &str, moltype: &str, ksize: u32) -> Vec<ProteinSketch> {
-    let index = ProteomeIndex::new(dir, ksize, 1, moltype, true).unwrap();
+    let index = ProteomeIndex::new(dir, ksize, SCALED_ALL_KMERS, moltype, true).unwrap();
     index.process_fasta(fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
     index.load_state().unwrap();
     sorted_by_name(&index)
@@ -87,7 +99,8 @@ fn exact_search(
     ksize: u32,
 ) -> (Vec<SearchResult>, Vec<ProteinSketch>, Vec<ProteinSketch>) {
     let dir = TempDir::new().unwrap();
-    let index = ProteomeIndex::new(dir.path().join("t"), ksize, 1, moltype, true).unwrap();
+    let index =
+        ProteomeIndex::new(dir.path().join("t"), ksize, SCALED_ALL_KMERS, moltype, true).unwrap();
     index.process_fasta(target_fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
     let searcher = ProteinSearcher::new(index).unwrap();
     // process_fasta streams sketches to disk; read them back to recount compositions.
@@ -182,7 +195,7 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 
 /// Random sequences: on sequences whose letters are drawn independently, the
 /// number of runs at least L0 long that an exact search reports matches the sum of E_run
-/// over all pairs, within 3 Poisson standard deviations. Ten 1,000-residue queries against
+/// over all pairs, within `MAX_STANDARD_DEVIATIONS` Poisson standard deviations. Ten 1,000-residue queries against
 /// forty 1,000-residue targets. The counts also equal a walk along every diagonal
 /// (`run_lengths`), so the search neither misses nor splits a run.
 ///
@@ -222,9 +235,12 @@ fn region_run_evalue_matches_runs_between_random_sequences() {
         let measured = counted_and_predicted(moltype, ksize, &l0s);
         for ((l0, counted, predicted), (_, expected_count)) in measured.into_iter().zip(expected) {
             let sd = predicted.sqrt();
-            assert!(sd / predicted < 0.15, "{moltype} L0={l0}: predicted only {predicted:.1}");
             assert!(
-                (counted as f64 - predicted).abs() <= 3.0 * sd,
+                sd / predicted < MAX_RELATIVE_SPREAD,
+                "{moltype} L0={l0}: predicted only {predicted:.1}"
+            );
+            assert!(
+                (counted as f64 - predicted).abs() <= MAX_STANDARD_DEVIATIONS * sd,
                 "{moltype} L0={l0}: counted {counted}, predicted {predicted:.1}"
             );
             assert_eq!(counted, expected_count, "{moltype} L0={l0}");
