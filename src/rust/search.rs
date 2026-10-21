@@ -5848,7 +5848,7 @@ mod tests {
     /// under each rule. Prints the median of 7 timed searches per rule. Ignored by default;
     /// run with `cargo test --release -- --ignored time_each_pr_same_rule --nocapture`.
     #[test]
-    #[ignore]
+    #[ignore = "timing run, not a check; run by hand with --release"]
     fn time_each_pr_same_rule() -> Result<()> {
         let temp_dir = TempDir::new()?;
         let index = ProteomeIndex::new(temp_dir.path().join("t"), 8, 1, "hp_lehninger2", true)?;
