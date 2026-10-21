@@ -99,3 +99,17 @@ pub fn report() {
         eprintln!("profile\t{step:?}\t{seconds:.3}\t{calls}");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `Timer` indexes the counters with `step as usize`, so `STEPS` must list the variants
+    /// in enum order, or two steps' totals would swap.
+    #[test]
+    fn test_steps_are_in_enum_order() {
+        for (i, step) in STEPS.iter().enumerate() {
+            assert_eq!(*step as usize, i, "{step:?} is out of order in STEPS");
+        }
+    }
+}
