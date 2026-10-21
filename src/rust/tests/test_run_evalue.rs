@@ -180,7 +180,7 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
         .collect()
 }
 
-/// Test 2 of the run E-value: on sequences whose letters are drawn independently, the
+/// Random sequences: on sequences whose letters are drawn independently, the
 /// number of runs at least L0 long that an exact search reports matches the sum of E_run
 /// over all pairs, within 3 Poisson standard deviations. Ten 1,000-residue queries against
 /// forty 1,000-residue targets. The counts also equal a walk along every diagonal
@@ -241,7 +241,7 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
     results.iter().filter(|r| best_run_evalue(r) <= x).count()
 }
 
-/// Test 3 of the run E-value, on decoys: the 25 BCL-2-like proteins against 500 sequences
+/// Decoys: the 25 BCL-2-like proteins against 500 sequences
 /// shuffled with their 2-mer counts kept, exact search at hp_lehninger2. A calibrated
 /// E-value gives about 25 query-target pairs with a best region at E <= 1 (one per query)
 /// and 250 at E <= 10. Pinned as measured, nothing tuned:
