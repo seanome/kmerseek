@@ -84,6 +84,32 @@ mod tests {
         }
     }
 
+    /// The purpose of massspec18: a peptide read with I for L, or Q for K, is the same
+    /// peptide. Its sketch must not change under those swaps, while protein20 sees them.
+    /// `RGVFRRDAHKSEVA` is the figure's peptide (K only); the second one holds I, L and K.
+    #[test]
+    fn test_massspec18_ignores_mass_spec_swaps() {
+        let hashes = |moltype: &str, seq: &str| {
+            ProteinSketch::from_protein_sequence("peptide", seq, 5, 1, moltype)
+                .unwrap()
+                .mins_as_set()
+        };
+
+        let cases = [("RGVFRRDAHKSEVA", "RGVFRRDAHQSEVA"), ("AILKLQDIEVKLG", "ALIQIKDLEVQIG")];
+        for (peptide, swapped) in cases {
+            assert_eq!(
+                hashes("massspec18", peptide),
+                hashes("massspec18", swapped),
+                "massspec18 should not tell {peptide} from {swapped}"
+            );
+            assert_ne!(
+                hashes("protein20", peptide),
+                hashes("protein20", swapped),
+                "protein20 should tell {peptide} from {swapped}"
+            );
+        }
+    }
+
     /// Every character of an encoded sequence has to be one of the alphabet's own symbols,
     /// so the class count in the name is what the index stores.
     #[test]
