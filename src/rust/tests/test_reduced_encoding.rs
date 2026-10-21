@@ -55,7 +55,7 @@ mod tests {
     }
 
     /// The stored encoded_sequence must be the fragment written in the reduced alphabet,
-    /// not the raw amino acids. Spelled out for six alphabets spanning the size range so
+    /// not the raw amino acids. Spelled out for seven alphabets spanning the size range so
     /// that a wrong cluster constant shows up as a diff on a real sequence.
     #[test]
     fn test_encoded_sequence_matches_published_partition() {
@@ -69,6 +69,7 @@ mod tests {
             (Alphabet::Sdm12, "tlykkkhaknyktycktllalpkltytlytdllktlgnattdtcpltygkllglltyggyl"),
             (Alphabet::Hsdm17, "tlfkkkhaknfktfckqllalprlsfslyqdllrtlgnaqtdqcpmsygrllgllsfggfl"),
             (Alphabet::Uniprot18, "tifekkhaenfetfceqhhaverisfshyqdvvrtvgnaqtdqcemsygrhighisfggfv"),
+            (Alphabet::Massspec18, "tifeqqhaenfetfceqiiavprisfsiyqdvvrtvgnaqtdqcpmsygriigiisfggfv"),
         ];
 
         for (alphabet, want) in expected {
