@@ -463,3 +463,13 @@ Run the `are-you-sure` pass on the code under review and on any fix you wrote (a
 - Write or run a test for each Blocking finding that fails before the fix and passes after.
 - Run `cargo test` and `cargo clippy --all-targets` on the pinned toolchain, and report both.
 - For a performance claim, measure it (a benchmark or `time` on a real index), do not reason it.
+
+## Mapped index boundaries
+
+Added 2026-10-23 after PR 159 accepted valid endpoints with invalid interior
+shard boundaries and posting offsets. Endpoint checks alone did not prevent a
+lookup panic or silently missing hits. When reviewing mapped arrays whose values
+index another array, corrupt an interior value while preserving both endpoints.
+Check descending and out-of-range boundaries, and require an error before lookup.
+If validation adds a full offset-table scan, qualify older startup and memory
+measurements until that version is measured.
