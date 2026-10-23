@@ -9,9 +9,9 @@
 //!   targets `offsets[i]..offsets[i + 1]`, its posting list.
 //! - `targets.u32`: target indexes into the target list, each posting list in target order.
 //!
-//! A search maps the files instead of reading them. Opening costs nothing in the index
-//! size, the operating system reads in only the pages a lookup touches, and searches
-//! running at the same time on one node share those pages.
+//! A search maps the files rather than copying them into hash maps. Opening validates
+//! the shard and offset tables. K-mer and target pages are read when lookups touch them;
+//! searches running at the same time on one node share mapped pages.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -93,8 +93,9 @@ impl PostingIndex {
         index_dir.join(DIR).join(SHARDS_FILE).exists()
     }
 
-    /// Map the posting files of the index at `index_dir`. Checks the array lengths and
-    /// end points, which reads a few bytes of each file and nothing in between.
+    /// Map posting files and validate shard and posting-list boundaries.
+    /// This reads the full shard and offset tables, but not all k-mers or targets.
+    /// Invalid interior offsets must fail before a search can silently miss hits.
     pub fn open(index_dir: &Path) -> IndexResult<Self> {
         let dir = index_dir.join(DIR);
         let index = Self {
@@ -129,7 +130,7 @@ impl PostingIndex {
         if !n_shards.is_power_of_two() {
             return corrupt(format!("{n_shards} shards, not a power of two"));
         }
-        if shards[0] != 0 || shards[n_shards] as usize != self.len() {
+        if shards[0] != 0 || shards[n_shards] != self.len() as u64 {
             return corrupt(format!(
                 "shards end at {}, kmers.u64 holds {}",
                 shards[n_shards],
@@ -139,12 +140,20 @@ impl PostingIndex {
         if offsets.len() != self.len() + 1 {
             return corrupt(format!("{} offsets for {} k-mers", offsets.len(), self.len()));
         }
-        if offsets[0] != 0 || offsets[self.len()] as usize != self.n_postings() {
+        if offsets[0] != 0 || offsets[self.len()] != self.n_postings() as u64 {
             return corrupt(format!(
                 "offsets end at {}, targets.u32 holds {}",
                 offsets[self.len()],
                 self.n_postings()
             ));
+        }
+        // Checking endpoints alone permits corrupt interior boundaries to panic while
+        // slicing a shard or to turn a real posting list into a missing lookup.
+        if shards.windows(2).any(|w| w[0] > w[1] || w[1] > self.len() as u64) {
+            return corrupt("shard boundaries are not monotone and within the k-mer array".into());
+        }
+        if offsets.windows(2).any(|w| w[0] > w[1] || w[1] > self.n_postings() as u64) {
+            return corrupt("posting offsets are not monotone and within the target array".into());
         }
         Ok(())
     }
@@ -360,6 +369,29 @@ mod tests {
         fs::remove_file(&targets)?;
         let message = PostingIndex::open(dir.path()).unwrap_err().to_string();
         assert!(message.contains("targets.u32 cannot be opened"), "{message}");
+        Ok(())
+    }
+    #[test]
+    fn invalid_interior_shard_is_reported_before_lookup() -> IndexResult<()> {
+        let dir = tempdir()?;
+        write_two_shards(dir.path())?;
+        let bytes: Vec<_> = [0u64, 99, 4].into_iter().flat_map(u64::to_le_bytes).collect();
+        fs::write(dir.path().join(DIR).join(SHARDS_FILE), bytes)?;
+        let error = PostingIndex::open(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("shard boundaries"), "{error}");
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_interior_offsets_are_not_silently_missing_hits() -> IndexResult<()> {
+        let dir = tempdir()?;
+        write_two_shards(dir.path())?;
+        for offsets in [[0u64, 99, 3, 6, 7], [0, 2, 1, 6, 7]] {
+            let bytes: Vec<_> = offsets.into_iter().flat_map(u64::to_le_bytes).collect();
+            fs::write(dir.path().join(DIR).join(OFFSETS_FILE), bytes)?;
+            let error = PostingIndex::open(dir.path()).unwrap_err().to_string();
+            assert!(error.contains("posting offsets"), "{error}");
+        }
         Ok(())
     }
 }

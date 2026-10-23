@@ -128,6 +128,12 @@ against Swiss-Prot.
 
 All six result CSVs have the same md5 (`posting_files/identical.md5`), 7,475 rows each.
 
+These timings precede the review's stronger corruption check. Opening now scans the shard
+and offset tables to reject invalid interior boundaries before they cause a panic or a
+missing hit. It still does not scan all k-mer hashes or target postings. Startup time and
+resident memory after that extra validation have not been remeasured; the table is the
+original experiment, not a timing of the reviewed guard change.
+
 - The "before" warm runs took 165-188 s here and 105 s in job 48672829 above, with the same
   binary and index. The node or the file system was slower this time. Both versions ran in
   the same job, so the comparison between them holds.
