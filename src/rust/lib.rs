@@ -10,6 +10,7 @@ pub mod iterators;
 pub mod kmer;
 pub mod metrics;
 pub mod pair;
+pub mod profile;
 pub mod search;
 pub mod signature;
 pub mod significance;
