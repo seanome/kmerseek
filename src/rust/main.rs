@@ -359,6 +359,13 @@ enum ProteinAlphabet {
     /// POLARITY4, 4 classes on polarity and charge (Ball, Hill & Scott 2014)
     #[value(name = "polarity4")]
     ReducedPolarity4,
+    /// ARO_HYD_CHG_POL4, 4 classes: aromatic, other hydrophobic, charged, polar (stickers
+    /// and spacers of Martin et al. 2020)
+    #[value(name = "aro_hyd_chg_pol4")]
+    ReducedAroHydChgPol4,
+    /// ARO_HYD_ARG_CHG_POL5, aro_hyd_chg_pol4 with arginine in its own class (Wang et al. 2018)
+    #[value(name = "aro_hyd_arg_chg_pol5")]
+    ReducedAroHydArgChgPol5,
     /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
     #[value(name = "wwmj5")]
     ReducedWwmj5,
@@ -399,6 +406,8 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
             ProteinAlphabet::ReducedGbmr4 => "gbmr4",
             ProteinAlphabet::ReducedPolarity4 => "polarity4",
+            ProteinAlphabet::ReducedAroHydChgPol4 => "aro_hyd_chg_pol4",
+            ProteinAlphabet::ReducedAroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
             ProteinAlphabet::ReducedWwmj5 => "wwmj5",
             ProteinAlphabet::ReducedGbmr7 => "gbmr7",
             ProteinAlphabet::ReducedFuncGroups8 => "funcgroups8",
@@ -1113,6 +1122,8 @@ fn assign_encoding(
         "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
         "gbmr4" => ProteinAlphabet::ReducedGbmr4,
         "polarity4" => ProteinAlphabet::ReducedPolarity4,
+        "aro_hyd_chg_pol4" => ProteinAlphabet::ReducedAroHydChgPol4,
+        "aro_hyd_arg_chg_pol5" => ProteinAlphabet::ReducedAroHydArgChgPol5,
         "wwmj5" => ProteinAlphabet::ReducedWwmj5,
         "gbmr7" => ProteinAlphabet::ReducedGbmr7,
         "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
@@ -1127,7 +1138,8 @@ fn assign_encoding(
                     "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
                      hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
                      hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-                     gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
+                     gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, wwmj5, gbmr7, funcgroups8, sdm12, \
+                     mmseqs12, \
                      wass14, hsdm17, uniprot18",
                     detected_moltype
                 ),
