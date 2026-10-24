@@ -55,7 +55,9 @@ impl Section {
         }
         // SAFETY: posting files are never written in place. `PostingWriter` builds new ones
         // in another directory and renames it over this one, which leaves these bytes
-        // unchanged for as long as they stay mapped.
+        // unchanged for as long as they stay mapped. This holds only for this crate's own
+        // writer. If another process truncates or rewrites a mapped file in place, a read
+        // can fail with SIGBUS or return changed bytes.
         let map = unsafe { Mmap::map(&file)? };
         Ok(Self(Some(map)))
     }
