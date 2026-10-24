@@ -1,7 +1,7 @@
 use anyhow::Result;
 use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
 
-use crate::alphabets::{alphabet_table, canonical_moltype};
+use crate::alphabets::{alphabet_table, canonical_moltype, Alphabet};
 
 const MURMUR64PROTEIN: &str = "Murmur64Protein";
 const MURMUR64DAYHOFF: &str = "Murmur64Dayhoff";
@@ -34,13 +34,9 @@ pub fn get_hash_function_from_moltype(moltype: &str) -> Result<HashFunctions, an
         // an already-encoded sequence and hashes it as protein.
         s if alphabet_table(s).is_some() => Ok(HashFunctions::Murmur64Protein),
         _ => Err(anyhow::anyhow!(
-            "Invalid alphabet: {}. Supported values: 'protein20', 'dayhoff6', \
-             'hp_lehninger2', 'hp_thomas_dill2', 'hp_kyte_doolittle2', \
-             'hp_thomas_dill_no_c2', 'hp_lehninger_c_nonpolar2', 'hp_lehninger_hpc3', \
-             'hp_pbotc_1st_ed2', \
-             'gbmr4', 'polarity4', 'wwmj5', 'gbmr7', 'funcgroups8', 'sdm12', \
-             'mmseqs12', 'wass14', 'hsdm17', 'uniprot18'",
-            moltype
+            "Invalid alphabet: {}. Supported values: {}",
+            moltype,
+            Alphabet::moltype_names()
         )),
     }
 }
@@ -197,6 +193,15 @@ mod tests {
     use crate::tests::test_fixtures::TEST_KMER;
     use anyhow::Result;
     use sourmash::encodings::{aa_to_dayhoff, aa_to_hp, HashFunctions};
+
+    /// Adding an alphabet must not need a hand edit to this message.
+    #[test]
+    fn invalid_alphabet_error_names_every_alphabet() {
+        let message = get_hash_function_from_moltype("not_an_alphabet").unwrap_err().to_string();
+        for alphabet in Alphabet::all() {
+            assert!(message.contains(alphabet.to_moltype()), "{message}");
+        }
+    }
 
     #[test]
     fn test_get_hash_function_from_moltype() {
