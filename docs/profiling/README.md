@@ -103,3 +103,47 @@ cut the pairs:
 Both change which results are reported, so neither is in this PR. Rerun with
 `sbatch scripts/profile_candidate_filter.sbatch` and redraw with
 `python scripts/plot_candidate_filter.py`.
+
+## Posting files read in place (protein20, k=10)
+
+![Search wall time, peak memory and index load time, before and after](../images/posting_files_swissprot_protein20_k10.png)
+
+Before this change, search read every k-mer of the index into three HashMaps before the
+first query ran: the posting lists, each k-mer's frequency, and each k-mer's IDF. For
+protein20 k=10 that is 116,913,137 k-mers. The index now keeps its posting lists in four flat
+files under `<index>/postings/`, and search maps them into memory instead of reading them
+(`src/rust/postings.rs`). A lookup goes to the k-mer's shard and binary-searches it.
+
+Sherlock job 48806130 ran the old binary on the old index and the new binary on a rebuilt
+index, alternating, three times each, on one node. The same 100 human proteins were searched
+against Swiss-Prot.
+
+| | Before | After |
+|---|---|---|
+| Wall time, warm runs 2 and 3 | 165 s, 188 s | 1.1 s, 1.0 s |
+| Wall time, run 1 (cold disk cache) | 357 s | 21 s |
+| Peak memory | 15.0 GB | 1.2 GB |
+| Load the index | 100-285 s | 0.1-1.0 s |
+| Index on disk | 6.29 GB | 7.04 GB |
+
+All six result CSVs have the same md5 (`posting_files/identical.md5`), 7,475 rows each.
+
+These timings precede the review's stronger corruption check. Opening now scans the shard
+and offset tables to reject invalid interior boundaries before they cause a panic or a
+missing hit. It still does not scan all k-mer hashes or target postings. Startup time and
+resident memory after that extra validation have not been remeasured; the table is the
+original experiment, not a timing of the reviewed guard change.
+
+- The "before" warm runs took 165-188 s here and 105 s in job 48672829 above, with the same
+  binary and index. The node or the file system was slower this time. Both versions ran in
+  the same job, so the comparison between them holds.
+- In the cold run, most of the 21 s is the first lookups paging the files in from
+  `$SCRATCH`: preparing the queries took 97 thread-seconds, against 1.6 in warm runs, because
+  it looks up the frequency of every query k-mer.
+- The index grew by 0.75 GB. The posting files are 2.60 GB and stored uncompressed. The old
+  `ii_shard_{s}` values were RocksDB values, which RocksDB compresses by default. The old
+  shards' own size was not measured.
+- Rebuilding the index took 3 min 23 s with a 1.4 GB peak.
+
+Rerun with `sbatch scripts/profile_posting_files.sbatch` and redraw with
+`python scripts/plot_posting_files.py`.
