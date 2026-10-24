@@ -86,7 +86,10 @@ mod tests {
 
     /// The purpose of massspec18: a peptide read with I for L, or Q for K, is the same
     /// peptide. Its sketch must not change under those swaps, while protein20 sees them.
-    /// `RGVFRRDAHKSEVA` is the figure's peptide (K only); the second is the first 30 residues of the CED-9 fragment, which hold I, K and Q.
+    /// `RGVFRRDAHKSEVA` is the peptide drawn in `docs/images/massspec18_classes.png`; the
+    /// second is the first 30 residues of the CED-9 fragment, which hold I, K and Q. Each
+    /// swapped copy is built here by replacing I with L and K with Q. The sketches use
+    /// k-mer size 5 and scaled 1.
     #[test]
     fn test_massspec18_ignores_mass_spec_swaps() {
         let hashes = |moltype: &str, seq: &str| {
@@ -94,20 +97,27 @@ mod tests {
                 .unwrap()
                 .mins_as_set()
         };
+        let swap = |seq: &str| -> String {
+            seq.chars()
+                .map(|c| match c {
+                    'I' => 'L',
+                    'K' => 'Q',
+                    other => other,
+                })
+                .collect()
+        };
 
-        let cases = [
-            ("RGVFRRDAHKSEVA", "RGVFRRDAHQSEVA"),
-            ("TIFEKKHAENFETFCEQLLAVPRISFSLYQ", "TLFEQQHAENFETFCEQLLAVPRLSFSLYQ"),
-        ];
-        for (peptide, swapped) in cases {
+        for peptide in ["RGVFRRDAHKSEVA", &CED9_FRAGMENT[..30]] {
+            let swapped = swap(peptide);
+            assert_ne!(peptide, swapped, "the swap should change {peptide}");
             assert_eq!(
                 hashes("massspec18", peptide),
-                hashes("massspec18", swapped),
+                hashes("massspec18", &swapped),
                 "massspec18 should not tell {peptide} from {swapped}"
             );
             assert_ne!(
                 hashes("protein20", peptide),
-                hashes("protein20", swapped),
+                hashes("protein20", &swapped),
                 "protein20 should tell {peptide} from {swapped}"
             );
         }
