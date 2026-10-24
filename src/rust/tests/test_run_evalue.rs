@@ -20,7 +20,7 @@ const SCALED_ALL_KMERS: u32 = 1;
 const MAX_STANDARD_DEVIATIONS: f64 = 3.0;
 
 /// The count tests assert only where the Poisson spread (sd / predicted) is below this. The
-/// largest spread asserted is 12.8% (see the table above the test), so 0.15 admits it.
+/// largest spread asserted is 12.7% (see the table above the test), so 0.15 admits it.
 const MAX_RELATIVE_SPREAD: f64 = 0.15;
 
 /// Amino-acid composition of UniProtKB/Swiss-Prot release 2026_03, in percent
@@ -204,7 +204,7 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 /// 2.2% at L0 = 12, 3.8% at L0 = 20. Where the counts are in the tens of thousands the
 /// Poisson spread (0.4%) is smaller than that, and the counts fall outside 3 standard
 /// deviations for this reason alone. The assertions use the L0 where the spread is 3.5% to
-/// 12.8%, larger than the edge effect. The shorter L0 are listed for the record.
+/// 12.7%, larger than the edge effect. The shorter L0 are listed for the record.
 ///
 /// | alphabet      | k  | L0 | counted | predicted | spread | asserted |
 /// |---------------|----|----|---------|-----------|--------|----------|
