@@ -86,7 +86,7 @@ mod tests {
 
     /// The purpose of massspec18: a peptide read with I for L, or Q for K, is the same
     /// peptide. Its sketch must not change under those swaps, while protein20 sees them.
-    /// `RGVFRRDAHKSEVA` is the figure's peptide (K only); the second one holds I, L and K.
+    /// `RGVFRRDAHKSEVA` is the figure's peptide (K only); the second is the first 30 residues of the CED-9 fragment, which hold I, K and Q.
     #[test]
     fn test_massspec18_ignores_mass_spec_swaps() {
         let hashes = |moltype: &str, seq: &str| {
@@ -95,7 +95,10 @@ mod tests {
                 .mins_as_set()
         };
 
-        let cases = [("RGVFRRDAHKSEVA", "RGVFRRDAHQSEVA"), ("AILKLQDIEVKLG", "ALIQIKDLEVQIG")];
+        let cases = [
+            ("RGVFRRDAHKSEVA", "RGVFRRDAHQSEVA"),
+            ("TIFEKKHAENFETFCEQLLAVPRISFSLYQ", "TLFEQQHAENFETFCEQLLAVPRLSFSLYQ"),
+        ];
         for (peptide, swapped) in cases {
             assert_eq!(
                 hashes("massspec18", peptide),
