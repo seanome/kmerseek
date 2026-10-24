@@ -64,8 +64,8 @@ merging; a PR changes during review. Tags are optional; keep them out of the fir
 unless short.
 
 After the required input/output diagram, the prose opens with one sentence giving the
-why, what and how, so a reader who stops there knows the PR. Olga, analysis PR 86 (added 2026-10-13): "What is the 1-sentence
-summary of this PR? The Why, the what and the how?"
+why, what and how, so a reader who stops there knows the PR. Olga, analysis PR 86 (added
+2026-10-13): "What is the 1-sentence summary of this PR? The Why, the what and the how?"
 
 ## Reviewing (the standard)
 
