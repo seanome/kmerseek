@@ -55,7 +55,7 @@ mod tests {
     }
 
     /// The stored encoded_sequence must be the fragment written in the reduced alphabet,
-    /// not the raw amino acids. Spelled out for six alphabets spanning the size range so
+    /// not the raw amino acids. Spelled out for seven alphabets spanning the size range so
     /// that a wrong cluster constant shows up as a diff on a real sequence.
     #[test]
     fn test_encoded_sequence_matches_published_partition() {
@@ -69,6 +69,7 @@ mod tests {
             (Alphabet::Sdm12, "tlykkkhaknyktycktllalpkltytlytdllktlgnattdtcpltygkllglltyggyl"),
             (Alphabet::Hsdm17, "tlfkkkhaknfktfckqllalprlsfslyqdllrtlgnaqtdqcpmsygrllgllsfggfl"),
             (Alphabet::Uniprot18, "tifekkhaenfetfceqhhaverisfshyqdvvrtvgnaqtdqcemsygrhighisfggfv"),
+            (Alphabet::Massspec18, "tifeqqhaenfetfceqiiavprisfsiyqdvvrtvgnaqtdqcpmsygriigiisfggfv"),
         ];
 
         for (alphabet, want) in expected {
@@ -80,6 +81,45 @@ mod tests {
                 .get_moltype_sequence()
                 .unwrap_or_else(|| panic!("{moltype}: encoded_sequence is None"));
             assert_eq!(got, want, "{moltype}");
+        }
+    }
+
+    /// The purpose of massspec18: a peptide read with I for L, or Q for K, is the same
+    /// peptide. Its sketch must not change under those swaps, while protein20 sees them.
+    /// `RGVFRRDAHKSEVA` is the peptide drawn in `docs/images/massspec18_classes.png`; the
+    /// second is the first 30 residues of the CED-9 fragment, which hold I, K and Q. Each
+    /// swapped copy is built here by replacing I with L and K with Q. The sketches use
+    /// k-mer size 5 and scaled 1.
+    #[test]
+    fn test_massspec18_ignores_mass_spec_swaps() {
+        let hashes = |moltype: &str, seq: &str| {
+            ProteinSketch::from_protein_sequence("peptide", seq, 5, 1, moltype)
+                .unwrap()
+                .mins_as_set()
+        };
+        let swap = |seq: &str| -> String {
+            seq.chars()
+                .map(|c| match c {
+                    'I' => 'L',
+                    'K' => 'Q',
+                    other => other,
+                })
+                .collect()
+        };
+
+        for peptide in ["RGVFRRDAHKSEVA", &CED9_FRAGMENT[..30]] {
+            let swapped = swap(peptide);
+            assert_ne!(peptide, swapped, "the swap should change {peptide}");
+            assert_eq!(
+                hashes("massspec18", peptide),
+                hashes("massspec18", &swapped),
+                "massspec18 should not tell {peptide} from {swapped}"
+            );
+            assert_ne!(
+                hashes("protein20", peptide),
+                hashes("protein20", &swapped),
+                "protein20 should tell {peptide} from {swapped}"
+            );
         }
     }
 

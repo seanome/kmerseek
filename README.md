@@ -425,7 +425,16 @@ partitions live in `src/rust/alphabets.rs`.
 | `wass14` | 14 | `WM` `DI` `P` `C` `AV` `K` `T` `RE` `G` `L` `Y` `SH` `F` `NQ` | Ieremie et al. 2024 |
 | `hsdm17` | 17 | `A` `D` `KE` `R` `N` `T` `S` `Q` `Y` `F` `LIV` `M` `C` `W` `H` `G` `P` | Prlic et al. 2000 |
 | `uniprot18` | 18 | `A` `R` `N` `D` `C` `Q` `EP` `G` `HL` `I` `K` `M` `F` `S` `T` `W` `Y` `V` | Ieremie et al. 2024 |
+| `massspec18` | 18 | `A` `C` `D` `E` `F` `G` `H` `IL` `QK` `M` `N` `P` `R` `S` `T` `V` `W` `Y` | the pairs mass spectrometry cannot tell apart, merged |
 | `protein20` | 20 | each residue its own class | no reduction |
+
+`massspec18` is for peptides read by mass spectrometry, which cannot tell I from L (same
+mass) and often not Q from K (0.036 Da apart). A peptide read with either letter of a pair
+encodes the same:
+
+![The 20 residues under protein20, massspec18 and uniprot18, and an albumin peptide with K28 read as Q](docs/images/massspec18_classes.png)
+
+(`scripts/plot_massspec18_classes.py` draws it.)
 
 Clusters are listed in the order their classes are numbered. The `hp_` alphabets write
 their classes as `h` and `p`, and `hp_lehninger_hpc3` adds `c` for cysteine. Every other

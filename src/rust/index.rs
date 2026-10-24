@@ -2242,7 +2242,7 @@ mod tests {
     /// Removal drops a reading whose encoding is a run of one class, such as `IMALG`
     /// under the Lehninger split (`hhhhh`) or `ANTAN` under gbmr4 (`aaaaa`). No window
     /// here is a run under protein20 or dayhoff6.
-    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 19] = [
+    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 20] = [
         // moltype, then the counts for the B sequence and for the Z sequence
         ("protein20", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("dayhoff6", [counts(17, 17, 0), counts(17, 17, 0)]),
@@ -2263,6 +2263,7 @@ mod tests {
         ("wass14", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("hsdm17", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("uniprot18", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("massspec18", [counts(21, 21, 0), counts(21, 21, 0)]),
     ];
 
     /// With removal on, a window covering an ambiguous residue is still indexed under both

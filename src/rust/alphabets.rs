@@ -96,6 +96,8 @@ pub enum Alphabet {
     Hsdm17,
     /// Ieremie et al. 2024, 18 classes, learned by a protein language model.
     Uniprot18,
+    /// 18 classes for peptides read by mass spectrometry: I with L, Q with K.
+    Massspec18,
 }
 
 impl Alphabet {
@@ -121,6 +123,7 @@ impl Alphabet {
             Alphabet::Wass14,
             Alphabet::Hsdm17,
             Alphabet::Uniprot18,
+            Alphabet::Massspec18,
         ]
     }
 
@@ -146,6 +149,7 @@ impl Alphabet {
             Self::Wass14 => "wass14",
             Self::Hsdm17 => "hsdm17",
             Self::Uniprot18 => "uniprot18",
+            Self::Massspec18 => "massspec18",
         }
     }
 
@@ -171,7 +175,7 @@ impl Alphabet {
             Self::Sdm12 | Self::Mmseqs12 => 12,
             Self::Wass14 => 14,
             Self::Hsdm17 => 17,
-            Self::Uniprot18 => 18,
+            Self::Uniprot18 | Self::Massspec18 => 18,
             _ => 2,
         }
     }
@@ -211,6 +215,7 @@ impl Alphabet {
             Self::Wass14 => &WASS14,
             Self::Hsdm17 => &HSDM17,
             Self::Uniprot18 => &UNIPROT18,
+            Self::Massspec18 => &MASSSPEC18,
         })
     }
 
@@ -228,6 +233,7 @@ impl Alphabet {
             Self::Wass14 => WASS14_CLUSTERS,
             Self::Hsdm17 => HSDM17_CLUSTERS,
             Self::Uniprot18 => UNIPROT18_CLUSTERS,
+            Self::Massspec18 => MASSSPEC18_CLUSTERS,
             _ => return None,
         })
     }
@@ -912,6 +918,22 @@ const UNIPROT18_CLUSTERS: &[&str] =
     &["A", "R", "N", "D", "C", "Q", "EP", "G", "HL", "I", "K", "M", "F", "S", "T", "W", "Y", "V"];
 static UNIPROT18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(UNIPROT18_CLUSTERS));
 
+// -----------------------------------------------------------------------------
+// MASSSPEC18 — the letters a mass spectrometer can tell apart, 18 classes.
+//
+// A peptide read by tandem mass spectrometry, from a database search or de novo, cannot
+// tell isoleucine from leucine: both are C6H11NO, 113.08406 Da. Glutamine (C5H8N2O2,
+// 128.05858 Da) and lysine (C6H12N2O, 128.09496 Da) differ by 0.03639 Da, less than many
+// instruments resolve in a fragment spectrum, so de novo tools often swap them. Merging
+// those two pairs and keeping the other 16 residues apart means a peptide matches its
+// source protein whichever letter of each pair the spectrum was read as. The masses are
+// the residue formulas summed with Unimod's monoisotopic element masses
+// (https://www.unimod.org/masses.html).
+// -----------------------------------------------------------------------------
+const MASSSPEC18_CLUSTERS: &[&str] =
+    &["A", "C", "D", "E", "F", "G", "H", "IL", "QK", "M", "N", "P", "R", "S", "T", "V", "W", "Y"];
+static MASSSPEC18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(MASSSPEC18_CLUSTERS));
+
 #[cfg(test)]
 mod multi_letter_tests {
     use super::*;
@@ -981,11 +1003,17 @@ mod multi_letter_tests {
         assert_eq!(encode_canonical(Alphabet::Uniprot18), "acdefghikhmneqrstvwy");
     }
 
+    #[test]
+    fn test_massspec18_partition() {
+        // IL i | QK q | every other residue on its own
+        assert_eq!(encode_canonical(Alphabet::Massspec18), "acdefghiqimnpqrstvwy");
+    }
+
     /// `build_reduced` asserts full coverage and distinct symbols, so constructing every
     /// table is itself the check that no cluster list drifts out of shape.
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
-        let expected_sizes = [4usize, 4, 5, 7, 8, 12, 12, 14, 17, 18];
+        let expected_sizes = [4usize, 4, 5, 7, 8, 12, 12, 14, 17, 18, 18];
         for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
             let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.
