@@ -955,8 +955,9 @@ impl Display for MatchedRegion {
 pub struct SearchStats {
     /// Total number of signatures in the database
     pub total_signatures: usize,
-    /// The database's inverted index. The frequency of a k-mer, how many signatures
-    /// contain it, is the length of its posting list.
+    /// The database's inverted index: k-mer hash to the targets that contain it. The
+    /// frequency of a k-mer, how many signatures contain it, is the length of its posting
+    /// list. `search_one` uses it to compare a query only with targets that share a k-mer.
     pub postings: Arc<PostingIndex>,
 }
 
@@ -1011,10 +1012,6 @@ pub struct ProteinSearcher {
     stats: SearchStats,
     /// Ordered list of target MD5 keys, indexed by u32 for the inverted index
     target_list: Vec<String>,
-    /// Inverted k-mer index: kmer_hash → target indices into target_list. The same
-    /// mapping as `stats.postings`. Enables candidate pre-filtering so search_one only
-    /// compares against targets that share at least one k-mer with the query.
-    inverted_index: Arc<PostingIndex>,
     /// Lazy signature cache: populated on demand from RocksDB during search_one().
     ///
     /// WHY: When on-demand loading is used (fast startup path), the same target protein
@@ -1338,7 +1335,6 @@ impl ProteinSearcher {
             index,
             stats,
             target_list: cache.target_list,
-            inverted_index: postings,
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
@@ -1574,7 +1570,7 @@ impl ProteinSearcher {
         // Per target: shared k-mers, and whether one of them is not common.
         let mut counts: HashMap<u32, (usize, bool)> = HashMap::new();
         for kmer in &query.mins {
-            let Some(targets) = self.inverted_index.get(*kmer) else { continue };
+            let Some(targets) = self.stats.postings.get(*kmer) else { continue };
             let rare = targets.len() <= max_targets;
             for &idx in targets {
                 let entry = counts.entry(idx).or_insert((0, false));
@@ -4430,7 +4426,6 @@ mod tests {
             index,
             stats,
             target_list: Vec::new(),
-            inverted_index: Arc::new(PostingIndex::empty()),
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
