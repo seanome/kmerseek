@@ -193,10 +193,10 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
         .collect()
 }
 
-/// Random sequences: on sequences whose letters are drawn independently, the
-/// number of runs at least L0 long that an exact search reports matches the sum of E_run
-/// over all pairs, within `MAX_STANDARD_DEVIATIONS` Poisson standard deviations. Ten 1,000-residue queries against
-/// forty 1,000-residue targets. The counts also equal a walk along every diagonal
+/// Random sequences: on sequences whose letters are drawn independently, the number of runs
+/// at least L0 long that an exact search reports matches the sum of E_run over all pairs,
+/// within `MAX_STANDARD_DEVIATIONS` Poisson standard deviations. Ten 1,000-residue queries
+/// against forty 1,000-residue targets. The counts also equal a walk along every diagonal
 /// (`run_lengths`), so the search neither misses nor splits a run.
 ///
 /// The formula counts m x n places a run can start, but a run of L0 cannot start in the last
@@ -223,8 +223,8 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 ///
 /// The counts are pinned; the sequences are seeded. Every counted value above is in
 /// `docs/images/run_evalue_checks/random_sequences_runs.tsv`; `write_run_evalue_figure_data`
-/// (below) regenerates it. This checks the code against the
-/// formula. It says nothing about real proteins, whose classes repeat in patterns: see
+/// (below) regenerates it. This checks the code against the formula. It says nothing about
+/// real proteins, whose classes repeat in patterns: see
 /// `region_run_evalue_on_2mer_shuffled_decoys`.
 #[test]
 fn region_run_evalue_matches_runs_between_random_sequences() {
