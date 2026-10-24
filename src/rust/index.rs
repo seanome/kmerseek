@@ -34,8 +34,10 @@ use crate::types::MolType;
 ///
 /// History: 1 = first versioned layout; 2 = `remove_low_complexity` in the metadata;
 /// 3 = streaming index (`sig_{md5}`, `targets_{n}`, `ii_shard_{s}` keys, no combined
-/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped.
-pub const SCHEMA_VERSION: u32 = 4;
+/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped;
+/// 5 = signatures keyed by their sequence (`sketch::sequence_key`) instead of their k-mer
+/// set, and the key stored in `ProteinSketchStore::md5sum`.
+pub const SCHEMA_VERSION: u32 = 5;
 
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
@@ -113,7 +115,8 @@ struct IngestState {
     /// Signatures written so far; also the target index the next one receives.
     next_idx: usize,
     /// Signature keys already written, so a repeated sequence is skipped rather than
-    /// listed twice. The key is the sketch "md5", a wrapping sum of its mins.
+    /// listed twice. The key is the sketch "md5", a hash of its sequence
+    /// (`sketch::sequence_key`).
     seen: HashSet<u64>,
     /// The partial last `targets_{n}` chunk, rewritten each time it grows.
     target_tail: Vec<String>,
@@ -1810,7 +1813,7 @@ mod tests {
     // Private to the module; needed to forge an unstamped index in
     // test_older_schema_is_rejected_at_open.
     use super::KMERSEEK_VERSION_KEY;
-    use crate::sketch::ProteinSketch;
+    use crate::sketch::{sequence_key, ProteinSketch};
     use crate::tests::test_fixtures::{
         TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST,
         TEST_KMER, TEST_PROTEIN,
@@ -2568,12 +2571,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "f7661cd829e75c0d" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
-                } else if md5sum == "7641839ad508ab8" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
@@ -2627,12 +2630,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "a963d06839b6d6a9" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 dayhoff 5-mers"
                     );
-                } else if md5sum == "84d7545d531dcf51" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 dayhoff 5-mers"
@@ -2686,12 +2689,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "24ca8d939672666b" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 6,
                         "LIVINGALIVE should have 6 hp 5-mers"
                     );
-                } else if md5sum == "668d7173d661287b" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 14,
                         "PLANTANDANIMALGENQMES should have 14 hp 5-mers"
@@ -2740,12 +2743,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "f7661cd829e75c0d" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
-                } else if md5sum == "7641839ad508ab8" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
@@ -2797,13 +2800,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "4d565dee9c8de9db" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 474,
                         "sp|O43236|SEPT4_HUMAN should have 474 protein 5-mers"
                     );
                 }
-                if md5sum == "4da1f84ad8be618e" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 235,
                         "sp|P10415|BCL2_HUMAN should have 235 protein 5-mers"
@@ -2854,13 +2857,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "fc27dcd533217385" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 433,
                         "sp|O43236|SEPT4_HUMAN should have 433 dayhoff 5-mers"
                     );
                 }
-                if md5sum == "3206706fa14185e7" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 204,
                         "sp|P10415|BCL2_HUMAN should have 204 dayhoff 5-mers"
@@ -2918,13 +2921,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "38ffedf9d3ec7cec" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 452,
                         "sp|O43236|SEPT4_HUMAN should have 452 hp 12-mers"
                     );
                 }
-                if md5sum == "204716e4d80eb350" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 220,
                         "sp|P10415|BCL2_HUMAN should have 220 hp 12-mers"
