@@ -1006,6 +1006,13 @@ static UNIPROT18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(UNI
 mod pbotc_hpc_tests {
     use super::*;
 
+    /// 20 letters in total, but A appears twice and Y is missing, so a length check passes.
+    #[test]
+    #[should_panic(expected = "exactly once")]
+    fn test_build_two_class_rejects_repeated_and_missing_residue() {
+        build_two_class(b"AACDEFGHIK", b'h', b"LMNPQRSTVW", b'p');
+    }
+
     /// Omega-conotoxin MVIIA (ziconotide, UniProt P05484), the mature 25-residue peptide.
     /// Its six cysteines are the framework written C-C-CC-C-C.
     const MVIIA: &[u8] = b"CKGKGAKCSRLMYDCCTGSCRSGKC";
