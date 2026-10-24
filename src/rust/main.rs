@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
+use kmerseek::profile::{self, Step, Timer};
 use kmerseek::search::{
     ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, DEFAULT_MISMATCH_PENALTY,
     DEFAULT_XDROP,
@@ -162,6 +163,12 @@ enum Commands {
         /// Minimum number of shared k-mers required to report a match
         #[arg(long, default_value = "2")]
         min_shared_kmers: usize,
+
+        /// Call a k-mer common when more than this many targets contain it, and report a
+        /// match only if it shares at least one k-mer that is not common. Common k-mers still
+        /// count towards --min-shared-kmers and still make up regions. Off by default.
+        #[arg(long)]
+        max_kmer_targets: Option<usize>,
 
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
         /// A match is reported if either this or --min-region-score passes.
@@ -569,6 +576,7 @@ fn main() -> IndexResult<()> {
             alphabet,
             threshold,
             min_shared_kmers,
+            max_kmer_targets,
             max_query_pvalue,
             min_region_score,
             max_pvalue,
@@ -665,8 +673,13 @@ fn main() -> IndexResult<()> {
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters =
-                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
+            let filters = SearchFilters {
+                threshold,
+                min_shared_kmers,
+                max_query_pvalue,
+                min_region_score,
+                max_kmer_targets,
+            };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -683,7 +696,10 @@ fn main() -> IndexResult<()> {
 
             // Load the target database
             eprintln!("Loading target database...");
-            let mut searcher = ProteinSearcher::load(&target)?;
+            let mut searcher = {
+                let _timer = Timer::start(Step::LoadIndex);
+                ProteinSearcher::load(&target)?
+            };
             if let Some(scoring) = scoring {
                 if let Some(k) = ka_k {
                     if k <= 0.0 || k.is_nan() {
@@ -896,6 +912,7 @@ fn main() -> IndexResult<()> {
                         .collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
+                    let _timer = Timer::start(Step::WriteCsv);
                     for results in &batch_results {
                         for result in results {
                             *match_count += 1;
@@ -964,6 +981,7 @@ fn main() -> IndexResult<()> {
                 eprintln!("Total queries: {}", query_count);
                 eprintln!("Total matches: {}", match_count);
                 eprintln!("Total CSV rows: {}", row_count);
+                profile::report();
                 return Ok(());
             };
 
