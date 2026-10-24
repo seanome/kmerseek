@@ -306,6 +306,38 @@ low: it counts the last L − 1 positions of each diagonal as possible starts to
 280-residue query against one 400-residue target at Pr(same) 0.5 and L = 19 it is 1.12
 times the exact count.
 
+On sequences whose letters are drawn independently, the formula predicts how many runs
+an exact search reports. At `hp_lehninger2` the search finds 225 runs of 20 or more where
+the formula predicts 201.5; at `gbmr4`, 50 runs of 17 or more against 61.6, both within
+3 standard deviations (test `region_run_evalue_matches_runs_between_random_sequences`).
+
+Real proteins are not random, so the run E-value was also measured on decoys. The 25
+BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
+search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
+protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value is one where the
+expected number of chance hits at E <= x is x. Each of the 25 queries is searched once, so
+a calibrated E-value gives about 25 query-target pairs with a best region at E <= 1 (1 per
+query), and 250 at E <= 10:
+
+| k | E <= | `region_run_evalue` | calibrated |
+|---|---|---|---|
+| 15 | 1 | 6 | 25 |
+| 15 | 10 | 162 | 250 |
+| 12 | 1 | 6 | 25 |
+| 12 | 10 | 162 | 250 |
+
+The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
+errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
+
+![Runs counted against predicted on random sequences, and decoy pairs called at each run E-value cutoff](docs/images/run_evalue_checks.png)
+
+(a) Random sequences: counted minus predicted runs, in Poisson standard deviations, for
+each minimum run length L0. The formula counts start positions a run cannot use at the
+end of each sequence; the dashed line is the shortfall that alone gives, and it explains
+the short L0 the test leaves out. (b) Decoys: pairs called at each cutoff, below the
+calibrated count (black) at every cutoff; k = 12 and k = 15 give the same counts, so
+their lines lie on top of each other. Drawn by `scripts/plot_run_evalue_checks.py`.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit

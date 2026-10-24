@@ -1,12 +1,32 @@
 #!/usr/bin/env python3
-"""
-Shuffle FASTA sequences while preserving 2-mer composition using ushuffle.
-Generates N shuffled versions of each sequence.
+"""Shuffle FASTA sequences while keeping every 2-mer count, so a shuffled protein has the
+same dipeptide composition as the original but no other resemblance to it. Writes N
+shuffled versions of each sequence, named `<header>_shuffle<i>`.
+
+2-mers are shuffled here in Python (Altschul and Erickson 1985, the algorithm ushuffle
+uses for k = 2): pick, for every residue but the last, the transition it will leave on
+last, keep picking until those last transitions all lead to the final residue, then walk
+the transitions in a random order. The first and last residues stay where they are. Other
+k need ushuffle (pip install ushuffle). Doing k = 2 in Python on every machine means one
+--seed gives one set of decoys whether or not ushuffle is installed.
+
+The input may be gzipped. The decoy fixture of the Rust tests was made with
+
+    python shuffle_fasta_2mer.py \
+        tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+        -n 20 --seed 1 | gzip > tests/testdata/fasta/bcl2_25_shuffled_2mer_20x_seed1.fasta.gz
 """
 
 import argparse
+import gzip
+import random
 import sys
-import ushuffle
+from collections import defaultdict
+
+try:
+    import ushuffle
+except ImportError:
+    ushuffle = None
 
 
 def parse_fasta(filepath):
@@ -14,7 +34,8 @@ def parse_fasta(filepath):
     header = None
     seq_lines = []
 
-    with open(filepath, 'r') as f:
+    opener = gzip.open if str(filepath).endswith('.gz') else open
+    with opener(filepath, 'rt') as f:
         for line in f:
             line = line.rstrip()
             if line.startswith('>'):
@@ -30,10 +51,51 @@ def parse_fasta(filepath):
             yield header, ''.join(seq_lines)
 
 
-def shuffle_sequence(seq, k=2):
-    """Shuffle sequence preserving k-mer composition."""
-    shuffled = ushuffle.shuffle(seq, len(seq), k)
-    return shuffled
+def _last_edges_reach_end(last_edge, end):
+    """Whether following each residue's chosen last transition always arrives at `end`."""
+    for start in last_edge:
+        seen, v = set(), start
+        while v != end:
+            if v in seen:
+                return False
+            seen.add(v)
+            v = last_edge[v]
+    return True
+
+
+def shuffle_2mer_python(seq, rng):
+    """A random sequence with exactly the 2-mer counts of `seq`."""
+    if len(seq) < 3:
+        return seq
+    edges = defaultdict(list)
+    for a, b in zip(seq, seq[1:]):
+        edges[a].append(b)
+    end = seq[-1]
+    while True:
+        last_edge = {v: rng.choice(out) for v, out in edges.items() if v != end}
+        if _last_edges_reach_end(last_edge, end):
+            break
+    order = {}
+    for v, out in edges.items():
+        rest = list(out)
+        if v != end:
+            rest.remove(last_edge[v])
+        rng.shuffle(rest)
+        order[v] = rest + ([last_edge[v]] if v != end else [])
+    out, v = [seq[0]], seq[0]
+    for _ in range(len(seq) - 1):
+        v = order[v].pop(0)
+        out.append(v)
+    return ''.join(out)
+
+
+def shuffle_sequence(seq, k=2, rng=None):
+    """Shuffle sequence preserving k-mer composition: k = 2 in Python, other k with ushuffle."""
+    if k == 2:
+        return shuffle_2mer_python(seq, rng or random.Random())
+    if ushuffle is None:
+        sys.exit(f"k={k} needs ushuffle (pip install ushuffle); the built-in shuffle keeps 2-mers only")
+    return ushuffle.shuffle(seq, len(seq), k)
 
 
 def main():
@@ -47,14 +109,19 @@ def main():
                         help='Number of shuffled versions per sequence (default: 10)')
     parser.add_argument('-k', '--kmer-size', type=int, default=2,
                         help='K-mer size to preserve (default: 2)')
+    parser.add_argument('--seed', type=int,
+                        help='random seed, for a reproducible set of shuffles')
     args = parser.parse_args()
 
+    if args.seed is not None and ushuffle is not None:
+        ushuffle.set_seed(args.seed)
+    rng = random.Random(args.seed)
     out_fh = sys.stdout if args.output == '-' else open(args.output, 'w')
 
     try:
         for header, seq in parse_fasta(args.input):
             for i in range(1, args.num_shuffles + 1):
-                shuffled_seq = shuffle_sequence(seq, k=args.kmer_size)
+                shuffled_seq = shuffle_sequence(seq, k=args.kmer_size, rng=rng)
                 # Write shuffled sequence with modified header
                 out_fh.write(f'>{header}_shuffle{i}\n')
                 # Write sequence in 60-character lines
