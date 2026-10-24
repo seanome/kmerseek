@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -24,7 +25,6 @@ use crate::profile::{Step, Timer};
 use crate::significance;
 use crate::sketch::ProteinSketch;
 use crate::types::MolType;
-use std::sync::Arc;
 
 /// Default progress interval for FASTA processing (log progress every N sequences)
 pub const DEFAULT_PROGRESS_INTERVAL: u32 = 1000;
