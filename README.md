@@ -205,7 +205,8 @@ it on the index itself (`--ka-queries`, 200 by default): it searches that many o
 index's own sequences against it, and reads K and a correction to λ, `r_database`, off
 the straight line that ln(regions at score S) makes against S below the related pairs.
 A search with the penalty and give-up margin the index was fitted for reads the fit
-back; with another pair it fits its own before searching, or takes `--ka-k`.
+back; with another pair it fits its own before searching, or takes `--ka-k` (and
+`--ka-r-database`, to use a fit made on another index).
 [docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
 On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
