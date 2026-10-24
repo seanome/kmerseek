@@ -95,6 +95,18 @@ impl PostingIndex {
         index_dir.join(DIR).join(SHARDS_FILE).exists()
     }
 
+    /// Undo a swap that `PostingWriter::finish` did not complete. `finish` renames the
+    /// current files to `postings.old/` and then the new files into place, so a crash
+    /// between the two renames leaves no `postings/`. Call this before `exists` or
+    /// `PostingWriter::create` so the previous files are found instead of looking absent.
+    pub fn recover(index_dir: &Path) -> IndexResult<()> {
+        let (dir, old) = (index_dir.join(DIR), index_dir.join(OLD_DIR));
+        if !dir.exists() && old.exists() {
+            fs::rename(&old, &dir)?;
+        }
+        Ok(())
+    }
+
     /// Map posting files and validate shard and posting-list boundaries.
     /// This reads the full shard and offset tables, but not all k-mers or targets.
     /// Invalid interior offsets must fail before a search can silently miss hits.
@@ -339,6 +351,22 @@ mod tests {
         let new = PostingIndex::open(dir.path())?;
         assert_eq!((new.len(), new.get(8), new.get(3)), (1, Some(&[9u32][..]), None));
         assert!(!dir.path().join(TMP_DIR).exists() && !dir.path().join(OLD_DIR).exists());
+        Ok(())
+    }
+
+    /// A crash between the two renames in `finish` leaves only `postings.old/`.
+    #[test]
+    fn recover_restores_the_old_files_after_an_interrupted_swap() -> IndexResult<()> {
+        let dir = tempdir()?;
+        write_two_shards(dir.path())?;
+        fs::rename(dir.path().join(DIR), dir.path().join(OLD_DIR))?;
+        assert!(!PostingIndex::exists(dir.path()));
+        PostingIndex::recover(dir.path())?;
+        assert!(PostingIndex::exists(dir.path()) && !dir.path().join(OLD_DIR).exists());
+        assert_eq!(PostingIndex::open(dir.path())?.get(3), Some(&[2u32, 3, 4][..]));
+        // With nothing to undo, it changes nothing.
+        PostingIndex::recover(dir.path())?;
+        assert_eq!(PostingIndex::open(dir.path())?.len(), 4);
         Ok(())
     }
 

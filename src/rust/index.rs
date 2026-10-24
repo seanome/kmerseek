@@ -933,6 +933,7 @@ impl ProteomeIndex {
         if !state.shards_written {
             let t0 = Instant::now();
             let dir = self.db.path().to_path_buf();
+            PostingIndex::recover(&dir)?;
             let existing =
                 PostingIndex::exists(&dir).then(|| PostingIndex::open(&dir)).transpose()?;
             eprintln!(
