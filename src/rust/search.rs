@@ -2965,7 +2965,10 @@ mod tests {
         index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
         let mut searcher = ProteinSearcher::new(index)?;
         searcher.set_extension(Some(ExtensionParams {
-            // The CLI defaults.
+            // Extension and chaining are on, which `search` does not do by default.
+            // Penalty 2.0 is the `index` and `calibrate` default; X-drop 8.0 is the default
+            // of all three. A gap of 30 covers the 6-residue gap between the halves and a
+            // shift of 10 covers the 3-residue shift. K is set by hand: this index has no fit.
             mismatch_penalty: 2.0,
             xdrop: 8.0,
             ka_k: 0.1,
