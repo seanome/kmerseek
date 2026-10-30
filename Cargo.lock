@@ -1164,6 +1164,7 @@ dependencies = [
  "human_bytes",
  "indicatif",
  "memuse",
+ "murmurhash3",
  "needletail",
  "niffler",
  "parking_lot",

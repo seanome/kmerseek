@@ -327,6 +327,10 @@ impl ProteinSketch {
         protein_ksize: u32,
         scaled: u32,
     ) -> anyhow::Result<Self> {
+        anyhow::ensure!(
+            u128::from_str_radix(&data.md5sum, 16).is_ok(),
+            "stored sequence key must be a nonempty hexadecimal u128"
+        );
         let hash_function = get_hash_function_from_moltype(&moltype)?;
         let minhash_ksize = protein_ksize * PROTEIN_TO_MINHASH_RATIO;
 
@@ -390,16 +394,15 @@ impl ProteinSketch {
             None
         };
 
-        let mut store = ProteinSketchStore::new(
+        ProteinSketchStore::new(
             self.signature.name.clone(),
+            self.signature.md5sum.clone(),
             mins,
             abunds,
             self.kmer_positions.clone(),
             raw_sequence,
             encoded_sequence,
-        );
-        store.md5sum = self.signature.md5sum.clone();
-        store
+        )
     }
 
     /// Convert to efficient storage format with pre-allocated sequence capacity
@@ -408,15 +411,14 @@ impl ProteinSketch {
         let mins = minhash.mins().to_vec();
         let abunds = minhash.abunds().map(|abunds| abunds.to_vec());
 
-        let mut store = ProteinSketchStore::with_sequence_capacity(
+        ProteinSketchStore::with_sequence_capacity(
             self.signature.name.clone(),
+            self.signature.md5sum.clone(),
             mins,
             abunds,
             self.kmer_positions.clone(),
             sequence_capacity,
-        );
-        store.md5sum = self.signature.md5sum.clone();
-        store
+        )
     }
 
     pub fn set_efficient_data(&mut self, data: ProteinSketchStore) {
@@ -450,6 +452,10 @@ impl ProteinSketch {
         use crate::aminoacid::{encode_sequence, has_ambiguous_residues};
         use crate::hash_functions::residue_encoder;
 
+        anyhow::ensure!(
+            self.signature.md5sum.is_empty(),
+            "a protein sketch can contain only one sequence"
+        );
         let moltype_str = self.moltype.to_string();
         let residue_classes = alphabet_table(&moltype_str);
         let encode = hash_encoder(&moltype_str)?;
@@ -621,16 +627,23 @@ impl ProteinSketch {
     }
 }
 
-/// The key a sketch is stored and deduplicated under: a 64-bit MurmurHash3 of the
-/// sequence's residues, in hex. The index stores two entries under one key only when their
-/// sequences are identical (the later names become aliases), so the key has to tell apart
-/// any two sequences that differ.
+/// The key used to store and deduplicate a sketch: the full 128-bit MurmurHash3 of
+/// its residues, in hex, with the original 64-bit half first. Equal keys are treated
+/// as equal sequences; a full 128-bit collision remains possible. The second half
+/// distinguishes sequences whose old 64-bit keys collide.
 ///
 /// A key over the sketch's k-mer set (the sum of its hashes) does not:
 /// "MKTWLRDEHPAAAAACYFNQSGV" and the same with eight A's have the same 5-mers, since a
 /// poly-A run of any length from 5 up adds only AAAAA.
+/// The input is the original residues, before low-complexity masking.
 pub fn sequence_key(sequence: &str) -> String {
-    format!("{:x}", sourmash::_hash_murmur(sequence.as_bytes(), SEED))
+    sequence_key_from_hash(murmurhash3::murmurhash3_x64_128(sequence.as_bytes(), SEED))
+}
+
+// Keep the old 64-bit half first, preserving target sampling order except when
+// the old keys collide or one is a prefix of another.
+fn sequence_key_from_hash((first, second): (u64, u64)) -> String {
+    format!("{first:x}{second:016x}")
 }
 
 /// Efficient storage structure for protein sketches
@@ -646,32 +659,26 @@ pub struct ProteinSketchStore {
     pub encoded_sequence: Option<String>,
     /// The sketch's key (`StableSignature::md5sum`), from [`sequence_key`]. Stored, not
     /// recomputed on load, because the raw sequence it is computed from is not always
-    /// stored. Empty in a store built by hand.
+    /// stored. Constructors require the sequence key.
     pub md5sum: String,
 }
 
 impl ProteinSketchStore {
     pub fn new(
         name: String,
+        md5sum: String,
         mins: Vec<u64>,
         abunds: Option<Vec<u64>>,
         kmer_positions: HashMap<u64, Vec<usize>>,
         raw_sequence: Option<String>,
         encoded_sequence: Option<String>,
     ) -> Self {
-        Self {
-            name,
-            mins,
-            abunds,
-            kmer_positions,
-            raw_sequence,
-            encoded_sequence,
-            md5sum: String::new(),
-        }
+        Self { name, mins, abunds, kmer_positions, raw_sequence, encoded_sequence, md5sum }
     }
 
     pub fn with_sequence_capacity(
         name: String,
+        md5sum: String,
         mins: Vec<u64>,
         abunds: Option<Vec<u64>>,
         kmer_positions: HashMap<u64, Vec<usize>>,
@@ -682,15 +689,7 @@ impl ProteinSketchStore {
         } else {
             None
         };
-        Self {
-            name,
-            mins,
-            abunds,
-            kmer_positions,
-            raw_sequence,
-            encoded_sequence: None,
-            md5sum: String::new(),
-        }
+        Self { name, mins, abunds, kmer_positions, raw_sequence, encoded_sequence: None, md5sum }
     }
 
     pub fn set_raw_sequence(&mut self, sequence: String) {
@@ -749,6 +748,48 @@ mod tests {
     // HP-encoding of SEQ (each residue -> h/p), stored for non-protein moltypes.
     const SEQ_HP_ENCODED: &str =
         "hpphhhhpppphphhppphppphppphhhhphphhhhpphhphpppphphhpphhphphphhhphphphhpphhphpp";
+
+    #[test]
+    fn test_sequence_keys_keep_both_hash_halves() {
+        let first = sequence_key_from_hash((42, 1));
+        let second = sequence_key_from_hash((42, 2));
+        assert_ne!(first, second, "a collision in the old 64-bit half must not merge targets");
+        assert_eq!(u128::from_str_radix(&first, 16).unwrap(), (42u128 << 64) | 1);
+        let sketch = protein_sketch();
+        let key = sequence_key(SEQ);
+        assert_eq!(key, sketch.signature().md5sum);
+    }
+
+    #[test]
+    fn test_second_sequence_is_rejected_without_changing_sketch() {
+        let mut sketch = protein_sketch();
+        let before = bincode::serialize(&sketch.to_efficient_data(true)).unwrap();
+        assert!(sketch.add_protein("AAAAACCCCC", true).is_err());
+        assert_eq!(bincode::serialize(&sketch.to_efficient_data(true)).unwrap(), before);
+    }
+
+    #[test]
+    fn test_store_key_is_required_on_load_and_preserved_without_residues() {
+        let sketch = protein_sketch();
+        let mut store = sketch.to_efficient_data(false);
+        assert!(store.raw_sequence.is_none());
+        let restored = ProteinSketch::from_efficient_data(
+            store.clone(),
+            sketch.moltype.to_string(),
+            sketch.protein_ksize,
+            sketch.scaled,
+        )
+        .unwrap();
+        assert_eq!(restored.signature().md5sum, sketch.signature().md5sum);
+        store.md5sum.clear();
+        assert!(ProteinSketch::from_efficient_data(
+            store,
+            sketch.moltype.to_string(),
+            sketch.protein_ksize,
+            sketch.scaled
+        )
+        .is_err());
+    }
 
     /// k=0 used to reach `add_protein`, where walking windows with
     /// `len().saturating_sub(ksize - 1)` underflows and panics. The size is now
@@ -982,8 +1023,15 @@ mod tests {
     fn test_set_and_get_efficient_data() {
         let mut s = ProteinSketch::new("n", 5, 1, "protein20").unwrap();
         assert!(!s.has_efficient_data());
-        let store =
-            ProteinSketchStore::new("n".into(), vec![1, 2], None, HashMap::new(), None, None);
+        let store = ProteinSketchStore::new(
+            "n".into(),
+            sequence_key(SEQ),
+            vec![1, 2],
+            None,
+            HashMap::new(),
+            None,
+            None,
+        );
         s.set_efficient_data(store);
         assert!(s.has_efficient_data());
         assert!(s.get_efficient_data().is_some());
@@ -1000,6 +1048,7 @@ mod tests {
     fn test_store_new_getters_and_estimated_size() {
         let mut store = ProteinSketchStore::new(
             "n".into(),
+            sequence_key(SEQ),
             vec![1, 2, 3],
             Some(vec![1, 1, 1]),
             HashMap::new(),
@@ -1022,6 +1071,7 @@ mod tests {
     fn test_store_with_sequence_capacity_enables_raw_storage() {
         let mut store = ProteinSketchStore::with_sequence_capacity(
             "n".into(),
+            sequence_key(SEQ),
             vec![9],
             None,
             HashMap::new(),
@@ -1034,6 +1084,7 @@ mod tests {
         // Zero capacity leaves raw storage unallocated.
         let store0 = ProteinSketchStore::with_sequence_capacity(
             "n".into(),
+            sequence_key(SEQ),
             vec![9],
             None,
             HashMap::new(),

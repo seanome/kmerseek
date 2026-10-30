@@ -1011,9 +1011,6 @@ pub struct ProteinSearcher {
     /// allowing concurrent reads from rayon's par_iter() in search_one(). Memory grows
     /// only as candidates are accessed — hot targets are cached, cold ones are never loaded.
     sig_cache: DashMap<String, ProteinSketch>,
-    /// Other entry names stored under each target md5 (see `ProteomeIndex::aliases`). A hit
-    /// on the md5 is reported once more under each of them.
-    aliases: HashMap<String, Vec<String>>,
     /// K-mer frequencies across the query proteome, set via set_query_frequencies() before
     /// searching. None = single-pass mode; joint_kmer_freq will be 0.0 for all results.
     query_kmer_frequencies: Option<HashMap<u64, usize>>,
@@ -1324,14 +1321,12 @@ impl ProteinSearcher {
     fn from_cache(index: ProteomeIndex, cache: SearchCache) -> IndexResult<Self> {
         let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
         let db_n_kmers = stats.kmer_frequencies.values().sum();
-        let aliases = index.aliases()?;
         Ok(Self {
             index,
             stats,
             target_list: cache.target_list,
             inverted_index: cache.inverted_index,
             sig_cache: DashMap::new(),
-            aliases,
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
@@ -1343,9 +1338,7 @@ impl ProteinSearcher {
     /// entries have the same sequence, so every statistic, region and residue is the same;
     /// only the name differs.
     fn alias_results(&self, result: &SearchResult) -> Vec<SearchResult> {
-        let Some(names) = self.aliases.get(&result.target_md5) else {
-            return Vec::new();
-        };
+        let names = self.index.alias_names(&result.target_md5);
         names
             .iter()
             .map(|name| {
@@ -1530,9 +1523,6 @@ impl ProteinSearcher {
         total_queries: usize,
     ) -> Vec<SearchResult> {
         let mut results = self.search_stored(query, filters, total_queries);
-        if self.aliases.is_empty() {
-            return results;
-        }
         let copies: Vec<SearchResult> =
             results.iter().flat_map(|r| self.alias_results(r)).collect();
         results.extend(copies);
@@ -1542,6 +1532,7 @@ impl ProteinSearcher {
 
     /// `search_one` with one result per stored sequence: a sequence held by several entries
     /// is reported once, under the name it was first indexed with.
+    /// Use `search_one` for output; use this path when counting regions for calibration.
     fn search_stored(
         &self,
         query: &ProteinSketch,
@@ -3300,6 +3291,10 @@ mod tests {
         assert_eq!(names, ["copy of BCL2", bcl2_name.as_str()]);
         let copy = results.iter().find(|r| r.target_name == "copy of BCL2").unwrap();
         let original = results.iter().find(|r| r.target_name == bcl2_name).unwrap();
+        assert_eq!(copy.db_n_targets, 1);
+        assert_eq!(original.db_n_targets, 1);
+        let scores = searcher.calibration_scores(&[(String::new(), query.clone())]);
+        assert_eq!(scores.len(), original.matched_regions.len());
         assert_eq!(copy.target_md5, original.target_md5);
         assert_eq!(copy.n_intersecting_hashes, original.n_intersecting_hashes);
         assert_eq!(copy.matched_regions.len(), original.matched_regions.len());
@@ -4463,7 +4458,6 @@ mod tests {
             target_list: Vec::new(),
             inverted_index: HashMap::new(),
             sig_cache: DashMap::new(),
-            aliases: HashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
