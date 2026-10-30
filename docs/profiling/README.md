@@ -37,7 +37,7 @@ candidates:
   read, 77% of Swiss-Prot. All of them stay in the in-memory cache, which is why the run
   peaks at 55 GB.
 
-Finding the candidates in the inverted index takes only 0.6 s. What would help is fewer
+Finding the candidates in the k-mer-to-protein index takes only 0.6 s. What would help is fewer
 candidates reaching the per-target steps: a cap on k-mers that occur in too many proteins,
 or requiring two shared k-mers on the same diagonal (target position minus query position)
 before a target is read from disk.
@@ -64,9 +64,9 @@ read the index from a cold disk cache and is left out of the means.
 
 ![Thread-seconds per step before and after counting shared k-mers first, and wall time per k-mer cap](../images/candidate_filter_swissprot_hp_lehninger2_k19.png)
 
-Commit fa352ce counts each candidate's shared k-mers from the posting lists. It drops
+Commit fa352ce counts each candidate's shared k-mers from the protein ID lists. It drops
 candidates below `--min-shared-kmers` (2 by default) or the containment threshold before
-their signature is read from disk. A posting list names each target once, so the count is
+their signature is read from disk. A protein ID list names each target once, so the count is
 exactly the number `compare` checks later. The search results do not change: the CSVs are
 byte-identical to the runs above (`candidate_filter/identical.md5`).
 
@@ -97,22 +97,22 @@ In an alphabet this small, two shared k-mers are expected by chance alone. Two c
 cut the pairs:
 
 - a default minimum that grows with the number of k-mers two random proteins would share;
-- storing each k-mer's position in the posting lists, so pairs whose shared k-mers do not lie
+- storing each k-mer's position in the protein ID lists, so pairs whose shared k-mers do not lie
   on one diagonal can be dropped before the target is read. This changes the index format.
 
 Both change which results are reported, so neither is in this PR. Rerun with
 `sbatch scripts/profile_candidate_filter.sbatch` and redraw with
 `python scripts/plot_candidate_filter.py`.
 
-## Posting files read in place (protein20, k=10)
+## K-mer-to-protein index files read in place (protein20, k=10)
 
 ![Search wall time, peak memory and index load time, before and after](../images/posting_files_swissprot_protein20_k10.png)
 
 Before this change, search read every k-mer of the index into three HashMaps before the
-first query ran: the posting lists, each k-mer's frequency, and each k-mer's IDF. For
-protein20 k=10 that is 116,913,137 k-mers. The index now keeps its posting lists in four flat
+first query ran: the protein ID lists, each k-mer's frequency, and each k-mer's IDF. For
+protein20 k=10 that is 116,913,137 k-mers. The index now keeps its protein ID lists in four flat
 files under `<index>/postings/`, and search maps them into memory instead of reading them
-(`src/rust/postings.rs`). A lookup goes to the k-mer's shard and binary-searches it.
+(`src/rust/kmer_protein_index.rs`). A lookup goes to the k-mer's shard and binary-searches it.
 
 Sherlock job 48806130 ran the old binary on the old index and the new binary on a rebuilt
 index, alternating, three times each, on one node. The same 100 human proteins were searched
@@ -140,7 +140,7 @@ original experiment, not a timing of the reviewed guard change.
 - In the cold run, most of the 21 s is the first lookups paging the files in from
   `$SCRATCH`: preparing the queries took 97 thread-seconds, against 1.6 in warm runs, because
   it looks up the frequency of every query k-mer.
-- The index grew by 0.75 GB. The posting files are 2.60 GB and stored uncompressed. The old
+- The index grew by 0.75 GB. The k-mer-to-protein index files are 2.60 GB and stored uncompressed. The old
   `ii_shard_{s}` values were RocksDB values, which RocksDB compresses by default. The old
   shards' own size was not measured.
 - Rebuilding the index took 3 min 23 s with a 1.4 GB peak.

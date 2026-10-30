@@ -1,4 +1,4 @@
-"""Swiss-Prot search before and after the inverted index moved to posting files read in place.
+"""Swiss-Prot search before and after the k-mer-to-protein index moved to files read in place.
 
 Reads docs/profiling/posting_files/timing.tsv and steps.tsv, written by
 scripts/profile_posting_files.sbatch, and draws wall time, peak memory and the time to load
@@ -21,7 +21,7 @@ OUT = Path("docs/images/posting_files_swissprot_protein20_k10")
 # Grey for before and blue for after, as in docs/images/candidate_filter_*.png.
 VERSIONS = {
     "before": ("before: HashMaps loaded at startup", pf.GREY, "o"),
-    "after": ("after: posting files read in place", pf.OKABE_ITO["blue"], "s"),
+    "after": ("after: index files read in place", pf.OKABE_ITO["blue"], "s"),
 }
 RUN_LABELS = ["1\n(cold)", "2", "3"]
 

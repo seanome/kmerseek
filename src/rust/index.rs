@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::KaCalibration;
-use crate::postings::{PostingIndex, PostingWriter};
+use crate::kmer_protein_index::{KmerProteinIndex, KmerProteinIndexWriter};
 use crate::search::ExtensionScoring;
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::KmerSize;
@@ -37,7 +37,7 @@ use crate::types::MolType;
 /// History: 1 = first versioned layout; 2 = `remove_low_complexity` in the metadata;
 /// 3 = streaming index (`sig_{md5}`, `targets_{n}`, `ii_shard_{s}` keys, no combined
 /// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped;
-/// 5 = inverted index in flat files under `postings/` (see `crate::postings`), no
+/// 5 = k-mer-to-protein index in flat files under `postings/` (see `crate::kmer_protein_index`), no
 /// `ii_shard_{s}` keys.
 pub const SCHEMA_VERSION: u32 = 5;
 
@@ -54,15 +54,17 @@ const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
 /// `SCHEMA_VERSION` must move with any such change.
 const KA_CALIBRATION_KEY: &[u8] = b"ka_calibration";
 
-/// Number of hash-range shards the inverted index is split into on disk.
+/// Number of hash-range shards the k-mer-to-protein index is split into on disk.
 ///
 /// Sharding bounds the memory needed to finalize the index: each shard is sorted and
-/// written on its own, so the peak is one shard's postings, not the corpus's. UniRef50
-/// at k=10 has ~12 G postings, which is ~12 M per shard. Shards are selected by the low
+/// written on its own, so the peak is one shard's k-mer–protein ID pairs, not the corpus's.
+/// UniRef50
+/// at k=10 has ~12 G k-mer–protein ID pairs, which is ~12 M per shard. Shards are selected by
+/// the low
 /// bits of the hash, because FracMinHash keeps only hashes below `max_hash / scaled`,
 /// which would leave the high bits nearly constant. A lookup goes to its shard and
 /// binary-searches only that shard's k-mers.
-const INVERTED_INDEX_SHARDS: usize = 1024;
+const KMER_PROTEIN_INDEX_SHARDS: usize = 1024;
 
 /// Target md5s per `targets_{n}` key. Chunk `n` always holds targets
 /// `n * chunk .. (n + 1) * chunk`, so an index into the target list maps to a key
@@ -72,7 +74,7 @@ const DEFAULT_TARGET_CHUNK: usize = 4096;
 /// `(hash, target)` pairs buffered in memory before they are written out as a sorted run.
 /// Each pair is 16 bytes, so the default buffer is 256 MB. This is the only structure
 /// during indexing whose size is chosen rather than dictated by the data.
-const DEFAULT_POSTING_BUFFER: usize = 1 << 24;
+const DEFAULT_KMER_PROTEIN_PAIR_BUFFER: usize = 1 << 24;
 
 /// Statistics for k-mer frequency analysis
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,9 +93,9 @@ struct ProteomeIndexMetadata {
     store_raw_sequences: bool,
     /// Whether low-complexity k-mers were removed when this index was built.
     remove_low_complexity: bool,
-    /// Distinct k-mer hashes across every signature; the number of inverted index keys.
+    /// Distinct k-mer hashes across every signature; the number of k-mer-to-protein index keys.
     unique_kmers: usize,
-    /// Inverted index shards on disk.
+    /// K-mer-to-protein index shards on disk.
     shards: usize,
     /// Target md5s per `targets_{n}` key.
     target_chunk: usize,
@@ -105,13 +107,13 @@ struct ProteomeIndexMetadata {
 pub struct SearchCache {
     /// Ordered list of target MD5 sums: index (u32) → md5 string
     pub target_list: Vec<String>,
-    /// Inverted k-mer index, mapped from the posting files: kmer_hash → target indices into
-    /// target_list. A k-mer's frequency is the length of its posting list.
-    pub postings: PostingIndex,
+    /// K-mer-to-protein index: each hash maps to IDs of proteins containing this k-mer.
+    /// IDs are positions in `target_list`. A k-mer's frequency is its protein ID list length.
+    pub kmer_protein_index: KmerProteinIndex,
 }
 
 /// Everything the streaming indexer carries between batches. Bounded in size: the
-/// posting buffer is capped, the target tail is at most one chunk, and `seen` is one
+/// k-mer–protein ID pair buffer is capped, the target tail is at most one chunk, and `seen` is one
 /// u64 per signature.
 struct IngestState {
     /// Signatures written so far; also the target index the next one receives.
@@ -122,10 +124,10 @@ struct IngestState {
     /// The partial last `targets_{n}` chunk, rewritten each time it grows.
     target_tail: Vec<String>,
     /// `(hash, target index)` pairs not yet written as a run.
-    postings: Vec<(u64, u32)>,
+    kmer_protein_pairs: Vec<(u64, u32)>,
     /// Runs written since the last finalize.
     runs: usize,
-    /// Whether every ingested posting has been merged into the on-disk shards.
+    /// Whether every ingested k-mer–protein ID pair has been merged into the on-disk shards.
     shards_written: bool,
     /// Whether the database reflects everything ingested: shards, target chunks and
     /// metadata. False for a new index until its first `finalize`, so an empty index
@@ -143,7 +145,7 @@ impl IngestState {
             next_idx: 0,
             seen: HashSet::new(),
             target_tail: Vec::new(),
-            postings: Vec::new(),
+            kmer_protein_pairs: Vec::new(),
             runs: 0,
             shards_written: false,
             saved: false,
@@ -209,9 +211,9 @@ pub struct ProteomeIndex {
     // Streaming state shared by every ingest path; see IngestState.
     ingest: Mutex<IngestState>,
 
-    // Posting pairs buffered before a run is written. A field rather than the constant
+    // K-mer–protein ID pairs buffered before a run is written. A field rather than the constant
     // so a test can force many runs on a tiny corpus.
-    posting_buffer_capacity: usize,
+    kmer_protein_pair_buffer_capacity: usize,
 
     // Target md5s per `targets_{n}` key. Read from the metadata of a saved index; for a
     // new one the default, unless a test lowers it to exercise chunk rollover.
@@ -395,7 +397,7 @@ impl ProteomeIndex {
             db,
             signatures: DashMap::new(),
             ingest: Mutex::new(IngestState::empty()),
-            posting_buffer_capacity: DEFAULT_POSTING_BUFFER,
+            kmer_protein_pair_buffer_capacity: DEFAULT_KMER_PROTEIN_PAIR_BUFFER,
             target_chunk,
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
             minhash_ksize: ksize * 3,
@@ -414,8 +416,8 @@ impl ProteomeIndex {
     /// Cap on buffered `(hash, target)` pairs before they are written as a run. Only a
     /// test has a reason to lower it: with the default a small corpus never writes more
     /// than one run, so the multi-run merge in `finalize` would go unexercised.
-    pub fn set_posting_buffer_capacity(&mut self, capacity: usize) {
-        self.posting_buffer_capacity = capacity.max(1);
+    pub fn set_kmer_protein_pair_buffer_capacity(&mut self, capacity: usize) {
+        self.kmer_protein_pair_buffer_capacity = capacity.max(1);
     }
 
     /// Target md5s per `targets_{n}` key. Only a test has a reason to lower it: no
@@ -804,7 +806,7 @@ impl ProteomeIndex {
     }
 
     fn shard_of(hash: u64) -> usize {
-        (hash as usize) & (INVERTED_INDEX_SHARDS - 1)
+        (hash as usize) & (KMER_PROTEIN_INDEX_SHARDS - 1)
     }
 
     /// The md5 of target `idx` from its `targets_{n}` chunk on disk.
@@ -821,8 +823,8 @@ impl ProteomeIndex {
     /// Write a batch of sketches to the index.
     ///
     /// Each sketch goes to its `sig_{md5}` key, its md5 to the target list, and one
-    /// `(hash, target)` pair per k-mer to the posting buffer, which is spilled to disk as
-    /// a run when full. With `retain` the sketch is also kept in the in-memory map.
+    /// `(hash, target)` pair per k-mer to the k-mer–protein ID pair buffer, which is spilled to
+    /// disk as a run when full. With `retain` the sketch is also kept in the in-memory map.
     /// Nothing else about the sketch survives the call, which is what keeps indexing
     /// memory flat in the corpus size.
     ///
@@ -853,11 +855,11 @@ impl ProteomeIndex {
 
             batch.put(format!("sig_{md5}").into_bytes(), &bytes);
             for hash in sketch.signature().minhash.mins() {
-                state.postings.push((hash, idx));
+                state.kmer_protein_pairs.push((hash, idx));
             }
             state.shards_written = false;
             state.saved = false;
-            if state.postings.len() >= self.posting_buffer_capacity {
+            if state.kmer_protein_pairs.len() >= self.kmer_protein_pair_buffer_capacity {
                 self.write_run(&mut state)?;
             }
             if retain {
@@ -876,23 +878,25 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Spill the posting buffer to disk as one run, split by shard so that `finalize` can
-    /// read each shard's postings without touching the others.
+    /// Spill the k-mer–protein ID pair buffer to disk as one run, split by shard so that
+    /// `finalize` can read each shard's k-mer–protein ID pairs without touching the others.
     fn write_run(&self, state: &mut IngestState) -> IndexResult<()> {
-        if state.postings.is_empty() {
+        if state.kmer_protein_pairs.is_empty() {
             return Ok(());
         }
         let run = state.runs;
         // Sorting by shard in place is what lets each shard's slice be written straight
         // from the buffer; the order within a shard does not matter yet, because
         // `merge_shard` sorts by (hash, target) anyway.
-        state.postings.sort_unstable_by_key(|&(hash, _)| Self::shard_of(hash));
+        state.kmer_protein_pairs.sort_unstable_by_key(|&(hash, _)| Self::shard_of(hash));
         let mut batch = WriteBatch::default();
-        for chunk in state.postings.chunk_by(|a, b| Self::shard_of(a.0) == Self::shard_of(b.0)) {
+        for chunk in
+            state.kmer_protein_pairs.chunk_by(|a, b| Self::shard_of(a.0) == Self::shard_of(b.0))
+        {
             batch.put(Self::run_key(run, Self::shard_of(chunk[0].0)), bincode::serialize(chunk)?);
         }
         self.db.write(batch)?;
-        state.postings.clear();
+        state.kmer_protein_pairs.clear();
         state.runs += 1;
         Ok(())
     }
@@ -910,18 +914,18 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Merge every run into the posting files and write the metadata.
+    /// Merge every run into the k-mer-to-protein index files and write the metadata.
     ///
     /// Runs the equivalent of an external sort: each shard's runs are read, sorted by
-    /// `(hash, target)`, grouped into posting lists, and appended to the posting files
-    /// (see `crate::postings`). Peak memory is one shard's postings. Also gathers the
-    /// k-mer frequency summary in the same pass, since that is the only time the whole
+    /// `(hash, target)`, grouped into protein ID lists, and appended to the k-mer-to-protein
+    /// index files (see `crate::kmer_protein_index`). Peak memory is one shard's k-mer–protein ID pairs.
+    /// Also gathers the k-mer frequency summary in the same pass, since that is the only time the whole
     /// index is walked. The runs are deleted only once the new files are in place.
     ///
     /// Idempotent: a second call with nothing new ingested writes nothing, so it is safe
     /// on an index opened read-only. A call after more sketches were ingested folds the
-    /// existing posting files in as one more run, so `process_fasta` can be called more
-    /// than once on the same index.
+    /// existing k-mer-to-protein index files in as one more run, so `process_fasta` can be
+    /// called more than once on the same index.
     pub fn finalize(&self) -> IndexResult<()> {
         let mut state = self.ingest.lock();
         if state.saved {
@@ -933,12 +937,12 @@ impl ProteomeIndex {
         if !state.shards_written {
             let t0 = Instant::now();
             let dir = self.db.path().to_path_buf();
-            PostingIndex::recover(&dir)?;
+            KmerProteinIndex::recover(&dir)?;
             let existing =
-                PostingIndex::exists(&dir).then(|| PostingIndex::open(&dir)).transpose()?;
+                KmerProteinIndex::exists(&dir).then(|| KmerProteinIndex::open(&dir)).transpose()?;
             eprintln!(
-                "[save] Merging {} posting runs into {} inverted index shards...",
-                state.runs, INVERTED_INDEX_SHARDS
+                "[save] Merging {} k-mer–protein ID pair runs into {} k-mer-to-protein index shards...",
+                state.runs, KMER_PROTEIN_INDEX_SHARDS
             );
             let mut summary = KmerFrequencySummary {
                 spectrum: BTreeMap::new(),
@@ -948,8 +952,8 @@ impl ProteomeIndex {
             let mut most = SmallestN::new(Self::KMER_EXAMPLES);
             let mut least = SmallestN::new(Self::KMER_EXAMPLES);
             let mut unique_kmers = 0usize;
-            let mut writer = PostingWriter::create(&dir)?;
-            for shard in 0..INVERTED_INDEX_SHARDS {
+            let mut writer = KmerProteinIndexWriter::create(&dir)?;
+            for shard in 0..KMER_PROTEIN_INDEX_SHARDS {
                 let groups = self.merge_shard(shard, state.runs, existing.as_ref())?;
                 writer.push_shard(&groups)?;
                 unique_kmers += groups.len();
@@ -970,7 +974,7 @@ impl ProteomeIndex {
             state.runs = 0;
             state.shards_written = true;
             eprintln!(
-                "[save] Inverted index written: {} unique k-mers in {:.1}s",
+                "[save] K-mer-to-protein index written: {} unique k-mers in {:.1}s",
                 unique_kmers,
                 t0.elapsed().as_secs_f32()
             );
@@ -987,12 +991,13 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Sort one shard's runs, and its postings from `existing`, into posting lists.
+    /// Sort one shard's runs, and its k-mer–protein ID pairs from `existing`, into protein ID
+    /// lists.
     fn merge_shard(
         &self,
         shard: usize,
         runs: usize,
-        existing: Option<&PostingIndex>,
+        existing: Option<&KmerProteinIndex>,
     ) -> IndexResult<Vec<(u64, Vec<u32>)>> {
         let mut pairs: Vec<(u64, u32)> = Vec::new();
         if let Some(existing) = existing {
@@ -1006,7 +1011,7 @@ impl ProteomeIndex {
                 pairs.extend(run_pairs);
             }
         }
-        // (hash, target) order makes each posting list come out in target order, which
+        // (hash, target) order makes each protein ID list come out in target order, which
         // is the order the sequences were indexed in.
         pairs.sort_unstable();
         Ok(pairs
@@ -1015,11 +1020,12 @@ impl ProteomeIndex {
             .collect())
     }
 
-    /// Delete every posting run, once the posting files that hold their pairs are in place.
+    /// Delete every k-mer–protein ID pair run, once the k-mer-to-protein index files that hold
+    /// their pairs are in place.
     fn delete_runs(&self, runs: usize) -> IndexResult<()> {
         let mut batch = WriteBatch::default();
         for run in 0..runs {
-            for shard in 0..INVERTED_INDEX_SHARDS {
+            for shard in 0..KMER_PROTEIN_INDEX_SHARDS {
                 batch.delete(Self::run_key(run, shard));
             }
         }
@@ -1040,7 +1046,7 @@ impl ProteomeIndex {
             store_raw_sequences: self.store_raw_sequences,
             remove_low_complexity: self.remove_low_complexity,
             unique_kmers: state.unique_kmers,
-            shards: INVERTED_INDEX_SHARDS,
+            shards: KMER_PROTEIN_INDEX_SHARDS,
             target_chunk: self.target_chunk,
         };
         let mut batch = WriteBatch::default();
@@ -1051,7 +1057,7 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Finish the index on disk: merge the inverted index, write the metadata, flush.
+    /// Finish the index on disk: merge the k-mer-to-protein index, write the metadata, flush.
     pub fn save_state(&self) -> IndexResult<()> {
         self.save_state_with_kmer_stats(None)
     }
@@ -1180,7 +1186,7 @@ impl ProteomeIndex {
     ///
     /// Reads only the metadata; signatures are loaded on demand via
     /// `get_signature_by_md5()` during search. Call `load_search_cache()` after opening
-    /// to retrieve the inverted index.
+    /// to retrieve the k-mer-to-protein index.
     pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let opts = Self::create_rocksdb_options(false);
         // WHY: open_for_read_only avoids acquiring the exclusive LOCK file, allowing
@@ -1209,10 +1215,10 @@ impl ProteomeIndex {
     }
 
     /// The search structures of this index: the target list, read from disk, and the
-    /// posting files, mapped but not read.
+    /// k-mer-to-protein index files, mapped but not read.
     ///
     /// `None` only for a database that was never finalized. The frequency of a k-mer is
-    /// the length of its posting list, so it is derived rather than stored.
+    /// the length of its protein ID list, so it is derived rather than stored.
     pub fn load_search_cache(&self) -> IndexResult<Option<SearchCache>> {
         let Some(metadata) = self.own_metadata()? else { return Ok(None) };
 
@@ -1229,21 +1235,21 @@ impl ProteomeIndex {
             )));
         }
 
-        let postings = PostingIndex::open(self.db.path())?;
-        if postings.len() != metadata.unique_kmers {
+        let kmer_protein_index = KmerProteinIndex::open(self.db.path())?;
+        if kmer_protein_index.len() != metadata.unique_kmers {
             return Err(IndexError::CorruptIndex(format!(
-                "posting files hold {} k-mers but the metadata says {}",
-                postings.len(),
+                "k-mer-to-protein index files hold {} k-mers but the metadata says {}",
+                kmer_protein_index.len(),
                 metadata.unique_kmers
             )));
         }
-        Ok(Some(SearchCache { target_list, postings }))
+        Ok(Some(SearchCache { target_list, kmer_protein_index }))
     }
 
     /// Load a single signature from RocksDB by its MD5 sum.
     ///
     /// Returns `None` if the signature was not found (e.g. the database was built without
-    /// `save_inverted_index()`). Returns an error on deserialization failures.
+    /// `finalize()`). Returns an error on deserialization failures.
     ///
     /// WHY: During search, only candidate signatures (those sharing ≥1 k-mer with the query)
     /// need to be loaded. This avoids loading all 200k+ signatures into memory at startup.
@@ -1704,7 +1710,7 @@ impl ProteomeIndex {
         }
 
         eprintln!(
-            "Done reading FASTA ({} sequences total). Building inverted index...",
+            "Done reading FASTA ({} sequences total). Building k-mer-to-protein index...",
             record_count
         );
         self.finalize()?;
@@ -3987,34 +3993,34 @@ mod tests {
         Ok(())
     }
 
-    /// Target list, inverted index and frequencies, in a form that can be compared.
+    /// Target list, k-mer-to-protein index and frequencies, in a form that can be compared.
     type ComparableCache = (Vec<String>, BTreeMap<u64, Vec<u32>>, BTreeMap<u64, usize>);
 
     /// The search cache of a finished index, with the maps in a form that can be compared.
     fn cache_of(index: &ProteomeIndex) -> Result<ComparableCache> {
         index.finalize()?;
         let cache = index.load_search_cache()?.expect("finalized index has a cache");
-        let postings = &cache.postings;
-        let lists: BTreeMap<u64, Vec<u32>> = (0..postings.n_shards())
-            .flat_map(|s| postings.shard(s))
+        let kmer_protein_index = &cache.kmer_protein_index;
+        let lists: BTreeMap<u64, Vec<u32>> = (0..kmer_protein_index.n_shards())
+            .flat_map(|s| kmer_protein_index.shard(s))
             .map(|(hash, targets)| (hash, targets.to_vec()))
             .collect();
         let frequencies = lists.iter().map(|(&hash, targets)| (hash, targets.len())).collect();
         Ok((cache.target_list, lists, frequencies))
     }
 
-    /// Spilling the posting buffer many times must produce the same index as never
+    /// Spilling the k-mer–protein ID pair buffer many times must produce the same index as never
     /// spilling it. With a 7-pair buffer the 25-sequence fixture writes hundreds of runs,
     /// so every shard merges many of them; the default never writes more than one.
     #[test]
-    fn test_many_posting_runs_merge_to_the_same_index() -> Result<()> {
+    fn test_many_kmer_protein_pair_runs_merge_to_the_same_index() -> Result<()> {
         let dir = tempdir()?;
         let one_run = ProteomeIndex::new(dir.path().join("one.db"), 16, 5, "hp_lehninger2", false)?;
         one_run.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
 
         let mut many_runs =
             ProteomeIndex::new(dir.path().join("many.db"), 16, 5, "hp_lehninger2", false)?;
-        many_runs.set_posting_buffer_capacity(7);
+        many_runs.set_kmer_protein_pair_buffer_capacity(7);
         // Target chunks of 4 roll over six times and leave a partial seventh; batches of
         // 3 put the rollovers mid-batch as well as between batches.
         many_runs.set_target_chunk(4);
@@ -4031,7 +4037,7 @@ mod tests {
             many_runs.db.iterator(IteratorMode::From(b"ii_run_", Direction::Forward)).next();
         assert!(
             leftover.is_none_or(|kv| !kv.unwrap().0.starts_with(b"ii_run_")),
-            "posting runs were not deleted after merging"
+            "k-mer–protein ID pair runs were not deleted after merging"
         );
         Ok(())
     }
@@ -4086,10 +4092,10 @@ mod tests {
         Ok(())
     }
 
-    /// A posting file missing from a finalized index means the write was interrupted. That
-    /// must surface as an error, never as a search that silently lacks those k-mers.
+    /// A k-mer-to-protein index file missing from a finalized index means the write was
+    /// interrupted. This must be an error, never a search that lacks those k-mers.
     #[test]
-    fn test_missing_posting_file_is_reported_as_corrupt() -> Result<()> {
+    fn test_missing_kmer_protein_index_file_is_reported_as_corrupt() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("torn.db");
         {
@@ -4110,7 +4116,7 @@ mod tests {
     }
 
     /// The target list is as load-bearing as the shards: a missing or short chunk is an
-    /// error, never a shorter target list that would silently misnumber every posting.
+    /// error, never a shorter target list that would silently misnumber every protein ID.
     #[test]
     fn test_missing_or_short_target_chunk_is_reported_as_corrupt() -> Result<()> {
         let dir = tempdir()?;

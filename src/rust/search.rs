@@ -20,7 +20,7 @@ use crate::evalue::{
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
-use crate::postings::PostingIndex;
+use crate::kmer_protein_index::KmerProteinIndex;
 use crate::profile::{Step, Timer};
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -955,10 +955,10 @@ impl Display for MatchedRegion {
 pub struct SearchStats {
     /// Total number of signatures in the database
     pub total_signatures: usize,
-    /// The database's inverted index: k-mer hash to the targets that contain it. The
-    /// frequency of a k-mer, how many signatures contain it, is the length of its posting
-    /// list. `search_one` uses it to compare a query only with targets that share a k-mer.
-    pub postings: Arc<PostingIndex>,
+    /// The database's k-mer-to-protein index: each hash maps to IDs of proteins
+    /// containing this k-mer. Its protein ID list length is the k-mer's frequency.
+    /// `search_one` compares a query only with proteins that share a k-mer.
+    pub kmer_protein_index: Arc<KmerProteinIndex>,
 }
 
 /// Pre-computed query data for efficient batch searching
@@ -994,7 +994,7 @@ pub struct PreparedQuery<'a> {
 impl SearchStats {
     /// How many database signatures contain `hash`; `None` if none does.
     pub fn kmer_frequency(&self, hash: u64) -> Option<usize> {
-        self.postings.frequency(hash)
+        self.kmer_protein_index.frequency(hash)
     }
 
     /// Inverse document frequency of `hash`, ln(signatures / signatures containing it);
@@ -1010,7 +1010,7 @@ impl SearchStats {
 pub struct ProteinSearcher {
     index: ProteomeIndex,
     stats: SearchStats,
-    /// Ordered list of target MD5 keys, indexed by u32 for the inverted index
+    /// Ordered list of target MD5 keys, indexed by u32 for the k-mer-to-protein index
     target_list: Vec<String>,
     /// Lazy signature cache: populated on demand from RocksDB during search_one().
     ///
@@ -1304,7 +1304,7 @@ impl ProteinSearcher {
 
     /// Create a searcher over an index built in this process.
     ///
-    /// Finalizes the index so its inverted index is on disk, then reads the search
+    /// Finalizes the index so its k-mer-to-protein index is on disk, then reads the search
     /// structures back exactly as `load` would for a saved index. Sketches the index
     /// holds in memory (from `store_signatures` or `load`) are used directly; the rest
     /// are read on demand.
@@ -1321,16 +1321,18 @@ impl ProteinSearcher {
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let index = ProteomeIndex::open_for_search(&path)?;
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
-        let (targets, kmers) = (cache.target_list.len(), cache.postings.len());
+        let (targets, kmers) = (cache.target_list.len(), cache.kmer_protein_index.len());
         eprintln!("Loaded search cache: {targets} targets, {kmers} k-mers indexed");
         Ok(Self::from_cache(index, cache))
     }
 
     fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
-        let postings = Arc::new(cache.postings);
-        let db_n_kmers = postings.n_postings();
-        let stats =
-            SearchStats { total_signatures: cache.target_list.len(), postings: postings.clone() };
+        let kmer_protein_index = Arc::new(cache.kmer_protein_index);
+        let db_n_kmers = kmer_protein_index.n_kmer_protein_pairs();
+        let stats = SearchStats {
+            total_signatures: cache.target_list.len(),
+            kmer_protein_index: kmer_protein_index.clone(),
+        };
         Self {
             index,
             stats,
@@ -1469,11 +1471,11 @@ impl ProteinSearcher {
 
         let total_queries = queries.len();
 
-        // Perform parallel search across all queries using the inverted index
+        // Perform parallel search across all queries using the k-mer-to-protein index
         let all_results: Vec<SearchResult> = queries
             .par_iter()
             .flat_map(|query| {
-                // search_one uses the inverted index to find candidates
+                // search_one uses the k-mer-to-protein index to find candidates
                 let results = self.search_one(query, filters, total_queries);
 
                 // Update progress after processing each query
@@ -1498,7 +1500,7 @@ impl ProteinSearcher {
     /// large-scale searches (e.g., 159k human proteins) where loading all queries
     /// into memory would require 50+ GB.
     ///
-    /// Uses the inverted k-mer index to find candidate targets (those sharing ≥1 k-mer
+    /// Uses the k-mer-to-protein index to find candidate targets (those sharing ≥1 k-mer
     /// with the query) before doing full pairwise comparison. This skips the vast majority
     /// of targets with no k-mer overlap, reducing work from O(all_targets) to O(candidates).
     ///
@@ -1556,21 +1558,21 @@ impl ProteinSearcher {
         results
     }
 
-    /// Targets that can pass `filters`, found from the inverted index alone.
+    /// Targets that can pass `filters`, found from the k-mer-to-protein index alone.
     ///
-    /// Each query k-mer's posting list adds one to every target it names. A posting list
+    /// Each query k-mer's protein ID list adds one to every target it names. A protein ID list
     /// names a target once, so a target's count is exactly how many k-mers it shares with
     /// the query: the `n_intersecting_hashes` that `compare` checks against
     /// `min_shared_kmers` and the containment threshold. Applying those checks here drops
     /// the same targets `compare` would, before their signatures are read from disk.
     /// With `max_kmer_targets` set, a target must also share at least one k-mer whose
-    /// posting list is no longer than that.
+    /// protein ID list is no longer than that.
     fn candidate_targets(&self, query: &PreparedQuery<'_>, filters: &SearchFilters) -> Vec<u32> {
         let max_targets = filters.max_kmer_targets.unwrap_or(usize::MAX);
         // Per target: shared k-mers, and whether one of them is not common.
         let mut counts: HashMap<u32, (usize, bool)> = HashMap::new();
         for kmer in &query.mins {
-            let Some(targets) = self.stats.postings.get(*kmer) else { continue };
+            let Some(targets) = self.stats.kmer_protein_index.get(*kmer) else { continue };
             let rare = targets.len() <= max_targets;
             for &idx in targets {
                 let entry = counts.entry(idx).or_insert((0, false));
@@ -1641,7 +1643,8 @@ impl ProteinSearcher {
 
         let total_queries = all_queries.len();
 
-        // Use search_one (inverted index) for each query instead of exhaustive O(N²) iteration
+        // Use search_one (k-mer-to-protein index) for each query instead of exhaustive O(N²)
+        // iteration
         let all_results: Vec<SearchResult> = all_queries
             .par_iter()
             .flat_map(|query| {
@@ -3394,7 +3397,7 @@ mod tests {
         first
     }
 
-    /// `candidate_targets` counts shared k-mers from posting lists only. The counts must
+    /// `candidate_targets` counts shared k-mers from protein ID lists only. The counts must
     /// equal the intersections `compare` computes from the signatures, or the early filter
     /// would drop pairs `compare` keeps. Checked for BCL2 (k=15, hp_lehninger2) against every
     /// protein in the test FASTA, at each `min_shared_kmers` from 1 to 3.
@@ -3436,7 +3439,7 @@ mod tests {
     }
 
     /// `max_kmer_targets` drops a target whose shared k-mers are all common. With a cap of 0
-    /// every k-mer is common, so nothing is left; with no cap, and with a cap no posting list
+    /// every k-mer is common, so nothing is left; with no cap, and with a cap no protein ID list
     /// can exceed, the candidates are the same.
     #[test]
     fn test_max_kmer_targets_needs_one_rare_shared_kmer() -> Result<()> {
@@ -4402,8 +4405,10 @@ mod tests {
     fn test_search_stats_calculation() {
         // This would need a proper test with actual signatures
         // For now, just test the structure
-        let stats =
-            SearchStats { total_signatures: 100, postings: Arc::new(PostingIndex::empty()) };
+        let stats = SearchStats {
+            total_signatures: 100,
+            kmer_protein_index: Arc::new(KmerProteinIndex::empty()),
+        };
 
         assert_eq!(stats.total_signatures, 100);
     }
@@ -4419,8 +4424,10 @@ mod tests {
         let index = ProteomeIndex::new(&temp_path, 10, 5, "hp_lehninger2", false)?;
 
         let query = ProteinSketch::new("test", 10, 5, "hp_lehninger2")?;
-        let stats =
-            SearchStats { total_signatures: 100, postings: Arc::new(PostingIndex::empty()) };
+        let stats = SearchStats {
+            total_signatures: 100,
+            kmer_protein_index: Arc::new(KmerProteinIndex::empty()),
+        };
 
         let searcher = ProteinSearcher {
             index,
@@ -5233,7 +5240,7 @@ mod tests {
 
         // TEST_FASTA_GZ holds 25 signatures, and every k-mer occurrence across them is counted.
         assert_eq!(paired.db_n_targets, 25);
-        assert_eq!(paired.db_n_kmers, searcher.stats().postings.n_postings());
+        assert_eq!(paired.db_n_kmers, searcher.stats().kmer_protein_index.n_kmer_protein_pairs());
         assert_eq!(paired.run_n_queries, 2);
         // Candidate region start positions in CED9: len - k + 1.
         assert_eq!(paired.region_search_space, ced9_sequence.len() - ksize as usize + 1);

@@ -7,7 +7,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --output=profile_posting_files_%j.log
 # Searches Swiss-Prot (protein20, k=10) before and after the inverted index moved from
-# HashMaps loaded at startup to posting files read in place. "Before" is the binary and the
+# HashMaps loaded at startup to k-mer-to-protein index files read in place. "Before" is the binary and the
 # schema 4 index of scripts/profile_search_steps.sbatch; "after" is this checkout, with the
 # index rebuilt, since schema 5 cannot read schema 4. The two alternate, three runs each, on
 # the same node, with the step timers on. The first run of each reads from a cold disk cache.
@@ -65,7 +65,7 @@ PY
     done
 done
 
-# On-disk size of each index, and of the posting files alone.
+# On-disk size of each index, and of the k-mer-to-protein index files alone.
 printf 'what\tbytes\n' > "$OUT/sizes.tsv"
 printf 'before index\t%s\n' "$(du -sb "$BEFORE_DB" | cut -f1)" >> "$OUT/sizes.tsv"
 printf 'after index\t%s\n' "$(du -sb "$AFTER_DB" | cut -f1)" >> "$OUT/sizes.tsv"
