@@ -228,6 +228,18 @@ transfer, where a call has to cover a domain to carry its label. A chained row's
 `region_evalue` takes the database size as the number of targets times the target's
 length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
 
+## Finding what a search spends its time on
+
+Set `KMERSEEK_PROFILE` to any value and `kmerseek search` prints, at the end, the seconds
+and call count of each step to stderr as tab-separated lines starting with `profile`
+(`grep ^profile`). Steps that run on several threads are summed over the threads. See
+[docs/profiling/README.md](docs/profiling/README.md) for a Swiss-Prot run.
+
+`--max-kmer-targets N` (off by default) calls a k-mer common when more than N targets
+contain it, and reports a pair only if it shares at least one k-mer that is not common.
+Common k-mers still count towards `--min-shared-kmers`. On Swiss-Prot it did not pay; the
+profiling page has the numbers.
+
 ## Visualizing hits
 
 `scripts/visualize_hits.py` renders a per-gene PNG+SVG pair showing every hit

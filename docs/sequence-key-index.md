@@ -72,8 +72,23 @@ sequence once as a query. Changing those policies is separate from keeping two
 
 ## Verification
 
-Regression tests cover separate targets with equal simulated 64-bit hash halves,
-1,000 names stored as 999 individual alias records, repeated ingestion, reopening,
-a late batch-validation error followed by retry, and a write to a read-only database.
+Regression tests cover separate targets with equal simulated 64-bit hash halves.
+They also cover 1,000 names stored as 999 individual alias records, repeated ingestion,
+and reopening. Failure tests exercise a late batch-validation error followed by retry
+and a write to a read-only database.
 Sketch tests cover both hash halves, loading without stored residues, rejecting an
 empty key, and rejecting a second sequence without modifying the first sketch.
+
+Validation on 2026-10-30, after merging current `main`:
+
+- Built the CLI executable before testing, so CLI tests used this branch's binary.
+- `cargo test --no-default-features -- --test-threads=1`: 340 unit tests and nine
+  documentation tests passed. Existing calibration expectations were unchanged.
+- `cargo fmt --check`, whitespace checks on the changed Rust and review-document files, and
+  `cargo clippy --no-default-features --all-targets -- -D warnings` passed.
+- An earlier test run aborted during a CLI assertion while the shared target
+  directory held another executable. Rebuilding the CLI made that test and the
+  complete suite pass. The native RocksDB archive built during this session was
+  reused for subsequent builds.
+- No large-database performance benchmark or Sherlock run was performed. The alias
+  test verifies bounded record sizes, not a measured end-to-end speedup.
