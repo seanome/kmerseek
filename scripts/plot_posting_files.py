@@ -37,21 +37,26 @@ def per_run(timing, steps):
 
 
 def number(value):
-    """One decimal below 10, none above, so values near zero still read."""
+    """Two decimals below 0.1, one below 10, none above, so values near zero still read."""
+    if value < 0.1:
+        return f"{value:.2f}"
     return f"{value:.1f}" if value < 10 else f"{value:.0f}"
 
 
 def draw_panel(ax, table, column, ylabel):
-    """Each version's value per run as a point, its number written above it."""
-    for offset, (version, (label, colour, marker)) in zip((-0.12, 0.12), VERSIONS.items()):
+    """Each version's value per run as a point, its number written beside it: "before" on
+    the left of its point and "after" on the right, so the two never overlap."""
+    sides = [(-0.12, -4, "right"), (0.12, 4, "left")]
+    for (offset, dx, ha), (version, (label, colour, marker)) in zip(sides, VERSIONS.items()):
         rows = table[table.version == version].sort_values("run")
         x = rows.run - 1 + offset
         ax.plot(x, rows[column], marker, color=colour, label=label, linestyle="none")
         for xi, value in zip(x, rows[column]):
-            ax.annotate(number(value), (xi, value), xytext=(0, 4),
-                        textcoords="offset points", ha="center", va="bottom")
+            # Bottom-aligned just above the point, so a value near zero clears the axis.
+            ax.annotate(number(value), (xi, value), xytext=(dx, 2),
+                        textcoords="offset points", ha=ha, va="bottom")
     ax.set_xticks(range(len(RUN_LABELS)), RUN_LABELS)
-    ax.set_xlim(-0.5, len(RUN_LABELS) - 0.3)
+    ax.set_xlim(-0.6, len(RUN_LABELS) - 0.4)
     ax.set_ylim(0, table[column].max() * 1.2)
     ax.set_xlabel("Run")
     ax.set_ylabel(ylabel)

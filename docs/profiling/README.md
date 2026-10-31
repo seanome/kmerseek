@@ -104,46 +104,55 @@ Both change which results are reported, so neither is in this PR. Rerun with
 `sbatch scripts/profile_candidate_filter.sbatch` and redraw with
 `python scripts/plot_candidate_filter.py`.
 
-## Posting files read in place (protein20, k=10)
+## Posting files read in place
 
-![Search wall time, peak memory and index load time, before and after](../images/posting_files_swissprot_protein20_k10.png)
+![Search wall time, peak memory and index load time, before and after](../images/posting_files_swissprot.png)
 
 Before this change, search read every k-mer of the index into three HashMaps before the
 first query ran: the posting lists, each k-mer's frequency, and each k-mer's IDF. For
-protein20 k=10 that is 116,913,137 k-mers. The index now keeps its posting lists in four flat
-files under `<index>/postings/`, and search maps them into memory instead of reading them
-(`src/rust/postings.rs`). A lookup goes to the k-mer's shard and binary-searches it.
+protein20 k=10 that is 116,913,137 k-mers; for hp_lehninger2 k=19, 572,309. The index now
+keeps its posting lists in four flat files under `<index>/postings/`, and search maps them
+into memory instead of reading them (`src/rust/postings.rs`). A lookup goes to the k-mer's
+shard and binary-searches it. Opening checks every shard and offset boundary, which reads the
+whole offsets file (0.94 GB for protein20) but none of the k-mers or targets.
 
-Sherlock job 48806130 ran the old binary on the old index and the new binary on a rebuilt
-index, alternating, three times each, on one node. The same 100 human proteins were searched
-against Swiss-Prot.
+Sherlock job 50498949 ran the old binary on the old indexes and the new binary (commit
+3cddf3b) on rebuilt indexes, alternating, three runs each, on one node. The same 100 human
+proteins were searched against Swiss-Prot. Run 1 of each read the index from a cold disk
+cache.
 
-| | Before | After |
-|---|---|---|
-| Wall time, warm runs 2 and 3 | 165 s, 188 s | 1.1 s, 1.0 s |
-| Wall time, run 1 (cold disk cache) | 357 s | 21 s |
-| Peak memory | 15.0 GB | 1.2 GB |
-| Load the index | 100-285 s | 0.1-1.0 s |
-| Index on disk | 6.29 GB | 7.04 GB |
+| | protein20 k=10, before | after | hp_lehninger2 k=19, before | after |
+|---|---|---|---|---|
+| Wall time, warm runs 2 and 3 | 103 s, 109 s | 1.0 s, 1.0 s | 165 s, 184 s | 185 s, 175 s |
+| Wall time, run 1 (cold) | 240 s | 13 s | 456 s | 421 s |
+| CPU time, warm runs (mean) | 107 s | 2.4 s | 957 s | 1,048 s |
+| Peak memory | 15.0 GB | 2.0 GB | 55.0 GB | 53.8 GB |
+| Load the index | 74-206 s | 0.4-1.0 s | 0.9-49 s | 0.05-0.7 s |
+| Index on disk | 6.29 GB | 7.04 GB | 4.88 GB | 4.88 GB |
 
-All six result CSVs have the same md5 (`posting_files/identical.md5`), 7,475 rows each.
+All twelve result CSVs match their "before" run byte for byte (`posting_files/identical.md5`):
+7,475 rows for protein20, 6,542,668 for hp_lehninger2.
 
-These timings precede the review's stronger corruption check. Opening now scans the shard
-and offset tables to reject invalid interior boundaries before they cause a panic or a
-missing hit. It still does not scan all k-mer hashes or target postings. Startup time and
-resident memory after that extra validation have not been remeasured; the table is the
-original experiment, not a timing of the reviewed guard change.
-
-- The "before" warm runs took 165-188 s here and 105 s in job 48672829 above, with the same
-  binary and index. The node or the file system was slower this time. Both versions ran in
-  the same job, so the comparison between them holds.
-- In the cold run, most of the 21 s is the first lookups paging the files in from
-  `$SCRATCH`: preparing the queries took 97 thread-seconds, against 1.6 in warm runs, because
-  it looks up the frequency of every query k-mer.
-- The index grew by 0.75 GB. The posting files are 2.60 GB and stored uncompressed. The old
-  `ii_shard_{s}` values were RocksDB values, which RocksDB compresses by default. The old
-  shards' own size was not measured.
-- Rebuilding the index took 3 min 23 s with a 1.4 GB peak.
+- protein20 k=10 was slow because of loading the index, so it gains the most: about 100
+  times faster warm, and 7 times less memory.
+- hp_lehninger2 k=19 loaded its index in under a second already. Its time goes to the
+  4,065,945 query-target pairs (PR 158), so its wall time does not change beyond the
+  run-to-run noise. It uses 10% more CPU: the "shared k-mers" step went from 243 to 334
+  thread-seconds (mean of the warm runs). That step looks up the database frequency of every
+  shared k-mer twice per pair (`calculate_mean_matched_kmer_freq` and
+  `calculate_sum_matched_kmer_freq`), and each lookup is now a binary search within a shard
+  of about 560 k-mers instead of one hash lookup. Its 54 GB peak is the cache of target
+  sketches read from disk, which this change does not touch.
+- protein20's peak memory after the change is 2.0 GB here and was 1.2 GB in job 48806130,
+  before the boundary check was added in review. The difference is close to the size of the
+  offsets file the check reads (0.94 GB); that cause was not tested separately.
+- The protein20 index grew by 0.75 GB. Its posting files are 2.60 GB, stored uncompressed;
+  the old `ii_shard_{s}` values were RocksDB values, which RocksDB compresses by default. The
+  hp_lehninger2 index is the same size before and after; its posting files are 0.68 GB.
+- Each index rebuilt in 2 min 14 s with a peak under 1.4 GB.
+- The "before" warm runs vary between jobs (protein20: 105 s in job 48672829, 165-188 s in
+  job 48806130, 103-109 s here), with the same binary and index. Both versions run in the
+  same job, so the comparison within a job holds.
 
 Rerun with `sbatch scripts/profile_posting_files.sbatch` and redraw with
 `python scripts/plot_posting_files.py`.
