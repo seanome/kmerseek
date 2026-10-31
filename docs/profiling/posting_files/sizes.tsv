@@ -1,0 +1,13 @@
+what	bytes
+protein20 k=10 before index	6288808512
+protein20 k=10 after index	7041690976
+protein20 k=10 after kmers.u64	935305096
+protein20 k=10 after offsets.u64	935305104
+protein20 k=10 after shards.u64	8200
+protein20 k=10 after targets.u32	724599200
+hp_lehninger2 k=19 before index	4881887862
+hp_lehninger2 k=19 after index	4881870493
+hp_lehninger2 k=19 after kmers.u64	4578472
+hp_lehninger2 k=19 after offsets.u64	4578480
+hp_lehninger2 k=19 after shards.u64	8200
+hp_lehninger2 k=19 after targets.u32	669533416
