@@ -2,8 +2,8 @@
 
 Reads docs/profiling/posting_files/timing.tsv and steps.tsv, written by
 scripts/profile_posting_files.sbatch, and draws wall time, peak memory and the time to load
-the index for each of the three runs of each version. Run 1 read the index from a cold disk
-cache; runs 2 and 3 found it already in memory.
+the index for each of the three runs of each version, one row per index setting. Run 1 read
+the index from a cold disk cache; runs 2 and 3 found it already in memory.
 
     python scripts/plot_posting_files.py   # from the repository root
 """
@@ -17,7 +17,8 @@ sys.path.insert(0, str(Path(__file__).parent))
 import pubfig as pf  # noqa: E402
 
 DATA = Path("docs/profiling/posting_files")
-OUT = Path("docs/images/posting_files_swissprot_protein20_k10")
+OUT = Path("docs/images/posting_files_swissprot")
+SETTINGS = [("protein20", 10), ("hp_lehninger2", 19)]
 # Grey for before and blue for after, as in docs/images/candidate_filter_*.png.
 VERSIONS = {
     "before": ("before: HashMaps loaded at startup", pf.GREY, "o"),
@@ -27,9 +28,10 @@ RUN_LABELS = ["1\n(cold)", "2", "3"]
 
 
 def per_run(timing, steps):
-    """One row per (version, run): wall seconds, peak GB and seconds to load the index."""
-    load = steps[steps.step == "LoadIndex"][["version", "run", "seconds"]]
-    table = timing.merge(load, on=["version", "run"])
+    """One row per (setting, version, run): wall seconds, peak GB and seconds to load the index."""
+    keys = ["alphabet", "k", "version", "run"]
+    load = steps[steps.step == "LoadIndex"][keys + ["seconds"]]
+    table = timing.merge(load, on=keys)
     table["rss_gb"] = table.max_rss_kb * 1024 / 1e9
     return table.rename(columns={"seconds": "load_s"})
 
@@ -60,13 +62,17 @@ def main():
     timing = pd.read_csv(DATA / "timing.tsv", sep="\t")
     steps = pd.read_csv(DATA / "steps.tsv", sep="\t")
     table = per_run(timing, steps)
-    fig, axs = pf.figure(pf.TWO_COLUMN_MM, 55, ncols=3)
+    fig, axs = pf.figure(pf.TWO_COLUMN_MM, 110, nrows=2, ncols=3)
     panels = [("wall_s", "Search wall time (s)"),
               ("rss_gb", "Peak memory (GB)"),
               ("load_s", "Time to load the index (s)")]
-    for ax, (column, ylabel), letter in zip(axs, panels, "abc"):
-        draw_panel(ax, table, column, ylabel)
-        pf.panel_label(ax, letter)
+    letters = iter("abcdef")
+    for row, (alphabet, k) in zip(axs, SETTINGS):
+        rows = table[(table.alphabet == alphabet) & (table.k == k)]
+        for ax, (column, ylabel) in zip(row, panels):
+            draw_panel(ax, rows, column, ylabel)
+            pf.panel_label(ax, next(letters))
+        row[0].set_title(f"{alphabet}, k={k}", loc="left", pad=12)
     pf.shared_legend(fig, ncol=2)
     pf.save(fig, str(OUT))
 
