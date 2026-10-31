@@ -1,0 +1,8 @@
+alphabet	cutoff	pairs	max_score_pairs	max_score_kept	top1pct_by_shared	top1pct_by_shared_kept	top1pct_shared_min	top10pct_by_shared_kept	top10pct_shared_min
+protein20	none	1712	879	1.0000	17	1.0000	239	1.0000	46
+protein20	1e-6	1280	879	1.0000	17	1.0000	239	1.0000	46
+hp_lehninger2	none	4065945	211946	1.0000	40659	1.0000	9	1.0000	5
+hp_lehninger2	1e-2	1610337	211946	0.9276	40659	0.9815	9	0.8975	5
+hp_lehninger2	1e-4	587667	211946	0.7373	40659	0.9180	9	0.6666	5
+hp_lehninger2	1e-6	249817	211946	0.4925	40659	0.8040	9	0.4165	5
+hp_lehninger2	1e-8	116213	211946	0.2892	40659	0.6512	9	0.2306	5
