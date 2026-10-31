@@ -1,0 +1,8 @@
+alphabet	k	cutoff	pairs	pairs_kept_fraction	top1pct_kept_fraction	top10pct_kept_fraction	top1pct_min_score	top10pct_min_score
+protein20	10	none	1712	1.0000	1.0000	1.0000	307.65	307.65
+protein20	10	1e-6	1280	0.7477	1.0000	1.0000	307.65	307.65
+hp_lehninger2	19	none	4065945	1.0000	1.0000	1.0000	307.65	13.78
+hp_lehninger2	19	1e-2	1610337	0.3961	0.9276	0.8851	307.65	13.78
+hp_lehninger2	19	1e-4	587667	0.1445	0.7373	0.6237	307.65	13.78
+hp_lehninger2	19	1e-6	249817	0.0614	0.4925	0.3629	307.65	13.78
+hp_lehninger2	19	1e-8	116213	0.0286	0.2892	0.1922	307.65	13.78

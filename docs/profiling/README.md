@@ -103,3 +103,44 @@ cut the pairs:
 Both change which results are reported, so neither is in this PR. Rerun with
 `sbatch scripts/profile_candidate_filter.sbatch` and redraw with
 `python scripts/plot_candidate_filter.py`.
+
+# A minimum shared k-mer count from chance (hp_lehninger2, k=19)
+
+![Wall time and pairs kept at each --max-shared-kmer-pvalue cutoff](../images/chance_minimum_swissprot_hp_lehninger2_k19.png)
+
+`--max-shared-kmer-pvalue P` keeps a pair only if two unrelated proteins of the same sizes
+would share at least as many k-mers with probability at most P. That probability is the
+whole-protein Poisson tail kmerseek already reports as `query_poisson_pvalue`, whose mean is
+the expected chance overlap. So the cutoff works as a minimum shared k-mer count that rises
+with the two proteins' chance overlap. Unlike `--max-query-pvalue`, a strong region cannot
+override it. The check runs on posting-list counts before any target is read. It uses each
+target's k-mer count, which the searcher now counts from the posting lists when it loads.
+
+Same 100 human proteins against Swiss-Prot, one search per cutoff, Sherlock job 50499296.
+This node was slower than the one used above (319 s against 167 s with no cutoff), so compare
+times only within this table.
+
+| Cutoff | Wall time | Pairs kept | Pairs with the largest region score kept | Top 1% by shared k-mers in one region kept |
+|---|---|---|---|---|
+| none | 319 s | 4,065,945 (100%) | 211,946 (100%) | 40,659 (100%) |
+| 0.01 | 191 s | 39.6% | 92.8% | 98.2% |
+| 0.0001 | 108 s | 14.5% | 73.7% | 91.8% |
+| 0.000001 | 64 s | 6.1% | 49.3% | 80.4% |
+| 0.00000001 | 35 s | 2.9% | 28.9% | 65.1% |
+
+"Largest region score" is 307.65: the region's Poisson tail was smaller than the smallest
+number a 64-bit float holds, so 211,946 pairs (5.2%) tie there and cannot be ranked by score.
+The top 1% by shared k-mers are the 40,659 pairs whose best region shares 9 or more k-mers.
+
+The cutoff makes the search much faster, but it drops many of the strongest pairs. At 0.0001
+the search is 3 times faster, and a quarter of the pairs with the largest region score are
+lost. Those pairs have one strong region inside proteins whose whole-protein overlap is
+ordinary. A whole-protein floor rejects exactly the local matches kmerseek is meant to find.
+For protein20 k=10 a cutoff of 0.000001 keeps every pair with the largest region score and
+drops 25% of all pairs. Its run was 33% faster, but that run is dominated by loading the index.
+
+So the option stays off by default. A floor that respects local matches needs a chance test
+per region, which needs each k-mer's position in the posting lists. Rerun with
+`INDEXES=$SCRATCH/kmerseek-step-timing/profile_search_steps sbatch scripts/profile_chance_minimum.sbatch`,
+then `python3 scripts/kept_pairs_by_shared_kmers.py profile_chance_minimum` and
+`python scripts/plot_chance_minimum.py`.
