@@ -175,7 +175,7 @@ enum Commands {
         /// is a minimum shared k-mer count that grows with the chance overlap of the two
         /// proteins, so it bites in small alphabets, where many k-mers are shared by chance.
         /// Unlike --max-query-pvalue, a strong region cannot override it. Off by default.
-        #[arg(long)]
+        #[arg(long, value_parser = parse_probability)]
         max_shared_kmer_pvalue: Option<f64>,
 
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
@@ -416,6 +416,17 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::ReducedHsdm17 => "hsdm17",
             ProteinAlphabet::ReducedUniprot18 => "uniprot18",
         }
+    }
+}
+
+/// A probability cutoff above 0 and at most 1. Zero, negative, NaN and infinite values would
+/// silently drop every pair, and a value above 1 would do nothing.
+fn parse_probability(text: &str) -> Result<f64, String> {
+    let value: f64 = text.parse().map_err(|_| format!("`{text}` is not a number"))?;
+    if value > 0.0 && value <= 1.0 {
+        Ok(value)
+    } else {
+        Err(format!("`{text}` must be above 0 and at most 1"))
     }
 }
 
