@@ -24,8 +24,8 @@ use crate::errors::{IndexError, IndexResult};
 #[cfg(not(target_endian = "little"))]
 compile_error!("the k-mer-to-protein index files are little-endian and are read in place");
 
-/// Directory holding the k-mer-to-protein index files. Keep this on-disk name so
-/// indexes written before the terminology change remain readable.
+/// Directory holding the k-mer-to-protein index files. The name is part of the on-disk
+/// layout, so changing it needs a new `SCHEMA_VERSION`.
 const DIR: &str = "postings";
 /// Where `KmerProteinIndexWriter` builds the files before swapping them in.
 const TMP_DIR: &str = "postings.tmp";

@@ -1166,6 +1166,7 @@ dependencies = [
  "indicatif",
  "memmap2",
  "memuse",
+ "murmurhash3",
  "needletail",
  "niffler",
  "parking_lot",

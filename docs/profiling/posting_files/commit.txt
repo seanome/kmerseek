@@ -1,2 +1,2 @@
-5edb525 Add the job that times the Swiss-Prot search before and after the posting files
+3cddf3b Time hp_lehninger2 k=19 too, and redo protein20 at the current head
 fa352ce Pass an empty argument list under set -u on Sherlock's bash

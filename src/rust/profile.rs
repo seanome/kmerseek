@@ -108,6 +108,11 @@ mod tests {
     /// in enum order, or two steps' totals would swap.
     #[test]
     fn test_steps_are_in_enum_order() {
+        assert_eq!(
+            STEPS.len(),
+            Step::WriteCsv as usize + 1,
+            "a Step variant is missing from STEPS"
+        );
         for (i, step) in STEPS.iter().enumerate() {
             assert_eq!(*step as usize, i, "{step:?} is out of order in STEPS");
         }
