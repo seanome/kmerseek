@@ -15,7 +15,7 @@
 # bench/profile/heaptrack_peaks.txt.
 set -euo pipefail
 
-module load rust/1.90.0 llvm/17.0.6 cmake/3.31.4 gcc/14.2.0
+module load python/3.12.1 rust/1.90.0 llvm/17.0.6 cmake/3.31.4 gcc/14.2.0
 LLVM_ROOT=/share/software/user/open/llvm/17.0.6
 CPATH=$(printf '%s' "${CPATH:-}" | tr ':' '\n' | { grep -v "^$LLVM_ROOT" || true; } | paste -sd: -)
 export CPATH LIBCLANG_PATH=$LLVM_ROOT/lib CC=gcc CXX=g++ CARGO_HOME=$SCRATCH/.cargo
