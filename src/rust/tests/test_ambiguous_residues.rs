@@ -94,6 +94,8 @@ mod tests {
     /// aro_hyd_chg_pol4 and aro_hyd_arg_chg_pol5 merge only residue 3's S/T, like
     /// polarity4, so they lose every window covering residue 19, 37 or 103: windows
     /// starting at 38-81 at k=22 (44 shared), and at 38-84 and 104-106 at k=19 (50 shared).
+    /// massspec18 merges only Q/K of the four, so the 10 windows whose one mismatch is that
+    /// Q/K become shared: 82 + 10 = 92.
     const EXPECTED: &[Expected] = &[
         Expected {
             moltype: "protein20",
@@ -241,6 +243,13 @@ mod tests {
             readings: 541,
             query_hashes: 541,
             shared_with_bovine: 82,
+        },
+        Expected {
+            moltype: "massspec18",
+            ksize: 10,
+            readings: 541,
+            query_hashes: 541,
+            shared_with_bovine: 92,
         },
     ];
 

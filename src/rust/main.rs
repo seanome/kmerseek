@@ -401,6 +401,9 @@ enum ProteinAlphabet {
     /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
     #[value(name = "uniprot18")]
     ReducedUniprot18,
+    /// MASSSPEC18, 18 classes: I with L and Q with K, the pairs mass spectrometry confuses
+    #[value(name = "massspec18")]
+    ReducedMassspec18,
 }
 
 impl From<ProteinAlphabet> for &'static str {
@@ -427,6 +430,7 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::ReducedWass14 => "wass14",
             ProteinAlphabet::ReducedHsdm17 => "hsdm17",
             ProteinAlphabet::ReducedUniprot18 => "uniprot18",
+            ProteinAlphabet::ReducedMassspec18 => "massspec18",
         }
     }
 }
@@ -1157,6 +1161,7 @@ fn assign_encoding(
         "wass14" => ProteinAlphabet::ReducedWass14,
         "hsdm17" => ProteinAlphabet::ReducedHsdm17,
         "uniprot18" => ProteinAlphabet::ReducedUniprot18,
+        "massspec18" => ProteinAlphabet::ReducedMassspec18,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
@@ -1165,7 +1170,7 @@ fn assign_encoding(
                      hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
                      gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, wwmj5, gbmr7, funcgroups8, sdm12, \
                      mmseqs12, \
-                     wass14, hsdm17, uniprot18",
+                     wass14, hsdm17, uniprot18, massspec18",
                     detected_moltype
                 ),
             });
