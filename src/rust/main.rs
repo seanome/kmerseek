@@ -170,6 +170,14 @@ enum Commands {
         #[arg(long)]
         max_kmer_targets: Option<usize>,
 
+        /// Report a match only if two unrelated proteins of the same sizes would share at least
+        /// as many k-mers with probability at most this (the whole-protein Poisson tail). This
+        /// is a minimum shared k-mer count that grows with the chance overlap of the two
+        /// proteins, so it bites in small alphabets, where many k-mers are shared by chance.
+        /// Unlike --max-query-pvalue, a strong region cannot override it. Off by default.
+        #[arg(long, value_parser = parse_probability)]
+        max_shared_kmer_pvalue: Option<f64>,
+
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
         /// A match is reported if either this or --min-region-score passes.
         #[arg(long, default_value = "0.05")]
@@ -435,6 +443,17 @@ impl From<ProteinAlphabet> for &'static str {
     }
 }
 
+/// A probability cutoff above 0 and at most 1. Zero, negative, NaN and infinite values would
+/// silently drop every pair, and a value above 1 would do nothing.
+fn parse_probability(text: &str) -> Result<f64, String> {
+    let value: f64 = text.parse().map_err(|_| format!("`{text}` is not a number"))?;
+    if value > 0.0 && value <= 1.0 {
+        Ok(value)
+    } else {
+        Err(format!("`{text}` must be above 0 and at most 1"))
+    }
+}
+
 fn main() -> IndexResult<()> {
     let cli = Cli::parse();
 
@@ -601,6 +620,7 @@ fn main() -> IndexResult<()> {
             threshold,
             min_shared_kmers,
             max_kmer_targets,
+            max_shared_kmer_pvalue,
             max_query_pvalue,
             min_region_score,
             max_pvalue,
@@ -724,6 +744,7 @@ fn main() -> IndexResult<()> {
                 max_query_pvalue,
                 min_region_score,
                 max_kmer_targets,
+                max_shared_kmer_pvalue,
             };
 
             // Check if query and target are the same database (all-vs-all search)

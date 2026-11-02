@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -57,6 +57,13 @@ pub struct SearchFilters {
     /// count towards `min_shared_kmers` and still make up regions; they only cannot be a
     /// pair's sole evidence.
     pub max_kmer_targets: Option<usize>,
+    /// Keep a pair only if two unrelated proteins of the same sizes would share at least as
+    /// many k-mers with probability at most this: the whole-protein Poisson tail
+    /// (`query_poisson_pvalue`) must be at or below it. Unlike `max_query_pvalue`, which a
+    /// strong region can override, this is a hard floor, checked from posting-list counts
+    /// before any target is read. In effect it is a minimum shared k-mer count that grows
+    /// with the chance overlap of the two proteins. None, the default here, turns it off.
+    pub max_shared_kmer_pvalue: Option<f64>,
 }
 
 impl Default for SearchFilters {
@@ -78,6 +85,7 @@ impl Default for SearchFilters {
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
             max_kmer_targets: None,
+            max_shared_kmer_pvalue: None,
         }
     }
 }
@@ -828,6 +836,19 @@ fn expected_shared_kmers(shares: impl Iterator<Item = f64>, size_ratio: f64) -> 
     shares.map(|f| -(size_ratio * (-f).ln_1p()).exp_m1()).sum()
 }
 
+/// How many hashes each target's sketch holds: the number of posting lists that name it.
+fn count_target_hashes(postings: &PostingIndex, n_targets: usize) -> Vec<u32> {
+    let mut counts = vec![0u32; n_targets];
+    for shard in 0..postings.n_shards() {
+        for (_, targets) in postings.shard(shard) {
+            for &idx in targets {
+                counts[idx as usize] += 1;
+            }
+        }
+    }
+    counts
+}
+
 /// P(X >= observed | lambda) via the Poisson survival function, 1 - CDF(observed - 1).
 ///
 /// Returns 1.0 (no evidence) rather than erroring when there is no usable null: a lambda of
@@ -1058,8 +1079,46 @@ pub struct ProteinSearcher {
     /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
     /// on every candidate pair.
     db_n_kmers: usize,
+    /// How many k-mer hashes each target's sketch holds, by target index: its posting-list
+    /// count, which equals the `target_mins.len()` `compare` uses for the chance overlap.
+    /// Counted on first use, since it reads every posting list and only
+    /// `--max-shared-kmer-pvalue` needs it.
+    target_n_hashes: OnceLock<Vec<u32>>,
     /// Seed extension, set via `set_extension()`. None keeps every region an exact run.
     extension: Option<ExtensionParams>,
+}
+
+/// The fewest shared k-mers a pair needs for its whole-protein Poisson tail to be at or below
+/// a cutoff, for one query, cached by target size (targets of one size have one chance
+/// overlap).
+struct ChanceMinimum<'a> {
+    searcher: &'a ProteinSearcher,
+    query: &'a ProteinSketch,
+    max_pvalue: f64,
+    by_size: HashMap<u32, usize>,
+}
+
+impl<'a> ChanceMinimum<'a> {
+    fn new(searcher: &'a ProteinSearcher, query: &'a ProteinSketch, max_pvalue: f64) -> Self {
+        Self { searcher, query, max_pvalue, by_size: HashMap::new() }
+    }
+
+    /// Whether `shared` k-mers clear the cutoff for a target holding `target_n_hashes`.
+    fn passes(&mut self, shared: usize, target_n_hashes: u32) -> bool {
+        shared >= self.minimum(target_n_hashes)
+    }
+
+    /// Smallest count whose Poisson tail, at this pair's expected chance overlap, is at or
+    /// below the cutoff. The tail falls as the count grows, so the first count that clears
+    /// it is the minimum; counts past the query's own k-mers can never be reached.
+    fn minimum(&mut self, target_n_hashes: u32) -> usize {
+        let (searcher, query, max_pvalue) = (self.searcher, self.query, self.max_pvalue);
+        *self.by_size.entry(target_n_hashes).or_insert_with(|| {
+            let lambda = searcher.calculate_expected_shared_kmers(query, target_n_hashes as usize);
+            let most = query.signature().minhash.mins().len() + 1;
+            (1..most).find(|&n| poisson_survival(n as u32, lambda) <= max_pvalue).unwrap_or(most)
+        })
+    }
 }
 
 /// Puts results in one fixed order, so the same search writes the same CSV on every run.
@@ -1229,6 +1288,7 @@ impl ProteinSearcher {
             max_query_pvalue: f64::INFINITY,
             min_region_score: f64::NEG_INFINITY,
             max_kmer_targets: None,
+            max_shared_kmer_pvalue: None,
         };
         queries
             .par_iter()
@@ -1365,6 +1425,7 @@ impl ProteinSearcher {
         Self {
             index,
             stats,
+            target_n_hashes: OnceLock::new(),
             target_list: cache.target_list,
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
@@ -1604,6 +1665,12 @@ impl ProteinSearcher {
     /// the same targets `compare` would, before their signatures are read from disk.
     /// With `max_kmer_targets` set, a target must also share at least one k-mer whose
     /// posting list is no longer than that.
+    /// How many k-mer hashes each target's sketch holds, by target index.
+    fn target_n_hashes(&self) -> &[u32] {
+        self.target_n_hashes
+            .get_or_init(|| count_target_hashes(&self.stats.postings, self.target_list.len()))
+    }
+
     fn candidate_targets(&self, query: &PreparedQuery<'_>, filters: &SearchFilters) -> Vec<u32> {
         let max_targets = filters.max_kmer_targets.unwrap_or(usize::MAX);
         // Per target: shared k-mers, and whether one of them is not common.
@@ -1618,11 +1685,16 @@ impl ProteinSearcher {
             }
         }
         let n_kmers = query.n_kmers as f64;
+        let mut chance =
+            filters.max_shared_kmer_pvalue.map(|p| ChanceMinimum::new(self, query.sketch, p));
         counts
             .into_iter()
-            .filter(|&(_, (shared, rare))| {
+            .filter(|&(idx, (shared, rare))| {
                 rare && shared >= filters.min_shared_kmers
                     && shared as f64 / n_kmers >= filters.threshold
+                    && chance
+                        .as_mut()
+                        .is_none_or(|c| c.passes(shared, self.target_n_hashes()[idx as usize]))
             })
             .map(|(idx, _)| idx)
             .collect()
@@ -3500,6 +3572,43 @@ mod tests {
         Ok(())
     }
 
+    /// `max_shared_kmer_pvalue` is checked before any target is read, from posting-list
+    /// counts and per-target hash counts. It must keep exactly the pairs whose
+    /// `query_poisson_pvalue`, computed later by `compare` from the signatures, is at or below
+    /// the cutoff. BCL2 (k=15, hp_lehninger2) against every protein in the test FASTA.
+    #[test]
+    fn test_max_shared_kmer_pvalue_matches_query_pvalue() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let target_index = ProteomeIndex::new(temp_dir.path(), 15, 1, "hp_lehninger2", true)?;
+        target_index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(target_index)?;
+        let query = sketch_first_record(TEST_BLC2_FASTA, 15, "hp_lehninger2");
+        let everything = searcher.search_one(&query, &SearchFilters::default(), 1);
+
+        let mut n_kept = Vec::new();
+        for cutoff in [1e-1, 1e-3, 1e-6] {
+            let filters =
+                SearchFilters { max_shared_kmer_pvalue: Some(cutoff), ..SearchFilters::default() };
+            let mut kept: Vec<String> = searcher
+                .search_one(&query, &filters, 1)
+                .into_iter()
+                .map(|r| r.target_md5)
+                .collect();
+            kept.sort();
+            let mut expected: Vec<String> = everything
+                .iter()
+                .filter(|r| r.query_poisson_pvalue <= cutoff)
+                .map(|r| r.target_md5.clone())
+                .collect();
+            expected.sort();
+            assert_eq!(kept, expected, "cutoff {cutoff}");
+            n_kept.push(kept.len());
+        }
+        println!("pairs: {} of which kept at 1e-1, 1e-3, 1e-6: {n_kept:?}", everything.len());
+        assert_eq!((everything.len(), n_kept), (21, vec![2, 1, 1]));
+        Ok(())
+    }
+
     /// `max_kmer_targets` drops a target whose shared k-mers are all common. With a cap of 0
     /// every k-mer is common, so nothing is left; with no cap, and with a cap no posting list
     /// can exceed, the candidates are the same.
@@ -4496,6 +4605,7 @@ mod tests {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
+            target_n_hashes: OnceLock::new(),
             extension: None,
         };
 
