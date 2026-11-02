@@ -1,0 +1,31 @@
+share_of_samples	function
+24.7%	[unknown]
+8.3%	core::hash::BuildHasher::hash_one
+5.0%	_int_malloc
+4.2%	snappy::DecompressBranchless<char*>
+3.6%	_int_free
+3.6%	__memcpy_ssse3
+3.5%	hashbrown::map::HashMap<K,V,S,A>::insert
+3.4%	<core::hash::sip::Hasher<S> as core::hash::Hasher>::write
+2.8%	malloc_consolidate
+2.2%	__ieee754_exp_avx
+2.1%	free
+2.0%	kmerseek::search::ProteinSearcher::compare
+1.9%	hashbrown::raw::RawTable<T,A>::reserve_rehash
+1.8%	kmerseek::search::multi_reading_windows
+1.8%	sourmash::encodings::aa_to_hp
+1.5%	malloc
+1.4%	ryu::pretty::format64
+1.3%	<core::iter::adapters::map::Map<I,F> as core::iter::traits::iterator::Iterator>::fold
+1.1%	kmerseek::search::n_kmers
+1.0%	kmerseek::search::xdrop_walk
+1.0%	kmerseek::search::class_composition
+0.9%	__memmove_ssse3
+0.9%	sysmalloc
+0.8%	__expm1
+0.8%	csv_core::writer::Writer::field
+0.8%	__ieee754_log_avx
+0.7%	<&mut csv::serializer::SeRecord<W> as serde::ser::SerializeStruct>::serialize_field
+0.7%	kmerseek::search::find_matched_regions
+0.7%	__log1p
+0.6%	ryu::pretty::mantissa::write_mantissa_long
