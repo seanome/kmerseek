@@ -12,8 +12,8 @@
 # extension on (--extend-mismatch-penalty 2). See bench/README.md.
 #   sbatch bench/speed.sh        # from the repository root
 # Appends one row per tool and step to bench/ledger.tsv. Writes kmerseek's hit list,
-# sorted, to $OUT/kmerseek_hits.tsv and compares it with bench/baseline_hits.tsv; with no
-# baseline yet, it writes that file instead.
+# sorted, to $OUT/kmerseek_hits.tsv and compares it with bench/baseline_hits.tsv.gz; with
+# no baseline yet, it writes that file instead.
 set -euo pipefail
 
 module load python/3.12.1 rust/1.90.0 llvm/17.0.6 cmake/3.31.4 gcc/14.2.0
@@ -34,7 +34,7 @@ QUERIES=$PWD/bench/queries.fasta
 QUERIES_MD5=a4f84f1f590c917616982eef85435b85
 OUT=${OUT:-$SCRATCH/kmerseek-bench/speed_${SLURM_JOB_ID:-local}}
 LEDGER=$PWD/bench/ledger.tsv
-BASELINE=$PWD/bench/baseline_hits.tsv
+BASELINE=$PWD/bench/baseline_hits.tsv.gz
 BIN=$PWD/target/release/kmerseek
 
 check_md5() {
@@ -92,10 +92,10 @@ PY2
 rm -f kmerseek_hits.unsorted.tsv
 echo "kmerseek hit rows: $(($(wc -l < kmerseek_hits.tsv) - 1))"
 if [ -f "$BASELINE" ]; then
-    cmp kmerseek_hits.tsv "$BASELINE" && echo "HITS IDENTICAL to $BASELINE" \
+    gzip -dc "$BASELINE" | cmp - kmerseek_hits.tsv && echo "HITS IDENTICAL to $BASELINE" \
         || echo "HITS DIFFER from $BASELINE"
 else
-    \cp kmerseek_hits.tsv "$BASELINE" && echo "wrote new baseline $BASELINE"
+    gzip -n -c kmerseek_hits.tsv > "$BASELINE" && echo "wrote new baseline $BASELINE"
 fi
 
 measure diamond makedb "dmdb.dmnd" "$TOOLS/diamond" makedb --in db.fasta -d dmdb \
