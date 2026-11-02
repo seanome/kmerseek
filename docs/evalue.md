@@ -92,6 +92,17 @@ Both are fitted by `kmerseek index` and stored in the index under their C and X.
 with the same pair reads them back; a search with another pair fits its own on
 `--ka-queries` database sequences first, or is refused unless `--ka-k` is given.
 
+`--ka-k` alone keeps the closed-form λ (r_database 1). `--ka-k` with `--ka-r-database` is a
+whole fit given by hand, such as the one another index stored: copy `k` and `r_database`
+from that index's `kmerseek index --ka-survival-out` CSV. A fit holds only for the
+mismatch penalty C and give-up margin X it was made with, which the CSV's
+`mismatch_penalty` and `xdrop` columns give, so search with the same
+`--extend-mismatch-penalty` and `--extend-xdrop`; nothing checks this. If two indexes
+have the same class composition and length distribution, then searched with one fit they
+differ only in their size n, and their E-values differ by the factor n₁ / n₂ for the same
+score. If their compositions differ, the closed-form λ differs per pair and the ratio is
+not n₁ / n₂.
+
 How the fit works:
 
 1. Take 200 sequences from the database itself (`--ka-queries`, `--ka-seed`) and search
