@@ -80,6 +80,12 @@ pub enum Alphabet {
     Gbmr4,
     /// Ball, Hill & Scott 2014, 4 classes on polarity and charge.
     Polarity4,
+    /// Aromatic, other hydrophobic, charged, polar: the sticker and spacer classes of
+    /// Martin et al. 2020.
+    AroHydChgPol4,
+    /// [`Self::AroHydChgPol4`] with arginine in a class of its own, since tyrosine-arginine
+    /// contacts also drive phase separation (Wang et al. 2018).
+    AroHydArgChgPol5,
     /// Wang & Wang 1999, 5 classes.
     Wwmj5,
     /// Solis & Rackovsky 2000, 7 classes.
@@ -113,6 +119,8 @@ impl Alphabet {
             Alphabet::HpPBotC1stEd2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
+            Alphabet::AroHydChgPol4,
+            Alphabet::AroHydArgChgPol5,
             Alphabet::Wwmj5,
             Alphabet::Gbmr7,
             Alphabet::FuncGroups8,
@@ -138,6 +146,8 @@ impl Alphabet {
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
+            Self::AroHydChgPol4 => "aro_hyd_chg_pol4",
+            Self::AroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
             Self::Wwmj5 => "wwmj5",
             Self::Gbmr7 => "gbmr7",
             Self::FuncGroups8 => "funcgroups8",
@@ -164,8 +174,8 @@ impl Alphabet {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
             Self::HpLehningerHpc3 => 3,
-            Self::Gbmr4 | Self::Polarity4 => 4,
-            Self::Wwmj5 => 5,
+            Self::Gbmr4 | Self::Polarity4 | Self::AroHydChgPol4 => 4,
+            Self::Wwmj5 | Self::AroHydArgChgPol5 => 5,
             Self::Gbmr7 => 7,
             Self::FuncGroups8 => 8,
             Self::Sdm12 | Self::Mmseqs12 => 12,
@@ -203,6 +213,8 @@ impl Alphabet {
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
+            Self::AroHydChgPol4 => &ARO_HYD_CHG_POL4,
+            Self::AroHydArgChgPol5 => &ARO_HYD_ARG_CHG_POL5,
             Self::Wwmj5 => &WWMJ5,
             Self::Gbmr7 => &GBMR7,
             Self::FuncGroups8 => &FUNCGROUPS8,
@@ -220,6 +232,8 @@ impl Alphabet {
         Some(match self {
             Self::Gbmr4 => GBMR4_CLUSTERS,
             Self::Polarity4 => POLARITY4_CLUSTERS,
+            Self::AroHydChgPol4 => ARO_HYD_CHG_POL4_CLUSTERS,
+            Self::AroHydArgChgPol5 => ARO_HYD_ARG_CHG_POL5_CLUSTERS,
             Self::Wwmj5 => WWMJ5_CLUSTERS,
             Self::Gbmr7 => GBMR7_CLUSTERS,
             Self::FuncGroups8 => FUNCGROUPS8_CLUSTERS,
@@ -823,6 +837,40 @@ const POLARITY4_CLUSTERS: &[&str] = &["GAVLIFWMP", "STCYNQ", "DE", "HKR"];
 static POLARITY4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(POLARITY4_CLUSTERS));
 
 // -----------------------------------------------------------------------------
+// ARO_HYD_CHG_POL4 — aromatic, other hydrophobic, charged, polar.
+//
+// Built for disordered regions that phase-separate. Martin et al. (2020, Science
+// 367:694) showed that the number and even spacing of aromatic residues (F, W, Y) in a
+// disordered region set whether it phase-separates: aromatic residues are the "stickers"
+// that bind each other, and the stretches between them are "spacers". So the aromatic
+// residues get a letter of their own instead of joining the other hydrophobic ones.
+// Charged residues are pooled (D, E, K, R) because their pattern is measured separately
+// by kappa (Das & Pappu 2013). This alphabet cannot measure that pattern: a k-mer cannot
+// tell a positive stretch from a negative one. Pooling also puts R with K, although Wang
+// et al. (2018) found that K does not substitute for R; ARO_HYD_ARG_CHG_POL5 below keeps
+// them apart, at the cost of one more letter. C, G, P and H go with the polar residues
+// (S first, since the first residue names the letter): none of them is aromatic or
+// charged at neutral pH, G and P are the most common spacer residues in low-complexity
+// regions, and C is rare in them.
+// -----------------------------------------------------------------------------
+const ARO_HYD_CHG_POL4_CLUSTERS: &[&str] = &["FWY", "AILMV", "DEKR", "SCGHNPQT"];
+static ARO_HYD_CHG_POL4: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_CHG_POL4_CLUSTERS));
+
+// -----------------------------------------------------------------------------
+// ARO_HYD_ARG_CHG_POL5 — ARO_HYD_CHG_POL4 with arginine split out.
+//
+// Wang et al. (2018, Cell 174:688) found that in the FUS family the number of tyrosines
+// and arginines together sets the driving force for phase separation, through
+// tyrosine-arginine contacts, while lysine does not substitute for arginine. So R gets
+// a class of its own and D, E and K stay pooled. Comparing this alphabet with
+// ARO_HYD_CHG_POL4 asks whether the arginine letter adds anything.
+// -----------------------------------------------------------------------------
+const ARO_HYD_ARG_CHG_POL5_CLUSTERS: &[&str] = &["FWY", "AILMV", "R", "DEK", "SCGHNPQT"];
+static ARO_HYD_ARG_CHG_POL5: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_ARG_CHG_POL5_CLUSTERS));
+
+// -----------------------------------------------------------------------------
 // WWMJ5 — Wang & Wang (1999), 5 classes.
 //
 // Derived by minimizing the mismatch within the Miyazawa-Jernigan contact potential
@@ -934,6 +982,18 @@ mod multi_letter_tests {
     }
 
     #[test]
+    fn test_aro_hyd_chg_pol4_partition() {
+        // FWY -> f, AILMV -> a, DEKR -> d, SCGHNPQT -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydChgPol4), "asddfssadaasssdssaff");
+    }
+
+    #[test]
+    fn test_aro_hyd_arg_chg_pol5_partition() {
+        // FWY -> f, AILMV -> a, R -> r, DEK -> d, SCGHNPQT -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydArgChgPol5), "asddfssadaasssrssaff");
+    }
+
+    #[test]
     fn test_wwmj5_partition() {
         // CMFILVWY -> c, ATH -> a, GP -> g, DE -> d, SNQRK -> s
         assert_eq!(encode_canonical(Alphabet::Wwmj5), "acddcgacsccsgsssaccc");
@@ -985,7 +1045,9 @@ mod multi_letter_tests {
     /// table is itself the check that no cluster list drifts out of shape.
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
-        let expected_sizes = [4usize, 4, 5, 7, 8, 12, 12, 14, 17, 18];
+        let expected_sizes = [4usize, 4, 4, 5, 5, 7, 8, 12, 12, 14, 17, 18];
+        // zip stops at the shorter side, so a missing size would skip an alphabet.
+        assert_eq!(expected_sizes.len(), Alphabet::multi_letter().count());
         for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
             let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.
