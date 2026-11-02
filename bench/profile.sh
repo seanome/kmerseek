@@ -43,7 +43,7 @@ search() {
     --extend-mismatch-penalty 2 --output "$OUT/km_hits.csv" > "$OUT/rss_search.log" 2>&1 &
 pid=$!
 while kill -0 $pid 2> /dev/null; do
-    grep -E '^(VmRSS|RssAnon|RssFile|RssShmem):' /proc/$pid/status 2> /dev/null | tr '\n' ' '
+    { grep -E '^(VmRSS|RssAnon|RssFile|RssShmem):' /proc/$pid/status 2> /dev/null || true; } | tr '\n' ' '
     echo; sleep 0.1
 done | awk '{ for (i = 1; i < NF; i += 3) if ($(i + 1) > max[$i]) max[$i] = $(i + 1) }
             END { for (k in max) printf "%s\tpeak %.2f GB\n", k, max[k] / 1024 / 1024 }' \
