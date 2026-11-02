@@ -37,20 +37,50 @@ search() {
         --alphabet hp_lehninger2 --extend-mismatch-penalty 2 --output "$OUT/km_hits.csv"
 }
 
-# CPU: sample user-space stacks 49 times a second per thread, unwound from DWARF line
-# tables (the release profile keeps them).
-search perf record -e cpu-clock -F 49 --call-graph dwarf -o "$OUT/perf.data" -- \
+# Peak resident memory split into heap and the like (RssAnon) and mapped files such as
+# the index (RssFile), read from /proc every 0.1 s while the search runs.
+"$BIN" search --query "$QUERIES" --target "$INDEX" --ksize 24 --alphabet hp_lehninger2 \
+    --extend-mismatch-penalty 2 --output "$OUT/km_hits.csv" > "$OUT/rss_search.log" 2>&1 &
+pid=$!
+while kill -0 $pid 2> /dev/null; do
+    grep -E '^(VmRSS|RssAnon|RssFile|RssShmem):' /proc/$pid/status 2> /dev/null | tr '\n' ' '
+    echo; sleep 0.1
+done | awk '{ for (i = 1; i < NF; i += 3) if ($(i + 1) > max[$i]) max[$i] = $(i + 1) }
+            END { for (k in max) printf "%s\tpeak %.2f GB\n", k, max[k] / 1024 / 1024 }' \
+    | sort > "$REPORT/rss_split.txt"
+wait $pid
+
+# CPU: sample stacks 999 times a second per thread, unwound from DWARF line tables (the
+# release profile keeps them). Kernel frames have no symbols here (perf_event_paranoid 2),
+# so they show as [unknown]. Inlined frames are left out so time is charged to the
+# function the compiler kept.
+search perf record -e cpu-clock -F 999 --call-graph dwarf -o "$OUT/perf.data" -- \
     > "$OUT/perf_search.log" 2>&1
-perf script -i "$OUT/perf.data" 2> /dev/null | inferno-collapse-perf > "$OUT/stacks.folded"
+/usr/bin/time -v -o "$OUT/time_perf_script.txt" perf script --no-inline -i "$OUT/perf.data" \
+    2> /dev/null > "$OUT/perf.script"
+inferno-collapse-perf < "$OUT/perf.script" > "$OUT/stacks.folded"
 inferno-flamegraph --title "kmerseek search, hp_lehninger2 k=24 scaled 10" \
     < "$OUT/stacks.folded" > "$PWD/bench/baseline_flame.svg"
-perf report -i "$OUT/perf.data" --no-children --sort symbol --stdio --percent-limit 0.5 \
-    2> /dev/null | grep -v '^$' > "$REPORT/perf_self.txt"
+python3 - "$OUT/stacks.folded" > "$REPORT/perf_self.txt" <<'PY2'
+import sys
+from collections import Counter
+self_time, total = Counter(), 0
+for line in open(sys.argv[1]):
+    stack, n = line.rstrip().rsplit(" ", 1)
+    self_time[stack.split(";")[-1]] += int(n)
+    total += int(n)
+print("share_of_samples\tfunction")
+for name, n in self_time.most_common(30):
+    print(f"{100 * n / total:.1f}%\t{name}")
+PY2
 
 # Memory: every allocation with its call stack; the peaks list sums the bytes each
 # allocation site held at the moment total heap use was highest.
 search "$TOOLS/heaptrack" -o "$OUT/heaptrack" > "$OUT/heaptrack_search.log" 2>&1
-"$TOOLS/heaptrack_print" -f "$(ls "$OUT"/heaptrack.*)" --print-peaks 1 --peak-limit 10 \
-    --print-allocators 0 --print-temporary 0 --print-leaks 0 > "$REPORT/heaptrack_peaks.txt"
-head -60 "$REPORT/perf_self.txt"
-grep -A3 -m12 'peak' "$REPORT/heaptrack_peaks.txt" || head -80 "$REPORT/heaptrack_peaks.txt"
+/usr/bin/time -v -o "$OUT/time_heaptrack_print.txt" "$TOOLS/heaptrack_print" \
+    -f "$(ls "$OUT"/heaptrack.*)" --print-peaks 1 --peak-limit 10 --print-allocators 0 \
+    --print-temporary 0 --print-leaks 0 > "$REPORT/heaptrack_peaks.txt"
+grep -h 'Maximum resident' "$OUT"/time_*.txt
+cat "$REPORT/rss_split.txt"
+head -12 "$REPORT/perf_self.txt"
+tail -4 "$REPORT/heaptrack_peaks.txt"
