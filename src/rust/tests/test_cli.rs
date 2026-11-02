@@ -1205,6 +1205,146 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     Ok(())
 }
 
+/// `--ka-k` with `--ka-r-database` is a whole fit given by hand. Given the numbers an
+/// index stored, a search prints exactly the E-values the stored fit gives, so one index's
+/// fit can be used to search another. `--ka-r-database` needs `--ka-k` and must be
+/// positive.
+#[test]
+fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let survival = temp_dir.path().join("survival.csv");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+            "--ka-survival-out",
+            survival.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The stored fit, at full precision, from the survival curve's own columns.
+    let mut reader = csv::Reader::from_path(&survival)?;
+    let headers = reader.headers()?.clone();
+    let column = |name: &str| headers.iter().position(|h| h == name).unwrap();
+    let first = reader.records().next().expect("one row per score bin")?;
+    let k = first[column("k")].to_string();
+    let r_database = first[column("r_database")].to_string();
+    // Those strings must parse back to exactly the fit the index stored, on every row.
+    let stored_fit = crate::index::ProteomeIndex::open_for_search(&index_path)?
+        .ka_calibration(crate::search::ExtensionScoring::new(
+            crate::search::DEFAULT_MISMATCH_PENALTY,
+            crate::search::DEFAULT_XDROP,
+        )?)?
+        .expect("the index stores a fit for C 2, X 8")
+        .ka_params();
+    for row in reader.records() {
+        let row = row?;
+        assert_eq!(&row[column("k")], k);
+        assert_eq!(&row[column("r_database")], r_database);
+    }
+    assert_eq!(k.parse::<f64>()?, stored_fit.k);
+    assert_eq!(r_database.parse::<f64>()?, stored_fit.r_database);
+
+    let penalty = crate::search::DEFAULT_MISMATCH_PENALTY.to_string();
+    let xdrop = crate::search::DEFAULT_XDROP.to_string();
+    let search = |out: &std::path::Path, extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            &penalty,
+            "--extend-xdrop",
+            &xdrop,
+        ]);
+        cmd.args(extra);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+    let evalues = |out: &std::path::Path| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut reader = csv::Reader::from_path(out)?;
+        let i = reader.headers()?.iter().position(|h| h == "region_evalue").unwrap();
+        // Rows come out in the order the parallel search finishes them, so compare the
+        // E-values as a sorted list.
+        let mut v: Vec<String> =
+            reader.records().map(|r| r.map(|r| r[i].to_string())).collect::<Result<_, _>>()?;
+        v.sort();
+        Ok(v)
+    };
+
+    let stored = temp_dir.path().join("stored.csv");
+    search(&stored, &[])?
+        .success()
+        .stderr(predicate::str::contains("(stored in the index: 25 database queries"));
+    let given = temp_dir.path().join("given.csv");
+    search(&given, &["--ka-k", &k, "--ka-r-database", &r_database])?
+        .success()
+        .stderr(predicate::str::contains("(--ka-k and --ka-r-database)"));
+    let (a, b) = (evalues(&stored)?, evalues(&given)?);
+    assert!(!a.is_empty(), "CED-9 against the BCL2 family gives regions");
+    assert_eq!(a, b, "the same fit given by hand gives the same E-values");
+
+    // --ka-k alone keeps the closed form, so the E-values differ.
+    let closed = temp_dir.path().join("closed.csv");
+    search(&closed, &["--ka-k", &k])?
+        .success()
+        .stderr(predicate::str::contains("r_database 1.000 (--ka-k, closed-form lambda)"));
+    assert_ne!(a, evalues(&closed)?);
+
+    search(&temp_dir.path().join("x.csv"), &["--ka-r-database", &r_database])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-k"));
+    search(&temp_dir.path().join("y.csv"), &["--ka-k", &k, "--ka-r-database", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-r-database must be positive"));
+    Ok(())
+}
+
+/// A bad `--ka-k` or `--ka-r-database` is refused even with seed extension off, and before
+/// the target index is opened (the target here does not exist).
+#[test]
+fn test_cli_ka_bad_values_fail_with_scoring_off() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let missing_index = temp_dir.path().join("no_such_index.db");
+    let out = temp_dir.path().join("out.csv");
+    let run = |extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            missing_index.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            "0",
+        ]);
+        cmd.args(extra);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+    run(&["--ka-r-database=-3", "--ka-k", "0.03"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-r-database must be positive"));
+    run(&["--ka-k", "inf"])?.failure().stderr(predicate::str::contains("--ka-k must be positive"));
+    Ok(())
+}
+
 /// One calibration query gives too few score bins to fit, so nothing is stored; three
 /// give a fit that leans on the seed end of the curve, which the index step says out
 /// loud and writes out as a survival curve.

@@ -238,6 +238,9 @@ pub enum KaSource {
     /// Given on the command line (`--ka-k`), with the closed-form lambda per pair
     /// (r_database 1).
     Given,
+    /// Given on the command line as a whole fit (`--ka-k` and `--ka-r-database`), such as
+    /// one stored in another index.
+    GivenFit,
     /// A fit stored in the index when it was built.
     Index(Box<KaCalibration>),
     /// A fit run just now, before the search.
@@ -248,6 +251,7 @@ impl Display for KaSource {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
             KaSource::Given => write!(f, "--ka-k, closed-form lambda"),
+            KaSource::GivenFit => write!(f, "--ka-k and --ka-r-database"),
             KaSource::Index(fit) => write!(f, "stored in the index: {fit}"),
             KaSource::Fitted(fit) => write!(f, "fitted now: {fit}"),
         }
@@ -1251,17 +1255,20 @@ impl ProteinSearcher {
     }
 
     /// The r_database and K a search should use for `settings.scoring`, and where they
-    /// came from, in order of preference: `explicit` (`--ka-k`, with the closed-form
-    /// lambda); a fit stored in the index for this scoring, whatever null it used; a fresh
-    /// fit on `settings.n_queries` calibration queries if that is nonzero. Otherwise an
-    /// error: an E-value without a fit for its own index is not printed.
+    /// came from, in order of preference: `explicit` (`--ka-k`, with `--ka-r-database` or
+    /// else the closed-form lambda, r_database 1); a fit stored in the index for this
+    /// scoring, whatever null it used; a fresh fit on `settings.n_queries` calibration
+    /// queries if that is nonzero. Otherwise an error: an E-value without a fit for its
+    /// own index is not printed.
     pub fn resolve_ka(
         &mut self,
-        explicit: Option<f64>,
+        explicit: Option<KaParams>,
         settings: KaCalibrationSettings,
     ) -> IndexResult<(KaParams, KaSource)> {
-        if let Some(k) = explicit {
-            return Ok((KaParams { k, r_database: 1.0 }, KaSource::Given));
+        if let Some(params) = explicit {
+            let source =
+                if params.r_database == 1.0 { KaSource::Given } else { KaSource::GivenFit };
+            return Ok((params, source));
         }
         if let Some(stored) = self.index.ka_calibration(settings.scoring)? {
             return Ok((stored.ka_params(), KaSource::Index(Box::new(stored))));
@@ -5752,8 +5759,14 @@ mod ka_calibration_tests {
         assert_eq!(params, fit.ka_params());
         assert_eq!(source, KaSource::Index(Box::new(fit.clone())));
 
-        let (params, source) = searcher.resolve_ka(Some(0.03), shuffled_settings(2.0, 0))?;
-        assert_eq!((params, source), (KaParams { k: 0.03, r_database: 1.0 }, KaSource::Given));
+        let given = KaParams { k: 0.03, r_database: 1.0 };
+        let (params, source) = searcher.resolve_ka(Some(given), shuffled_settings(2.0, 0))?;
+        assert_eq!((params, source), (given, KaSource::Given));
+
+        // A whole fit given by hand wins over the stored one and is used as given.
+        let other = KaParams { k: 0.0115, r_database: 0.806 };
+        let (params, source) = searcher.resolve_ka(Some(other), shuffled_settings(2.0, 0))?;
+        assert_eq!((params, source), (other, KaSource::GivenFit));
 
         // No stored fit for penalty 3, no queries allowed and no K given: refused, not
         // guessed.
