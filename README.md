@@ -205,7 +205,8 @@ it on the index itself (`--ka-queries`, 200 by default): it searches that many o
 index's own sequences against it, and reads K and a correction to λ, `r_database`, off
 the straight line that ln(regions at score S) makes against S below the related pairs.
 A search with the penalty and give-up margin the index was fitted for reads the fit
-back; with another pair it fits its own before searching, or takes `--ka-k`.
+back; with another pair it fits its own before searching, or takes `--ka-k` (and
+`--ka-r-database`, to use a fit made on another index).
 [docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
 On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
@@ -227,6 +228,18 @@ ranking little (chains form in 2% of regions at 30/10); its purpose is region-le
 transfer, where a call has to cover a domain to carry its label. A chained row's
 `region_evalue` takes the database size as the number of targets times the target's
 length; an unchained row's takes it as `db_n_kmers`. The two are close, not identical.
+
+## Finding what a search spends its time on
+
+Set `KMERSEEK_PROFILE` to any value and `kmerseek search` prints, at the end, the seconds
+and call count of each step to stderr as tab-separated lines starting with `profile`
+(`grep ^profile`). Steps that run on several threads are summed over the threads. See
+[docs/profiling/README.md](docs/profiling/README.md) for a Swiss-Prot run.
+
+`--max-kmer-targets N` (off by default) calls a k-mer common when more than N targets
+contain it, and reports a pair only if it shares at least one k-mer that is not common.
+Common k-mers still count towards `--min-shared-kmers`. On Swiss-Prot it did not pay; the
+profiling page has the numbers.
 
 ## Visualizing hits
 
@@ -416,6 +429,8 @@ partitions live in `src/rust/alphabets.rs`.
 | `hp_lehninger_hpc3` | 3 | `AFGILMPVWY` `DEHKNQRST` `C` | Lehninger with C in a class of its own |
 | `gbmr4` | 4 | `ADKERNTSQ` `YFLIVMCWH` `G` `P` | Solis & Rackovsky 2000 |
 | `polarity4` | 4 | `GAVLIFWMP` `STCYNQ` `DE` `HKR` | Ball, Hill & Scott 2014 |
+| `aro_hyd_chg_pol4` | 4 | `FWY` `AILMV` `DEKR` `SCGHNPQT` | Aromatic residues kept apart, for phase-separating regions (Martin et al. 2020) |
+| `aro_hyd_arg_chg_pol5` | 5 | `FWY` `AILMV` `R` `DEK` `SCGHNPQT` | `aro_hyd_chg_pol4` with arginine apart (Wang et al. 2018) |
 | `wwmj5` | 5 | `CMFILVWY` `ATH` `GP` `DE` `SNQRK` | Wang & Wang 1999 |
 | `dayhoff6` | 6 | `C` `AGPST` `DENQ` `HKR` `ILMV` `FWY` | Dayhoff; also sourmash's `dayhoff` |
 | `gbmr7` | 7 | `DN` `AEFIKLMQRVWY` `CH` `T` `S` `G` `P` | Solis & Rackovsky 2000 |
@@ -440,6 +455,13 @@ Clusters are listed in the order their classes are numbered. The `hp_` alphabets
 their classes as `h` and `p`, and `hp_lehninger_hpc3` adds `c` for cysteine. Every other
 alphabet writes a class as its first residue in lowercase, so an SDM12-encoded sequence
 shows the `LIVM` class as `l` and can be read against the source residues directly.
+
+![The 20 amino acids in aro_hyd_chg_pol4 (top) and hp_pbotc_1st_ed2 (bottom)](docs/images/aro_hyd_chg_pol4_vs_hp_pbotc_1st_ed2.png)
+
+Each square is one amino acid, coloured by its class in `aro_hyd_chg_pol4` (top) and in
+the two-letter `hp_pbotc_1st_ed2` (bottom). F, W and Y get a class of their own instead of
+sharing `h` with A, I, L, M and V; C and P move from hydrophobic to polar.
+`aro_hyd_arg_chg_pol5` is the same with R split out of the charged class.
 
 The two- and three-class alphabets share an `hp_` prefix because they differ only on
 borderline residues, which keeps a sweep easy to write and to grep. The rest use the

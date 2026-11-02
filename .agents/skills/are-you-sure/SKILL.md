@@ -47,6 +47,11 @@ questions that have found real bugs in these repos:
 - **Names you did not resolve.** Every function, flag, tag, URL and column name checked
   against the source or the pinned docs, not recalled.
 - **Merges.** After merging branches that grew the same file, check for duplicate `def`s.
+- **A version bump changes every pin.** When a tool's version changes in one place, grep
+  the repo for its old version and change every pin: `environment*.yml`, the CI workflows
+  under `.github/workflows/`, `.pre-commit-config.yaml`, Dockerfiles and pixi or lock files.
+  Olga, analysis PR 111 (added 2026-10-13): "And is this updated/pinned in the github
+  actions, too?"
 
 ## 3. Check the output against something you did not compute
 
