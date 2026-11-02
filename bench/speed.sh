@@ -81,12 +81,13 @@ measure kmerseek search "" "$BIN" search --query "$QUERIES" --target km.db \
 # names contain commas and the CSV quotes them.
 python3 - km_hits.csv > kmerseek_hits.unsorted.tsv <<'PY2'
 import csv, sys
-cols = ["query_name", "target_name", "start", "end", "target_start", "target_end", "n_shared"]
+cols = ["query_name", "target_name", "region_start", "region_end", "target_start", "target_end",
+        "region_n_shared_kmers"]
 with open(sys.argv[1], newline="") as f:
     for row in csv.DictReader(f):
         sys.stdout.write("\t".join(row[c] for c in cols) + "\n")
 PY2
-{ printf 'query_name\ttarget_name\tstart\tend\ttarget_start\ttarget_end\tn_shared\n'
+{ printf 'query_name\ttarget_name\tregion_start\tregion_end\ttarget_start\ttarget_end\tn_shared\n'
   LC_ALL=C sort -S 16G --parallel=$THREADS kmerseek_hits.unsorted.tsv; } > kmerseek_hits.tsv
 rm -f kmerseek_hits.unsorted.tsv
 echo "kmerseek hit rows: $(($(wc -l < kmerseek_hits.tsv) - 1))"
