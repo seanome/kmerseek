@@ -17,8 +17,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 import pubfig as pf  # noqa: E402
 
 TOOLS = {"kmerseek": "kmerseek", "diamond": "DIAMOND", "mmseqs": "MMseqs2"}
-COLOURS = {"kmerseek": pf.OKABE_ITO["blue"], "diamond": pf.OKABE_ITO["vermillion"],
-           "mmseqs": pf.OKABE_ITO["bluish_green"]}
+COLOURS = {
+    "kmerseek": pf.OKABE_ITO["blue"],
+    "diamond": pf.OKABE_ITO["vermillion"],
+    "mmseqs": pf.OKABE_ITO["bluish_green"],
+}
 SEARCH_STEP = {"kmerseek": "search", "diamond": "blastp", "mmseqs": "search"}
 INDEX_STEP = {"kmerseek": "index", "diamond": "makedb", "mmseqs": "createindex"}
 
@@ -30,9 +33,14 @@ def panel_values(ledger):
         mine = ledger[ledger.tool == tool]
         search = mine[mine.step == SEARCH_STEP[tool]]
         index = mine[mine.step == INDEX_STEP[tool]]
-        rows.append({"tool": tool, "Search wall time (s)": list(search.wall_s),
-                     "Search peak memory (GB)": list(search.peak_rss_gb),
-                     "Index on disk (GB)": list(index.index_bytes.astype(float) / 1024**3)})
+        rows.append(
+            {
+                "tool": tool,
+                "Search wall time (s)": list(search.wall_s),
+                "Search peak memory (GB)": list(search.peak_rss_gb),
+                "Index on disk (GB)": list(index.index_bytes.astype(float) / 1024**3),
+            }
+        )
     return pd.DataFrame(rows)
 
 
@@ -53,9 +61,18 @@ def main(ledger_path, out_stem, *commits):
     pf.use_style()
     fig, axs = pf.figure(pf.TWO_COLUMN_MM, 55, ncols=3)
     columns = ["Search wall time (s)", "Search peak memory (GB)", "Index on disk (GB)"]
-    key = [Patch(color=pf.GREY, label="bar: mean of the runs"),
-           Line2D([], [], marker="o", color="black", linestyle="", markersize=2,
-                  label="dot: one run (one ledger row)")]
+    key = [
+        Patch(color=pf.GREY, label="bar: mean of the runs"),
+        Line2D(
+            [],
+            [],
+            marker="o",
+            color="black",
+            linestyle="",
+            markersize=2,
+            label="dot: one run (one ledger row)",
+        ),
+    ]
     fig.legend(handles=key, loc="outside upper center", ncol=2)
     for ax, column, letter in zip(axs, columns, "abc"):
         draw(ax, values, column)
