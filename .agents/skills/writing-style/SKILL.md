@@ -121,7 +121,12 @@ Added 2026-09-24 from Olga's handoff notes, after she called "h·h + p·p" terri
 - Name every quantity. One symbol, one value: write `h_query`, `p_target`, not a bare `h`
   used for two proteins.
 - In hydrophobic-polar alphabet math, `h` and `p` mean only the hydrophobic and polar
-  class shares. Every probability is `Pr(·)`: `Pr(same)`, never `p_same`.
+  class shares. In plain text every probability is `Pr(·)`: `Pr(same)`, never `p_same`.
+- `E` means only the E-value. An expected count gets its own symbol, such as `\mu` or
+  `n_expected`, never `E[...]` or `E` next to an E-value. In LaTeX, set it as
+  `\text{Pr}(\cdot)`, capital P and lower-case r. Olga, kmerseek PR 136 (added 2026-10-13):
+  "Can we use a different letter or notation here instead of E because it gets confusing
+  with this expected and eval".
 
 ## Citations
 

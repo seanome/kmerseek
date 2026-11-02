@@ -91,6 +91,11 @@ mod tests {
     /// A, Q, K and N in one class, so it sees no mismatch at all and every one of its 103
     /// windows is shared. The HP alphabets merge three of the four (S/T, Q/K and K/N are
     /// each polar/polar) and keep only residue 19's S/A.
+    /// aro_hyd_chg_pol4 and aro_hyd_arg_chg_pol5 merge only residue 3's S/T, like
+    /// polarity4, so they lose every window covering residue 19, 37 or 103: windows
+    /// starting at 38-81 at k=22 (44 shared), and at 38-84 and 104-106 at k=19 (50 shared).
+    /// massspec18 merges only Q/K of the four, so the 10 windows whose one mismatch is that
+    /// Q/K become shared: 82 + 10 = 92.
     const EXPECTED: &[Expected] = &[
         Expected {
             moltype: "protein20",
@@ -170,6 +175,20 @@ mod tests {
             shared_with_bovine: 44,
         },
         Expected {
+            moltype: "aro_hyd_chg_pol4",
+            ksize: 22,
+            readings: 3250,
+            query_hashes: 3250,
+            shared_with_bovine: 44,
+        },
+        Expected {
+            moltype: "aro_hyd_arg_chg_pol5",
+            ksize: 19,
+            readings: 1984,
+            query_hashes: 1984,
+            shared_with_bovine: 50,
+        },
+        Expected {
             moltype: "wwmj5",
             ksize: 19,
             readings: 1984,
@@ -224,6 +243,13 @@ mod tests {
             readings: 541,
             query_hashes: 541,
             shared_with_bovine: 82,
+        },
+        Expected {
+            moltype: "massspec18",
+            ksize: 10,
+            readings: 541,
+            query_hashes: 541,
+            shared_with_bovine: 92,
         },
     ];
 
@@ -462,6 +488,20 @@ mod tests {
         assert_relative_eq!(topi.tfidf, goat.tfidf, epsilon = 1e-9);
         assert_relative_eq!(topi.tfidf, 188.4702672915833, epsilon = 1e-9);
         assert_relative_eq!(topi.mean_idf, topi.tfidf / 56.0, epsilon = 1e-12);
+        Ok(())
+    }
+
+    /// Topi RNase against itself is one exact run over its whole length. Each window holding
+    /// a B or Z is sketched under every reading, and both copies hold every reading, so a
+    /// (query, target) position is listed once per shared reading; counted twice, it would
+    /// break the run where the ambiguous residue sits.
+    #[test]
+    fn test_an_ambiguous_residue_shared_with_itself_does_not_break_a_run() -> Result<()> {
+        let topi = ProteinSketch::from_protein_sequence("topi", TOPI_RNASE, 10, 1, "protein20")?;
+        let regions = find_matched_regions(&topi, &topi, &topi.intersect(&topi));
+        let spans: Vec<_> = regions.iter().map(|r| (r.start, r.end, r.target_start)).collect();
+        println!("{spans:?}");
+        assert_eq!(spans, vec![(0, TOPI_RNASE.len() as u32, 0)]);
         Ok(())
     }
 

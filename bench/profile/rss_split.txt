@@ -1,0 +1,4 @@
+RssAnon:	peak 1.87 GB
+RssFile:	peak 0.46 GB
+RssShmem:	peak 0.00 GB
+VmRSS:	peak 2.33 GB
