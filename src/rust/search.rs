@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::Result;
 use dashmap::DashMap;
@@ -19,6 +20,7 @@ use crate::evalue::{
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
+use crate::postings::PostingIndex;
 use crate::profile::{Step, Timer};
 use crate::significance;
 use crate::sketch::ProteinSketch;
@@ -957,10 +959,10 @@ impl Display for MatchedRegion {
 pub struct SearchStats {
     /// Total number of signatures in the database
     pub total_signatures: usize,
-    /// IDF values for each k-mer hash
-    pub idf: HashMap<u64, f64>,
-    /// Frequency of each k-mer hash across all signatures
-    pub kmer_frequencies: HashMap<u64, usize>,
+    /// The database's inverted index: k-mer hash to the targets that contain it. The
+    /// frequency of a k-mer, how many signatures contain it, is the length of its posting
+    /// list. `search_one` uses it to compare a query only with targets that share a k-mer.
+    pub postings: Arc<PostingIndex>,
 }
 
 /// Pre-computed query data for efficient batch searching
@@ -991,16 +993,44 @@ pub struct PreparedQuery<'a> {
     /// lambda. Built once here rather than once per candidate pair. None when the sketch
     /// carries no encoded sequence.
     pub composition: Option<ClassComposition>,
+    /// How many database signatures contain each of the query's k-mers, for the k-mers the
+    /// database holds. Looked up once here: every k-mer a pair shares is one of these, and
+    /// each lookup in the posting files is a binary search, which cost hp_lehninger2 k=19
+    /// 10% more CPU when it ran once per shared k-mer per pair.
+    db_frequency: HashMap<u64, usize>,
+    /// Signatures in the database, the N of `idf`.
+    total_signatures: usize,
+}
+
+impl PreparedQuery<'_> {
+    /// How many database signatures contain `hash`; `None` if none does or the query does
+    /// not hold it.
+    pub fn kmer_frequency(&self, hash: u64) -> Option<usize> {
+        self.db_frequency.get(&hash).copied()
+    }
+
+    /// Inverse document frequency of `hash`, as `SearchStats::idf`.
+    pub fn idf(&self, hash: u64) -> Option<f64> {
+        Some(idf(self.total_signatures, self.kmer_frequency(hash)?))
+    }
+}
+
+/// ln(signatures / signatures containing the k-mer).
+fn idf(total_signatures: usize, frequency: usize) -> f64 {
+    (total_signatures as f64 / frequency as f64).ln()
 }
 
 impl SearchStats {
-    /// Search statistics from the structures `ProteomeIndex::load_search_cache` returns.
-    fn from_cache(total_signatures: usize, kmer_frequencies: HashMap<u64, usize>) -> Self {
-        let idf: HashMap<u64, f64> = kmer_frequencies
-            .iter()
-            .map(|(&kmer, &freq)| (kmer, (total_signatures as f64 / freq as f64).ln()))
-            .collect();
-        Self { total_signatures, idf, kmer_frequencies }
+    /// How many database signatures contain `hash`; `None` if none does.
+    pub fn kmer_frequency(&self, hash: u64) -> Option<usize> {
+        self.postings.frequency(hash)
+    }
+
+    /// Inverse document frequency of `hash`, ln(signatures / signatures containing it);
+    /// `None` if no signature contains it. Computed per lookup rather than stored, so
+    /// there is no map of every k-mer in memory.
+    pub fn idf(&self, hash: u64) -> Option<f64> {
+        Some(idf(self.total_signatures, self.kmer_frequency(hash)?))
     }
 }
 
@@ -1010,10 +1040,6 @@ pub struct ProteinSearcher {
     stats: SearchStats,
     /// Ordered list of target MD5 keys, indexed by u32 for the inverted index
     target_list: Vec<String>,
-    /// Inverted k-mer index: kmer_hash → Vec of target indices into target_list.
-    /// Enables candidate pre-filtering so search_one only compares against targets
-    /// that share at least one k-mer with the query, instead of all targets.
-    inverted_index: HashMap<u64, Vec<u32>>,
     /// Lazy signature cache: populated on demand from RocksDB during search_one().
     ///
     /// WHY: When on-demand loading is used (fast startup path), the same target protein
@@ -1326,19 +1352,20 @@ impl ProteinSearcher {
     pub fn load<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let index = ProteomeIndex::open_for_search(&path)?;
         let cache = index.load_search_cache()?.ok_or(IndexError::NoSavedState)?;
-        let (targets, kmers) = (cache.target_list.len(), cache.inverted_index.len());
+        let (targets, kmers) = (cache.target_list.len(), cache.postings.len());
         eprintln!("Loaded search cache: {targets} targets, {kmers} k-mers indexed");
         Ok(Self::from_cache(index, cache))
     }
 
     fn from_cache(index: ProteomeIndex, cache: SearchCache) -> Self {
-        let stats = SearchStats::from_cache(cache.target_list.len(), cache.kmer_frequencies);
-        let db_n_kmers = stats.kmer_frequencies.values().sum();
+        let postings = Arc::new(cache.postings);
+        let db_n_kmers = postings.n_postings();
+        let stats =
+            SearchStats { total_signatures: cache.target_list.len(), postings: postings.clone() };
         Self {
             index,
             stats,
             target_list: cache.target_list,
-            inverted_index: cache.inverted_index,
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
@@ -1372,7 +1399,16 @@ impl ProteinSearcher {
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
             composition: query.get_moltype_sequence().map(|enc| class_composition(enc.as_bytes())),
+            db_frequency: self.query_db_frequency(query),
+            total_signatures: self.stats.total_signatures,
         }
+    }
+
+    /// The database frequency of each query k-mer the database holds (see
+    /// `PreparedQuery::db_frequency`).
+    fn query_db_frequency(&self, query: &ProteinSketch) -> HashMap<u64, usize> {
+        let mins = query.signature().minhash.mins();
+        mins.into_iter().filter_map(|h| Some((h, self.stats.kmer_frequency(h)?))).collect()
     }
 
     /// Builds the per-position frequency prefix sums consumed by `region_expectation`. Runs
@@ -1383,8 +1419,7 @@ impl ProteinSearcher {
     fn build_position_prefix(&self, query: &ProteinSketch) -> Vec<f64> {
         let total_signatures = self.stats.total_signatures as f64;
         Self::build_prefix(query, |hashval| {
-            self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64
-                / total_signatures
+            self.stats.kmer_frequency(hashval).unwrap_or(1) as f64 / total_signatures
         })
     }
 
@@ -1393,14 +1428,13 @@ impl ProteinSearcher {
     /// several of its readings, the window keeps the smallest IDF, so it counts once and
     /// never as rarer than the most common reading the two proteins share.
     fn shared_window_idf(
-        &self,
-        query: &ProteinSketch,
+        query: &PreparedQuery<'_>,
         target: &ProteinSketch,
         intersection: &HashSet<u64>,
     ) -> HashMap<(usize, usize), f64> {
         let mut window_idf: HashMap<(usize, usize), f64> = HashMap::new();
-        for (qpos, tpos, hashval) in shared_position_pairs(query, target, intersection) {
-            let idf = self.stats.idf.get(&hashval).copied().unwrap_or(0.0);
+        for (qpos, tpos, hashval) in shared_position_pairs(query.sketch, target, intersection) {
+            let idf = query.idf(hashval).unwrap_or(0.0);
             window_idf.entry((qpos, tpos)).and_modify(|v| *v = v.min(idf)).or_insert(idf);
         }
         window_idf
@@ -1575,7 +1609,7 @@ impl ProteinSearcher {
         // Per target: shared k-mers, and whether one of them is not common.
         let mut counts: HashMap<u32, (usize, bool)> = HashMap::new();
         for kmer in &query.mins {
-            let Some(targets) = self.inverted_index.get(kmer) else { continue };
+            let Some(targets) = self.stats.postings.get(*kmer) else { continue };
             let rare = targets.len() <= max_targets;
             for &idx in targets {
                 let entry = counts.entry(idx).or_insert((0, false));
@@ -1739,7 +1773,9 @@ impl ProteinSearcher {
         }
 
         let query_expected_shared_kmers =
-            self.calculate_expected_shared_kmers(query.sketch, target_mins.len());
+            self.expected_shared_kmers_with(query.sketch, target_mins.len(), |h| {
+                query.kmer_frequency(h)
+            });
         let query_poisson_pvalue =
             poisson_survival(n_intersecting_hashes as u32, query_expected_shared_kmers);
 
@@ -1749,8 +1785,8 @@ impl ProteinSearcher {
         shared_hashes.sort_unstable();
 
         // Calculate database-specific overlap metrics
-        let mean_matched_kmer_freq = self.calculate_mean_matched_kmer_freq(&shared_hashes);
-        let sum_matched_kmer_freq = self.calculate_sum_matched_kmer_freq(&shared_hashes);
+        let mean_matched_kmer_freq = Self::calculate_mean_matched_kmer_freq(query, &shared_hashes);
+        let sum_matched_kmer_freq = Self::calculate_sum_matched_kmer_freq(query, &shared_hashes);
 
         drop(intersection_timer);
 
@@ -1790,7 +1826,7 @@ impl ProteinSearcher {
         let window_idf = if result.matched_regions.is_empty() {
             HashMap::new()
         } else {
-            self.shared_window_idf(query.sketch, target, &intersection)
+            Self::shared_window_idf(query, target, &intersection)
         };
         for region in result.matched_regions.iter_mut() {
             // lambda: for each query k-mer positioned inside this region, how many target
@@ -1891,8 +1927,7 @@ impl ProteinSearcher {
                 .iter()
                 .map(|&h| {
                     let fq = qfreqs.get(&h).copied().unwrap_or(0) as f64 / total_q;
-                    let ft =
-                        self.stats.kmer_frequencies.get(&h).copied().unwrap_or(0) as f64 / total_t;
+                    let ft = query.kmer_frequency(h).unwrap_or(0) as f64 / total_t;
                     fq * ft
                 })
                 .sum()
@@ -1901,7 +1936,7 @@ impl ProteinSearcher {
         };
 
         result.query_tfidf = query.tfidf;
-        result.coverage_score = self.calculate_coverage_score(&shared_hashes, target);
+        result.coverage_score = Self::calculate_coverage_score(query, &shared_hashes, target);
         result.mean_matched_kmer_freq = mean_matched_kmer_freq;
         result.sum_matched_kmer_freq = sum_matched_kmer_freq;
         result.query_expected_shared_kmers = query_expected_shared_kmers;
@@ -1932,7 +1967,7 @@ impl ProteinSearcher {
         let mut tfidf_sum = 0.0;
 
         for min in query_mins {
-            if let Some(&idf) = self.stats.idf.get(&min) {
+            if let Some(idf) = self.stats.idf(min) {
                 // TF is the abundance of the k-mer in the query (simplified to 1 if no abundance tracking)
                 let tf = 1.0; // Could be enhanced to use actual abundance if available
                 tfidf_sum += tf * idf;
@@ -1945,7 +1980,10 @@ impl ProteinSearcher {
     /// Mean frequency of matched k-mers in the target database: mean(freq_target[h]/N) over intersection.
     /// Higher values = matched k-mers are more common in the target DB (less discriminative).
     /// Range: [0, 1]. Pass the hashes sorted so the sum is the same on every run.
-    pub fn calculate_mean_matched_kmer_freq(&self, intersection: &[u64]) -> f64 {
+    pub fn calculate_mean_matched_kmer_freq(
+        query: &PreparedQuery<'_>,
+        intersection: &[u64],
+    ) -> f64 {
         if intersection.is_empty() {
             return 0.0;
         }
@@ -1957,9 +1995,8 @@ impl ProteinSearcher {
             .iter()
             .map(|&hashval| {
                 // Get frequency of this k-mer in the database (how many signatures contain it)
-                let db_frequency =
-                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
-                let total_signatures = self.stats.total_signatures as f64;
+                let db_frequency = query.kmer_frequency(hashval).unwrap_or(1) as f64;
+                let total_signatures = query.total_signatures as f64;
 
                 // Normalize frequency to [0,1] range
                 db_frequency / total_signatures
@@ -1977,24 +2014,25 @@ impl ProteinSearcher {
     /// `alpha = COVERAGE_LENGTH_EXPONENT` and L the target length in residues. See
     /// `SearchResult::coverage_score`. A hash the database has never seen contributes 0,
     /// matching `calculate_tfidf`.
-    fn calculate_coverage_score(&self, intersection: &[u64], target: &ProteinSketch) -> f64 {
+    fn calculate_coverage_score(
+        query: &PreparedQuery<'_>,
+        intersection: &[u64],
+        target: &ProteinSketch,
+    ) -> f64 {
         let Some(target_length) = target.get_raw_sequence().map(str::len) else {
             return 0.0;
         };
-        let idf_sum: f64 = intersection
-            .iter()
-            .map(|hashval| self.stats.idf.get(hashval).copied().unwrap_or(0.0))
-            .sum();
+        let idf_sum: f64 =
+            intersection.iter().map(|hashval| query.idf(*hashval).unwrap_or(0.0)).sum();
         idf_sum * (target_length as f64).powf(-COVERAGE_LENGTH_EXPONENT)
     }
 
-    fn calculate_sum_matched_kmer_freq(&self, intersection: &[u64]) -> f64 {
-        let total_signatures = self.stats.total_signatures as f64;
+    fn calculate_sum_matched_kmer_freq(query: &PreparedQuery<'_>, intersection: &[u64]) -> f64 {
+        let total_signatures = query.total_signatures as f64;
         intersection
             .iter()
             .map(|&hashval| {
-                let db_frequency =
-                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
+                let db_frequency = query.kmer_frequency(hashval).unwrap_or(1) as f64;
                 db_frequency / total_signatures
             })
             .sum()
@@ -2017,8 +2055,7 @@ impl ProteinSearcher {
             .iter()
             .filter(|&&hashval| target_mins.contains(&hashval))
             .map(|&hashval| {
-                let db_frequency =
-                    self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64;
+                let db_frequency = self.stats.kmer_frequency(hashval).unwrap_or(1) as f64;
                 db_frequency / total_signatures
             })
             .sum()
@@ -2049,16 +2086,31 @@ impl ProteinSearcher {
         query_sketch: &ProteinSketch,
         target_n_hashes: usize,
     ) -> f64 {
+        self.expected_shared_kmers_with(query_sketch, target_n_hashes, |h| {
+            self.stats.kmer_frequency(h)
+        })
+    }
+
+    /// `calculate_expected_shared_kmers` with each k-mer's database frequency read from
+    /// `frequency`, so `compare` can use the query's own table instead of the posting files.
+    fn expected_shared_kmers_with(
+        &self,
+        query_sketch: &ProteinSketch,
+        target_n_hashes: usize,
+        frequency: impl Fn(u64) -> Option<usize>,
+    ) -> f64 {
         let total_signatures = self.stats.total_signatures as f64;
         if total_signatures == 0.0 || self.db_n_kmers == 0 || target_n_hashes == 0 {
             return 0.0;
         }
         let mean_hashes = self.db_n_kmers as f64 / total_signatures;
         // Sequential iter: rayon overhead is unjustified for per-query-sized collections.
-        let shares = query_sketch.signature().minhash.mins().into_iter().map(|hashval| {
-            self.stats.kmer_frequencies.get(&hashval).copied().unwrap_or(1) as f64
-                / total_signatures
-        });
+        let shares = query_sketch
+            .signature()
+            .minhash
+            .mins()
+            .into_iter()
+            .map(|hashval| frequency(hashval).unwrap_or(1) as f64 / total_signatures);
         expected_shared_kmers(shares, target_n_hashes as f64 / mean_hashes)
     }
 
@@ -4416,11 +4468,8 @@ mod tests {
     fn test_search_stats_calculation() {
         // This would need a proper test with actual signatures
         // For now, just test the structure
-        let stats = SearchStats {
-            total_signatures: 100,
-            idf: HashMap::new(),
-            kmer_frequencies: HashMap::new(),
-        };
+        let stats =
+            SearchStats { total_signatures: 100, postings: Arc::new(PostingIndex::empty()) };
 
         assert_eq!(stats.total_signatures, 100);
     }
@@ -4436,17 +4485,13 @@ mod tests {
         let index = ProteomeIndex::new(&temp_path, 10, 5, "hp_lehninger2", false)?;
 
         let query = ProteinSketch::new("test", 10, 5, "hp_lehninger2")?;
-        let stats = SearchStats {
-            total_signatures: 100,
-            idf: HashMap::new(),
-            kmer_frequencies: HashMap::new(),
-        };
+        let stats =
+            SearchStats { total_signatures: 100, postings: Arc::new(PostingIndex::empty()) };
 
         let searcher = ProteinSearcher {
             index,
             stats,
             target_list: Vec::new(),
-            inverted_index: HashMap::new(),
             sig_cache: DashMap::new(),
             query_kmer_frequencies: None,
             total_queries: 0,
@@ -5157,7 +5202,7 @@ mod tests {
             .kmer_positions()
             .iter()
             .map(|(hashval, positions)| {
-                let freq = stats.kmer_frequencies.get(hashval).copied().unwrap_or(1) as f64
+                let freq = stats.kmer_frequency(*hashval).unwrap_or(1) as f64
                     / stats.total_signatures as f64;
                 let n_in_region = positions
                     .iter()
@@ -5188,7 +5233,7 @@ mod tests {
             .iter()
             .map(|(hashval, positions)| {
                 let idf = (stats.total_signatures as f64
-                    / stats.kmer_frequencies.get(hashval).copied().unwrap_or(1) as f64)
+                    / stats.kmer_frequency(*hashval).unwrap_or(1) as f64)
                     .ln();
                 let n_in_region = positions
                     .iter()
@@ -5254,7 +5299,7 @@ mod tests {
 
         // TEST_FASTA_GZ holds 25 signatures, and every k-mer occurrence across them is counted.
         assert_eq!(paired.db_n_targets, 25);
-        assert_eq!(paired.db_n_kmers, searcher.stats().kmer_frequencies.values().sum::<usize>());
+        assert_eq!(paired.db_n_kmers, searcher.stats().postings.n_postings());
         assert_eq!(paired.run_n_queries, 2);
         // Candidate region start positions in CED9: len - k + 1.
         assert_eq!(paired.region_search_space, ced9_sequence.len() - ksize as usize + 1);
@@ -5399,6 +5444,43 @@ mod tests {
         Ok(())
     }
 
+    /// `prepare_query` copies each query k-mer's database frequency out of the posting files
+    /// once, and `compare` reads only that copy. Worm Ced-9 against the first 25 BCL2-family
+    /// proteins at hp_lehninger2 k=19, where only some of Ced-9's k-mers are in the database:
+    /// the copy must hold exactly those, with the same counts, and nothing else.
+    #[test]
+    fn test_prepared_query_copies_every_database_frequency() -> Result<()> {
+        let ksize = 19;
+        let temp_dir = TempDir::new()?;
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+        let (name, sequence) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let sketch =
+            ProteinSketch::from_protein_sequence(&name, &sequence, ksize, 1, "hp_lehninger2")?;
+        let prepared = searcher.prepare_query(&sketch);
+
+        let mins = sketch.signature().minhash.mins();
+        let mut n_in_database = 0;
+        for &hash in &mins {
+            let expected = searcher.stats.kmer_frequency(hash);
+            assert_eq!(prepared.kmer_frequency(hash), expected, "hash {hash}");
+            assert_eq!(prepared.idf(hash), searcher.stats.idf(hash), "hash {hash}");
+            n_in_database += usize::from(expected.is_some());
+        }
+        // 262 Ced-9 k-mers, 13 of them in the 25 proteins.
+        assert_eq!((mins.len(), n_in_database, prepared.db_frequency.len()), (262, 13, 13));
+        // A hash the query does not hold is not in the copy, even if the database has it.
+        let postings = &searcher.stats.postings;
+        let (other, _) = (0..postings.n_shards())
+            .flat_map(|s| postings.shard(s))
+            .find(|(h, _)| !mins.contains(h))
+            .unwrap();
+        assert_eq!(prepared.kmer_frequency(other), None);
+        Ok(())
+    }
+
     /// A k-mer window holding an ambiguous residue is sketched under every reading, so one
     /// query position carries several hashes. The prefix array must add those up: then the
     /// whole-query prefix total is the same sum `calculate_expected_shared_kmers` takes over
@@ -5432,7 +5514,7 @@ mod tests {
             .minhash
             .mins()
             .into_iter()
-            .map(|h| searcher.stats.kmer_frequencies.get(&h).copied().unwrap_or(1) as f64 / n);
+            .map(|h| searcher.stats.kmer_frequency(h).unwrap_or(1) as f64 / n);
         let expected_total = expected_shared_kmers(shares, 1.0);
         let total_prefix = *prepared.position_prefix.last().unwrap();
         assert_relative_eq!(total_prefix, expected_total, epsilon = 1e-12);
@@ -5519,7 +5601,7 @@ mod tests {
             .minhash
             .mins()
             .into_iter()
-            .map(|h| searcher.stats.kmer_frequencies.get(&h).copied().unwrap_or(1))
+            .map(|h| searcher.stats.kmer_frequency(h).unwrap_or(1))
             .sum();
         assert_eq!(proteins_holding, 30);
         let small = searcher.calculate_expected_shared_kmers(&sketch, 91);
