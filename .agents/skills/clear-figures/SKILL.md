@@ -81,7 +81,7 @@ redoing these by hand.
     human-mouse GENCODE genes) at the k-mer sizes actually run: HP k of 19 or more,
     never k=9 ("completely unreasonable", kmerseek PR #62; kmerseek PR #38).
 
-Rules 7i to 7r come from Olga's chat messages, August to October 2026 (collected
+Rules 7i to 7t come from Olga's chat messages, August to October 2026 (collected
 2026-10-01), including the MultiQC figure spec she pasted on 2026-09-03.
 
 7i. **Numbers go on an x-y plot, not in bars.** "Anytime the categories are actually
@@ -118,6 +118,18 @@ Rules 7i to 7r come from Olga's chat messages, August to October 2026 (collected
 7r. **Say how to read the figure and what to decide from it.** "What is this figure really
     telling me? How do I interpret it? What decisions do I make from it?" (2026-09-25). The
     conclusion line answers the last question.
+7s. **A value beyond the axis range stays visible.** When one value sits far outside the
+    rest (the -1.45 chance score in the quote below), break the axis so the reader
+    sees both the cluster and the outlier, with the outlier's value written on it. Never set
+    the limits so that it falls off the view. Olga, analysis PR 54 (added 2026-10-13): "Make
+    this figure have a broken x axis to show that -1.45 goes way beyond the current view".
+7t. **Two series in one panel differ by colour, not only by dash pattern.** Dotted and
+    dashed lines are too hard to tell apart; use two clearly different colours (for example
+    red and blue), and keep the dash pattern as a second cue at most. Where two curves
+    cross, the caption says whether the crossing means anything; if it does not, say so.
+    Olga, analysis PR 54 (added 2026-10-13): "Does the intersection of Cohen's kappa
+    and the mean longest run mean something?", and asked for colours "like red and blue"
+    because the dotted and dashed lines were too hard to tell apart.
 
 ## Words in and around figures
 
