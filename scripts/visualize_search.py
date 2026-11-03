@@ -154,6 +154,25 @@ def ranking(rows):
     return benjamini_hochberg(_target_tail_probabilities(rows)), False
 
 
+def score_columns(rows):
+    """The page's score columns, the ranking one first. A search run with extension has a
+    Karlin-Altschul E-value and bit score per region; without it the page shows the single
+    ranking statistic (stat_name), so this is empty."""
+    if "region_evalue" not in rows[0] or "region_ka_bits" not in rows[0]:
+        return []
+    return [
+        {"key": "stat", "label": "E-value", "note": "E-value of the best region: Karlin-Altschul for an extended region, the run E-value otherwise (region_evalue_source)", "better": "low"},
+        {"key": "bits", "label": "bits", "note": "Karlin-Altschul bit score of the best region", "better": "high"},
+    ]
+
+
+def region_bits(row):
+    """The row's bit score, or None when it has none: 0 bits means the region was not
+    extended, so it has no Karlin-Altschul score."""
+    bits = float(row.get("region_ka_bits") or 0)
+    return bits or None
+
+
 def fold_entries(rows):
     """{protein key: [target names]} for every target in the CSV."""
     groups = defaultdict(list)
@@ -247,6 +266,7 @@ def protein_row(rank, target_name, others, stat, row, model):
         "tm_score": model["structure"]["tm_score_query"] if model.get("structure") else None,
         "n_shared": int(row["n_intersecting_hashes"]),
         "stat": stat,
+        "bits": region_bits(row),
         "runs": [run_bar(b) for b in model["runs"]],
         "model": model,
     }
@@ -271,7 +291,9 @@ class SearchReport:
         return align_pair(self.aligner, self.args.structures, query_name, target_name)
 
     def rows_for(self, query_name, rows, workdir):
-        ranked = rank_proteins(rows, self.args.max_rows)
+        # With --min-runs, proteins are taken in rank order and one with fewer runs is skipped
+        # until --max-rows are kept, so every protein is ranked first and the cap comes last.
+        ranked = rank_proteins(rows, None if self.args.min_runs > 0 else self.args.max_rows)
         best = _target_best_rows(rows)
         ksize, moltype = int(rows[0]["ksize"]), rows[0]["moltype"]
         query_fasta = os.path.join(workdir, "query.fasta")
@@ -279,7 +301,10 @@ class SearchReport:
         target_fasta = os.path.join(workdir, "targets.fasta")
         write_fasta(target_fasta, {t: self.targets[t] for t, _, _ in ranked})
         out = []
+        skipped = 0
         for rank, (target_name, others, stat) in enumerate(ranked, start=1):
+            if len(out) >= self.args.max_rows:
+                break
             pair = run_pair(self.kmerseek, query_fasta, target_fasta, target_name.split()[0], ksize, moltype)
             model = build_model(
                 pair,
@@ -287,7 +312,12 @@ class SearchReport:
                 flank=self.args.flank,
                 structure=self.structure(query_name, target_name),
             )
+            if len(model["runs"]) < self.args.min_runs:
+                skipped += 1
+                continue
             out.append(protein_row(rank, target_name, others, stat, best[target_name], model))
+        if skipped:
+            print(f"{query_name}: left out {skipped} proteins with fewer than {self.args.min_runs} runs", file=sys.stderr)
         return out
 
     def query_track(self, query_name):
@@ -312,6 +342,7 @@ class SearchReport:
             "classes": protein_rows[0]["model"]["classes"] if protein_rows else [],
             "stat_name": "E-value" if is_evalue else "q-value",
             "stat_note": "E-value of the best region: Karlin-Altschul for an extended region, the run E-value otherwise (region_evalue_source)" if is_evalue else "Benjamini-Hochberg corrected tail probability of the best region",
+            "score_columns": score_columns(rows),
             "n_entries": len(_target_best_rows(rows)),
             "n_proteins": len(fold_entries(rows)),
             "solid_identical": self.args.solid_identical,
@@ -344,6 +375,9 @@ def _build_arg_parser():
     p.add_argument("--query-name", help="one query's header, or its first token; default every query in the CSV")
     p.add_argument("--domains", nargs="*", default=[], metavar="TABLE", help="Pfam-style domain tables for queries and targets")
     p.add_argument("--max-rows", type=int, default=100, help="protein rows per query, best ranking statistic first (default 100)")
+    p.add_argument("--min-runs", type=int, default=0,
+                   help="leave out proteins with fewer runs than this (default 0, keep all): a region "
+                        "kmerseek search chained from k-mers on different diagonals can have none")
     p.add_argument("--max-runs-shown", type=int, default=10, help="alignments per opened row, longest first (default 10)")
     p.add_argument("--solid-identical", type=int, default=5, help="identical residues a run needs to count in the histogram's dark area (default 5)")
     p.add_argument("--flank", type=int, default=0, help="residues shown either side of each run in the alignments")
