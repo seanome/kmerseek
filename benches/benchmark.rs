@@ -452,15 +452,20 @@ fn benchmark_search_throughput(c: &mut Criterion) {
             }
 
             // benchmark: batch search at several batch sizes (simulated by repeating query)
-            for n_queries in [10usize, 100, 500] {
+            // Each result is dropped before the next search: ced9 at hp_lehninger2 k=10 returns
+            // about 80 MB per search, so holding 500 of them took 39 GB and stopped the CI runner.
+            for n_queries in [10usize, 100] {
                 let queries: Vec<ProteinSketch> = vec![query_sig.clone(); n_queries];
                 let bench_name = format!("search_batch{n_queries}_{moltype}_k{ksize}");
                 c.bench_function(&bench_name, |b| {
                     b.iter(|| {
-                        queries
-                            .iter()
-                            .map(|q| searcher.search_one(q, &SearchFilters::default(), n_queries))
-                            .collect::<Vec<_>>()
+                        for q in &queries {
+                            std::hint::black_box(searcher.search_one(
+                                q,
+                                &SearchFilters::default(),
+                                n_queries,
+                            ));
+                        }
                     })
                 });
             }
