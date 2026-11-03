@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::aminoacid::AminoAcidAmbiguity;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::KaCalibration;
+use crate::kmer_protein_index::{KmerProteinIndex, KmerProteinIndexWriter};
 use crate::search::ExtensionScoring;
 use crate::sketch::{ProteinSketch, ProteinSketchStore};
 use crate::types::KmerSize;
@@ -35,8 +36,15 @@ use crate::types::MolType;
 ///
 /// History: 1 = first versioned layout; 2 = `remove_low_complexity` in the metadata;
 /// 3 = streaming index (`sig_{md5}`, `targets_{n}`, `ii_shard_{s}` keys, no combined
-/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped.
-pub const SCHEMA_VERSION: u32 = 4;
+/// minhash in the metadata); 4 = older layouts no longer read, `chunk_count` dropped;
+/// 5 = k-mer-to-protein index in flat files under `postings/` (see `crate::kmer_protein_index`), no
+/// `ii_shard_{s}` keys;
+/// 6 = signatures keyed by their sequence, without k-mer-to-protein index files (PR 152's branch only);
+/// 7 = k-mer-to-protein index files, plus signatures keyed by their sequence (`sketch::sequence_key`, full
+/// 128 bits) instead of their k-mer set, the key stored in `ProteinSketchStore::md5sum`, one
+/// alias record per repeated name, and a small primary-name record.
+/// 8 = `total_residues` in the metadata.
+pub const SCHEMA_VERSION: u32 = 8;
 
 /// RocksDB key holding the kmerseek version that wrote the index, e.g. `"0.4.0"`.
 /// Provenance only; `schema_version` is what selects the on-disk layout.
@@ -51,15 +59,17 @@ const KMERSEEK_VERSION_KEY: &[u8] = b"kmerseek_version";
 /// `SCHEMA_VERSION` must move with any such change.
 const KA_CALIBRATION_KEY: &[u8] = b"ka_calibration";
 
-/// Number of hash-range shards the inverted index is split into on disk.
+/// Number of hash-range shards the k-mer-to-protein index is split into on disk.
 ///
 /// Sharding bounds the memory needed to finalize the index: each shard is sorted and
-/// written on its own, so the peak is one shard's postings, not the corpus's. It also
-/// keeps every RocksDB value far below the 4 GiB single-value limit: UniRef50 at k=10
-/// has ~12 G postings, which is ~12 M per shard, about 250 MB serialized. Shards are
-/// selected by the low bits of the hash, because FracMinHash keeps only hashes below
-/// `max_hash / scaled`, which would leave the high bits nearly constant.
-const INVERTED_INDEX_SHARDS: usize = 1024;
+/// written on its own, so the peak is one shard's k-mer–protein ID pairs, not the corpus's.
+/// UniRef50
+/// at k=10 has ~12 G k-mer–protein ID pairs, which is ~12 M per shard. Shards are selected by
+/// the low
+/// bits of the hash, because FracMinHash keeps only hashes below `max_hash / scaled`,
+/// which would leave the high bits nearly constant. A lookup goes to its shard and
+/// binary-searches only that shard's k-mers.
+const KMER_PROTEIN_INDEX_SHARDS: usize = 1024;
 
 /// Target md5s per `targets_{n}` key. Chunk `n` always holds targets
 /// `n * chunk .. (n + 1) * chunk`, so an index into the target list maps to a key
@@ -69,14 +79,7 @@ const DEFAULT_TARGET_CHUNK: usize = 4096;
 /// `(hash, target)` pairs buffered in memory before they are written out as a sorted run.
 /// Each pair is 16 bytes, so the default buffer is 256 MB. This is the only structure
 /// during indexing whose size is chosen rather than dictated by the data.
-const DEFAULT_POSTING_BUFFER: usize = 1 << 24;
-
-/// Statistics for k-mer frequency analysis
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProteomeIndexKmerStats {
-    pub idf: HashMap<u64, f64>, // Inverse document frequency for each k-mer hashvalue
-    pub frequency: HashMap<u64, f64>, // Raw frequency for each k-mer hashvalue
-}
+const DEFAULT_KMER_PROTEIN_PAIR_BUFFER: usize = 1 << 24;
 
 /// Index metadata, written last by `finalize` so its presence means the index is complete.
 #[derive(Serialize, Deserialize)]
@@ -88,51 +91,56 @@ struct ProteomeIndexMetadata {
     store_raw_sequences: bool,
     /// Whether low-complexity k-mers were removed when this index was built.
     remove_low_complexity: bool,
-    /// Distinct k-mer hashes across every signature; the number of inverted index keys.
+    /// Distinct k-mer hashes across every signature; the number of k-mer-to-protein index keys.
     unique_kmers: usize,
-    /// Inverted index shards on disk.
+    /// Residues summed over every stored sequence (see `ProteomeIndex::total_residues`).
+    total_residues: u64,
+    /// K-mer-to-protein index shards on disk.
     shards: usize,
     /// Target md5s per `targets_{n}` key.
     target_chunk: usize,
 }
 
-/// The search structures a `ProteinSearcher` keeps in memory, assembled from the on-disk
-/// inverted index by `ProteomeIndex::load_search_cache`.
+/// The search structures a `ProteinSearcher` needs, from `ProteomeIndex::load_search_cache`.
 ///
 /// Individual signatures are stored separately under "sig_{md5}" keys for on-demand access.
-#[derive(Serialize, Deserialize)]
 pub struct SearchCache {
     /// Ordered list of target MD5 sums: index (u32) → md5 string
     pub target_list: Vec<String>,
-    /// Inverted k-mer index: kmer_hash → Vec of target indices into target_list
-    pub inverted_index: HashMap<u64, Vec<u32>>,
-    /// K-mer frequency counts: kmer_hash → number of signatures containing it
-    pub kmer_frequencies: HashMap<u64, usize>,
+    /// K-mer-to-protein index: each hash maps to IDs of proteins containing this k-mer.
+    /// IDs are positions in `target_list`. A k-mer's frequency is its protein ID list length.
+    pub kmer_protein_index: KmerProteinIndex,
 }
 
 /// Everything the streaming indexer carries between batches. Bounded in size: the
-/// posting buffer is capped, the target tail is at most one chunk, and `seen` is one
-/// u64 per signature.
+/// k-mer–protein ID pair buffer is capped, the target tail is at most one chunk, and `seen` is one
+/// u128 per signature, plus the additional entry names.
 struct IngestState {
     /// Signatures written so far; also the target index the next one receives.
     next_idx: usize,
-    /// Signature keys already written, so a repeated sequence is skipped rather than
-    /// listed twice. The key is the sketch "md5", a wrapping sum of its mins.
-    seen: HashSet<u64>,
+    /// Signature keys already written, so a repeated sequence is stored once rather than
+    /// listed twice. The key is the sketch "md5", a hash of its sequence
+    /// (`sketch::sequence_key`).
+    seen: HashSet<u128>,
     /// The partial last `targets_{n}` chunk, rewritten each time it grows.
     target_tail: Vec<String>,
     /// `(hash, target index)` pairs not yet written as a run.
-    postings: Vec<(u64, u32)>,
+    kmer_protein_pairs: Vec<(u64, u32)>,
     /// Runs written since the last finalize.
     runs: usize,
-    /// Whether every ingested posting has been merged into the on-disk shards.
+    /// Whether every ingested k-mer–protein ID pair has been merged into the on-disk shards.
     shards_written: bool,
     /// Whether the database reflects everything ingested: shards, target chunks and
     /// metadata. False for a new index until its first `finalize`, so an empty index
     /// still gets a (empty) cache; true after opening a saved one.
     saved: bool,
     unique_kmers: usize,
+    /// Residues of every sequence written so far that stores one.
+    total_residues: u64,
     duplicates_skipped: usize,
+    /// Names of the entries whose sequence was already stored, by that sequence's md5.
+    /// Written to `alias_{md5}_{name}` so search can report every entry.
+    aliases: HashMap<String, HashSet<String>>,
     /// Frequency summary gathered while the shards were last written.
     stats: Option<KmerFrequencySummary>,
 }
@@ -143,12 +151,14 @@ impl IngestState {
             next_idx: 0,
             seen: HashSet::new(),
             target_tail: Vec::new(),
-            postings: Vec::new(),
+            kmer_protein_pairs: Vec::new(),
             runs: 0,
             shards_written: false,
             saved: false,
             unique_kmers: 0,
+            total_residues: 0,
             duplicates_skipped: 0,
+            aliases: HashMap::new(),
             stats: None,
         }
     }
@@ -209,9 +219,9 @@ pub struct ProteomeIndex {
     // Streaming state shared by every ingest path; see IngestState.
     ingest: Mutex<IngestState>,
 
-    // Posting pairs buffered before a run is written. A field rather than the constant
+    // K-mer–protein ID pairs buffered before a run is written. A field rather than the constant
     // so a test can force many runs on a tiny corpus.
-    posting_buffer_capacity: usize,
+    kmer_protein_pair_buffer_capacity: usize,
 
     // Target md5s per `targets_{n}` key. Read from the metadata of a saved index; for a
     // new one the default, unless a test lowers it to exercise chunk rollover.
@@ -220,24 +230,13 @@ pub struct ProteomeIndex {
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
 
-    // Statistics for k-mer frequencies and IDF
-    // Not currently used, but will be used in the future
-    #[allow(dead_code)]
-    stats: ProteomeIndexKmerStats,
-
-    // Molecule type of every signature, e.g. "protein" or "hp". Saved in
+    // Alphabet of every signature, e.g. "protein20" or "hp_lehninger2". Saved in
     // ProteomeIndexMetadata, so a loaded index knows it without reading a signature.
     moltype: String,
 
     // k-mer size in residues. Saved in ProteomeIndexMetadata. u32 to match sourmash
     // branchwater.
     ksize: u32,
-
-    // Add minhash_ksize field for serialization
-    // MinHash k-mer size is protein_ksize * 3, as a legacy from Sourmash which was originally designed for DNA
-    // Not currently used, but will be used in the future
-    #[allow(dead_code)]
-    minhash_ksize: u32,
 
     // FracMinHash scaled value: a k-mer is kept when its hash is below max_hash / scaled.
     // Saved in ProteomeIndexMetadata.
@@ -395,14 +394,12 @@ impl ProteomeIndex {
             db,
             signatures: DashMap::new(),
             ingest: Mutex::new(IngestState::empty()),
-            posting_buffer_capacity: DEFAULT_POSTING_BUFFER,
+            kmer_protein_pair_buffer_capacity: DEFAULT_KMER_PROTEIN_PAIR_BUFFER,
             target_chunk,
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-            minhash_ksize: ksize * 3,
             moltype,
             ksize,
             scaled,
-            stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             store_raw_sequences,
             remove_low_complexity,
             kmer_windows_examined: AtomicUsize::new(0),
@@ -414,8 +411,8 @@ impl ProteomeIndex {
     /// Cap on buffered `(hash, target)` pairs before they are written as a run. Only a
     /// test has a reason to lower it: with the default a small corpus never writes more
     /// than one run, so the multi-run merge in `finalize` would go unexercised.
-    pub fn set_posting_buffer_capacity(&mut self, capacity: usize) {
-        self.posting_buffer_capacity = capacity.max(1);
+    pub fn set_kmer_protein_pair_buffer_capacity(&mut self, capacity: usize) {
+        self.kmer_protein_pair_buffer_capacity = capacity.max(1);
     }
 
     /// Target md5s per `targets_{n}` key. Only a test has a reason to lower it: no
@@ -541,6 +538,13 @@ impl ProteomeIndex {
     /// Get the scaled value
     pub fn scaled(&self) -> u32 {
         self.scaled
+    }
+
+    /// Residues summed over every stored sequence: the encoded sequence, or the raw one
+    /// for `protein`. A target stored without its sequence adds nothing, and neither does a
+    /// repeated sequence, which is skipped. This is n in the run E-value.
+    pub fn total_residues(&self) -> u64 {
+        self.ingest.lock().total_residues
     }
 
     /// Get the molecular type
@@ -803,12 +807,8 @@ impl ProteomeIndex {
         format!("ii_run_{run}_{shard}").into_bytes()
     }
 
-    fn shard_key(shard: usize) -> Vec<u8> {
-        format!("ii_shard_{shard}").into_bytes()
-    }
-
     fn shard_of(hash: u64) -> usize {
-        (hash as usize) & (INVERTED_INDEX_SHARDS - 1)
+        (hash as usize) & (KMER_PROTEIN_INDEX_SHARDS - 1)
     }
 
     /// The md5 of target `idx` from its `targets_{n}` chunk on disk.
@@ -825,13 +825,15 @@ impl ProteomeIndex {
     /// Write a batch of sketches to the index.
     ///
     /// Each sketch goes to its `sig_{md5}` key, its md5 to the target list, and one
-    /// `(hash, target)` pair per k-mer to the posting buffer, which is spilled to disk as
-    /// a run when full. With `retain` the sketch is also kept in the in-memory map.
+    /// `(hash, target)` pair per k-mer to the k-mer–protein ID pair buffer, which is spilled to
+    /// disk as a run when full. With `retain` the sketch is also kept in the in-memory map.
     /// Nothing else about the sketch survives the call, which is what keeps indexing
     /// memory flat in the corpus size.
     ///
-    /// A sketch whose key was already written is skipped, so a repeated sequence appears
-    /// once, under the name it was first seen with.
+    /// A sketch whose key was already written is stored once, under the name it was first
+    /// seen with; the later names go to `alias_{md5}_{name}`, so search reports each of them.
+    /// A name already recorded for that sequence is not added again, so ingesting the same
+    /// FASTA twice does not make search report each hit twice.
     fn ingest(&self, sketches: Vec<ProteinSketch>, retain: bool) -> IndexResult<()> {
         use rayon::prelude::*;
 
@@ -841,62 +843,128 @@ impl ProteomeIndex {
             .collect::<Result<_, _>>()?;
 
         let mut state = self.ingest.lock();
+        // Stage only this batch and the bounded k-mer–protein ID pair and target buffers. The live
+        // state and retained signatures change only after the atomic database write.
+        let mut pending = IngestState::empty();
+        pending.next_idx = state.next_idx;
+        pending.target_tail = state.target_tail.clone();
+        pending.kmer_protein_pairs = state.kmer_protein_pairs.clone();
+        pending.runs = state.runs;
         let mut batch = WriteBatch::default();
+        let mut stored_here: HashMap<u128, String> = HashMap::new();
+        let mut retained = Vec::new();
         for (sketch, bytes) in sketches.into_iter().zip(serialized) {
             let md5 = sketch.signature().md5sum.clone();
-            let key = u64::from_str_radix(&md5, 16).map_err(|_| IndexError::ValidationError {
-                message: format!("signature key {md5:?} is not a hex u64"),
+            let key = u128::from_str_radix(&md5, 16).map_err(|_| IndexError::ValidationError {
+                message: format!("signature key {md5:?} is not a hex u128"),
             })?;
-            if !state.seen.insert(key) {
-                state.duplicates_skipped += 1;
+            if state.seen.contains(&key) || pending.seen.contains(&key) {
+                pending.duplicates_skipped += 1;
+                let name = &sketch.signature().name;
+                let stored_name = match stored_here.get(&key) {
+                    Some(stored) => Some(stored.clone()),
+                    None => self.stored_name(&md5)?,
+                };
+                if stored_name.as_ref() != Some(name)
+                    && !state.aliases.get(&md5).is_some_and(|names| names.contains(name))
+                    && pending.aliases.entry(md5.clone()).or_default().insert(name.clone())
+                {
+                    // One record per name: no growing list is serialized or scanned.
+                    batch.put(
+                        format!("alias_{md5}_{name}").as_bytes(),
+                        bincode::serialize(&(md5.clone(), name))?,
+                    );
+                }
                 continue;
             }
-            let idx = u32::try_from(state.next_idx).map_err(|_| IndexError::ValidationError {
+            let idx = u32::try_from(pending.next_idx).map_err(|_| IndexError::ValidationError {
                 message: format!("index cannot hold more than {} targets", u32::MAX),
             })?;
-
-            batch.put(format!("sig_{md5}").into_bytes(), &bytes);
+            pending.seen.insert(key);
+            stored_here.insert(key, sketch.signature().name.clone());
+            batch.put(format!("name_{md5}").as_bytes(), sketch.signature().name.as_bytes());
+            batch.put(format!("sig_{md5}").as_bytes(), &bytes);
+            let stored = sketch.get_moltype_sequence().or_else(|| sketch.get_raw_sequence());
+            pending.total_residues += stored.map_or(0, str::len) as u64;
             for hash in sketch.signature().minhash.mins() {
-                state.postings.push((hash, idx));
+                pending.kmer_protein_pairs.push((hash, idx));
             }
-            state.shards_written = false;
-            state.saved = false;
-            if state.postings.len() >= self.posting_buffer_capacity {
-                self.write_run(&mut state)?;
+            if pending.kmer_protein_pairs.len() >= self.kmer_protein_pair_buffer_capacity {
+                Self::stage_run(&mut pending, &mut batch)?;
             }
             if retain {
-                self.signatures.insert(md5.clone(), sketch);
+                retained.push((md5.clone(), sketch));
             }
-
-            let tail_chunk = self.tail_chunk(&state);
-            state.target_tail.push(md5);
-            state.next_idx += 1;
-            if state.target_tail.len() == self.target_chunk {
-                batch.put(Self::targets_key(tail_chunk), bincode::serialize(&state.target_tail)?);
-                state.target_tail.clear();
+            let tail_chunk = self.tail_chunk(&pending);
+            pending.target_tail.push(md5);
+            pending.next_idx += 1;
+            if pending.target_tail.len() == self.target_chunk {
+                batch.put(Self::targets_key(tail_chunk), bincode::serialize(&pending.target_tail)?);
+                pending.target_tail.clear();
             }
         }
         self.db.write(batch)?;
+        if !pending.seen.is_empty() {
+            state.shards_written = false;
+            state.saved = false;
+        }
+        for (key, names) in pending.aliases {
+            if !names.is_empty() {
+                state.aliases.entry(key).or_default().extend(names);
+                state.saved = false;
+            }
+        }
+        state.seen.extend(pending.seen);
+        state.next_idx = pending.next_idx;
+        state.target_tail = pending.target_tail;
+        state.kmer_protein_pairs = pending.kmer_protein_pairs;
+        state.runs = pending.runs;
+        state.duplicates_skipped += pending.duplicates_skipped;
+        state.total_residues += pending.total_residues;
+        for (md5, sketch) in retained {
+            self.signatures.insert(md5, sketch);
+        }
         Ok(())
     }
 
-    /// Spill the posting buffer to disk as one run, split by shard so that `finalize` can
-    /// read each shard's postings without touching the others.
+    /// Add a run of k-mer–protein ID pairs to the caller's atomic batch without changing the database.
+    fn stage_run(state: &mut IngestState, batch: &mut WriteBatch) -> IndexResult<()> {
+        if state.kmer_protein_pairs.is_empty() {
+            return Ok(());
+        }
+        state.kmer_protein_pairs.sort_unstable_by_key(|&(hash, _)| Self::shard_of(hash));
+        for chunk in
+            state.kmer_protein_pairs.chunk_by(|a, b| Self::shard_of(a.0) == Self::shard_of(b.0))
+        {
+            batch.put(
+                Self::run_key(state.runs, Self::shard_of(chunk[0].0)),
+                bincode::serialize(chunk)?,
+            );
+        }
+        state.kmer_protein_pairs.clear();
+        state.runs += 1;
+        Ok(())
+    }
+
+    /// Spill the k-mer–protein ID pair buffer to disk as one run, split by shard so that
+    /// `finalize` can read each shard's k-mer–protein ID pairs without touching the others.
     fn write_run(&self, state: &mut IngestState) -> IndexResult<()> {
-        if state.postings.is_empty() {
+        if state.kmer_protein_pairs.is_empty() {
             return Ok(());
         }
         let run = state.runs;
         // Sorting by shard in place is what lets each shard's slice be written straight
         // from the buffer; the order within a shard does not matter yet, because
         // `merge_shard` sorts by (hash, target) anyway.
-        state.postings.sort_unstable_by_key(|&(hash, _)| Self::shard_of(hash));
+        state.kmer_protein_pairs.sort_unstable_by_key(|&(hash, _)| Self::shard_of(hash));
         let mut batch = WriteBatch::default();
-        for chunk in state.postings.chunk_by(|a, b| Self::shard_of(a.0) == Self::shard_of(b.0)) {
+        for chunk in
+            state.kmer_protein_pairs.chunk_by(|a, b| Self::shard_of(a.0) == Self::shard_of(b.0))
+        {
             batch.put(Self::run_key(run, Self::shard_of(chunk[0].0)), bincode::serialize(chunk)?);
         }
         self.db.write(batch)?;
-        state.postings.clear();
+        state.kmer_protein_pairs.clear();
         state.runs += 1;
         Ok(())
     }
@@ -914,17 +982,18 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Merge every run into the on-disk inverted index shards and write the metadata.
+    /// Merge every run into the k-mer-to-protein index files and write the metadata.
     ///
     /// Runs the equivalent of an external sort: each shard's runs are read, sorted by
-    /// `(hash, target)`, grouped into posting lists, and written as one `ii_shard_{s}`
-    /// value. Peak memory is one shard's postings. Also gathers the k-mer frequency
-    /// summary in the same pass, since that is the only time the whole index is walked.
+    /// `(hash, target)`, grouped into protein ID lists, and appended to the k-mer-to-protein
+    /// index files (see `crate::kmer_protein_index`). Peak memory is one shard's k-mer–protein ID pairs.
+    /// Also gathers the k-mer frequency summary in the same pass, since that is the only time the whole
+    /// index is walked. The runs are deleted only once the new files are in place.
     ///
     /// Idempotent: a second call with nothing new ingested writes nothing, so it is safe
     /// on an index opened read-only. A call after more sketches were ingested folds the
-    /// existing shards in as one more run, so `process_fasta` can be called more than
-    /// once on the same index.
+    /// existing k-mer-to-protein index files in as one more run, so `process_fasta` can be
+    /// called more than once on the same index.
     pub fn finalize(&self) -> IndexResult<()> {
         let mut state = self.ingest.lock();
         if state.saved {
@@ -935,10 +1004,13 @@ impl ProteomeIndex {
 
         if !state.shards_written {
             let t0 = Instant::now();
-            let merge_existing = self.db.get(Self::shard_key(0))?.is_some();
+            let dir = self.db.path().to_path_buf();
+            KmerProteinIndex::recover(&dir)?;
+            let existing =
+                KmerProteinIndex::exists(&dir).then(|| KmerProteinIndex::open(&dir)).transpose()?;
             eprintln!(
-                "[save] Merging {} posting runs into {} inverted index shards...",
-                state.runs, INVERTED_INDEX_SHARDS
+                "[save] Merging {} k-mer–protein ID pair runs into {} k-mer-to-protein index shards...",
+                state.runs, KMER_PROTEIN_INDEX_SHARDS
             );
             let mut summary = KmerFrequencySummary {
                 spectrum: BTreeMap::new(),
@@ -948,8 +1020,10 @@ impl ProteomeIndex {
             let mut most = SmallestN::new(Self::KMER_EXAMPLES);
             let mut least = SmallestN::new(Self::KMER_EXAMPLES);
             let mut unique_kmers = 0usize;
-            for shard in 0..INVERTED_INDEX_SHARDS {
-                let groups = self.merge_shard(shard, state.runs, merge_existing)?;
+            let mut writer = KmerProteinIndexWriter::create(&dir)?;
+            for shard in 0..KMER_PROTEIN_INDEX_SHARDS {
+                let groups = self.merge_shard(shard, state.runs, existing.as_ref())?;
+                writer.push_shard(&groups)?;
                 unique_kmers += groups.len();
                 for (hash, targets) in &groups {
                     let count = targets.len();
@@ -959,6 +1033,8 @@ impl ProteomeIndex {
                     least.push((count, *hash), value);
                 }
             }
+            writer.finish()?;
+            self.delete_runs(state.runs)?;
             summary.most_common = most.into_sorted();
             summary.least_common = least.into_sorted();
             state.unique_kmers = unique_kmers;
@@ -966,13 +1042,14 @@ impl ProteomeIndex {
             state.runs = 0;
             state.shards_written = true;
             eprintln!(
-                "[save] Inverted index written: {} unique k-mers in {:.1}s",
+                "[save] K-mer-to-protein index written: {} unique k-mers in {:.1}s",
                 unique_kmers,
                 t0.elapsed().as_secs_f32()
             );
             if state.duplicates_skipped > 0 {
                 eprintln!(
-                    "[save] Skipped {} sequences whose signature key was already indexed",
+                    "[save] {} entries repeat an earlier entry's sequence: stored once, \
+                     reported under every name",
                     state.duplicates_skipped
                 );
             }
@@ -983,51 +1060,46 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Sort one shard's runs into posting lists, write the shard, and delete the runs.
+    /// Sort one shard's runs, and its k-mer–protein ID pairs from `existing`, into protein ID
+    /// lists.
     fn merge_shard(
         &self,
         shard: usize,
         runs: usize,
-        merge_existing: bool,
+        existing: Option<&KmerProteinIndex>,
     ) -> IndexResult<Vec<(u64, Vec<u32>)>> {
         let mut pairs: Vec<(u64, u32)> = Vec::new();
-        if merge_existing {
-            for (hash, targets) in self.read_shard(shard)? {
-                pairs.extend(targets.into_iter().map(|t| (hash, t)));
+        if let Some(existing) = existing {
+            for (hash, targets) in existing.shard(shard) {
+                pairs.extend(targets.iter().map(|&t| (hash, t)));
             }
         }
-        let mut batch = WriteBatch::default();
         for run in 0..runs {
-            let key = Self::run_key(run, shard);
-            if let Some(raw) = self.db.get(&key)? {
+            if let Some(raw) = self.db.get(Self::run_key(run, shard))? {
                 let run_pairs: Vec<(u64, u32)> = bincode::deserialize(&raw)?;
                 pairs.extend(run_pairs);
-                batch.delete(&key);
             }
         }
-        // (hash, target) order makes each posting list come out in target order, which
+        // (hash, target) order makes each protein ID list come out in target order, which
         // is the order the sequences were indexed in.
         pairs.sort_unstable();
-        let mut groups: Vec<(u64, Vec<u32>)> = Vec::new();
-        for chunk in pairs.chunk_by(|a, b| a.0 == b.0) {
-            groups.push((chunk[0].0, chunk.iter().map(|&(_, t)| t).collect()));
-        }
-        batch.put(Self::shard_key(shard), bincode::serialize(&groups)?);
-        self.db.write(batch)?;
-        Ok(groups)
+        Ok(pairs
+            .chunk_by(|a, b| a.0 == b.0)
+            .map(|chunk| (chunk[0].0, chunk.iter().map(|&(_, t)| t).collect()))
+            .collect())
     }
 
-    /// One shard of the on-disk inverted index. A missing shard is an error, never an
-    /// empty list: every shard is written by `finalize`, so absence means the index was
-    /// interrupted while being written.
-    fn read_shard(&self, shard: usize) -> IndexResult<Vec<(u64, Vec<u32>)>> {
-        let raw = self.db.get(Self::shard_key(shard))?.ok_or_else(|| {
-            IndexError::CorruptIndex(format!(
-                "inverted index shard {shard} is missing; the index was interrupted while \
-                 being written and must be rebuilt with `kmerseek index`"
-            ))
-        })?;
-        Ok(bincode::deserialize(&raw)?)
+    /// Delete every k-mer–protein ID pair run, once the k-mer-to-protein index files that hold
+    /// their pairs are in place.
+    fn delete_runs(&self, runs: usize) -> IndexResult<()> {
+        let mut batch = WriteBatch::default();
+        for run in 0..runs {
+            for shard in 0..KMER_PROTEIN_INDEX_SHARDS {
+                batch.delete(Self::run_key(run, shard));
+            }
+        }
+        self.db.write(batch)?;
+        Ok(())
     }
 
     /// Write `index_metadata`, `schema_version` and `kmerseek_version`.
@@ -1043,7 +1115,8 @@ impl ProteomeIndex {
             store_raw_sequences: self.store_raw_sequences,
             remove_low_complexity: self.remove_low_complexity,
             unique_kmers: state.unique_kmers,
-            shards: INVERTED_INDEX_SHARDS,
+            total_residues: state.total_residues,
+            shards: KMER_PROTEIN_INDEX_SHARDS,
             target_chunk: self.target_chunk,
         };
         let mut batch = WriteBatch::default();
@@ -1054,7 +1127,7 @@ impl ProteomeIndex {
         Ok(())
     }
 
-    /// Finish the index on disk: merge the inverted index, write the metadata, flush.
+    /// Finish the index on disk: merge the k-mer-to-protein index, write the metadata, flush.
     pub fn save_state(&self) -> IndexResult<()> {
         self.save_state_with_kmer_stats(None)
     }
@@ -1112,15 +1185,18 @@ impl ProteomeIndex {
         let mut state = IngestState::empty();
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
+        state.total_residues = metadata.total_residues;
         state.shards_written = true;
         state.saved = true;
+        state.aliases = self.read_aliases()?;
         let chunks = metadata.total_signatures.div_ceil(metadata.target_chunk);
         for chunk in 0..chunks {
             let md5s = self.read_target_chunk(chunk, chunks)?;
             for md5 in &md5s {
-                if let Ok(key) = u64::from_str_radix(md5, 16) {
-                    state.seen.insert(key);
-                }
+                let key = u128::from_str_radix(md5, 16).map_err(|_| {
+                    IndexError::CorruptIndex(format!("invalid stored sequence key {md5:?}"))
+                })?;
+                state.seen.insert(key);
             }
             if md5s.len() < metadata.target_chunk {
                 state.target_tail = md5s;
@@ -1183,7 +1259,7 @@ impl ProteomeIndex {
     ///
     /// Reads only the metadata; signatures are loaded on demand via
     /// `get_signature_by_md5()` during search. Call `load_search_cache()` after opening
-    /// to retrieve the inverted index.
+    /// to retrieve the k-mer-to-protein index.
     pub fn open_for_search<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
         let opts = Self::create_rocksdb_options(false);
         // WHY: open_for_read_only avoids acquiring the exclusive LOCK file, allowing
@@ -1203,19 +1279,21 @@ impl ProteomeIndex {
             metadata.target_chunk,
         );
         let mut state = IngestState::empty();
+        state.aliases = index.read_aliases()?;
         state.next_idx = metadata.total_signatures;
         state.unique_kmers = metadata.unique_kmers;
+        state.total_residues = metadata.total_residues;
         state.shards_written = true;
         state.saved = true;
         *index.ingest.lock() = state;
         Ok(index)
     }
 
-    /// The search structures of this index, assembled from disk.
+    /// The search structures of this index: the target list, read from disk, and the
+    /// k-mer-to-protein index files, mapped but not read.
     ///
-    /// `None` only for a database that was never finalized. The index is read shard by
-    /// shard. The frequency of a k-mer is the length of its posting list, so it is
-    /// derived rather than stored.
+    /// `None` only for a database that was never finalized. The frequency of a k-mer is
+    /// the length of its protein ID list, so it is derived rather than stored.
     pub fn load_search_cache(&self) -> IndexResult<Option<SearchCache>> {
         let Some(metadata) = self.own_metadata()? else { return Ok(None) };
 
@@ -1232,23 +1310,32 @@ impl ProteomeIndex {
             )));
         }
 
-        let mut inverted_index: HashMap<u64, Vec<u32>> =
-            HashMap::with_capacity(metadata.unique_kmers);
-        let mut kmer_frequencies: HashMap<u64, usize> =
-            HashMap::with_capacity(metadata.unique_kmers);
-        for shard in 0..metadata.shards {
-            for (hash, targets) in self.read_shard(shard)? {
-                kmer_frequencies.insert(hash, targets.len());
-                inverted_index.insert(hash, targets);
-            }
+        let kmer_protein_index = KmerProteinIndex::open(self.db.path())?;
+        if kmer_protein_index.len() != metadata.unique_kmers {
+            return Err(IndexError::CorruptIndex(format!(
+                "k-mer-to-protein index files hold {} k-mers but the metadata says {}",
+                kmer_protein_index.len(),
+                metadata.unique_kmers
+            )));
         }
-        Ok(Some(SearchCache { target_list, inverted_index, kmer_frequencies }))
+        Ok(Some(SearchCache { target_list, kmer_protein_index }))
+    }
+
+    /// The name a stored sequence was first indexed under, read from its small `name_{md5}` entry
+    /// without rebuilding the sketch. `None` if no entry has that key.
+    fn stored_name(&self, md5: &str) -> IndexResult<Option<String>> {
+        self.db
+            .get(format!("name_{md5}").as_bytes())?
+            .map(|data| {
+                String::from_utf8(data).map_err(|e| IndexError::CorruptIndex(e.to_string()))
+            })
+            .transpose()
     }
 
     /// Load a single signature from RocksDB by its MD5 sum.
     ///
     /// Returns `None` if the signature was not found (e.g. the database was built without
-    /// `save_inverted_index()`). Returns an error on deserialization failures.
+    /// `finalize()`). Returns an error on deserialization failures.
     ///
     /// WHY: During search, only candidate signatures (those sharing ≥1 k-mer with the query)
     /// need to be loaded. This avoids loading all 200k+ signatures into memory at startup.
@@ -1299,6 +1386,7 @@ impl ProteomeIndex {
         other.finalize()?;
         if self.signature_count() != other.signature_count()
             || self.unique_kmer_count() != other.unique_kmer_count()
+            || self.aliases()? != other.aliases()?
         {
             return Ok(false);
         }
@@ -1316,6 +1404,44 @@ impl ProteomeIndex {
             }
         }
         Ok(true)
+    }
+
+    /// Every entry name whose sequence was already stored under another name, by that
+    /// sequence's md5, sorted within each md5 so the order does not depend on ingest order.
+    /// Search reports a hit on the md5 once more under each of these names.
+    pub fn aliases(&self) -> IndexResult<HashMap<String, Vec<String>>> {
+        Ok(self
+            .ingest
+            .lock()
+            .aliases
+            .iter()
+            .map(|(key, names)| {
+                let mut names: Vec<_> = names.iter().cloned().collect();
+                names.sort();
+                (key.clone(), names)
+            })
+            .collect())
+    }
+
+    /// Other names for one stored sequence, in deterministic order.
+    pub fn alias_names(&self, key: &str) -> Vec<String> {
+        let mut names: Vec<_> =
+            self.ingest.lock().aliases.get(key).into_iter().flatten().cloned().collect();
+        names.sort();
+        names
+    }
+
+    fn read_aliases(&self) -> IndexResult<HashMap<String, HashSet<String>>> {
+        let mut aliases: HashMap<String, HashSet<String>> = HashMap::new();
+        for item in self.db.iterator(IteratorMode::From(b"alias_", Direction::Forward)) {
+            let (key, value) = item?;
+            if !key.starts_with(b"alias_") {
+                break;
+            }
+            let (md5, name): (String, String) = bincode::deserialize(&value)?;
+            aliases.entry(md5).or_default().insert(name);
+        }
+        Ok(aliases)
     }
 
     /// Print index statistics
@@ -1709,7 +1835,7 @@ impl ProteomeIndex {
         }
 
         eprintln!(
-            "Done reading FASTA ({} sequences total). Building inverted index...",
+            "Done reading FASTA ({} sequences total). Building k-mer-to-protein index...",
             record_count
         );
         self.finalize()?;
@@ -1769,7 +1895,7 @@ mod tests {
     // Private to the module; needed to forge an unstamped index in
     // test_older_schema_is_rejected_at_open.
     use super::KMERSEEK_VERSION_KEY;
-    use crate::sketch::ProteinSketch;
+    use crate::sketch::{sequence_key, ProteinSketch};
     use crate::tests::test_fixtures::{
         TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_CONTENT, TEST_FASTA_GZ, TEST_FASTA_ZST,
         TEST_KMER, TEST_PROTEIN,
@@ -2247,7 +2373,7 @@ mod tests {
     /// B (D, N) or of Z (E, Q) is one either, so every window encodes to `xxxxx`. That is
     /// one distinct k-mer with removal off, and it is a run of one class, so removal on
     /// drops all 17 windows and leaves nothing.
-    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 21] = [
+    const AMBIGUOUS_READINGS_PER_ALPHABET: [(&str, [ReadingCounts; 2]); 24] = [
         // moltype, then the counts for the B sequence and for the Z sequence
         ("protein20", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("dayhoff6", [counts(17, 17, 0), counts(17, 17, 0)]),
@@ -2262,6 +2388,8 @@ mod tests {
         ("cys2", [counts(1, 0, 17), counts(1, 0, 17)]),
         ("gbmr4", [counts(14, 13, 4), counts(14, 13, 4)]),
         ("polarity4", [counts(21, 20, 1), counts(21, 20, 1)]),
+        ("aro_hyd_chg_pol4", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("aro_hyd_arg_chg_pol5", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("wwmj5", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("gbmr7", [counts(17, 17, 0), counts(16, 16, 0)]),
         ("funcgroups8", [counts(21, 21, 0), counts(21, 21, 0)]),
@@ -2270,6 +2398,7 @@ mod tests {
         ("wass14", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("hsdm17", [counts(21, 21, 0), counts(21, 21, 0)]),
         ("uniprot18", [counts(21, 21, 0), counts(21, 21, 0)]),
+        ("massspec18", [counts(21, 21, 0), counts(21, 21, 0)]),
     ];
 
     /// With removal on, a window covering an ambiguous residue is still indexed under both
@@ -2409,6 +2538,23 @@ mod tests {
             );
         }
 
+        Ok(())
+    }
+
+    /// The residue count, n in the run E-value, survives save -> open_for_search, and a
+    /// repeated sequence adds nothing: the 25 test proteins hold 9,288 residues, and
+    /// ingesting the same file twice keeps it at 9,288.
+    #[test]
+    fn test_total_residues_persists_and_skips_repeats() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("residues.db");
+        {
+            let index = ProteomeIndex::new(&db_path, 10, 1, "hp_lehninger2", true)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+            assert_eq!(index.total_residues(), 9288);
+        }
+        assert_eq!(ProteomeIndex::open_for_search(&db_path)?.total_residues(), 9288);
         Ok(())
     }
 
@@ -2604,12 +2750,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "f7661cd829e75c0d" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
-                } else if md5sum == "7641839ad508ab8" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
@@ -2663,12 +2809,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "a963d06839b6d6a9" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 dayhoff 5-mers"
                     );
-                } else if md5sum == "84d7545d531dcf51" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 dayhoff 5-mers"
@@ -2722,12 +2868,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "24ca8d939672666b" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 6,
                         "LIVINGALIVE should have 6 hp 5-mers"
                     );
-                } else if md5sum == "668d7173d661287b" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 14,
                         "PLANTANDANIMALGENQMES should have 14 hp 5-mers"
@@ -2776,12 +2922,12 @@ mod tests {
             for entry in signatures.iter() {
                 let md5sum = entry.key();
                 let stored_signature = entry.value();
-                if md5sum == "f7661cd829e75c0d" {
+                if *md5sum == sequence_key(TEST_KMER) {
                     assert!(
                         stored_signature.kmer_positions().len() == 7,
                         "LIVINGALIVE should have 7 protein 5-mers"
                     );
-                } else if md5sum == "7641839ad508ab8" {
+                } else if *md5sum == sequence_key(TEST_PROTEIN) {
                     assert!(
                         stored_signature.kmer_positions().len() == 17,
                         "PLANTANDANIMALGENQMES should have 17 protein 5-mers"
@@ -2833,13 +2979,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "4d565dee9c8de9db" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 474,
                         "sp|O43236|SEPT4_HUMAN should have 474 protein 5-mers"
                     );
                 }
-                if md5sum == "4da1f84ad8be618e" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 235,
                         "sp|P10415|BCL2_HUMAN should have 235 protein 5-mers"
@@ -2890,13 +3036,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "fc27dcd533217385" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 433,
                         "sp|O43236|SEPT4_HUMAN should have 433 dayhoff 5-mers"
                     );
                 }
-                if md5sum == "3206706fa14185e7" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 204,
                         "sp|P10415|BCL2_HUMAN should have 204 dayhoff 5-mers"
@@ -2954,13 +3100,13 @@ mod tests {
                 println!("\n---\nmd5sum: {}", md5sum);
                 println!("Name: {}", stored_signature.signature().name);
                 println!("Len of Kmer infos: {}", stored_signature.kmer_positions().len());
-                if md5sum == "38ffedf9d3ec7cec" {
+                if stored_signature.signature().name.starts_with("sp|O43236|SEPT4_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 452,
                         "sp|O43236|SEPT4_HUMAN should have 452 hp 12-mers"
                     );
                 }
-                if md5sum == "204716e4d80eb350" {
+                if stored_signature.signature().name.starts_with("sp|P10415|BCL2_HUMAN") {
                     assert!(
                         stored_signature.kmer_positions().len() == 220,
                         "sp|P10415|BCL2_HUMAN should have 220 hp 12-mers"
@@ -3999,32 +4145,34 @@ mod tests {
         Ok(())
     }
 
-    /// Target list, inverted index and frequencies, in a form that can be compared.
+    /// Target list, k-mer-to-protein index and frequencies, in a form that can be compared.
     type ComparableCache = (Vec<String>, BTreeMap<u64, Vec<u32>>, BTreeMap<u64, usize>);
 
     /// The search cache of a finished index, with the maps in a form that can be compared.
     fn cache_of(index: &ProteomeIndex) -> Result<ComparableCache> {
         index.finalize()?;
         let cache = index.load_search_cache()?.expect("finalized index has a cache");
-        Ok((
-            cache.target_list,
-            cache.inverted_index.into_iter().collect(),
-            cache.kmer_frequencies.into_iter().collect(),
-        ))
+        let kmer_protein_index = &cache.kmer_protein_index;
+        let lists: BTreeMap<u64, Vec<u32>> = (0..kmer_protein_index.n_shards())
+            .flat_map(|s| kmer_protein_index.shard(s))
+            .map(|(hash, targets)| (hash, targets.to_vec()))
+            .collect();
+        let frequencies = lists.iter().map(|(&hash, targets)| (hash, targets.len())).collect();
+        Ok((cache.target_list, lists, frequencies))
     }
 
-    /// Spilling the posting buffer many times must produce the same index as never
+    /// Spilling the k-mer–protein ID pair buffer many times must produce the same index as never
     /// spilling it. With a 7-pair buffer the 25-sequence fixture writes hundreds of runs,
     /// so every shard merges many of them; the default never writes more than one.
     #[test]
-    fn test_many_posting_runs_merge_to_the_same_index() -> Result<()> {
+    fn test_many_kmer_protein_pair_runs_merge_to_the_same_index() -> Result<()> {
         let dir = tempdir()?;
         let one_run = ProteomeIndex::new(dir.path().join("one.db"), 16, 5, "hp_lehninger2", false)?;
         one_run.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
 
         let mut many_runs =
             ProteomeIndex::new(dir.path().join("many.db"), 16, 5, "hp_lehninger2", false)?;
-        many_runs.set_posting_buffer_capacity(7);
+        many_runs.set_kmer_protein_pair_buffer_capacity(7);
         // Target chunks of 4 roll over six times and leave a partial seventh; batches of
         // 3 put the rollovers mid-batch as well as between batches.
         many_runs.set_target_chunk(4);
@@ -4041,7 +4189,7 @@ mod tests {
             many_runs.db.iterator(IteratorMode::From(b"ii_run_", Direction::Forward)).next();
         assert!(
             leftover.is_none_or(|kv| !kv.unwrap().0.starts_with(b"ii_run_")),
-            "posting runs were not deleted after merging"
+            "k-mer–protein ID pair runs were not deleted after merging"
         );
         Ok(())
     }
@@ -4073,7 +4221,144 @@ mod tests {
         Ok(())
     }
 
-    /// A sequence seen twice is indexed once, under the name it was first seen with.
+    /// Simulate two full hashes sharing their first half; both sequences must survive.
+    #[test]
+    fn test_colliding_64_bit_halves_remain_separate_targets() -> Result<()> {
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("collision.db"), 5, 1, "protein20", true)?;
+        for (name, sequence, key) in [
+            ("first", TEST_PROTEIN, "2a0000000000000001"),
+            ("second", TEST_KMER, "2a0000000000000002"),
+        ] {
+            let original = ProteinSketch::from_protein_sequence(name, sequence, 5, 1, "protein20")?;
+            let mut store = original.to_efficient_data(true);
+            store.md5sum = key.to_string();
+            let sketch = ProteinSketch::from_efficient_data(store, "protein20".into(), 5, 1)?;
+            index.ingest(vec![sketch], false)?;
+        }
+        index.finalize()?;
+        assert_eq!(index.signature_count(), 2);
+        assert!(index.aliases()?.is_empty());
+        assert_eq!(
+            index.get_signature_by_md5("2a0000000000000001")?.unwrap().get_raw_sequence(),
+            Some(TEST_PROTEIN)
+        );
+        assert_eq!(
+            index.get_signature_by_md5("2a0000000000000002")?.unwrap().get_raw_sequence(),
+            Some(TEST_KMER)
+        );
+        Ok(())
+    }
+
+    /// A late validation error must leave neither names, signatures nor spilled runs.
+    #[test]
+    fn test_failed_ingest_batch_can_be_retried() -> Result<()> {
+        let dir = tempdir()?;
+        let mut index = ProteomeIndex::new(dir.path().join("atomic.db"), 5, 1, "protein20", true)?;
+        index.set_kmer_protein_pair_buffer_capacity(1);
+        index.set_target_chunk(1);
+        let sketch = |name, sequence| {
+            ProteinSketch::from_protein_sequence(name, sequence, 5, 1, "protein20")
+        };
+        index.ingest(vec![sketch("first", TEST_PROTEIN)?], true)?;
+        index.finalize()?;
+        let before = cache_of(&index)?;
+        let malformed = ProteinSketch::new("invalid", 5, 1, "protein20")?;
+        assert!(index
+            .ingest(
+                vec![sketch("copy", TEST_PROTEIN)?, sketch("other", TEST_KMER)?, malformed],
+                true
+            )
+            .is_err());
+        assert_eq!(index.signature_count(), 1);
+        assert_eq!(index.signatures.len(), 1);
+        assert!(index.aliases()?.is_empty());
+        assert!(index.get_signature_by_md5(&sequence_key(TEST_KMER))?.is_none());
+        assert_eq!(cache_of(&index)?, before);
+        assert!(index
+            .db
+            .iterator(IteratorMode::From(b"ii_run_", Direction::Forward))
+            .next()
+            .is_none_or(|item| !item.unwrap().0.starts_with(b"ii_run_")));
+        index.ingest(vec![sketch("copy", TEST_PROTEIN)?, sketch("other", TEST_KMER)?], true)?;
+        index.finalize()?;
+        assert_eq!(index.signature_count(), 2);
+        assert_eq!(index.alias_names(&sequence_key(TEST_PROTEIN)), ["copy"]);
+        Ok(())
+    }
+
+    /// A database write failure must not publish the staged names or target count.
+    #[test]
+    fn test_read_only_ingest_failure_preserves_state() -> Result<()> {
+        let dir = tempdir()?;
+        let path = dir.path().join("readonly.db");
+        {
+            let index = ProteomeIndex::new(&path, 5, 1, "protein20", true)?;
+            index.ingest(
+                vec![ProteinSketch::from_protein_sequence(
+                    "first",
+                    TEST_PROTEIN,
+                    5,
+                    1,
+                    "protein20",
+                )?],
+                false,
+            )?;
+            index.finalize()?;
+        }
+        let index = ProteomeIndex::load(&path)?;
+        assert!(index
+            .ingest(
+                vec![ProteinSketch::from_protein_sequence(
+                    "copy",
+                    TEST_PROTEIN,
+                    5,
+                    1,
+                    "protein20"
+                )?],
+                true
+            )
+            .is_err());
+        assert!(index.aliases()?.is_empty());
+        assert_eq!(index.signature_count(), 1);
+        assert_eq!(index.signatures.len(), 1);
+        Ok(())
+    }
+
+    /// Each additional name writes one bounded record, including across batches.
+    #[test]
+    fn test_many_aliases_use_individual_records() -> Result<()> {
+        let dir = tempdir()?;
+        let index = ProteomeIndex::new(dir.path().join("copies.db"), 5, 1, "protein20", false)?;
+        for batch in 0..10 {
+            let sketches = (batch * 100..(batch + 1) * 100)
+                .map(|i| {
+                    ProteinSketch::from_protein_sequence(
+                        &format!("copy_{i:04}"),
+                        TEST_PROTEIN,
+                        5,
+                        1,
+                        "protein20",
+                    )
+                })
+                .collect::<Result<Vec<_>>>()?;
+            index.ingest(sketches, false)?;
+        }
+        let records = index
+            .db
+            .iterator(IteratorMode::From(b"alias_", Direction::Forward))
+            .map(|item| item.unwrap())
+            .take_while(|(key, _)| key.starts_with(b"alias_"))
+            .collect::<Vec<_>>();
+        assert_eq!(records.len(), 999);
+        assert!(records.iter().all(|(_, value)| value.len() < 80));
+        assert_eq!(index.alias_names(&sequence_key(TEST_PROTEIN)).len(), 999);
+        assert_eq!(index.signature_count(), 1);
+        Ok(())
+    }
+
+    /// A sequence seen twice is indexed once, under the name it was first seen with; the
+    /// second name is kept as an alias so search can still report it.
     #[test]
     fn test_repeated_sequence_is_indexed_once() -> Result<()> {
         let dir = tempdir()?;
@@ -4086,20 +4371,99 @@ mod tests {
         index.process_fasta(&fasta, 0, 1000)?;
 
         assert_eq!(index.signature_count(), 2);
-        let (targets, inverted, _) = cache_of(&index)?;
+        let (targets, kmer_proteins, _) = cache_of(&index)?;
         assert_eq!(targets.len(), 2);
         let first = index.get_signature_by_md5(&targets[0])?.expect("first target is stored");
         assert_eq!(first.signature().name, "first");
         // 17 5-mers in TEST_PROTEIN and 7 in TEST_KMER, none shared.
-        assert_eq!(inverted.len(), 24);
-        assert!(inverted.values().all(|targets| targets.len() == 1));
+        assert_eq!(kmer_proteins.len(), 24);
+        assert!(kmer_proteins.values().all(|targets| targets.len() == 1));
+        assert_eq!(
+            index.aliases()?,
+            HashMap::from([(sequence_key(TEST_PROTEIN), vec!["second".to_string()])])
+        );
         Ok(())
     }
 
-    /// A shard missing from a finalized index means the write was interrupted. That must
-    /// surface as an error, never as a search that silently lacks those k-mers.
+    /// Aliases survive closing the index and adding more sequences later: a third copy joins
+    /// the list instead of replacing it.
     #[test]
-    fn test_missing_shard_is_reported_as_corrupt() -> Result<()> {
+    fn test_aliases_persist_and_accumulate_across_reopen() -> Result<()> {
+        let dir = tempdir()?;
+        let db_path = dir.path().join("dup.db");
+        let first = dir.path().join("first.fasta");
+        let second = dir.path().join("second.fasta");
+        std::fs::write(&first, format!(">a\n{TEST_PROTEIN}\n>b\n{TEST_PROTEIN}\n"))?;
+        std::fs::write(&second, format!(">c\n{TEST_PROTEIN}\n>d\n{TEST_KMER}\n"))?;
+        {
+            let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+            index.process_fasta(&first, 0, 1000)?;
+            index.save_state()?;
+        }
+        let index = ProteomeIndex::new(&db_path, 5, 1, "protein20", true)?;
+        index.load_state()?;
+        index.process_fasta(&second, 0, 1000)?;
+        index.save_state()?;
+        let (targets, _, _) = cache_of(&index)?;
+        assert_eq!(targets, [sequence_key(TEST_PROTEIN), sequence_key(TEST_KMER)]);
+        assert_eq!(
+            index.aliases()?,
+            HashMap::from([(sequence_key(TEST_PROTEIN), vec!["b".to_string(), "c".to_string()])])
+        );
+        Ok(())
+    }
+
+    /// Two indexes whose repeated sequences were ingested under the same names in a
+    /// different order are equivalent, and `aliases()` lists the names sorted.
+    #[test]
+    fn test_aliases_are_sorted_and_equivalence_ignores_ingest_order() -> Result<()> {
+        let dir = tempdir()?;
+        let build = |name: &str, headers: &[&str]| -> Result<ProteomeIndex> {
+            let fasta = dir.path().join(format!("{name}.fasta"));
+            let body: String = headers.iter().map(|h| format!(">{h}\n{TEST_PROTEIN}\n")).collect();
+            std::fs::write(&fasta, body)?;
+            let index = ProteomeIndex::new(dir.path().join(name), 5, 1, "protein20", true)?;
+            index.process_fasta(&fasta, 0, 1000)?;
+            index.save_state()?;
+            Ok(index)
+        };
+        let forward = build("forward.db", &["a", "b", "c"])?;
+        let backward = build("backward.db", &["a", "c", "b"])?;
+        let expected = vec!["b".to_string(), "c".to_string()];
+        assert_eq!(forward.aliases()?[&sequence_key(TEST_PROTEIN)], expected);
+        assert_eq!(backward.aliases()?[&sequence_key(TEST_PROTEIN)], expected);
+        assert!(forward.is_equivalent_to(&backward)?);
+        Ok(())
+    }
+
+    /// Ingesting the same FASTA a second time adds no aliases: every name is already
+    /// recorded for its sequence, either as the stored entry or as an alias. Otherwise search
+    /// would report each hit to those entries twice.
+    #[test]
+    fn test_reingesting_same_fasta_adds_no_aliases() -> Result<()> {
+        let dir = tempdir()?;
+        let fasta = dir.path().join("dup.fasta");
+        std::fs::write(
+            &fasta,
+            format!(">a\n{TEST_PROTEIN}\n>b\n{TEST_PROTEIN}\n>c\n{TEST_KMER}\n"),
+        )?;
+        let index = ProteomeIndex::new(dir.path().join("dup.db"), 5, 1, "protein20", true)?;
+        index.process_fasta(&fasta, 0, 1000)?;
+        index.process_fasta(&fasta, 0, 1000)?;
+        index.save_state()?;
+
+        assert_eq!(index.signature_count(), 2);
+        assert_eq!(
+            index.aliases()?,
+            HashMap::from([(sequence_key(TEST_PROTEIN), vec!["b".to_string()])])
+        );
+        Ok(())
+    }
+
+    /// A k-mer-to-protein index file missing from a finalized index means the write was
+    /// interrupted. This must be an error, never a search that silently lacks those k-mers.
+    #[test]
+    fn test_missing_kmer_protein_index_file_is_reported_as_corrupt() -> Result<()> {
         let dir = tempdir()?;
         let db_path = dir.path().join("torn.db");
         {
@@ -4107,12 +4471,12 @@ mod tests {
             let sig = index.create_protein_signature(TEST_PROTEIN, "p")?;
             index.store_signatures(vec![sig])?;
             index.save_state()?;
-            index.db.delete(ProteomeIndex::shard_key(3))?;
+            std::fs::remove_file(db_path.join("postings").join("kmers.u64"))?;
         }
         let reopened = ProteomeIndex::open_for_search(&db_path)?;
         match reopened.load_search_cache() {
             Err(crate::errors::IndexError::CorruptIndex(message)) => {
-                assert!(message.contains("shard 3"), "unexpected message: {message}");
+                assert!(message.contains("kmers.u64 cannot be opened"), "unexpected: {message}");
             }
             other => panic!("expected CorruptIndex, got {:?}", other.map(|c| c.is_some())),
         }
@@ -4120,7 +4484,7 @@ mod tests {
     }
 
     /// The target list is as load-bearing as the shards: a missing or short chunk is an
-    /// error, never a shorter target list that would silently misnumber every posting.
+    /// error, never a shorter target list that would silently misnumber every protein ID.
     #[test]
     fn test_missing_or_short_target_chunk_is_reported_as_corrupt() -> Result<()> {
         let dir = tempdir()?;
