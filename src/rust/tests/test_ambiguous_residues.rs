@@ -91,6 +91,11 @@ mod tests {
     /// A, Q, K and N in one class, so it sees no mismatch at all and every one of its 103
     /// windows is shared. The HP alphabets merge three of the four (S/T, Q/K and K/N are
     /// each polar/polar) and keep only residue 19's S/A.
+    /// aro_hyd_chg_pol4 and aro_hyd_arg_chg_pol5 merge only residue 3's S/T, like
+    /// polarity4, so they lose every window covering residue 19, 37 or 103: windows
+    /// starting at 38-81 at k=22 (44 shared), and at 38-84 and 104-106 at k=19 (50 shared).
+    /// massspec18 merges only Q/K of the four, so the 10 windows whose one mismatch is that
+    /// Q/K become shared: 82 + 10 = 92.
     const EXPECTED: &[Expected] = &[
         Expected {
             moltype: "protein20",
@@ -155,6 +160,16 @@ mod tests {
             query_hashes: 82,
             shared_with_bovine: 63,
         },
+        // cys2 keeps only where the cysteines are. Topi's 8 cysteines (26, 40, 58, 65, 72,
+        // 84, 95, 110) have the same spacing as bovine RNase A's (52 to 136, offset by its
+        // 26-residue signal peptide), so every window is shared.
+        Expected {
+            moltype: "cys2",
+            ksize: 43,
+            readings: 82,
+            query_hashes: 82,
+            shared_with_bovine: 82,
+        },
         Expected {
             moltype: "gbmr4",
             ksize: 22,
@@ -168,6 +183,20 @@ mod tests {
             readings: 3250,
             query_hashes: 3250,
             shared_with_bovine: 44,
+        },
+        Expected {
+            moltype: "aro_hyd_chg_pol4",
+            ksize: 22,
+            readings: 3250,
+            query_hashes: 3250,
+            shared_with_bovine: 44,
+        },
+        Expected {
+            moltype: "aro_hyd_arg_chg_pol5",
+            ksize: 19,
+            readings: 1984,
+            query_hashes: 1984,
+            shared_with_bovine: 50,
         },
         Expected {
             moltype: "wwmj5",
@@ -224,6 +253,13 @@ mod tests {
             readings: 541,
             query_hashes: 541,
             shared_with_bovine: 82,
+        },
+        Expected {
+            moltype: "massspec18",
+            ksize: 10,
+            readings: 541,
+            query_hashes: 541,
+            shared_with_bovine: 92,
         },
     ];
 

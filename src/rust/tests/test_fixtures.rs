@@ -18,6 +18,7 @@ pub const NB344_TARGETS_FASTA: &str = "tests/testdata/fasta/nb344_targets_tbc1d1
 /// `scripts/test_shuffle_fasta_2mer.py` regenerates it and checks it is unchanged.
 pub const TEST_DECOYS_2MER_GZ: &str =
     "tests/testdata/fasta/bcl2_25_shuffled_2mer_20x_seed1.fasta.gz";
+pub const TEST_HNRNPA1_FASTA: &str = "tests/testdata/fasta/hnrnpa1_P09651.fasta";
 /// BCL2_HUMAN (UniProt P10415) residues 1-32, the first 32 residues of the protein.
 pub const BCL2_1_32: &str = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDA";
 /// k-mers in `BCL2_1_32` at k=5: 32 - 5 + 1 windows, all distinct.

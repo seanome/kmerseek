@@ -94,10 +94,11 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
 
     // Every alphabet, not a sample: a wrong table or hash function shows up as an indexing
-    // failure. Built from the alphabet lists rather than hardcoded, so a newly added
-    // alphabet is covered without editing this test.
+    // failure. Built from `Alphabet::all()`, so a newly added alphabet is indexed here
+    // without editing the list. The count is pinned so that dropping an alphabet from
+    // `Alphabet::all()` fails here; raise it when adding one.
     let alphabets: Vec<&str> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
-    assert_eq!(alphabets.len(), 19, "every alphabet must be exercised here");
+    assert_eq!(alphabets.len(), 23, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
@@ -119,6 +120,33 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
 
         // Check that the output database was created
         assert!(output_path.exists());
+
+        // Search the database just built, so an alphabet that indexes but is missing from
+        // the detected-alphabet match in main.rs fails here.
+        let results_path = temp_dir.path().join(format!("test_results_{}.csv", alphabet));
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            output_path.to_str().unwrap(),
+            "--output",
+            results_path.to_str().unwrap(),
+            "--ksize",
+            "8",
+            "--alphabet",
+            alphabet,
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "1",
+        ]);
+        // The database holds only Ced9, the query itself, and a search always skips a
+        // query's identical entry, so there are no result rows to check. Success, with the
+        // query read, shows the stored alphabet was recognized.
+        search_cmd.assert().success().stderr(predicate::str::contains("Total queries: 1"));
+        assert!(results_path.exists(), "no results file for {}", alphabet);
     }
 
     Ok(())
@@ -1080,7 +1108,7 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
         "Karlin-Altschul: K 0.0098, r_database 0.844 (fitted now: 25 database queries, 9838 \
          regions; r_database 0.844 per nat of lambda S (1 = closed form holds; closed \
          form 0.481 at the database's match probability 0.500), K 0.0098, fit on x \
-         6.5..10.5, rms 0.121; shuffled-dipeptide reference slope 0.766 over the same bins",
+         6.5..10.5, rms 0.121; shuffled-dipeptide reference slope 0.860 over the same bins",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
@@ -1097,10 +1125,10 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     // Shuffled queries have no relatives, so no reference is searched and none is reported.
     search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.0474, r_database 0.905 (fitted now: 25 shuffled queries, \
-             9570 regions; r_database 0.905 per nat of lambda S (1 = closed form holds; \
-             closed form 0.609 at the database's match probability 0.500), K 0.0474, fit on \
-             x 8.5..12.5, rms 0.238)\n",
+            "Karlin-Altschul: K 0.1083, r_database 1.008 (fitted now: 25 shuffled queries, \
+             9582 regions; r_database 1.008 per nat of lambda S (1 = closed form holds; \
+             closed form 0.609 at the database's match probability 0.500), K 0.1083, fit on \
+             x 7.5..11.5, counts rise above the line from x 11.5, rms 0.256)\n",
         ),
     );
     Ok(())
@@ -1173,7 +1201,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "fitted now: 25 database queries, 9838 regions; r_database 0.844 per nat of lambda S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
              0.500), K 0.0098, fit on x 6.5..10.5, rms 0.121; shuffled-dipeptide reference \
-             slope 0.766 over the same bins",
+             slope 0.860 over the same bins",
         ))
         .stderr(predicate::str::contains(
             "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
@@ -1208,9 +1236,149 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     );
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.0520, r_database 0.914 (fitted now: 25 database queries, 9854 regions; r_database 0.914",
+            "Karlin-Altschul: K 0.0505, r_database 0.916 (fitted now: 25 database queries, 9854 regions; r_database 0.916",
         ),
     );
+    Ok(())
+}
+
+/// `--ka-k` with `--ka-r-database` is a whole fit given by hand. Given the numbers an
+/// index stored, a search prints exactly the E-values the stored fit gives, so one index's
+/// fit can be used to search another. `--ka-r-database` needs `--ka-k` and must be
+/// positive.
+#[test]
+fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let survival = temp_dir.path().join("survival.csv");
+    Command::cargo_bin("kmerseek")?
+        .args([
+            "index",
+            "--input",
+            TEST_FASTA_GZ,
+            "--output",
+            index_path.to_str().unwrap(),
+            "--ksize",
+            "12",
+            "--alphabet",
+            "hp",
+            "--ka-queries",
+            "25",
+            "--ka-survival-out",
+            survival.to_str().unwrap(),
+        ])
+        .assert()
+        .success();
+
+    // The stored fit, at full precision, from the survival curve's own columns.
+    let mut reader = csv::Reader::from_path(&survival)?;
+    let headers = reader.headers()?.clone();
+    let column = |name: &str| headers.iter().position(|h| h == name).unwrap();
+    let first = reader.records().next().expect("one row per score bin")?;
+    let k = first[column("k")].to_string();
+    let r_database = first[column("r_database")].to_string();
+    // Those strings must parse back to exactly the fit the index stored, on every row.
+    let stored_fit = crate::index::ProteomeIndex::open_for_search(&index_path)?
+        .ka_calibration(crate::search::ExtensionScoring::new(
+            crate::search::DEFAULT_MISMATCH_PENALTY,
+            crate::search::DEFAULT_XDROP,
+        )?)?
+        .expect("the index stores a fit for C 2, X 8")
+        .ka_params();
+    for row in reader.records() {
+        let row = row?;
+        assert_eq!(&row[column("k")], k);
+        assert_eq!(&row[column("r_database")], r_database);
+    }
+    assert_eq!(k.parse::<f64>()?, stored_fit.k);
+    assert_eq!(r_database.parse::<f64>()?, stored_fit.r_database);
+
+    let penalty = crate::search::DEFAULT_MISMATCH_PENALTY.to_string();
+    let xdrop = crate::search::DEFAULT_XDROP.to_string();
+    let search = |out: &std::path::Path, extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            index_path.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            &penalty,
+            "--extend-xdrop",
+            &xdrop,
+        ]);
+        cmd.args(extra);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+    let evalues = |out: &std::path::Path| -> Result<Vec<String>, Box<dyn std::error::Error>> {
+        let mut reader = csv::Reader::from_path(out)?;
+        let i = reader.headers()?.iter().position(|h| h == "region_evalue").unwrap();
+        // Rows come out in the order the parallel search finishes them, so compare the
+        // E-values as a sorted list.
+        let mut v: Vec<String> =
+            reader.records().map(|r| r.map(|r| r[i].to_string())).collect::<Result<_, _>>()?;
+        v.sort();
+        Ok(v)
+    };
+
+    let stored = temp_dir.path().join("stored.csv");
+    search(&stored, &[])?
+        .success()
+        .stderr(predicate::str::contains("(stored in the index: 25 database queries"));
+    let given = temp_dir.path().join("given.csv");
+    search(&given, &["--ka-k", &k, "--ka-r-database", &r_database])?
+        .success()
+        .stderr(predicate::str::contains("(--ka-k and --ka-r-database)"));
+    let (a, b) = (evalues(&stored)?, evalues(&given)?);
+    assert!(!a.is_empty(), "CED-9 against the BCL2 family gives regions");
+    assert_eq!(a, b, "the same fit given by hand gives the same E-values");
+
+    // --ka-k alone keeps the closed form, so the E-values differ.
+    let closed = temp_dir.path().join("closed.csv");
+    search(&closed, &["--ka-k", &k])?
+        .success()
+        .stderr(predicate::str::contains("r_database 1.000 (--ka-k, closed-form lambda)"));
+    assert_ne!(a, evalues(&closed)?);
+
+    search(&temp_dir.path().join("x.csv"), &["--ka-r-database", &r_database])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-k"));
+    search(&temp_dir.path().join("y.csv"), &["--ka-k", &k, "--ka-r-database", "0"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-r-database must be positive"));
+    Ok(())
+}
+
+/// A bad `--ka-k` or `--ka-r-database` is refused even with seed extension off, and before
+/// the target index is opened (the target here does not exist).
+#[test]
+fn test_cli_ka_bad_values_fail_with_scoring_off() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let missing_index = temp_dir.path().join("no_such_index.db");
+    let out = temp_dir.path().join("out.csv");
+    let run = |extra: &[&str]| {
+        let mut cmd = Command::cargo_bin("kmerseek")?;
+        cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            missing_index.to_str().unwrap(),
+            "--output",
+            out.to_str().unwrap(),
+            "--extend-mismatch-penalty",
+            "0",
+        ]);
+        cmd.args(extra);
+        Ok::<_, Box<dyn std::error::Error>>(cmd.assert())
+    };
+    run(&["--ka-r-database=-3", "--ka-k", "0.03"])?
+        .failure()
+        .stderr(predicate::str::contains("--ka-r-database must be positive"));
+    run(&["--ka-k", "inf"])?.failure().stderr(predicate::str::contains("--ka-k must be positive"));
     Ok(())
 }
 
@@ -1247,7 +1415,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
 
     let unfit = temp_dir.path().join("unfit.csv");
     index("1", "database", &unfit)?.success().stderr(predicate::str::contains(
-        "1 queries gave 420 regions and 1 shuffled queries gave 441 chance regions, but \
+        "1 queries gave 416 regions and 1 shuffled queries gave 447 chance regions, but \
          fewer than 4 score bins above the peak hold 30 of each, too few to fit; nothing \
          stored. Raise --ka-reference-shuffles when the chance regions are what ran out, \
          --ka-queries when both did.",
@@ -1257,7 +1425,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
     // --ka-reference-shuffles.
     index("1", "shuffled", &temp_dir.path().join("unfit_shuffled.csv"))?.success().stderr(
         predicate::str::contains(
-            "1 queries gave 376 regions, but fewer than 4 score bins above the peak hold 30 of \
+            "1 queries gave 361 regions, but fewer than 4 score bins above the peak hold 30 of \
              them, too few to fit; nothing stored. Raise --ka-queries.",
         ),
     );
@@ -1269,9 +1437,9 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "Fitting r_database and K on 3 shuffled sequences (mismatch penalty 2, give-up margin 8)...",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 3 shuffled queries, 789 regions; r_database 0.848 per nat of lambda S",
+            "fitted now: 3 shuffled queries, 1457 regions; r_database 0.734 per nat of lambda S",
         ))
-        .stderr(predicate::str::contains("K 0.0091, fit on x 6.0..8.0, rms 0.098\n"));
+        .stderr(predicate::str::contains("K 0.0050, fit on x 6.0..9.5, rms 0.111\n"));
 
     let survival = temp_dir.path().join("survival.csv");
     index("3", "database", &survival)?
@@ -1282,13 +1450,13 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
              shuffled-dipeptide...",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 3 database queries, 903 regions; r_database 0.794 per nat of lambda S \
+            "fitted now: 3 database queries, 1567 regions; r_database 0.916 per nat of lambda S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
-             0.500), K 0.0075, fit on x 6.0..8.5, rms 0.125; shuffled-dipeptide reference \
-             slope 0.736 over the same bins",
+             0.500), K 0.0150, fit on x 6.0..9.0, rms 0.072; shuffled-dipeptide reference \
+             slope 0.694 over the same bins",
         ))
         .stderr(predicate::str::contains(
-            "WARNING: the fit has only 5 bins (x 6.0..8.5) below the relatives at x none.",
+            "WARNING: the fit has only 6 bins (x 6.0..9.0) below the relatives at x none.",
         ))
         .stderr(predicate::str::contains(format!(
             "Survival curve written to {}",
@@ -1334,29 +1502,28 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
         ]
     );
     let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
-    // From 0: a region whose own pr_same leaves no positive lambda scores x = 0.
-    assert_eq!(rows.len(), 74, "one row per half-nat bin of x from 0 to 36.5");
-    assert_eq!((&rows[0][0], &rows[73][0]), ("0.000", "36.500"));
-    // The lowest bin holds every region (903 seeds and up); the fit window is x 6.0..8.5.
-    assert_eq!(&rows[0][1], "903");
+    assert_eq!(rows.len(), 29, "one row per half-nat bin of x from 2 to 16");
+    assert_eq!((&rows[0][0], &rows[28][0]), ("2.000", "16.000"));
+    // The lowest bin holds every region (1567 seeds and up); the fit window is x 6.0..9.0.
+    assert_eq!(&rows[0][1], "1567");
     assert_eq!(&rows[0][4], "false");
     let in_fit: Vec<&str> = rows.iter().filter(|r| &r[4] == "true").map(|r| &r[0]).collect();
-    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000"]);
-    // Lowest bin: 903 regions, the fitted line far above at 53,024 (the seed floor bends
-    // the curve there), 864 in the shuffled-dipeptide reference.
-    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("903", "53023.592827449385", "864"));
-    // The top bin is one region, far above the fitted line's 1.4e-8, and the reference
-    // never got there. The line is written at full precision so its tail can be plotted on
-    // a log axis.
-    assert_eq!((&rows[73][1], &rows[73][2], &rows[73][3]), ("1", "0.00000001386897459123922", ""));
+    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500"]);
+    // Lowest bin: 1567 regions, the fitted line far above at 34,939 (the seed floor bends
+    // the curve there); the shuffled-dipeptide reference has no count in this bin.
+    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("1567", "34938.50998453395", ""));
+    // The top bin is one region, above the fitted line's 0.095, and the reference never
+    // got there. The line is written at full precision so its tail can be plotted on a log
+    // axis.
+    assert_eq!((&rows[28][1], &rows[28][2], &rows[28][3]), ("1", "0.09476199040546565", ""));
     // Fit constants repeat on every row.
     let constants = |r: &csv::StringRecord| r.iter().skip(5).map(str::to_owned).collect::<Vec<_>>();
     assert!(rows.iter().all(|r| constants(r) == constants(&rows[0])));
     assert_eq!(
         constants(&rows[0]),
         [
-            "0.793756267849351",
-            "0.007491900031232887",
+            "0.9155522737866966",
+            "0.014990945184001661",
             "0.48120853696601995",
             "0.5000011360087127",
             "database",
@@ -1365,8 +1532,8 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "8",
             "3",
             "3",
-            "864",
-            "762",
+            "1525",
+            "1566",
             "9288",
             "0.5"
         ]

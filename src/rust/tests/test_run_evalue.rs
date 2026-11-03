@@ -13,6 +13,18 @@ use crate::search::{
 use crate::sketch::ProteinSketch;
 use crate::tests::test_fixtures::{TEST_DECOYS_2MER_GZ, TEST_FASTA_GZ};
 
+/// `scaled` of 1 keeps every k-mer in the sketch, so the search is exact and the counts can
+/// be compared with a walk along every diagonal.
+const SCALED_ALL_KMERS: u32 = 1;
+
+/// The count tests assert that the counted number of runs is within this many Poisson
+/// standard deviations of the predicted number.
+const MAX_STANDARD_DEVIATIONS: f64 = 3.0;
+
+/// The count tests assert only where the Poisson spread (sd / predicted) is below this. The
+/// largest spread asserted is 12.7% (see the table above the test), so 0.15 admits it.
+const MAX_RELATIVE_SPREAD: f64 = 0.15;
+
 /// Amino-acid composition of UniProtKB/Swiss-Prot release 2026_03, in percent
 /// (web.expasy.org/docs/relnotes/relstat.html), in alphabetical order of one-letter code.
 const SWISSPROT_2026_03_PERCENT: [(u8, f64); 20] = [
@@ -66,7 +78,7 @@ fn write_random_fasta(path: &Path, prefix: &str, n: usize, len: usize, rng: &mut
 
 /// Every sketch of a FASTA, indexed at `moltype` and `ksize`, with sequences stored.
 fn sketches(dir: &Path, fasta: &str, moltype: &str, ksize: u32) -> Vec<ProteinSketch> {
-    let index = ProteomeIndex::new(dir, ksize, 1, moltype, true).unwrap();
+    let index = ProteomeIndex::new(dir, ksize, SCALED_ALL_KMERS, moltype, true).unwrap();
     index.process_fasta(fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
     index.load_state().unwrap();
     sorted_by_name(&index)
@@ -90,7 +102,8 @@ fn exact_search(
     scope: PrSameScope,
 ) -> (Vec<SearchResult>, Vec<ProteinSketch>, Vec<ProteinSketch>) {
     let dir = TempDir::new().unwrap();
-    let index = ProteomeIndex::new(dir.path().join("t"), ksize, 1, moltype, true).unwrap();
+    let index =
+        ProteomeIndex::new(dir.path().join("t"), ksize, SCALED_ALL_KMERS, moltype, true).unwrap();
     index.process_fasta(target_fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
     let mut searcher = ProteinSearcher::new(index).unwrap();
     searcher.set_pr_same_scope(scope);
@@ -189,10 +202,10 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
         .collect()
 }
 
-/// Test 2 of the run E-value: on sequences whose letters are drawn independently, the
-/// number of runs at least L0 long that an exact search reports matches the sum of E_run
-/// over all pairs, within 3 Poisson standard deviations. Ten 1,000-residue queries against
-/// forty 1,000-residue targets. The counts also equal a walk along every diagonal
+/// Random sequences: on sequences whose letters are drawn independently, the number of runs
+/// at least L0 long that an exact search reports matches the sum of E_run over all pairs,
+/// within `MAX_STANDARD_DEVIATIONS` Poisson standard deviations. Ten 1,000-residue queries
+/// against forty 1,000-residue targets. The counts also equal a walk along every diagonal
 /// (`run_lengths`), so the search neither misses nor splits a run.
 ///
 /// The formula counts m x n places a run can start, but a run of L0 cannot start in the last
@@ -200,7 +213,7 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 /// 2.2% at L0 = 12, 3.8% at L0 = 20. Where the counts are in the tens of thousands the
 /// Poisson spread (0.4%) is smaller than that, and the counts fall outside 3 standard
 /// deviations for this reason alone. The assertions use the L0 where the spread is 3.5% to
-/// 12.8%, larger than the edge effect. The shorter L0 are listed for the record.
+/// 12.7%, larger than the edge effect. The shorter L0 are listed for the record.
 ///
 /// | alphabet      | k  | L0 | counted | predicted | spread | asserted |
 /// |---------------|----|----|---------|-----------|--------|----------|
@@ -217,8 +230,10 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
 ///
 /// Drawn in `docs/images/run_evalue_checks.png`, panel a, with the edge effect.
 ///
-/// The counts are pinned; the sequences are seeded. This checks the code against the
-/// formula. It says nothing about real proteins, whose classes repeat in patterns: see
+/// The counts are pinned; the sequences are seeded. Every counted value above is in
+/// `docs/images/run_evalue_checks/random_sequences_runs.tsv`; `write_run_evalue_figure_data`
+/// (below) regenerates it. This checks the code against the formula. It says nothing about
+/// real proteins, whose classes repeat in patterns: see
 /// `region_run_evalue_on_2mer_shuffled_decoys`.
 #[test]
 fn region_run_evalue_matches_runs_between_random_sequences() {
@@ -231,9 +246,12 @@ fn region_run_evalue_matches_runs_between_random_sequences() {
         let measured = counted_and_predicted(moltype, ksize, &l0s);
         for ((l0, counted, predicted), (_, expected_count)) in measured.into_iter().zip(expected) {
             let sd = predicted.sqrt();
-            assert!(sd / predicted < 0.15, "{moltype} L0={l0}: predicted only {predicted:.1}");
             assert!(
-                (counted as f64 - predicted).abs() <= 3.0 * sd,
+                sd / predicted < MAX_RELATIVE_SPREAD,
+                "{moltype} L0={l0}: predicted only {predicted:.1}"
+            );
+            assert!(
+                (counted as f64 - predicted).abs() <= MAX_STANDARD_DEVIATIONS * sd,
                 "{moltype} L0={l0}: counted {counted}, predicted {predicted:.1}"
             );
             assert_eq!(counted, expected_count, "{moltype} L0={l0}");
@@ -250,7 +268,7 @@ fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
     results.iter().filter(|r| best_run_evalue(r) <= x).count()
 }
 
-/// Test 3 of the run E-value, on decoys: the 25 BCL-2-like proteins against 500 sequences
+/// Decoys: the 25 BCL-2-like proteins against 500 sequences
 /// shuffled with their 2-mer counts kept, exact search at hp_lehninger2. A calibrated
 /// E-value gives about 25 query-target pairs with a best region at E <= 1 (one per query)
 /// and 250 at E <= 10. Pinned as measured, nothing tuned, with pr_same from the region

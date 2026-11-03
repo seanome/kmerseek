@@ -1,8 +1,9 @@
 use clap::{Parser, Subcommand, ValueEnum};
 use kmerseek::errors::{IndexError, IndexResult};
 use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
+use kmerseek::profile::{self, Step, Timer};
 use kmerseek::search::{
-    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaSource, PrSameScope,
+    ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource, PrSameScope,
     DEFAULT_MISMATCH_PENALTY, DEFAULT_XDROP,
 };
 use kmerseek::types::{MolType, Scaled};
@@ -163,6 +164,20 @@ enum Commands {
         #[arg(long, default_value = "2")]
         min_shared_kmers: usize,
 
+        /// Call a k-mer common when more than this many targets contain it, and report a
+        /// match only if it shares at least one k-mer that is not common. Common k-mers still
+        /// count towards --min-shared-kmers and still make up regions. Off by default.
+        #[arg(long)]
+        max_kmer_targets: Option<usize>,
+
+        /// Report a match only if two unrelated proteins of the same sizes would share at least
+        /// as many k-mers with probability at most this (the whole-protein Poisson tail). This
+        /// is a minimum shared k-mer count that grows with the chance overlap of the two
+        /// proteins, so it bites in small alphabets, where many k-mers are shared by chance.
+        /// Unlike --max-query-pvalue, a strong region cannot override it. Off by default.
+        #[arg(long, value_parser = parse_probability)]
+        max_shared_kmer_pvalue: Option<f64>,
+
         /// Maximum uncorrected whole-query Poisson p-value required to report a match.
         /// A match is reported if either this or --min-region-score passes.
         #[arg(long, default_value = "0.05")]
@@ -228,6 +243,17 @@ enum Commands {
         /// `region_evalue` falls back to on every other row, needs no K.
         #[arg(long)]
         ka_k: Option<f64>,
+
+        /// r_database to use with --ka-k: the factor on every pair's closed-form lambda,
+        /// as a fit stores it. With --ka-k and --ka-r-database together a search uses a
+        /// fit made on another index, so two indexes can be searched with one fit and
+        /// differ only in their size n, if their class composition and length distribution
+        /// match. Copy both numbers from the other index's
+        /// `kmerseek index --ka-survival-out` CSV (columns `k` and `r_database`), and search
+        /// with the `mismatch_penalty` and `xdrop` from the same CSV, since a fit holds only
+        /// for those. Without it --ka-k uses r_database 1, the closed form.
+        #[arg(long, requires = "ka_k")]
+        ka_r_database: Option<f64>,
 
         /// Calibration queries to fit r_database and K on when the index has no fit for
         /// this penalty and give-up margin and --ka-k is unset. 0 refuses to search without
@@ -365,12 +391,23 @@ enum ProteinAlphabet {
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
     #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
+    /// Cysteine against everything else, 2 classes: a k-mer records only the
+    /// cysteine spacing. Not a hydrophobicity scheme
+    #[value(name = "cys2")]
+    Cys2,
     /// GBMR4, 4 classes (Solis & Rackovsky 2000; best recall in Peterson et al. 2009)
     #[value(name = "gbmr4")]
     ReducedGbmr4,
     /// POLARITY4, 4 classes on polarity and charge (Ball, Hill & Scott 2014)
     #[value(name = "polarity4")]
     ReducedPolarity4,
+    /// ARO_HYD_CHG_POL4, 4 classes: aromatic, other hydrophobic, charged, polar (stickers
+    /// and spacers of Martin et al. 2020)
+    #[value(name = "aro_hyd_chg_pol4")]
+    ReducedAroHydChgPol4,
+    /// ARO_HYD_ARG_CHG_POL5, aro_hyd_chg_pol4 with arginine in its own class (Wang et al. 2018)
+    #[value(name = "aro_hyd_arg_chg_pol5")]
+    ReducedAroHydArgChgPol5,
     /// WWMJ5, 5 classes (Wang & Wang 1999, Miyazawa-Jernigan contact potentials)
     #[value(name = "wwmj5")]
     ReducedWwmj5,
@@ -395,6 +432,9 @@ enum ProteinAlphabet {
     /// UNIPROT18, 18 classes, learned by a protein language model (Ieremie et al. 2024)
     #[value(name = "uniprot18")]
     ReducedUniprot18,
+    /// MASSSPEC18, 18 classes: I with L and Q with K, the pairs mass spectrometry confuses
+    #[value(name = "massspec18")]
+    ReducedMassspec18,
 }
 
 impl From<ProteinAlphabet> for &'static str {
@@ -409,8 +449,11 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
             ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
             ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
+            ProteinAlphabet::Cys2 => "cys2",
             ProteinAlphabet::ReducedGbmr4 => "gbmr4",
             ProteinAlphabet::ReducedPolarity4 => "polarity4",
+            ProteinAlphabet::ReducedAroHydChgPol4 => "aro_hyd_chg_pol4",
+            ProteinAlphabet::ReducedAroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
             ProteinAlphabet::ReducedWwmj5 => "wwmj5",
             ProteinAlphabet::ReducedGbmr7 => "gbmr7",
             ProteinAlphabet::ReducedFuncGroups8 => "funcgroups8",
@@ -419,7 +462,19 @@ impl From<ProteinAlphabet> for &'static str {
             ProteinAlphabet::ReducedWass14 => "wass14",
             ProteinAlphabet::ReducedHsdm17 => "hsdm17",
             ProteinAlphabet::ReducedUniprot18 => "uniprot18",
+            ProteinAlphabet::ReducedMassspec18 => "massspec18",
         }
+    }
+}
+
+/// A probability cutoff above 0 and at most 1. Zero, negative, NaN and infinite values would
+/// silently drop every pair, and a value above 1 would do nothing.
+fn parse_probability(text: &str) -> Result<f64, String> {
+    let value: f64 = text.parse().map_err(|_| format!("`{text}` is not a number"))?;
+    if value > 0.0 && value <= 1.0 {
+        Ok(value)
+    } else {
+        Err(format!("`{text}` must be above 0 and at most 1"))
     }
 }
 
@@ -588,6 +643,8 @@ fn main() -> IndexResult<()> {
             alphabet,
             threshold,
             min_shared_kmers,
+            max_kmer_targets,
+            max_shared_kmer_pvalue,
             max_query_pvalue,
             min_region_score,
             max_pvalue,
@@ -595,6 +652,7 @@ fn main() -> IndexResult<()> {
             extend_mismatch_penalty,
             extend_xdrop,
             ka_k,
+            ka_r_database,
             ka_queries,
             ka_seed,
             ka_null,
@@ -611,6 +669,26 @@ fn main() -> IndexResult<()> {
             eprintln!("Searching query sequences against target database");
             eprintln!("Query: {}", query.display());
             eprintln!("Target: {}", target.display());
+
+            // Reject bad values before any index is opened, so a typo fails at once.
+            if let Some(k) = ka_k {
+                if k <= 0.0 || !k.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-k must be positive and finite (got {k}); K is the fraction of the m x n \
+                         cells that can start a region"
+                    )
+                    .into());
+                }
+            }
+            if let Some(r) = ka_r_database {
+                if r <= 0.0 || !r.is_finite() {
+                    return Err(anyhow::anyhow!(
+                        "--ka-r-database must be positive and finite (got {r}); it \
+                         multiplies every pair's lambda"
+                    )
+                    .into());
+                }
+            }
 
             // Autodetect parameters from the target database
             eprintln!("Autodetecting parameters from target database...");
@@ -686,8 +764,14 @@ fn main() -> IndexResult<()> {
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
             use kmerseek::search::SearchFilters;
-            let filters =
-                SearchFilters { threshold, min_shared_kmers, max_query_pvalue, min_region_score };
+            let filters = SearchFilters {
+                threshold,
+                min_shared_kmers,
+                max_query_pvalue,
+                min_region_score,
+                max_kmer_targets,
+                max_shared_kmer_pvalue,
+            };
 
             // Check if query and target are the same database (all-vs-all search)
             // WHY: RocksDB doesn't allow the same database to be opened twice by the same process.
@@ -711,7 +795,10 @@ fn main() -> IndexResult<()> {
 
             // Load the target database
             eprintln!("Loading target database...");
-            let mut searcher = ProteinSearcher::load(&target)?;
+            let mut searcher = {
+                let _timer = Timer::start(Step::LoadIndex);
+                ProteinSearcher::load(&target)?
+            };
             searcher.set_pr_same_scope(pr_same_from);
             searcher.set_seg_mask(seg_mask);
             eprintln!(
@@ -719,15 +806,8 @@ fn main() -> IndexResult<()> {
                 if seg_mask { "on" } else { "off" }
             );
             if let Some(scoring) = scoring {
-                if let Some(k) = ka_k {
-                    if k <= 0.0 || k.is_nan() {
-                        return Err(anyhow::anyhow!(
-                            "--ka-k must be positive (got {k}); K is the fraction of the m x n \
-                             cells that can start a region"
-                        )
-                        .into());
-                    }
-                }
+                let explicit =
+                    ka_k.map(|k| KaParams { k, r_database: ka_r_database.unwrap_or(1.0) });
                 let settings = KaCalibrationSettings {
                     scoring,
                     null: ka_null,
@@ -736,7 +816,7 @@ fn main() -> IndexResult<()> {
                     n_queries: ka_queries,
                     seed: ka_seed,
                 };
-                let (ka, source) = searcher.resolve_ka(ka_k, settings)?;
+                let (ka, source) = searcher.resolve_ka(explicit, settings)?;
                 eprintln!(
                     "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
                     ka.k, ka.r_database
@@ -930,6 +1010,7 @@ fn main() -> IndexResult<()> {
                         .collect();
 
                     // Write results sequentially (preserves per-query ordering within batch)
+                    let _timer = Timer::start(Step::WriteCsv);
                     for results in &batch_results {
                         for result in results {
                             *match_count += 1;
@@ -998,6 +1079,7 @@ fn main() -> IndexResult<()> {
                 eprintln!("Total queries: {}", query_count);
                 eprintln!("Total matches: {}", match_count);
                 eprintln!("Total CSV rows: {}", row_count);
+                profile::report();
                 return Ok(());
             };
 
@@ -1127,8 +1209,11 @@ fn assign_encoding(
         "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
         "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
         "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
+        "cys2" => ProteinAlphabet::Cys2,
         "gbmr4" => ProteinAlphabet::ReducedGbmr4,
         "polarity4" => ProteinAlphabet::ReducedPolarity4,
+        "aro_hyd_chg_pol4" => ProteinAlphabet::ReducedAroHydChgPol4,
+        "aro_hyd_arg_chg_pol5" => ProteinAlphabet::ReducedAroHydArgChgPol5,
         "wwmj5" => ProteinAlphabet::ReducedWwmj5,
         "gbmr7" => ProteinAlphabet::ReducedGbmr7,
         "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
@@ -1137,14 +1222,16 @@ fn assign_encoding(
         "wass14" => ProteinAlphabet::ReducedWass14,
         "hsdm17" => ProteinAlphabet::ReducedHsdm17,
         "uniprot18" => ProteinAlphabet::ReducedUniprot18,
+        "massspec18" => ProteinAlphabet::ReducedMassspec18,
         _ => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
                     "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
                      hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
-                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, \
-                     gbmr4, polarity4, wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, \
-                     wass14, hsdm17, uniprot18",
+                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, cys2, \
+                     gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, wwmj5, gbmr7, funcgroups8, sdm12, \
+                     mmseqs12, \
+                     wass14, hsdm17, uniprot18, massspec18",
                     detected_moltype
                 ),
             });
