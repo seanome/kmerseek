@@ -78,13 +78,6 @@ const DEFAULT_TARGET_CHUNK: usize = 4096;
 /// during indexing whose size is chosen rather than dictated by the data.
 const DEFAULT_POSTING_BUFFER: usize = 1 << 24;
 
-/// Statistics for k-mer frequency analysis
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ProteomeIndexKmerStats {
-    pub idf: HashMap<u64, f64>, // Inverse document frequency for each k-mer hashvalue
-    pub frequency: HashMap<u64, f64>, // Raw frequency for each k-mer hashvalue
-}
-
 /// Index metadata, written last by `finalize` so its presence means the index is complete.
 #[derive(Serialize, Deserialize)]
 struct ProteomeIndexMetadata {
@@ -229,24 +222,13 @@ pub struct ProteomeIndex {
     // Amino acid ambiguity handler
     aa_ambiguity: Arc<AminoAcidAmbiguity>,
 
-    // Statistics for k-mer frequencies and IDF
-    // Not currently used, but will be used in the future
-    #[allow(dead_code)]
-    stats: ProteomeIndexKmerStats,
-
-    // Molecule type of every signature, e.g. "protein" or "hp". Saved in
+    // Alphabet of every signature, e.g. "protein20" or "hp_lehninger2". Saved in
     // ProteomeIndexMetadata, so a loaded index knows it without reading a signature.
     moltype: String,
 
     // k-mer size in residues. Saved in ProteomeIndexMetadata. u32 to match sourmash
     // branchwater.
     ksize: u32,
-
-    // Add minhash_ksize field for serialization
-    // MinHash k-mer size is protein_ksize * 3, as a legacy from Sourmash which was originally designed for DNA
-    // Not currently used, but will be used in the future
-    #[allow(dead_code)]
-    minhash_ksize: u32,
 
     // FracMinHash scaled value: a k-mer is kept when its hash is below max_hash / scaled.
     // Saved in ProteomeIndexMetadata.
@@ -407,11 +389,9 @@ impl ProteomeIndex {
             posting_buffer_capacity: DEFAULT_POSTING_BUFFER,
             target_chunk,
             aa_ambiguity: Arc::new(AminoAcidAmbiguity::new()),
-            minhash_ksize: ksize * 3,
             moltype,
             ksize,
             scaled,
-            stats: ProteomeIndexKmerStats { idf: HashMap::new(), frequency: HashMap::new() },
             store_raw_sequences,
             remove_low_complexity,
             kmer_windows_examined: AtomicUsize::new(0),
