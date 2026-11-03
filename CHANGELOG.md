@@ -38,6 +38,7 @@ An index built by 0.4.0 or earlier cannot be read by 0.5.0: rebuild it with `kme
 ### Alphabets
 
 - Added `cys2` (cysteine against every other residue), `aro_hyd_chg_pol4` and `aro_hyd_arg_chg_pol5` (sticker and spacer alphabets), and `massspec18` (the 20 residues with I = L and Q = K merged) ([#145](https://github.com/seanome/kmerseek/pull/145), [#146](https://github.com/seanome/kmerseek/pull/146), [#156](https://github.com/seanome/kmerseek/pull/156))
+- Added `hp_pbotc_1st_ed_hpc3` (`cys_hp3` for short): PBotC 1st ed's hydrophobic/polar split with cysteine in a class of its own, for cysteine-framework searches that should also read the residues between the cysteines. The README draws a cone-snail and a spider toxin with the same C-C-CC-C-C framework under `cys2`, `cys_hp3` and `hp_pbotc_1st_ed2` ([#148](https://github.com/seanome/kmerseek/pull/148), [#150](https://github.com/seanome/kmerseek/pull/150))
 - Built every "expected one of" list of alphabets from one registry, so a new alphabet cannot be left out of an error message ([#155](https://github.com/seanome/kmerseek/pull/155))
 
 ### Docs, tests and CI
