@@ -12,11 +12,11 @@ use std::time::Instant;
 /// One timed part of a search, in the order a query passes through them.
 #[derive(Clone, Copy, Debug)]
 pub enum Step {
-    /// Opening the index and reading its target list and inverted index into memory.
+    /// Opening the database, reading its target list, and mapping its k-mer-to-protein index.
     LoadIndex,
     /// `prepare_query`: the query's k-mer set, TF-IDF and position prefix sums.
     PrepareQuery,
-    /// Looking up each query k-mer in the inverted index and collecting candidate targets.
+    /// Looking up each query k-mer in the k-mer-to-protein index and collecting candidate targets.
     CandidateLookup,
     /// Reading a candidate's signature from RocksDB and deserializing it (first use only).
     SignatureLoad,
