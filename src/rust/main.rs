@@ -134,6 +134,51 @@ enum Commands {
         #[arg(long, value_name = "PATH")]
         ka_survival_out: Option<PathBuf>,
     },
+    /// Fit and store the Karlin-Altschul r_database and K of an existing index for one more
+    /// mismatch penalty and give-up margin. `kmerseek index` fits one pair when it builds
+    /// the index. A search at another `--extend-mismatch-penalty` then reads the fit stored
+    /// here instead of fitting its own on every run.
+    Calibrate {
+        /// Index directory, as written by `kmerseek index`. Opened read-write, so no
+        /// search may have it open at the same time.
+        #[arg(short, long)]
+        target: PathBuf,
+
+        /// The `--extend-mismatch-penalty` the fit is for.
+        #[arg(long, default_value_t = DEFAULT_MISMATCH_PENALTY)]
+        extend_mismatch_penalty: f64,
+
+        /// The `--extend-xdrop` (give-up margin) the fit is for.
+        #[arg(long, default_value_t = DEFAULT_XDROP)]
+        extend_xdrop: f64,
+
+        /// How many database sequences to search against the index to fit r_database and
+        /// K; see `kmerseek index --help`. Must be at least 1.
+        #[arg(long, default_value = "200")]
+        ka_queries: usize,
+
+        /// Seed for picking the calibration sequences, so the fit is reproducible.
+        #[arg(long, default_value = "1")]
+        ka_seed: u64,
+
+        /// The sequences the line is fitted to; see `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::Database)]
+        ka_null: DecoyNull,
+
+        /// With `--ka-null database`, how the reference queries that mark where relatives
+        /// begin are made; see `kmerseek index --help`.
+        #[arg(long, value_enum, default_value_t = DecoyNull::default())]
+        ka_reference: DecoyNull,
+
+        /// How many times each reference query is shuffled; see `kmerseek index --help`.
+        #[arg(long, default_value = "1")]
+        ka_reference_shuffles: usize,
+
+        /// Write the survival curve the fit was read from to this CSV, as
+        /// `kmerseek index --ka-survival-out` does.
+        #[arg(long, value_name = "PATH")]
+        ka_survival_out: Option<PathBuf>,
+    },
     /// Search query sequences against a protein database
     Search {
         /// Query FASTA file path
@@ -1114,6 +1159,36 @@ fn main() -> IndexResult<()> {
                 eprintln!("Average TF-IDF: {:.6}", avg_tfidf);
                 eprintln!("Average database k-mer frequency: {:.6}", avg_database_kmer_freq);
             }
+        }
+        Commands::Calibrate {
+            target,
+            extend_mismatch_penalty,
+            extend_xdrop,
+            ka_queries,
+            ka_seed,
+            ka_null,
+            ka_reference,
+            ka_reference_shuffles,
+            ka_survival_out,
+        } => {
+            if ka_queries == 0 {
+                return Err(
+                    anyhow::anyhow!("--ka-queries must be at least 1 to fit anything").into()
+                );
+            }
+            let scoring = ExtensionScoring::new(extend_mismatch_penalty, extend_xdrop)
+                .map_err(|message| anyhow::anyhow!(message))?;
+            eprintln!("Opening index {} read-write", target.display());
+            let index = ProteomeIndex::open_for_calibration(&target)?;
+            let settings = KaCalibrationSettings {
+                scoring,
+                null: ka_null,
+                reference: ka_reference,
+                reference_shuffles: ka_reference_shuffles,
+                n_queries: ka_queries,
+                seed: ka_seed,
+            };
+            calibrate_index(index, settings, ka_survival_out.as_deref())?;
         }
         Commands::Pair { query, target, query_name, target_name, output, ksize, alphabet } => {
             run_pair(&query, &target, query_name, target_name, output, ksize, alphabet.into())?;
