@@ -20,7 +20,8 @@ keeps a region.
 (c) The cost on ordinary sequence: the 25 BCL-2-like test proteins against 500 decoys
 (each shuffled 20 times keeping its dipeptide counts), exact search at hp_lehninger2
 k = 15. Query-target pairs whose best region has a run E-value at or below each cutoff. A
-calibrated E-value gives 12,500 (1 - e^(-x/500)) pairs, about 25 x while x is small.
+calibrated E-value gives 12,000 (1 - e^(-x/480)) pairs, about 24 x while x is small.
+Each query's own 20 shuffles are left out, as in the test.
 """
 
 import argparse
@@ -40,7 +41,7 @@ TARGETS_FASTA = "tests/testdata/fasta/nb344_targets_tbc1d10b_fmn2.fasta"
 DSPP_START, DSPP_END, TBC_START = 1057, 1117, 715
 # hp_lehninger2's classes, from src/rust/alphabets.rs (LEHNINGER_HP).
 HP = str.maketrans("AFGILMPVWYCDEHKNQRST", "hhhhhhhhhhpppppppppp")
-N_PAIRS, N_TARGETS = 25 * 500, 500
+N_PAIRS, N_TARGETS = 25 * 480, 480
 
 # One colour per rule, the same in panels b and c.
 RULES = {
@@ -146,8 +147,8 @@ def plot_decoys(ax):
     ax.set_xticks([0.3, 1, 10, 100, 1000], ["0.3", "1", "10", "100", "1000"])
     ax.set_yticks([1, 10, 100, 1000, 10000], ["1", "10", "100", "1000", "10,000"])
     ax.set_xlim(0.3, 1000)
-    ax.set_xlabel("run E-value cutoff x\n25 BCL-2-like proteins against\n500 decoys, hp_lehninger2 k = 15")
-    ax.set_ylabel("decoy pairs with best region at E ≤ x\n(of 12,500)")
+    ax.set_xlabel("run E-value cutoff x\n25 BCL-2-like proteins against the 480 decoys\nmade from other proteins, hp_lehninger2 k = 15")
+    ax.set_ylabel("decoy pairs with best region at E ≤ x\n(of 12,000)")
 
 
 def main():
@@ -166,7 +167,7 @@ def main():
     handles = [Line2D([], [], color=colour, marker="o", ls="", ms=4, label=label) for colour, label in RULES.values()]
     handles += [
         Line2D([], [], color="black", marker="x", ls="", ms=4, mew=1, label="no region left (SEG masked its seeds)"),
-        Line2D([], [], color="black", lw=1, label="(c) calibrated E-value: 12,500 (1 - e^(-x/500))"),
+        Line2D([], [], color="black", lw=1, label="(c) calibrated E-value: 12,000 (1 - e^(-x/480))"),
     ]
     bottom.legend(handles=handles, loc="outside upper center", ncol=2, frameon=False)
     for ax, letter in zip((a, b, c), "abc"):

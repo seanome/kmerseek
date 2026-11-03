@@ -13,10 +13,11 @@ either sequence, so it predicts (1 - (L0 - 1) / 1000)^2 too many; the line shows
 distance that alone would give. The test asserts the filled points.
 
 (b) Decoys. The 25 BCL-2-like test proteins against 500 decoys (each protein shuffled 20
-times keeping its dipeptide counts). Query-target pairs whose best region has a run
-E-value at or below each cutoff. A calibrated E-value would give, for each query, x chance
-hits at E <= x over the whole database, spread over 500 targets: 12,500 (1 - e^(-x/500))
-pairs, about 25 x while x is small.
+times keeping its dipeptide counts), leaving out each query's own 20 shuffles, which share
+short exact stretches with it. Query-target pairs whose best region has a run E-value at
+or below each cutoff. A calibrated E-value would give, for each query, x chance hits at
+E <= x spread over its 480 other decoys: 12,000 (1 - e^(-x/480)) pairs, about 24 x while x
+is small.
 """
 
 import argparse
@@ -32,8 +33,8 @@ from matplotlib.patches import Rectangle  # noqa: E402
 
 DATA = "docs/images/run_evalue_checks"
 SEQUENCE_LENGTH = 1000
-N_PAIRS = 25 * 500
-N_TARGETS = 500
+N_PAIRS = 25 * 480
+N_TARGETS = 480
 # L0 the test asserts, from region_run_evalue_matches_runs_between_random_sequences.
 ASSERTED_L0 = {"hp_lehninger2": {18, 19, 20}, "gbmr4": {15, 16, 17}}
 # Cutoffs the decoy test pins, from region_run_evalue_on_2mer_shuffled_decoys.
@@ -79,7 +80,7 @@ def plot_decoys(ax):
     rows = read("decoys_pairs_at_or_below.tsv")
     xs = [10 ** (i / 20) for i in range(-10, 61)]
     ax.plot(xs, [N_PAIRS * (1 - math.exp(-x / N_TARGETS)) for x in xs], color="black", lw=1,
-            label="calibrated E-value: 12,500 (1 - e^(-x/500))")
+            label="calibrated E-value: 12,000 (1 - e^(-x/480))")
     for (alphabet, ksize), (colour, _) in SERIES.items():
         mine = [r for r in rows if (r["alphabet"], int(r["ksize"])) == (alphabet, ksize) and int(r["pairs"]) > 0]
         if mine:
@@ -95,7 +96,7 @@ def plot_decoys(ax):
     ax.set_yticks([1, 10, 100, 1000, 10000], ["1", "10", "100", "1000", "10,000"])
     ax.set_xlim(0.3, 1000)
     ax.set_xlabel("region_run_evalue cutoff x\n(dotted: the cutoffs the test pins, 1 and 10)")
-    ax.set_ylabel("query-target pairs with best region at E ≤ x\n(of 12,500)")
+    ax.set_ylabel("query-target pairs with best region at E ≤ x\n(of 12,000)")
 
 
 def main():
@@ -117,7 +118,7 @@ def main():
         Line2D([], [], color="black", ls="--", lw=0.8,
                       label="(a) dashed: shortfall the sequence ends alone give"),
         Rectangle((0, 0), 1, 1, color=pf.GREY, alpha=0.2, label="(a) within 3 standard deviations"),
-        Line2D([], [], color="black", lw=1, label="(b) calibrated E-value: 12,500 (1 - e^(-x/500))"),
+        Line2D([], [], color="black", lw=1, label="(b) calibrated E-value: 12,000 (1 - e^(-x/480))"),
     ]
     fig.legend(handles=handles, loc="outside upper center", ncol=2, frameon=False)
     pf.panel_label(a, "a")

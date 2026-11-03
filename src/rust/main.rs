@@ -1,6 +1,7 @@
 use clap::{Parser, Subcommand, ValueEnum};
+use kmerseek::alphabets::Alphabet;
 use kmerseek::errors::{IndexError, IndexResult};
-use kmerseek::evalue::{calibrate_index, short_fit_warning, DecoyNull};
+use kmerseek::evalue::{calibrate_index, scoring_from_stored_fits, short_fit_warning, DecoyNull};
 use kmerseek::profile::{self, Step, Timer};
 use kmerseek::search::{
     ExtensionParams, ExtensionScoring, KaCalibrationSettings, KaParams, KaSource, PrSameScope,
@@ -88,7 +89,8 @@ enum Commands {
         /// How many database sequences to search against the index to fit r_database and
         /// K. ln(regions at score S) is a straight line in S; minus its slope is r_database
         /// and its height gives K. Related pairs bend it upward, and the fit stops below
-        /// them. 0 skips the fit, and a search then has to fit its own or be given --ka-k.
+        /// them. 0 skips the fit; a search then fits its own, is given --ka-k, or extends
+        /// without a Karlin-Altschul E-value.
         #[arg(long, default_value = "200")]
         ka_queries: usize,
 
@@ -210,21 +212,25 @@ enum Commands {
 
         /// Grow each matched region past its exact k-mer run, charging this much per
         /// encoded position where query and target disagree (+1 per agreeing position).
-        /// 0 keeps regions exact, the default. A remote homolog conserves the HP pattern per
-        /// position far better than it conserves any 23-residue stretch of it exactly, so an
-        /// exact run is treated as a seed and extended until the give-up margin ends it
-        /// (see --extend-xdrop).
+        /// A remote homolog conserves the HP pattern per position far better than it
+        /// conserves any 23-residue stretch of it exactly, so an exact run is treated as a
+        /// seed and extended until the give-up margin ends it (see --extend-xdrop).
         /// The region's shared k-mer count and Poisson score still count exact k-mers only;
         /// `region_n_mismatches` reports how many positions inside the region disagree.
+        /// Omit it to use the penalty the index's Karlin-Altschul fit was made for (2 unless
+        /// the index was built with another), so every region gets an E-value with no fit
+        /// at search time. An index with no fit keeps regions exact. 0 keeps them exact.
         /// Extended regions get `region_ka_evalue`, which becomes `region_evalue` when the
-        /// pair has a positive lambda; without this flag `region_evalue` is `region_run_evalue`.
-        #[arg(long, default_value = "0.0")]
-        extend_mismatch_penalty: f64,
+        /// pair has a positive lambda; exact regions' `region_evalue` is `region_run_evalue`.
+        #[arg(long)]
+        extend_mismatch_penalty: Option<f64>,
 
         /// The give-up margin (BLAST's X-drop): stop extending once the running score has
-        /// fallen this far below its best.
-        #[arg(long, default_value_t = DEFAULT_XDROP)]
-        extend_xdrop: f64,
+        /// fallen this far below its best. Omit it to use the index fit's, or 8 when
+        /// --extend-mismatch-penalty is given. Given alone, it extends at the penalty of the
+        /// index's fit for this margin, or at 2 when the index has none.
+        #[arg(long)]
+        extend_xdrop: Option<f64>,
 
         /// Karlin-Altschul K for `region_ka_evalue` and `region_ka_bits` on extended regions.
         /// Optional: without it, the r_database and K fitted when the index was built (for
@@ -256,8 +262,9 @@ enum Commands {
         ka_r_database: Option<f64>,
 
         /// Calibration queries to fit r_database and K on when the index has no fit for
-        /// this penalty and give-up margin and --ka-k is unset. 0 refuses to search without
-        /// a fit.
+        /// this penalty and give-up margin and --ka-k is unset. With 0, or when the fit is
+        /// refused, regions are still extended but get no region_ka_bits or
+        /// region_ka_evalue, and region_evalue is region_run_evalue.
         #[arg(long, default_value = "200")]
         ka_queries: usize,
 
@@ -286,7 +293,8 @@ enum Commands {
         /// Chain colinear extended regions at most this many residues apart on the query
         /// (and within --chain-max-shift diagonals) into one region scored with Karlin-Altschul sum statistics (Karlin & Altschul 1993). A
         /// domain that a single gapless run cannot cover becomes one call. 0 (default) keeps
-        /// every region separate. Used only with --extend-mismatch-penalty.
+        /// every region separate. Used only with --extend-mismatch-penalty, and only when
+        /// there is a Karlin-Altschul fit or --ka-k: the chain score needs K.
         #[arg(long, default_value = "0")]
         chain_max_gap: u32,
 
@@ -437,33 +445,48 @@ enum ProteinAlphabet {
     ReducedMassspec18,
 }
 
-impl From<ProteinAlphabet> for &'static str {
+impl From<ProteinAlphabet> for Alphabet {
     fn from(encoding: ProteinAlphabet) -> Self {
         match encoding {
-            ProteinAlphabet::Protein => "protein20",
-            ProteinAlphabet::Dayhoff => "dayhoff6",
-            ProteinAlphabet::HpLehninger => "hp_lehninger2",
-            ProteinAlphabet::HpThomasDill => "hp_thomas_dill2",
-            ProteinAlphabet::HpKyteDoolittle => "hp_kyte_doolittle2",
-            ProteinAlphabet::HpThomasDillNoC => "hp_thomas_dill_no_c2",
-            ProteinAlphabet::HpLehningerCNonpolar => "hp_lehninger_c_nonpolar2",
-            ProteinAlphabet::HpLehningerHpc => "hp_lehninger_hpc3",
-            ProteinAlphabet::HpPBotC1stEd => "hp_pbotc_1st_ed2",
-            ProteinAlphabet::Cys2 => "cys2",
-            ProteinAlphabet::ReducedGbmr4 => "gbmr4",
-            ProteinAlphabet::ReducedPolarity4 => "polarity4",
-            ProteinAlphabet::ReducedAroHydChgPol4 => "aro_hyd_chg_pol4",
-            ProteinAlphabet::ReducedAroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
-            ProteinAlphabet::ReducedWwmj5 => "wwmj5",
-            ProteinAlphabet::ReducedGbmr7 => "gbmr7",
-            ProteinAlphabet::ReducedFuncGroups8 => "funcgroups8",
-            ProteinAlphabet::ReducedSdm12 => "sdm12",
-            ProteinAlphabet::ReducedMmseqs12 => "mmseqs12",
-            ProteinAlphabet::ReducedWass14 => "wass14",
-            ProteinAlphabet::ReducedHsdm17 => "hsdm17",
-            ProteinAlphabet::ReducedUniprot18 => "uniprot18",
-            ProteinAlphabet::ReducedMassspec18 => "massspec18",
+            ProteinAlphabet::Protein => Alphabet::Protein20,
+            ProteinAlphabet::Dayhoff => Alphabet::Dayhoff6,
+            ProteinAlphabet::HpLehninger => Alphabet::HpLehninger2,
+            ProteinAlphabet::HpThomasDill => Alphabet::HpThomasDill2,
+            ProteinAlphabet::HpKyteDoolittle => Alphabet::HpKyteDoolittle2,
+            ProteinAlphabet::HpThomasDillNoC => Alphabet::HpThomasDillNoC2,
+            ProteinAlphabet::HpLehningerCNonpolar => Alphabet::HpLehningerCNonpolar2,
+            ProteinAlphabet::HpLehningerHpc => Alphabet::HpLehningerHpc3,
+            ProteinAlphabet::HpPBotC1stEd => Alphabet::HpPBotC1stEd2,
+            ProteinAlphabet::Cys2 => Alphabet::Cys2,
+            ProteinAlphabet::ReducedGbmr4 => Alphabet::Gbmr4,
+            ProteinAlphabet::ReducedPolarity4 => Alphabet::Polarity4,
+            ProteinAlphabet::ReducedAroHydChgPol4 => Alphabet::AroHydChgPol4,
+            ProteinAlphabet::ReducedAroHydArgChgPol5 => Alphabet::AroHydArgChgPol5,
+            ProteinAlphabet::ReducedWwmj5 => Alphabet::Wwmj5,
+            ProteinAlphabet::ReducedGbmr7 => Alphabet::Gbmr7,
+            ProteinAlphabet::ReducedFuncGroups8 => Alphabet::FuncGroups8,
+            ProteinAlphabet::ReducedSdm12 => Alphabet::Sdm12,
+            ProteinAlphabet::ReducedMmseqs12 => Alphabet::Mmseqs12,
+            ProteinAlphabet::ReducedWass14 => Alphabet::Wass14,
+            ProteinAlphabet::ReducedHsdm17 => Alphabet::Hsdm17,
+            ProteinAlphabet::ReducedUniprot18 => Alphabet::Uniprot18,
+            ProteinAlphabet::ReducedMassspec18 => Alphabet::Massspec18,
         }
+    }
+}
+
+impl From<Alphabet> for ProteinAlphabet {
+    fn from(alphabet: Alphabet) -> Self {
+        *ProteinAlphabet::value_variants()
+            .iter()
+            .find(|variant| Alphabet::from(**variant) == alphabet)
+            .expect("every Alphabet has a --alphabet value")
+    }
+}
+
+impl From<ProteinAlphabet> for &'static str {
+    fn from(encoding: ProteinAlphabet) -> Self {
+        Alphabet::from(encoding).to_moltype()
     }
 }
 
@@ -475,6 +498,47 @@ fn parse_probability(text: &str) -> Result<f64, String> {
         Ok(value)
     } else {
         Err(format!("`{text}` must be above 0 and at most 1"))
+    }
+}
+
+/// Checks the extension flags of `kmerseek search` before the index is opened, so a bad
+/// value fails at once. Only a penalty of exactly 0 turns extension off; a negative, NaN or
+/// infinite one is an error, as it is for `kmerseek index`. `--ka-k` and
+/// `--ka-r-database` are checked next to it in `main`.
+fn check_extension_flags(penalty: Option<f64>, xdrop: Option<f64>) -> IndexResult<()> {
+    if let Some(x) = xdrop.filter(|x| x.is_nan() || *x < 0.0) {
+        return Err(anyhow::anyhow!(
+            "--extend-xdrop must be 0 or more (got {x}); a negative give-up margin would end \
+             every extension at its first mismatch"
+        )
+        .into());
+    }
+    if let Some(p) = penalty.filter(|p| *p != 0.0) {
+        ExtensionScoring::new(p, xdrop.unwrap_or(DEFAULT_XDROP))
+            .map_err(|message| anyhow::anyhow!(message))?;
+    }
+    Ok(())
+}
+
+/// The mismatch penalty and give-up margin `kmerseek search` extends with, or None to keep
+/// regions exact. A penalty that is given decides on its own (0 is off); an omitted one
+/// follows the index's stored Karlin-Altschul fit (`scoring_from_stored_fits`). The flags
+/// have passed `check_extension_flags`.
+fn extension_scoring(
+    penalty: Option<f64>,
+    xdrop: Option<f64>,
+    index: &ProteomeIndex,
+) -> IndexResult<Option<ExtensionScoring>> {
+    match penalty {
+        Some(p) if p != 0.0 => ExtensionScoring::new(p, xdrop.unwrap_or(DEFAULT_XDROP))
+            .map(Some)
+            .map_err(|message| anyhow::anyhow!(message).into()),
+        Some(_) => Ok(None),
+        // A give-up margin with no stored fit for it still asks for extension: extend at the
+        // default penalty, and let the search fit K for it.
+        None => Ok(scoring_from_stored_fits(&index.ka_calibrations()?, xdrop).or_else(|| {
+            xdrop.map(|x| ExtensionScoring { mismatch_penalty: DEFAULT_MISMATCH_PENALTY, xdrop: x })
+        })),
     }
 }
 
@@ -666,6 +730,9 @@ fn main() -> IndexResult<()> {
             query_is_index,
             batch_size,
         } => {
+            // The flags need no index, so a bad one fails before the target is opened.
+            check_extension_flags(extend_mismatch_penalty, extend_xdrop)?;
+
             eprintln!("Searching query sequences against target database");
             eprintln!("Query: {}", query.display());
             eprintln!("Target: {}", target.display());
@@ -743,23 +810,6 @@ fn main() -> IndexResult<()> {
             eprintln!("  Minimum shared k-mers: {}", min_shared_kmers);
             eprintln!("  Maximum query p-value: {}", max_query_pvalue);
             eprintln!("  Minimum region score: {}", min_region_score);
-            // Extension is off at the default penalty of 0, so only a positive one is checked.
-            let scoring = if extend_mismatch_penalty > 0.0 {
-                Some(
-                    ExtensionScoring::new(extend_mismatch_penalty, extend_xdrop)
-                        .map_err(|message| anyhow::anyhow!(message))?,
-                )
-            } else {
-                None
-            };
-            if extend_mismatch_penalty > 0.0 {
-                eprintln!(
-                    "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
-                    extend_mismatch_penalty, extend_xdrop, chain_max_gap, chain_max_shift
-                );
-            } else {
-                eprintln!("  Seed extension: off (regions are exact runs)");
-            }
             eprintln!("  Verbose output: {}", verbose);
             eprintln!("  Query is pre-indexed: {}\n---", query_is_index);
 
@@ -805,7 +855,13 @@ fn main() -> IndexResult<()> {
                 "  Pr(same class) from: {pr_same_from:?}; SEG mask: {}",
                 if seg_mask { "on" } else { "off" }
             );
+            let scoring =
+                extension_scoring(extend_mismatch_penalty, extend_xdrop, searcher.index())?;
             if let Some(scoring) = scoring {
+                eprintln!(
+                    "  Seed extension: mismatch penalty {}, give-up margin {}, chain gap {} shift {}",
+                    scoring.mismatch_penalty, scoring.xdrop, chain_max_gap, chain_max_shift
+                );
                 let explicit =
                     ka_k.map(|k| KaParams { k, r_database: ka_r_database.unwrap_or(1.0) });
                 let settings = KaCalibrationSettings {
@@ -817,10 +873,13 @@ fn main() -> IndexResult<()> {
                     seed: ka_seed,
                 };
                 let (ka, source) = searcher.resolve_ka(explicit, settings)?;
-                eprintln!(
-                    "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
-                    ka.k, ka.r_database
-                );
+                match ka {
+                    Some(ka) => eprintln!(
+                        "  Karlin-Altschul: K {:.4}, r_database {:.3} ({source})",
+                        ka.k, ka.r_database
+                    ),
+                    None => eprintln!("  Karlin-Altschul: {source}"),
+                }
                 if let KaSource::Index(fit) | KaSource::Fitted(fit) = &source {
                     if let Some(warning) = short_fit_warning(fit) {
                         eprintln!("  {warning}");
@@ -832,6 +891,8 @@ fn main() -> IndexResult<()> {
                     chain_max_gap,
                     chain_max_shift,
                 }));
+            } else {
+                eprintln!("  Seed extension: off (regions are exact runs)");
             }
 
             // Build query sketches the same way the target index was built.
@@ -1194,45 +1255,19 @@ fn assign_encoding(
     // the enum type for comparison.
     // Indexes built before class counts were added to the HP names store the old
     // "hp_<name>" moltype. Alphabet::from_moltype() still parses those, so normalizing
-    // here lets the match below deal only in current names.
+    // here lets the lookup below deal only in current names.
     let canonical = MolType::new(detected_moltype)
         .map(|moltype| moltype.get().to_string())
         .unwrap_or_else(|_| detected_moltype.to_string());
 
-    let detected_alphabet = match canonical.as_str() {
-        "protein20" => ProteinAlphabet::Protein,
-        "dayhoff6" => ProteinAlphabet::Dayhoff,
-        "hp_lehninger2" => ProteinAlphabet::HpLehninger,
-        "hp_thomas_dill2" => ProteinAlphabet::HpThomasDill,
-        "hp_kyte_doolittle2" => ProteinAlphabet::HpKyteDoolittle,
-        "hp_thomas_dill_no_c2" => ProteinAlphabet::HpThomasDillNoC,
-        "hp_lehninger_c_nonpolar2" => ProteinAlphabet::HpLehningerCNonpolar,
-        "hp_lehninger_hpc3" => ProteinAlphabet::HpLehningerHpc,
-        "hp_pbotc_1st_ed2" => ProteinAlphabet::HpPBotC1stEd,
-        "cys2" => ProteinAlphabet::Cys2,
-        "gbmr4" => ProteinAlphabet::ReducedGbmr4,
-        "polarity4" => ProteinAlphabet::ReducedPolarity4,
-        "aro_hyd_chg_pol4" => ProteinAlphabet::ReducedAroHydChgPol4,
-        "aro_hyd_arg_chg_pol5" => ProteinAlphabet::ReducedAroHydArgChgPol5,
-        "wwmj5" => ProteinAlphabet::ReducedWwmj5,
-        "gbmr7" => ProteinAlphabet::ReducedGbmr7,
-        "funcgroups8" => ProteinAlphabet::ReducedFuncGroups8,
-        "sdm12" => ProteinAlphabet::ReducedSdm12,
-        "mmseqs12" => ProteinAlphabet::ReducedMmseqs12,
-        "wass14" => ProteinAlphabet::ReducedWass14,
-        "hsdm17" => ProteinAlphabet::ReducedHsdm17,
-        "uniprot18" => ProteinAlphabet::ReducedUniprot18,
-        "massspec18" => ProteinAlphabet::ReducedMassspec18,
-        _ => {
+    let detected_alphabet = match Alphabet::from_moltype(&canonical) {
+        Some(alphabet) => ProteinAlphabet::from(alphabet),
+        None => {
             return Err(kmerseek::errors::IndexError::ValidationError {
                 message: format!(
-                    "Unknown alphabet in database: {}. Expected one of: protein20, dayhoff6, \
-                     hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, hp_thomas_dill_no_c2, \
-                     hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, hp_pbotc_1st_ed2, cys2, \
-                     gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, wwmj5, gbmr7, funcgroups8, sdm12, \
-                     mmseqs12, \
-                     wass14, hsdm17, uniprot18, massspec18",
-                    detected_moltype
+                    "Unknown alphabet in database: {}. Expected one of: {}",
+                    detected_moltype,
+                    Alphabet::moltype_names()
                 ),
             });
         }
@@ -1323,4 +1358,37 @@ fn validate_and_assign_parameters(
     let final_alphabet = assign_encoding(user_encoding, detected_moltype)?;
 
     Ok((final_ksize, final_scaled, final_alphabet))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Every alphabet the library knows has a `--alphabet` value that maps back to it.
+    #[test]
+    fn every_alphabet_has_a_cli_value() {
+        for alphabet in Alphabet::all() {
+            assert_eq!(Alphabet::from(ProteinAlphabet::from(*alphabet)), *alphabet);
+        }
+        assert_eq!(ProteinAlphabet::value_variants().len(), Alphabet::all().len());
+    }
+
+    /// An index built with each alphabet is read back as that alphabet.
+    #[test]
+    fn assign_encoding_reads_every_stored_moltype() {
+        for alphabet in Alphabet::all() {
+            let detected = assign_encoding(ProteinAlphabet::Protein, alphabet.to_moltype());
+            assert_eq!(Alphabet::from(detected.unwrap()), *alphabet);
+        }
+    }
+
+    /// Adding an alphabet must not need a hand edit to this message.
+    #[test]
+    fn unknown_alphabet_error_names_every_alphabet() {
+        let message =
+            assign_encoding(ProteinAlphabet::Protein, "not_an_alphabet").unwrap_err().to_string();
+        for alphabet in Alphabet::all() {
+            assert!(message.contains(alphabet.to_moltype()), "{message}");
+        }
+    }
 }

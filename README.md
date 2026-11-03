@@ -156,6 +156,11 @@ score has fallen `--extend-xdrop X` (default 8) below its best. X is the give-up
 (BLAST calls this rule the X-drop). Two seeds on one diagonal whose extensions meet
 become one region.
 
+A search extends by default. `kmerseek index` stores a Karlin-Altschul fit (below) for
+penalty 2 and give-up margin 8, and a search without `--extend-mismatch-penalty` uses the
+penalty and give-up margin of that fit. `--extend-mismatch-penalty 0` keeps regions
+exact, and so does an index built with `--ka-queries 0`, which holds no fit.
+
 Both walks on the BH1 seed of CED9 against BCL2 (`hp`, k=12, penalty 2, give-up margin
 8). A side keeps residues only up to its best running score. To the left the first two
 classes differ, so the score starts at -4, never rises above 0, and nothing is kept. To
@@ -169,7 +174,7 @@ the right the score climbs to +1 after 7 residues, and the walk stops once it ha
 
 ```bash
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
-    --extend-mismatch-penalty 2 --output hits.csv
+    --output hits.csv
 ```
 
 What changes in the CSV: `region_start`/`region_end` and the target coordinates cover
@@ -178,9 +183,10 @@ exact shared k-mers (the seeds), so it no longer equals `region_length - ksize +
 and a new column `region_n_mismatches` says how many positions inside the region
 disagree. The region Poisson score keeps counting exact k-mers against the expectation
 summed over the extended span, so extension can only make a region's score more
-conservative. Without the flag every region is exact and `region_n_mismatches` is 0.
+conservative. With `--extend-mismatch-penalty 0` every region is exact and
+`region_n_mismatches` is 0.
 
-Two more columns come with the flag. `region_ka_bits` and `region_ka_evalue` score the
+Two more columns come with extension. `region_ka_bits` and `region_ka_evalue` score the
 extended region as an ungapped alignment in the encoded alphabet with Karlin-Altschul
 statistics (Karlin & Altschul 1990, the statistics behind BLAST):
 
@@ -201,7 +207,9 @@ regions](#prsame-in-low-complexity-regions)), gives λ as the positive root of
 `u e^λ + (1 - u) e^(-Cλ) = 1`. When `u ≥ C / (1 + C)` no positive root exists, which is
 what two hydrophobic runs look like, and the region gets 0 bits and an empty
 `region_ka_evalue`: agreement is what those two stretches do by default. Its
-`region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). `K` is the
+`region_evalue` is then the run E-value (see [E-values in the CSV](#e-values-in-the-csv)). The
+same happens on every row when the index has no fit for the penalty and none can be made:
+the regions are still extended, and the log says why there is no K. `K` is the
 fraction of the m × n cells that can start a region. It depends on the alphabet, the
 seed length, the penalty, the give-up margin and the database, so `kmerseek index` fits
 it on the index itself (`--ka-queries`, 200 by default): it searches that many of the
@@ -219,7 +227,7 @@ different-fold hit at E <= 0.01.
 ```bash
 kmerseek index --input proteome.fasta --output proteome.db --ksize 10 --alphabet hp
 kmerseek search -q query.fasta -t proteome.db --ksize 10 --alphabet hp \
-    --extend-mismatch-penalty 2 --output hits.csv
+    --output hits.csv
 ```
 
 `--chain-max-gap G --chain-max-shift D` chains extended regions that follow each other on
@@ -245,6 +253,7 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 | `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
 | `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, counted from the region's own positions (below; `--pr-same-from protein` counts it from the two whole proteins) | all |
 | `region_run_evalue` | Pr(same)^L × ((1 − Pr(same)) × m × n + diagonals), below | all |
+| `region_run_evalue_midp` | `region_run_evalue` × (1 + Pr(same)) / 2, the mid-p run E-value (below) | all |
 | `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
 | `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
 | `region_evalue_source` | `ka`, `ka_chain` (a chain of regions, above), or `run` | all |
@@ -314,33 +323,51 @@ an exact search reports. At `hp_lehninger2` the search finds 225 runs of 20 or m
 the formula predicts 201.5; at `gbmr4`, 50 runs of 17 or more against 61.6, both within
 3 standard deviations (test `region_run_evalue_matches_runs_between_random_sequences`).
 
-Real proteins are not random, so the run E-value was also measured on decoys. The 25
-BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
-search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
-protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value is one where the
-expected number of chance hits at E <= x is x. Each of the 25 queries is searched once, so
-a calibrated E-value gives about 25 query-target pairs with a best region at E <= 1 (1 per
-query), and 250 at E <= 10:
+Real proteins are not random, so the run E-values were also measured on decoys. The 25
+BCL-2-like test proteins were searched against 500 decoys, exact search. Each decoy is one
+of the proteins shuffled with its dipeptide counts kept, 20 per protein
+(`shuffle_fasta_2mer.py --seed 1`).
 
-| k | E <= | Pr(same) from the region | from the whole proteins | calibrated |
-|---|---|---|---|---|
-| 15 | 1 | 4 | 6 | 25 |
-| 15 | 10 | 112 | 162 | 250 |
-| 12 | 1 | 4 | 6 | 25 |
-| 12 | 10 | 112 | 162 | 250 |
+A query's own 20 shuffles are left out of the count. A shuffle that keeps every adjacent
+residue pair keeps short exact stretches of its source: at `protein20` k=5 a query and its
+own shuffles share 708 runs of 5 or more where the run model predicts 135. A real database
+holds no shuffle of the query. On the other 480 decoys a calibrated E-value gives about 24
+query-target pairs with a best region at E <= 1 (one per query) and 240 at E <= 10. Pairs
+called, with Pr(same) from each region (the default) and from the two whole proteins
+(`--pr-same-from protein`):
 
-The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
-errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`). The figure below
-shows Pr(same) from the whole proteins.
+| alphabet | k | E <= | run, region | mid-p, region | run, proteins | mid-p, proteins | calibrated |
+|---|---|---|---|---|---|---|---|
+| `hp_lehninger2` | 15 | 1 | 4 | 5 | 6 | 11 | 24 |
+| `hp_lehninger2` | 15 | 10 | 107 | 153 | 157 | 207 | 240 |
+| `hp_lehninger2` | 12 | 1 | 4 | 5 | 6 | 11 | 24 |
+| `hp_lehninger2` | 12 | 10 | 107 | 153 | 157 | 207 | 240 |
+| `gbmr4` | 10 | 1 | 18 | 30 | 28 | 38 | 24 |
+| `gbmr4` | 10 | 10 | 141 | 177 | 178 | 246 | 240 |
+| `protein20` | 5 | 1 | 6 | 7 | 7 | 18 | 24 |
+| `protein20` | 5 | 10 | 66 | 89 | 87 | 125 | 240 |
+
+"run" is `region_run_evalue` and "mid-p" is `region_run_evalue_midp`. With Pr(same) from
+each region, both let through fewer decoy pairs than a calibrated E-value would, in every
+row. Run lengths are whole numbers, and one more agreeing position multiplies the run
+E-value by Pr(same). So the runs that pass E <= 10 have E-values anywhere from
+10 × Pr(same) to 10: from 5 at `hp_lehninger2` (Pr(same) about 0.5), from 0.6 at
+`protein20` (about 0.06). The mid-p run E-value (Lancaster 1961) averages the expected
+counts of runs of at least L and of more than L, which puts the cut halfway along one
+step. It is closer to calibrated in every row at E <= 10; with Pr(same) from the whole
+proteins it lets through too many at `gbmr4`. It is reported beside `region_run_evalue`
+and is never `region_evalue`. Neither replaces measuring the cut on decoys of your own
+database (test `region_run_evalue_on_2mer_shuffled_decoys`).
 
 ![Runs counted against predicted on random sequences, and decoy pairs called at each run E-value cutoff](docs/images/run_evalue_checks.png)
 
 (a) Random sequences: counted minus predicted runs, in Poisson standard deviations, for
 each minimum run length L0. The formula counts start positions a run cannot use at the
 end of each sequence; the dashed line is the shortfall that alone gives, and it explains
-the short L0 the test leaves out. (b) Decoys: pairs called at each cutoff, below the
-calibrated count (black) at every cutoff; k = 12 and k = 15 give the same counts, so
-their lines lie on top of each other. Drawn by `scripts/plot_run_evalue_checks.py`.
+the short L0 the test leaves out. (b) Decoys at `hp_lehninger2`, without each query's own
+shuffles, with Pr(same) from each region: pairs called at each run E-value cutoff, below the calibrated count (black) at
+every cutoff; k = 12 and k = 15 give the same counts, so their lines lie on top of each
+other. Drawn by `scripts/plot_run_evalue_checks.py`.
 
 ### Pr(same) in low-complexity regions
 
@@ -375,8 +402,8 @@ against FMN2's proline-rich stretch, and for CED-9 against BCL2, a real match.
 `--seg-mask` (SEG, window 12, 2.2 and 2.5 bits) drops seeds that touch a low-complexity
 residue: it removes both chance regions, and it would also hide any real match between
 low-complexity regions, so it is off by default. (c) The cost on ordinary sequence: on the
-BCL-2 decoys above, counting from the region calls 112 pairs at E <= 10 where the whole
-proteins call 162 (250 is calibrated). Tests `region_run_evalue_holds_in_a_low_complexity_region`
+BCL-2 decoys above (other proteins' shuffles only), counting from the region calls 107
+pairs at E <= 10 where the whole proteins call 157 (240 is calibrated). Tests `region_run_evalue_holds_in_a_low_complexity_region`
 and `nb344_examples_under_each_pr_same_rule`; drawn by `scripts/plot_region_pr_same_nb344.py`.
 
 On the 500 decoys against the 25 BCL-2-like proteins at hp k = 8 (3.2 million regions),

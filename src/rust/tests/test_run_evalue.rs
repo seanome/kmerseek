@@ -263,50 +263,98 @@ fn best_run_evalue(r: &SearchResult) -> f64 {
     r.matched_regions.iter().filter_map(|region| region.run_evalue).fold(f64::INFINITY, f64::min)
 }
 
-/// Query-target pairs whose best region has region_run_evalue at most `x`.
-fn pairs_at_or_below(results: &[SearchResult], x: f64) -> usize {
-    results.iter().filter(|r| best_run_evalue(r) <= x).count()
+/// Query-target pairs whose best region, by `evalue`, is at most `x`.
+fn pairs_at_or_below(
+    results: &[SearchResult],
+    x: f64,
+    evalue: impl Fn(&SearchResult) -> f64,
+) -> usize {
+    results.iter().filter(|r| evalue(r) <= x).count()
 }
 
-/// Decoys: the 25 BCL-2-like proteins against 500 sequences
-/// shuffled with their 2-mer counts kept, exact search at hp_lehninger2. A calibrated
-/// E-value gives about 25 query-target pairs with a best region at E <= 1 (one per query)
-/// and 250 at E <= 10. Pinned as measured, nothing tuned, with pr_same from the region
-/// (the default) and from the two whole proteins:
+fn best_run_evalue_midp(r: &SearchResult) -> f64 {
+    r.matched_regions
+        .iter()
+        .filter_map(|region| region.run_evalue_midp)
+        .fold(f64::INFINITY, f64::min)
+}
+
+/// Whether `target` is one of `query`'s own shuffles. TEST_DECOYS_2MER_GZ names each decoy
+/// `<source header>_shuffle<i>`.
+fn is_own_shuffle(r: &SearchResult) -> bool {
+    r.target_name
+        .strip_prefix(r.query_name.as_str())
+        .is_some_and(|rest| rest.starts_with("_shuffle"))
+}
+
+/// The run E-value on decoys: the 25 BCL-2-like proteins against 500
+/// sequences shuffled with their 2-mer counts kept, 20 per protein, exact search.
 ///
-/// | k  | E <= | region | whole proteins | calibrated |
-/// |----|------|--------|----------------|------------|
-/// | 15 | 1    | 4      | 6              | 25         |
-/// | 15 | 10   | 112    | 162            | 250        |
-/// | 12 | 1    | 4      | 6              | 25         |
-/// | 12 | 10   | 112    | 162            | 250        |
+/// Only decoys made from OTHER proteins are counted. A shuffle that keeps every adjacent
+/// residue pair keeps short exact stretches of its source, so a query finds its own 20
+/// shuffles far more often than chance: at protein20 k=5, 708 runs of 5 or more where the
+/// run model predicts 135 (scripts/run_evalue_decoys.py). A real search has no shuffle of
+/// the query in its database, so those 500 pairs, 4% of the test, are left out.
 ///
-/// The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys
-/// it errs toward too large, and from the region a little more so: these proteins have no
-/// long low-complexity stretch for the region rule to correct, and it pays the small
-/// extra caution `region_pr_same` describes. k changes which pairs share a seed but not a pair's run
-/// E-value, which depends on the run length and the database's residue count only, so the
-/// two k give the same counts here. Every cutoff from 0.3 to 1,000 is drawn in
-/// `docs/images/run_evalue_checks.png`, panel b.
+/// On the 480 other decoys a calibrated E-value gives 25 x 480 / 500 = 24 query-target
+/// pairs with a best region at E <= 1 and 240 at E <= 10. Pinned as measured, nothing
+/// tuned, with Pr(same) from each region (the default) and from the two whole proteins
+/// (`--pr-same-from protein`):
+///
+/// | alphabet      | k  | E <= | run, region | mid-p, region | run, proteins | mid-p, proteins | calibrated |
+/// |---------------|----|------|-------------|---------------|---------------|-----------------|------------|
+/// | hp_lehninger2 | 15 | 1    | 4           | 5             | 6             | 11              | 24         |
+/// | hp_lehninger2 | 15 | 10   | 107         | 153           | 157           | 207             | 240        |
+/// | hp_lehninger2 | 12 | 1    | 4           | 5             | 6             | 11              | 24         |
+/// | hp_lehninger2 | 12 | 10   | 107         | 153           | 157           | 207             | 240        |
+/// | gbmr4         | 10 | 1    | 18          | 30            | 28            | 38              | 24         |
+/// | gbmr4         | 10 | 10   | 141         | 177           | 178           | 246             | 240        |
+/// | protein20     | 5  | 1    | 6           | 7             | 7             | 18              | 24         |
+/// | protein20     | 5  | 10   | 66          | 89            | 87            | 125             | 240        |
+///
+/// From the region, both E-values stay below calibrated at E <= 10. These proteins have no
+/// long low-complexity stretch for the region rule to correct, so it only adds the small
+/// extra caution `region_pr_same` describes. From the whole proteins, the run E-value
+/// stays below calibrated at E <= 10, protein20 most; the mid-p value does too, except at
+/// gbmr4 (246 against 240). k changes which pairs share a seed but not a
+/// pair's run E-value, so the two hp_lehninger2 k give the same counts. Run lengths are
+/// whole numbers and each extra position multiplies the run E-value by Pr(same), so the
+/// runs passing E <= 10 have E-values from 10 Pr(same) to 10: from 5 at hp_lehninger2
+/// (Pr(same) about 0.5) and from 0.6 at protein20 (about 0.06). The mid-p value moves the
+/// cut halfway along that step. It recovers part of the shortfall wherever the run E-value
+/// is below calibrated, and from the whole proteins overshoots at gbmr4 (E <= 1 and
+/// E <= 10). The run E-value at hp_lehninger2 with Pr(same) from each region, at every
+/// cutoff from 10^-4 to 1,000, is drawn in `docs/images/run_evalue_checks.png`, panel b.
 #[test]
 fn region_run_evalue_on_2mer_shuffled_decoys() {
-    // (k, query-target pairs the search reports, pairs at run E-value <= 1 and <= 10).
-    // The search reports a pair when it shares at least one k-mer; of the 25 x 500 =
-    // 12,500 pairs, 8,762 share a 15-mer and 12,440 a 12-mer. All counts as measured by
-    // this test.
+    // (alphabet, k, Pr(same) rule, pairs with a region against other decoys, run E-value at
+    // <= 1 and <= 10, mid-p run E-value at <= 1 and <= 10)
     let expected = [
-        (15, 8762, PrSameScope::Region, [4, 112]),
-        (15, 8762, PrSameScope::Protein, [6, 162]),
-        (12, 12440, PrSameScope::Region, [4, 112]),
-        (12, 12440, PrSameScope::Protein, [6, 162]),
+        ("hp_lehninger2", 15, PrSameScope::Protein, 8386, [6, 157], [11, 207]),
+        ("hp_lehninger2", 12, PrSameScope::Protein, 11940, [6, 157], [11, 207]),
+        ("gbmr4", 10, PrSameScope::Protein, 11231, [28, 178], [38, 246]),
+        ("protein20", 5, PrSameScope::Protein, 1262, [7, 87], [18, 125]),
+        ("hp_lehninger2", 15, PrSameScope::Region, 8386, [4, 107], [5, 153]),
+        ("hp_lehninger2", 12, PrSameScope::Region, 11940, [4, 107], [5, 153]),
+        ("gbmr4", 10, PrSameScope::Region, 11231, [18, 141], [30, 177]),
+        ("protein20", 5, PrSameScope::Region, 1262, [6, 66], [7, 89]),
     ];
-    for (ksize, n_pairs, scope, run) in expected {
-        let (results, queries, targets) =
-            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize, scope);
-        assert_eq!((queries.len(), targets.len(), results.len()), (25, 500, n_pairs));
-        let counts = [1.0, 10.0].map(|x| pairs_at_or_below(&results, x));
-        assert_eq!(counts, run, "k={ksize} {scope:?}");
-    }
+    // Every case is measured before any is checked, so one failing run reports them all.
+    let measured: Vec<_> = expected
+        .iter()
+        .map(|&(moltype, ksize, scope, ..)| {
+            let (results, queries, targets) =
+                exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, moltype, ksize, scope);
+            assert_eq!((queries.len(), targets.len()), (25, 500));
+            let others: Vec<SearchResult> =
+                results.into_iter().filter(|r| !is_own_shuffle(r)).collect();
+            let count =
+                |e: fn(&SearchResult) -> f64| [1.0, 10.0].map(|x| pairs_at_or_below(&others, x, e));
+            let n = others.len();
+            (moltype, ksize, scope, n, count(best_run_evalue), count(best_run_evalue_midp))
+        })
+        .collect();
+    assert_eq!(measured, expected);
 }
 
 /// Decoy pairs at or below each run E-value cutoff, with pr_same from the region and from
@@ -323,8 +371,10 @@ fn write_region_pr_same_decoy_data() {
     for (rule, scope) in [("region", PrSameScope::Region), ("protein", PrSameScope::Protein)] {
         let (results, _, _) =
             exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", 15, scope);
+        let others: Vec<SearchResult> =
+            results.into_iter().filter(|r| !is_own_shuffle(r)).collect();
         for &x in &cutoffs {
-            let n = pairs_at_or_below(&results, x);
+            let n = pairs_at_or_below(&others, x, best_run_evalue);
             writeln!(out, "hp_lehninger2\t15\t{rule}\t{x}\t{n}").unwrap();
         }
     }
@@ -368,10 +418,12 @@ fn write_run_evalue_figure_data() {
             TEST_DECOYS_2MER_GZ,
             "hp_lehninger2",
             ksize,
-            PrSameScope::Protein,
+            PrSameScope::Region,
         );
+        let others: Vec<SearchResult> =
+            results.into_iter().filter(|r| !is_own_shuffle(r)).collect();
         for &x in &cutoffs {
-            let n = pairs_at_or_below(&results, x);
+            let n = pairs_at_or_below(&others, x, best_run_evalue);
             writeln!(decoys, "hp_lehninger2\t{ksize}\t{}\t{x}\t{n}", queries.len()).unwrap();
         }
     }

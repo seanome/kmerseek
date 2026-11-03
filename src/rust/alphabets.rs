@@ -110,7 +110,10 @@ pub enum Alphabet {
 }
 
 impl Alphabet {
-    /// Every alphabet kmerseek can index with.
+    /// Every alphabet kmerseek can index with. Error messages, tests and the CLI read their
+    /// alphabet lists from here. To add an alphabet: add the variant here and its arms in
+    /// this file, then one `ProteinAlphabet` variant and one `From` arm in `main.rs`.
+    /// `every_alphabet_has_a_cli_value` in `main.rs` fails if the `main.rs` part is missing.
     pub fn all() -> &'static [Alphabet] {
         &[
             Alphabet::Protein20,
@@ -166,6 +169,12 @@ impl Alphabet {
             Self::Uniprot18 => "uniprot18",
             Self::Massspec18 => "massspec18",
         }
+    }
+
+    /// Every moltype in [`Self::all`] order, joined by ", ", for "expected one of" errors.
+    pub fn moltype_names() -> String {
+        let names: Vec<&str> = Self::all().iter().map(Alphabet::to_moltype).collect();
+        names.join(", ")
     }
 
     /// Parse a moltype. Returns `None` for anything unrecognized.
@@ -1236,6 +1245,23 @@ mod sourmash_compat_tests {
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
         }
+    }
+}
+
+#[cfg(test)]
+mod moltype_names_tests {
+    use super::*;
+
+    /// The list printed in "expected one of" errors, in `Alphabet::all()` order.
+    #[test]
+    fn moltype_names_lists_every_alphabet_in_order() {
+        assert_eq!(
+            Alphabet::moltype_names(),
+            "protein20, dayhoff6, hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, \
+             hp_thomas_dill_no_c2, hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, \
+             hp_pbotc_1st_ed2, cys2, gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, \
+             wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, wass14, hsdm17, uniprot18, massspec18"
+        );
     }
 }
 

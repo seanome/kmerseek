@@ -453,7 +453,7 @@ mod tests {
             &bovine,
             ExtensionParams {
                 scoring: ExtensionScoring::default(),
-                ka: KaParams { k: 0.03, r_database: 1.0 },
+                ka: Some(KaParams { k: 0.03, r_database: 1.0 }),
                 chain_max_gap: 0,
                 chain_max_shift: 0,
             },
@@ -527,7 +527,7 @@ mod tests {
         let bovine = ProteinSketch::from_protein_sequence("bovine", BOVINE_RNASE, 12, 1, "sdm12")?;
         let params = ExtensionParams {
             scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
-            ka: KaParams { k: 0.03, r_database: 1.0 },
+            ka: Some(KaParams { k: 0.03, r_database: 1.0 }),
             chain_max_gap: 5,
             chain_max_shift: 0,
         };
@@ -541,6 +541,8 @@ mod tests {
             t_raw: bovine.get_raw_sequence(),
             moltype: "sdm12",
             params,
+            k: 0.03,
+            r_database: 1.0,
             ka_lambda: 0.5,
             m: 124.0,
             n_t: 150.0,

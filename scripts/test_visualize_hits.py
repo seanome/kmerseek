@@ -192,9 +192,9 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         # One shared k-mer (region_n_shared_kmers above), so the IDF sum equals its mean.
         "region_tfidf": 3.2,
         "region_mean_idf": 3.2,
-        # Exact region (no --extend-mismatch-penalty), so nothing inside it disagrees.
+        # Exact region (--extend-mismatch-penalty 0), so nothing inside it disagrees.
         "region_n_mismatches": 0,
-        # Karlin-Altschul bits and E-value need --extend-mismatch-penalty; off here.
+        # Karlin-Altschul bits and E-value need extension; off here.
         "region_ka_bits": 0.0,
         # Empty in the CSV (None here) unless the region was extended.
         "region_ka_evalue": None,
@@ -202,6 +202,8 @@ def _row(target_name="tgt", region_start=0, region_end=10, region_length=10,
         "region_run_length": region_length,
         "region_pr_same": pr_same,
         "region_run_evalue": run_evalue,
+        # The mid-p run E-value: the run E-value x (1 + pr_same) / 2.
+        "region_run_evalue_midp": run_evalue * (1 + pr_same) / 2 if run_evalue is not None else None,
         # Not extended, so region_evalue is the run E-value.
         "region_evalue": run_evalue,
         "region_evalue_source": "run",
