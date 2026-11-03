@@ -1,0 +1,15 @@
+date	git_commit	tool	step	wall_s	peak_rss_gb	index_bytes	node	threads
+2026-11-01	bc3348a	kmerseek	index	91.47	3.65	777644714	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	bc3348a	kmerseek	search	9.70	2.33	NA	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	bc3348a	diamond	makedb	3.53	0.35	294217644	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	bc3348a	diamond	blastp	80.46	0.76	NA	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	bc3348a	mmseqs	createdb	10.01	0.34	NA	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	bc3348a	mmseqs	createindex	18.40	2.29	2937643947	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	bc3348a	mmseqs	search	19.75	2.28	NA	sh03-15n23 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	kmerseek	index	96.45	3.63	777645307	sh03-13n20 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	kmerseek	search	9.66	2.33	NA	sh03-13n20 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	diamond	makedb	4.22	0.35	294217644	sh03-13n20 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	diamond	blastp	64.95	0.76	NA	sh03-13n20 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	mmseqs	createdb	4.41	0.34	NA	sh03-13n20 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	mmseqs	createindex	18.24	2.29	2937643947	sh03-13n20 AMD EPYC 7742 64-Core Processor	8
+2026-11-01	f367d3c	mmseqs	search	15.01	2.29	NA	sh03-13n20 AMD EPYC 7742 64-Core Processor	8

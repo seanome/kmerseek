@@ -75,7 +75,10 @@ jobs:
           # pyo3 FFI code, but tarpaulin defaults to -C link-dead-code which keeps it,
           # leaving PyGen_Type/PyCapsule_Import unresolved. --no-dead-code turns that off
           # so the coverage build links like a normal build.
-          CARGO_BUILD_JOBS=2 cargo tarpaulin --no-dead-code \
+          # --lib: the kmerseek binary's own tests (in main.rs) segfault under tarpaulin
+          # before any test reports, though they pass under cargo test (see ci.yml). The
+          # library's test binary holds every other test, the CLI tests included.
+          CARGO_BUILD_JOBS=2 cargo tarpaulin --no-dead-code --lib \
             --out Xml --output-dir coverage/ \
             --timeout 120 --skip-clean --no-default-features
           find target/debug/incremental -type f -name "*.o" -delete 2>/dev/null || true

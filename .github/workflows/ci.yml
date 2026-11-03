@@ -40,7 +40,8 @@ jobs:
         run: cargo build --verbose --no-default-features
 
       - name: Run tests
-        run: cargo test --verbose --no-default-features --lib
+        # --bins: the tests inside main.rs live in the kmerseek binary, not the library.
+        run: cargo test --verbose --no-default-features --lib --bins
 
       - name: Run CLI tests
         run: |
@@ -173,13 +174,18 @@ jobs:
           sudo apt-get install -y binutils
 
       - name: Run benchmarks
-        run: cargo bench --verbose --no-default-features -- --output-format json > benchmark_results.json
+        # Only the Criterion bench in benches/benchmark.rs: `cargo bench` with no target also
+        # runs the library's test harness, which rejects Criterion's options. `bencher` is
+        # the output format the "cargo" tool of github-action-benchmark reads.
+        run: |
+          cargo bench --verbose --no-default-features --bench benchmark \
+            -- --output-format bencher > benchmark_results.txt
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: "cargo"
-          output-file-path: benchmark_results.json
+          output-file-path: benchmark_results.txt
           github-token: ${{ secrets.GITHUB_TOKEN }}
           auto-push: true
           comment-on-alert: true
