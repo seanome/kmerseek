@@ -344,8 +344,8 @@ impl ProteinSketch {
             minhash.add_many(&data.mins)?;
         }
 
-        // The key is stored, not recomputed: it hashes the sequence, which the store does not
-        // always hold.
+        // The key hashes the sequence, which the store does not always hold, so it is read
+        // from the store.
         let md5sum = data.md5sum.clone();
         let name = data.name.clone();
 

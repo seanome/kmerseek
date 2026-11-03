@@ -37,7 +37,7 @@ candidates:
   read, 77% of Swiss-Prot. All of them stay in the in-memory cache, which is why the run
   peaks at 55 GB.
 
-Finding the candidates in the inverted index takes only 0.6 s. What would help is fewer
+Finding the candidates in the k-mer-to-protein index takes only 0.6 s. What would help is fewer
 candidates reaching the per-target steps: a cap on k-mers that occur in too many proteins,
 or requiring two shared k-mers on the same diagonal (target position minus query position)
 before a target is read from disk.
@@ -64,9 +64,9 @@ read the index from a cold disk cache and is left out of the means.
 
 ![Thread-seconds per step before and after counting shared k-mers first, and wall time per k-mer cap](../images/candidate_filter_swissprot_hp_lehninger2_k19.png)
 
-Commit fa352ce counts each candidate's shared k-mers from the posting lists. It drops
+Commit fa352ce counts each candidate's shared k-mers from the protein ID lists. It drops
 candidates below `--min-shared-kmers` (2 by default) or the containment threshold before
-their signature is read from disk. A posting list names each target once, so the count is
+their signature is read from disk. A protein ID list names each target once, so the count is
 exactly the number `compare` checks later. The search results do not change: the CSVs are
 byte-identical to the runs above (`candidate_filter/identical.md5`).
 
@@ -97,22 +97,22 @@ In an alphabet this small, two shared k-mers are expected by chance alone. Two c
 cut the pairs:
 
 - a default minimum that grows with the number of k-mers two random proteins would share;
-- storing each k-mer's position in the posting lists, so pairs whose shared k-mers do not lie
+- storing each k-mer's position in the protein ID lists, so pairs whose shared k-mers do not lie
   on one diagonal can be dropped before the target is read. This changes the index format.
 
 Both change which results are reported, so neither is in this PR. Rerun with
 `sbatch scripts/profile_candidate_filter.sbatch` and redraw with
 `python scripts/plot_candidate_filter.py`.
 
-## Posting files read in place
+## K-mer-to-protein index files read in place
 
 ![Search wall time, peak memory and index load time, before and after](../images/posting_files_swissprot.png)
 
 Before this change, search read every k-mer of the index into three HashMaps before the
-first query ran: the posting lists, each k-mer's frequency, and each k-mer's IDF. For
+first query ran: the protein ID lists, each k-mer's frequency, and each k-mer's IDF. For
 protein20 k=10 that is 116,913,137 k-mers; for hp_lehninger2 k=19, 572,309. The index now
-keeps its posting lists in four flat files under `<index>/postings/`, and search maps them
-into memory instead of reading them (`src/rust/postings.rs`). A lookup goes to the k-mer's
+keeps its protein ID lists in four flat files under `<index>/postings/`, and search maps them
+into memory instead of reading them (`src/rust/kmer_protein_index.rs`). A lookup goes to the k-mer's
 shard and binary-searches it. Opening checks every shard and offset boundary, which reads the
 whole offsets file (0.94 GB for protein20) but none of the k-mers or targets.
 
@@ -146,9 +146,9 @@ All twelve result CSVs match their "before" run byte for byte (`posting_files/id
 - protein20's peak memory after the change is 2.0 GB here and was 1.2 GB in job 48806130,
   before the boundary check was added in review. The difference is close to the size of the
   offsets file the check reads (0.94 GB); that cause was not tested separately.
-- The protein20 index grew by 0.75 GB. Its posting files are 2.60 GB, stored uncompressed;
+- The protein20 index grew by 0.75 GB. Its k-mer-to-protein index files are 2.60 GB, stored uncompressed;
   the old `ii_shard_{s}` values were RocksDB values, which RocksDB compresses by default. The
-  hp_lehninger2 index is the same size before and after; its posting files are 0.68 GB.
+  hp_lehninger2 index is the same size before and after; its k-mer-to-protein index files are 0.68 GB.
 - Each index rebuilt in 2 min 14 s with a peak under 1.4 GB.
 - The "before" warm runs vary between jobs (protein20: 105 s in job 48672829, 165-188 s in
   job 48806130, 103-109 s here), with the same binary and index. Both versions run in the
@@ -166,8 +166,8 @@ would share at least as many k-mers with probability at most P. That probability
 whole-protein Poisson tail kmerseek already reports as `query_poisson_pvalue`, whose mean is
 the expected chance overlap. So the cutoff works as a minimum shared k-mer count that rises
 with the two proteins' chance overlap. Unlike `--max-query-pvalue`, a strong region cannot
-override it. The check runs on posting-list counts before any target is read. It uses each
-target's k-mer count, which the searcher counts from the posting files the first time
+override it. The check runs on protein ID list lengths before any target is read. It uses each
+target's k-mer count, which the searcher counts from the k-mer-to-protein index files the first time
 the cutoff is used, so searches without it do not pay for the count.
 
 Same 100 human proteins against Swiss-Prot, one search per cutoff, Sherlock job 50499296.
@@ -194,7 +194,7 @@ For protein20 k=10 a cutoff of 0.000001 keeps every pair with the largest region
 drops 25% of all pairs. Its run was 33% faster, but that run is dominated by loading the index.
 
 So the option stays off by default. A floor that respects local matches needs a chance test
-per region, which needs each k-mer's position in the posting lists. Rerun with
+per region, which needs each k-mer's position in the protein ID lists. Rerun with
 `INDEXES=$SCRATCH/kmerseek-step-timing/profile_search_steps sbatch scripts/profile_chance_minimum.sbatch`,
 then `python3 scripts/kept_pairs_by_shared_kmers.py profile_chance_minimum` and
 `python scripts/plot_chance_minimum.py`.
