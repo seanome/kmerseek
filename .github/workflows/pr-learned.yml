@@ -1,0 +1,50 @@
+name: PR notes
+
+# Checks that a pull request ready for review says why it exists and what was learned,
+# in Olga's words, under the "Why this PR (Olga)" and "What I learned (Olga)" headings
+# of .github/pull_request_template.md. Draft PRs are skipped, so agents can open drafts
+# freely; the check goes red only when a PR is marked ready and the notes are still empty.
+# Make it a required check in branch protection if it should block the merge button.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened, ready_for_review]
+
+permissions: {}
+
+jobs:
+  notes:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check the Why and What I learned sections
+        env:
+          BODY: ${{ github.event.pull_request.body }}
+        run: |
+          python3 - <<'EOF'
+          import os, re, sys
+
+          body = os.environ.get("BODY") or ""
+
+          def section(name):
+              m = re.search(
+                  rf"^##\s*{re.escape(name)}\s*$(.*?)(?=^##\s|\Z)", body, flags=re.M | re.S
+              )
+              if not m:
+                  return None
+              # Drop HTML comments (the template's instructions) inside this section only,
+              # so a stray comment cannot hide the next heading.
+              return re.sub(r"<!--.*?-->", "", m.group(1), flags=re.S).strip()
+
+          missing = []
+          for name in ("Why this PR (Olga)", "What I learned (Olga)"):
+              text = section(name)
+              if not text:
+                  missing.append(name)
+
+          if missing:
+              print("Fill in before merging: " + ", ".join(missing))
+              print("The headings come from .github/pull_request_template.md.")
+              sys.exit(1)
+          print("Why and What I learned are filled in.")
+          EOF
