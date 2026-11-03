@@ -1266,6 +1266,22 @@ impl ProteomeIndex {
         // multiple search processes to query the same index concurrently. This is the
         // only read-only open; `load()` and `get_index_parameters()` build on it.
         let db = DB::open_for_read_only(&opts, path, false)?;
+        Self::from_saved_db(db)
+    }
+
+    /// Open a finished index read-write, to store a Karlin-Altschul fit in it
+    /// (`kmerseek calibrate`). Takes the exclusive LOCK file, so nothing else may have the
+    /// index open; every other reader goes through `open_for_search`.
+    pub fn open_for_calibration<P: AsRef<Path>>(path: P) -> IndexResult<Self> {
+        let opts = Self::create_rocksdb_options(false);
+        let db = DB::open(&opts, path)?;
+        Self::from_saved_db(db)
+    }
+
+    /// The index around an open database that holds a saved index: metadata read, and
+    /// the ingest state marked saved, so `finalize` does nothing and no sequence can be
+    /// added.
+    fn from_saved_db(db: DB) -> IndexResult<Self> {
         let metadata = Self::read_metadata(&db)?.ok_or(IndexError::NoSavedState)?;
         let kmerseek_version = Self::read_kmerseek_version(&db)?;
         let index = Self::assemble(
@@ -2554,6 +2570,32 @@ mod tests {
             assert_eq!(index.total_residues(), 9288);
         }
         assert_eq!(ProteomeIndex::open_for_search(&db_path)?.total_residues(), 9288);
+        Ok(())
+    }
+
+    /// `kmerseek calibrate` opens a finished index read-write: the saved metadata is read
+    /// back as `open_for_search` reads it, and a fit stored through it is there when the
+    /// index is next opened for search. `KaCalibration::placeholder` carries only the key
+    /// and K.
+    #[test]
+    fn test_open_for_calibration_stores_a_fit_a_search_reads() -> Result<()> {
+        use crate::evalue::KaCalibration;
+        use crate::search::ExtensionScoring;
+        let dir = tempdir()?;
+        let db_path = dir.path().join("calibrate.db");
+        let scoring = ExtensionScoring { mismatch_penalty: 1.5, xdrop: 6.0 };
+        {
+            let index = ProteomeIndex::new(&db_path, 10, 1, "hp_lehninger2", true)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        }
+        {
+            let index = ProteomeIndex::open_for_calibration(&db_path)?;
+            assert_eq!(index.total_residues(), 9288, "the 25 test proteins' residues");
+            assert_eq!(index.ka_calibration(scoring)?, None);
+            index.put_ka_calibration(&KaCalibration::placeholder(scoring, 0.04))?;
+        }
+        let index = ProteomeIndex::open_for_search(&db_path)?;
+        assert_eq!(index.ka_calibration(scoring)?.map(|c| c.k), Some(0.04));
         Ok(())
     }
 

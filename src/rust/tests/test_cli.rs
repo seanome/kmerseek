@@ -1786,3 +1786,57 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
+
+/// `kmerseek calibrate` adds a Karlin-Altschul fit for one more mismatch penalty and
+/// give-up margin to a finished index, so a search at that penalty reads it instead of
+/// fitting its own. A penalty nobody fitted still has no fit.
+#[test]
+fn test_cli_calibrate_stores_a_second_penalty() -> Result<(), Box<dyn std::error::Error>> {
+    let temp_dir = tempdir()?;
+    let index_path = temp_dir.path().join("target_index.db");
+    let index_path = index_path.to_str().unwrap();
+    Command::cargo_bin("kmerseek")?
+        .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
+        .args(["--ksize", "12", "--alphabet", "hp_lehninger2", "--ka-queries", "0"])
+        .assert()
+        .success();
+
+    Command::cargo_bin("kmerseek")?
+        .args(["calibrate", "--target", index_path])
+        .args(["--extend-mismatch-penalty", "1.5", "--extend-xdrop", "6", "--ka-queries", "25"])
+        .assert()
+        .success()
+        .stderr(predicate::str::contains(
+            "Stored in the index for --extend-mismatch-penalty 1.5 --extend-xdrop 6",
+        ));
+
+    let search =
+        |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
+            Ok(Command::cargo_bin("kmerseek")?
+                .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
+                .args(["--output", temp_dir.path().join("out.csv").to_str().unwrap()])
+                .args(["--ka-queries", "0"])
+                .args(extra)
+                .assert())
+        };
+    search(&["--extend-mismatch-penalty", "1.5", "--extend-xdrop", "6"])?
+        .success()
+        .stderr(predicate::str::contains("(stored in the index: 25 database queries"));
+    search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
+        "Karlin-Altschul: no fit (the index has none for mismatch penalty 2, give-up margin 8",
+    ));
+
+    // --ka-queries 0 asks to fit nothing, which calibrate cannot do.
+    Command::cargo_bin("kmerseek")?
+        .args(["calibrate", "--target", index_path, "--ka-queries", "0"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--ka-queries must be at least 1"));
+    // A bad penalty is refused before the index is opened, with the index's wording.
+    Command::cargo_bin("kmerseek")?
+        .args(["calibrate", "--target", index_path, "--extend-mismatch-penalty=-1"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("--extend-mismatch-penalty must be above 0 (got -1)"));
+    Ok(())
+}

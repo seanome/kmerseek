@@ -217,7 +217,11 @@ index's own sequences against it, and reads K and a correction to λ, `r_databas
 the straight line that ln(regions at score S) makes against S below the related pairs.
 A search with the penalty and give-up margin the index was fitted for reads the fit
 back; with another pair it fits its own before searching, or takes `--ka-k` (and
-`--ka-r-database`, to use a fit made on another index).
+`--ka-r-database`, to use a fit made on another index). To search one index at several
+penalties without fitting on every search, store a fit for each with `kmerseek calibrate
+--target proteome.db --extend-mismatch-penalty 1.5 --extend-xdrop 6`. It takes the same
+fit options as `kmerseek index` and opens the index read-write, so run it while no search
+has the index open.
 [docs/evalue.md](docs/evalue.md) explains every quantity and the fit, with the figures.
 On 200 SCOPe40 domains against SCOPe40, ranking pairs by `region_ka_evalue` instead of
 `region_poisson_score` raised the share of same-superfamily relatives found before the
