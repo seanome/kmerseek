@@ -40,7 +40,8 @@ jobs:
         run: cargo build --verbose --no-default-features
 
       - name: Run tests
-        run: cargo test --verbose --no-default-features --lib
+        # --bins: the tests inside main.rs live in the kmerseek binary, not the library.
+        run: cargo test --verbose --no-default-features --lib --bins
 
       - name: Run CLI tests
         run: |
