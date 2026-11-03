@@ -16,8 +16,8 @@ use statrs::function::factorial::ln_factorial;
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::{
-    fit_bins, fit_bins_with_reference, make_decoy, run_evalue, DecoyNull, EvalueSource,
-    KaCalibration, ScoreBins, SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
+    fit_bins, fit_bins_with_reference, make_decoy, run_evalue, run_evalue_midp, DecoyNull,
+    EvalueSource, KaCalibration, ScoreBins, SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
@@ -550,6 +550,8 @@ pub struct SearchResultCsv {
     /// Expected number of runs at least region_run_length long by chance (see
     /// MatchedRegion::run_evalue).
     pub region_run_evalue: Option<f64>,
+    /// region_run_evalue x (1 + region_pr_same) / 2 (see MatchedRegion::run_evalue_midp).
+    pub region_run_evalue_midp: Option<f64>,
     /// region_ka_evalue when present, otherwise region_run_evalue (see
     /// MatchedRegion::evalue). Empty only when both are.
     pub region_evalue: Option<f64>,
@@ -629,6 +631,7 @@ impl SearchResultCsv {
             region_run_length: region.run_length,
             region_pr_same: region.pr_same,
             region_run_evalue: region.run_evalue,
+            region_run_evalue_midp: region.run_evalue_midp,
             region_evalue: region.evalue,
             region_evalue_source: region.evalue_source,
         }
@@ -930,6 +933,12 @@ pub struct MatchedRegion {
     /// the region could not be measured (see `measure_runs`).
     pub run_evalue: Option<f64>,
 
+    /// `run_evalue` x (1 + pr_same) / 2, the mid-p run E-value (`evalue::run_evalue_midp`).
+    /// A cut on `run_evalue` lets through fewer chance runs than it says, because run lengths
+    /// are whole numbers; this moves the cut halfway along one step. Reported beside
+    /// `run_evalue`, never in `evalue`. None whenever `run_evalue` is.
+    pub run_evalue_midp: Option<f64>,
+
     /// The E-value to rank and filter by: `ka_evalue` when there is one, otherwise
     /// `run_evalue`. Never the smaller of the two, since picking the better of two tests
     /// makes a region look more significant than either test says. None only when both
@@ -1103,6 +1112,7 @@ impl MatchedRegion {
             run_length: 0,
             pr_same: None,
             run_evalue: None,
+            run_evalue_midp: None,
             evalue: None,
             evalue_source: None,
         }
@@ -2268,6 +2278,9 @@ impl ProteinSearcher {
             region.run_evalue = pr_same
                 .filter(|_| region.run_length > 0)
                 .map(|p| run_evalue(p, region.run_length, m, self.db_n_residues, n_targets));
+            region.run_evalue_midp = pr_same
+                .filter(|_| region.run_length > 0)
+                .map(|p| run_evalue_midp(p, region.run_length, m, self.db_n_residues, n_targets));
             region.choose_evalue();
         }
     }

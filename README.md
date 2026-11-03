@@ -251,6 +251,7 @@ never `inf`, so a numeric filter such as `awk '$c <= 10'` cannot read it as 0.
 | `region_run_length` | L, the longest run inside the region where query and target are in the same class at every position. The region's length for an exact region; the longest stretch without a mismatch for an extended one. | all |
 | `region_pr_same` | Pr(same), the chance that one query position and one target position fall in the same class, from the pair's class compositions | all |
 | `region_run_evalue` | Pr(same)^L × ((1 − Pr(same)) × m × n + diagonals), below | all |
+| `region_run_evalue_midp` | `region_run_evalue` × (1 + Pr(same)) / 2, the mid-p run E-value (below) | all |
 | `region_ka_evalue` | the Karlin-Altschul E-value of an extended region (above) | extended regions whose pair has λ > 0; empty otherwise |
 | `region_evalue` | `region_ka_evalue` when present, otherwise `region_run_evalue` | all |
 | `region_evalue_source` | `ka`, `ka_chain` (a chain of regions, above), or `run` | all |
@@ -320,32 +321,48 @@ an exact search reports. At `hp_lehninger2` the search finds 225 runs of 20 or m
 the formula predicts 201.5; at `gbmr4`, 50 runs of 17 or more against 61.6, both within
 3 standard deviations (test `region_run_evalue_matches_runs_between_random_sequences`).
 
-Real proteins are not random, so the run E-value was also measured on decoys. The 25
-BCL-2-like test proteins were searched against 500 decoys at `hp_lehninger2`, exact
-search. Each decoy is one of the proteins shuffled with its dipeptide counts kept, 20 per
-protein (`shuffle_fasta_2mer.py --seed 1`). A calibrated E-value is one where the
-expected number of chance hits at E <= x is x. Each of the 25 queries is searched once, so
-a calibrated E-value gives about 25 query-target pairs with a best region at E <= 1 (1 per
-query), and 250 at E <= 10:
+Real proteins are not random, so the run E-values were also measured on decoys. The 25
+BCL-2-like test proteins were searched against 500 decoys, exact search. Each decoy is one
+of the proteins shuffled with its dipeptide counts kept, 20 per protein
+(`shuffle_fasta_2mer.py --seed 1`).
 
-| k | E <= | `region_run_evalue` | calibrated |
-|---|---|---|---|
-| 15 | 1 | 6 | 25 |
-| 15 | 10 | 162 | 250 |
-| 12 | 1 | 6 | 25 |
-| 12 | 10 | 162 | 250 |
+A query's own 20 shuffles are left out of the count. A shuffle that keeps every adjacent
+residue pair keeps short exact stretches of its source: at `protein20` k=5 a query and its
+own shuffles share 708 runs of 5 or more where the run model predicts 135. A real database
+holds no shuffle of the query. On the other 480 decoys a calibrated E-value gives about 24
+query-target pairs with a best region at E <= 1 (one per query) and 240 at E <= 10:
 
-The run E-value calls fewer decoy pairs than a calibrated one would, so on these decoys it
-errs toward too large (test `region_run_evalue_on_2mer_shuffled_decoys`).
+| alphabet | k | E <= | `region_run_evalue` | `region_run_evalue_midp` | calibrated |
+|---|---|---|---|---|---|
+| `hp_lehninger2` | 15 | 1 | 6 | 11 | 24 |
+| `hp_lehninger2` | 15 | 10 | 157 | 207 | 240 |
+| `hp_lehninger2` | 12 | 1 | 6 | 11 | 24 |
+| `hp_lehninger2` | 12 | 10 | 157 | 207 | 240 |
+| `gbmr4` | 10 | 1 | 28 | 38 | 24 |
+| `gbmr4` | 10 | 10 | 178 | 246 | 240 |
+| `protein20` | 5 | 1 | 7 | 18 | 24 |
+| `protein20` | 5 | 10 | 87 | 125 | 240 |
+
+The run E-value lets through fewer decoy pairs than a calibrated one would, most of all at
+`protein20`, except at `gbmr4` E <= 1. Run lengths are whole numbers, and one more agreeing
+position multiplies the run E-value by Pr(same). So the runs that pass E <= 10 have
+E-values anywhere from 10 × Pr(same) to 10: from 5 at `hp_lehninger2` (Pr(same) about
+0.5), from 0.6 at `protein20` (about 0.06). The mid-p run E-value (Lancaster 1961) averages
+the expected counts of runs of at least L and of more than L, which puts the cut halfway
+along one step. It is closer to calibrated in every row at E <= 10 and lets through too
+many at `gbmr4` (E <= 1 and E <= 10). It is reported beside `region_run_evalue` and is
+never `region_evalue`. Neither replaces measuring the cut on decoys of your own database
+(test `region_run_evalue_on_2mer_shuffled_decoys`).
 
 ![Runs counted against predicted on random sequences, and decoy pairs called at each run E-value cutoff](docs/images/run_evalue_checks.png)
 
 (a) Random sequences: counted minus predicted runs, in Poisson standard deviations, for
 each minimum run length L0. The formula counts start positions a run cannot use at the
 end of each sequence; the dashed line is the shortfall that alone gives, and it explains
-the short L0 the test leaves out. (b) Decoys: pairs called at each cutoff, below the
-calibrated count (black) at every cutoff; k = 12 and k = 15 give the same counts, so
-their lines lie on top of each other. Drawn by `scripts/plot_run_evalue_checks.py`.
+the short L0 the test leaves out. (b) Decoys at `hp_lehninger2`, without each query's own
+shuffles: pairs called at each run E-value cutoff, below the calibrated count (black) at
+every cutoff; k = 12 and k = 15 give the same counts, so their lines lie on top of each
+other. Drawn by `scripts/plot_run_evalue_checks.py`.
 
 ## Finding what a search spends its time on
 
