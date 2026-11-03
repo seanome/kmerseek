@@ -2573,6 +2573,32 @@ mod tests {
         Ok(())
     }
 
+    /// `kmerseek calibrate` opens a finished index read-write: the saved metadata is read
+    /// back as `open_for_search` reads it, and a fit stored through it is there when the
+    /// index is next opened for search. `KaCalibration::placeholder` carries only the key
+    /// and K.
+    #[test]
+    fn test_open_for_calibration_stores_a_fit_a_search_reads() -> Result<()> {
+        use crate::evalue::KaCalibration;
+        use crate::search::ExtensionScoring;
+        let dir = tempdir()?;
+        let db_path = dir.path().join("calibrate.db");
+        let scoring = ExtensionScoring { mismatch_penalty: 1.5, xdrop: 6.0 };
+        {
+            let index = ProteomeIndex::new(&db_path, 10, 1, "hp_lehninger2", true)?;
+            index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        }
+        {
+            let index = ProteomeIndex::open_for_calibration(&db_path)?;
+            assert_eq!(index.total_residues(), 9288, "the 25 test proteins' residues");
+            assert_eq!(index.ka_calibration(scoring)?, None);
+            index.put_ka_calibration(&KaCalibration::placeholder(scoring, 0.04))?;
+        }
+        let index = ProteomeIndex::open_for_search(&db_path)?;
+        assert_eq!(index.ka_calibration(scoring)?.map(|c| c.k), Some(0.04));
+        Ok(())
+    }
+
     /// An index from an older schema is refused when opened, with a message that names
     /// both versions and, when it was stamped, the kmerseek version that wrote it. No
     /// older layout is read: bincode is not self-describing, so reading one would fail
