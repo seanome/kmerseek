@@ -1746,7 +1746,8 @@ impl ProteinSearcher {
     /// method works directly with references from the index. We collect only the MD5 keys (cheap
     /// String clones) and parallelize over those, looking up the actual signatures in the DashMap.
     /// This avoids cloning the large ProteinSketch objects while still enabling parallel processing.
-    /// The method also automatically skips self-matches by comparing MD5 sums in compare().
+    /// `compare()` skips every target with the query's sequence, so a protein is never paired
+    /// with itself, nor with another entry name stored under the same sequence.
     ///
     /// `filters` is forwarded to `search_one`, so failing results are never allocated into the
     /// returned `Vec` (see `SearchFilters`).
@@ -1839,11 +1840,9 @@ impl ProteinSearcher {
         filters: &SearchFilters,
         total_queries: usize,
     ) -> Option<SearchResult> {
-        // Skip self-matches by comparing MD5 sums
-        // WHY: In all-vs-all searches, we don't want to compare a signature against itself.
-        // MD5 sum is a unique identifier for each signature, so comparing MD5 sums is the
-        // most reliable way to detect self-matches. This is idiomatic Rust - we use early
-        // returns to avoid unnecessary computation when we know the result will be invalid.
+        // A target with the query's key has the query's own sequence, so it is skipped in
+        // every search, not only all-vs-all: its hit says nothing new, and keeping it would
+        // add one row per query that is in the database.
         if query.sketch.signature().md5sum == target.signature().md5sum {
             return None;
         }
@@ -3402,9 +3401,9 @@ mod tests {
 
     /// Two entries whose 5-mer sets are equal but whose sequences differ (a poly-A run of 5
     /// and of 8: both hold AAAAA and nothing else the other lacks) are two targets, each
-    /// reported with its own residues and coordinates. Keyed by their k-mer set, the second
-    /// entry was dropped. The query has a run of 7, so it is neither entry: a query whose
-    /// key equals a target's is skipped as a self-match. Drawn as dot plots in
+    /// reported with its own residues and coordinates, because the index keys entries by
+    /// their residues, not their k-mer set. The query has a run of 7, so it is neither
+    /// entry: a query whose key equals a target's is skipped as a self-match. Drawn as dot plots in
     /// `docs/images/same_kmer_set_polyA5_polyA8_protein20_k5.png`
     /// (`scripts/plot_same_kmer_set_targets.py`).
     #[test]
@@ -3490,6 +3489,74 @@ mod tests {
             &results,
             &ced9,
             &HashMap::from([("copy of BCL2", bcl2.as_str()), (bcl2_name.as_str(), &bcl2)]),
+        );
+        Ok(())
+    }
+
+    /// A query with the same sequence as a database entry does not hit that entry, whether
+    /// it comes from a FASTA file or the index is searched against itself. BCL-2 searched
+    /// against an index of BCL-2 and Ced-9 lists only Ced-9, and all-vs-all on that index
+    /// lists BCL-2 against Ced-9 and Ced-9 against BCL-2. Drawn in
+    /// `docs/images/self_match_skip_bcl2_ced9_hp_lehninger2_k12.png`
+    /// (`scripts/plot_self_match_skip.py`).
+    #[test]
+    fn query_identical_to_an_entry_is_skipped() -> Result<()> {
+        let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let (ced9_name, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(&fasta, format!(">{bcl2_name}\n{bcl2}\n>{ced9_name}\n{ced9}\n"))?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+
+        let query = ProteinSketch::from_protein_sequence("bcl2", &bcl2, 12, 1, "hp_lehninger2")?;
+        let results = searcher.search_one(&query, &SearchFilters::default(), 1);
+        let names: Vec<&str> = results.iter().map(|r| r.target_name.as_str()).collect();
+        assert_eq!(names, [ced9_name.as_str()]);
+
+        let all = searcher.search_all_vs_all(&SearchFilters::default())?;
+        let mut pairs: Vec<(&str, &str)> =
+            all.iter().map(|r| (r.query_name.as_str(), r.target_name.as_str())).collect();
+        pairs.sort();
+        assert_eq!(
+            pairs,
+            [(bcl2_name.as_str(), ced9_name.as_str()), (ced9_name.as_str(), bcl2_name.as_str())]
+        );
+        Ok(())
+    }
+
+    /// Two entries with different names and the same sequence are one stored sequence, so
+    /// all-vs-all never pairs them: the skip in `compare()` is by sequence, not by name.
+    /// CED9_CAEEL still finds the sequence under both names.
+    #[test]
+    fn entries_sharing_a_sequence_are_not_paired() -> Result<()> {
+        let (bcl2_name, bcl2) = read_first_fasta_record(TEST_BLC2_FASTA)?;
+        let (ced9_name, ced9) = read_first_fasta_record(TEST_CED9_FASTA)?;
+        let copy_name = "BCL2_COPY";
+        let temp_dir = TempDir::new()?;
+        let fasta = temp_dir.path().join("db.fasta");
+        std::fs::write(
+            &fasta,
+            format!(">{bcl2_name}\n{bcl2}\n>{copy_name}\n{bcl2}\n>{ced9_name}\n{ced9}\n"),
+        )?;
+        let index = ProteomeIndex::new(temp_dir.path().join("db"), 12, 1, "hp_lehninger2", true)?;
+        index.process_fasta(&fasta, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+
+        let all = searcher.search_all_vs_all(&SearchFilters::default())?;
+        let mut pairs: Vec<(&str, &str)> =
+            all.iter().map(|r| (r.query_name.as_str(), r.target_name.as_str())).collect();
+        pairs.sort_unstable();
+        // As a target, the stored sequence is reported under both names. As a query it runs
+        // once, under the name it was first indexed with.
+        assert_eq!(
+            pairs,
+            [
+                (bcl2_name.as_str(), ced9_name.as_str()),
+                (ced9_name.as_str(), copy_name),
+                (ced9_name.as_str(), bcl2_name.as_str()),
+            ]
         );
         Ok(())
     }

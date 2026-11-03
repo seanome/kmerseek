@@ -1380,7 +1380,8 @@ impl ProteomeIndex {
     }
 
     /// Every entry name whose sequence was already stored under another name, by that
-    /// sequence's md5. Search reports a hit on the md5 once more under each of these names.
+    /// sequence's md5, sorted within each md5 so the order does not depend on ingest order.
+    /// Search reports a hit on the md5 once more under each of these names.
     pub fn aliases(&self) -> IndexResult<HashMap<String, Vec<String>>> {
         Ok(self
             .ingest
@@ -4364,6 +4365,29 @@ mod tests {
             index.aliases()?,
             HashMap::from([(sequence_key(TEST_PROTEIN), vec!["b".to_string(), "c".to_string()])])
         );
+        Ok(())
+    }
+
+    /// Two indexes whose repeated sequences were ingested under the same names in a
+    /// different order are equivalent, and `aliases()` lists the names sorted.
+    #[test]
+    fn test_aliases_are_sorted_and_equivalence_ignores_ingest_order() -> Result<()> {
+        let dir = tempdir()?;
+        let build = |name: &str, headers: &[&str]| -> Result<ProteomeIndex> {
+            let fasta = dir.path().join(format!("{name}.fasta"));
+            let body: String = headers.iter().map(|h| format!(">{h}\n{TEST_PROTEIN}\n")).collect();
+            std::fs::write(&fasta, body)?;
+            let index = ProteomeIndex::new(dir.path().join(name), 5, 1, "protein20", true)?;
+            index.process_fasta(&fasta, 0, 1000)?;
+            index.save_state()?;
+            Ok(index)
+        };
+        let forward = build("forward.db", &["a", "b", "c"])?;
+        let backward = build("backward.db", &["a", "c", "b"])?;
+        let expected = vec!["b".to_string(), "c".to_string()];
+        assert_eq!(forward.aliases()?[&sequence_key(TEST_PROTEIN)], expected);
+        assert_eq!(backward.aliases()?[&sequence_key(TEST_PROTEIN)], expected);
+        assert!(forward.is_equivalent_to(&backward)?);
         Ok(())
     }
 
