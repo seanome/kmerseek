@@ -5752,7 +5752,6 @@ mod ka_calibration_tests {
         index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
         let mut searcher = ProteinSearcher::new(index)?;
         let err = searcher.resolve_ka(None, shuffled_settings(2.0, 25)).unwrap_err();
-        println!("{err}");
         assert_eq!(
             err.to_string(),
             "Anyhow error: no Karlin-Altschul fit for mismatch penalty 2, give-up margin 8: the \
