@@ -1,0 +1,5 @@
+cap	pairs	pairs_kept_fraction	top1pct_kept_fraction	top10pct_kept_fraction	top1pct_min_score	top10pct_min_score
+none	4065945	1.0000	1.0000	1.0000	307.65	13.78
+10000	4052679	0.9967	1.0000	1.0000	307.65	13.78
+1000	3617077	0.8896	0.9879	0.9821	307.65	13.78
+100	0	0.0000	0.0000	0.0000	307.65	13.78

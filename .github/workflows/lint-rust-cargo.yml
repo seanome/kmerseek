@@ -29,3 +29,33 @@ jobs:
 
       - name: Check clippy
         run: cargo clippy --all -- --deny warnings
+
+      # A parameter named `_name` tells rustc not to warn that it is never used, so neither
+      # rustc nor clippy reports it. A function that ignores an input it takes looks as if
+      # it depends on that input, and nothing flags the mistake. Drop the parameter instead.
+      # Matches `(_name:`, `, _name:` and a parameter on its own line; a bare `_` is allowed.
+      - name: No function parameter silenced with a leading underscore
+        run: |
+          if grep -rnE '(\(|,)[[:space:]]*_[a-z][a-z0-9_]*[[:space:]]*:[^:]|^[[:space:]]+_[a-z][a-z0-9_]*[[:space:]]*:[[:space:]]*[&A-Za-z(]' src/rust; then
+            echo "Unused parameters above: remove them, or use them." >&2
+            exit 1
+          fi
+
+      # rustc warns on private dead code and unused items, and clippy above turns warnings
+      # into errors, so an allow attribute is the only way unused private code survives.
+      # rustc never flags pub items of the library crate, so this step does not cover them.
+      # Test modules (#[cfg(test)] followed by a `mod name {` block, closed by a `}` in
+      # column 0) are skipped: test fixtures may hold fields that only some tests read.
+      - name: No dead_code or unused lint silenced outside test modules
+        run: |
+          if awk '
+            FNR == 1 { in_test = 0; cfg_test = 0 }
+            in_test { if ($0 ~ /^}$/) in_test = 0; next }
+            cfg_test && /^(pub(\(crate\))? )?mod [a-z0-9_]+ \{/ { in_test = 1; cfg_test = 0; next }
+            { cfg_test = ($0 ~ /^#\[cfg\(test\)\]/) }
+            /#!?\[(allow|expect)\(([^)]*[ ,])?(dead_code|unused)/ { print FILENAME ":" FNR ": " $0; found = 1 }
+            END { exit !found }
+          ' $(find src/rust benches examples tests -name '*.rs'); then
+            echo "Code kept only by an allow attribute above: remove it, or use it." >&2
+            exit 1
+          fi
