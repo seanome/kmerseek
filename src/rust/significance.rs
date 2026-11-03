@@ -1,18 +1,5 @@
 use std::collections::{HashMap, HashSet};
 
-/// Calculate ANI (Average Nucleotide Identity) from containment
-pub fn ani(containment: f64, _size: usize) -> f64 {
-    // Simplified ANI calculation based on containment
-    // This is a rough approximation - in practice, ANI calculation is more complex
-    if containment <= 0.0 {
-        0.0
-    } else {
-        // Use a logarithmic relationship for ANI
-        let ani = 1.0 - (-containment.ln()).exp();
-        ani.clamp(0.0, 1.0)
-    }
-}
-
 /// Calculate abundance statistics for intersecting k-mers
 ///
 /// WHY: This function takes the mins arrays because abundances are stored in the same order
@@ -114,22 +101,6 @@ mod tests {
     use super::*;
 
     const EPS: f64 = 1e-9;
-
-    #[test]
-    fn test_ani_non_positive_containment() {
-        // Both the zero and negative branches return 0.0.
-        assert_eq!(ani(0.0, 100), 0.0);
-        assert_eq!(ani(-0.25, 100), 0.0);
-    }
-
-    #[test]
-    fn test_ani_clamps_and_computes_exact() {
-        // For containment in (0, 1] the raw value 1 - exp(-ln c) is <= 0, so it clamps to 0.0.
-        assert_eq!(ani(0.5, 100), 0.0); // raw = 1 - exp(ln 2) = -1.0, clamped
-        assert_eq!(ani(1.0, 100), 0.0); // raw = 1 - exp(0) = 0.0
-                                        // For containment > 1 the value lands in (0, 1): 1 - exp(-ln 2) = 0.5.
-        assert!((ani(2.0, 100) - 0.5).abs() < 1e-12);
-    }
 
     #[test]
     fn test_abundance_stats_empty_intersection_returns_defaults() {

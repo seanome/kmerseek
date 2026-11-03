@@ -4,9 +4,16 @@ pub const TEST_CED9_FASTA: &str = "tests/testdata/fasta/ced9.fasta";
 pub const TEST_BLC2_FASTA: &str = "tests/testdata/fasta/bcl2.fasta";
 /// The 25 BCL-2-like proteins of TEST_FASTA_GZ, each shuffled 20 times with its 2-mer
 /// (dipeptide) counts kept, so a decoy has the composition of a real protein and nothing
-/// else in common with any query. `python shuffle_fasta_2mer.py <TEST_FASTA_GZ> -n 20 --seed 1`.
+/// else in common with any query. Made with
+/// `python shuffle_fasta_2mer.py <TEST_FASTA_GZ> -n 20 --seed 1 | gzip`; the Python test
+/// `scripts/test_shuffle_fasta_2mer.py` regenerates it and checks it is unchanged.
 pub const TEST_DECOYS_2MER_GZ: &str =
     "tests/testdata/fasta/bcl2_25_shuffled_2mer_20x_seed1.fasta.gz";
+pub const TEST_HNRNPA1_FASTA: &str = "tests/testdata/fasta/hnrnpa1_P09651.fasta";
+/// BCL2_HUMAN (UniProt P10415) residues 1-32, the first 32 residues of the protein.
+pub const BCL2_1_32: &str = "MAHAGRTGYDNREIVMKYIHYKLSQRGYEWDA";
+/// k-mers in `BCL2_1_32` at k=5: 32 - 5 + 1 windows, all distinct.
+pub const BCL2_1_32_KMERS_K5: usize = 28;
 pub const TEST_FASTA_ZST: &str = "tests/testdata/fasta/test_compression.fasta.zst";
 
 pub const TEST_FASTA_CONTENT: &str =

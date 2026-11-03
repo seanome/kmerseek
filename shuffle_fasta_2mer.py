@@ -3,15 +3,22 @@
 same dipeptide composition as the original but no other resemblance to it. Writes N
 shuffled versions of each sequence, named `<header>_shuffle<i>`.
 
-Uses ushuffle when it is installed and otherwise the same algorithm in Python (Altschul
-and Erickson 1985, the one behind ushuffle): pick, for every residue but the last, the
-transition it will leave on last, keep picking until those last transitions all lead to
-the final residue, then walk the transitions in a random order.
+2-mers are shuffled here in Python (Altschul and Erickson 1985, the algorithm ushuffle
+uses for k = 2): pick, for every residue but the last, the transition it will leave on
+last, keep picking until those last transitions all lead to the final residue, then walk
+the transitions in a random order. The first and last residues stay where they are. Other
+k need ushuffle (pip install ushuffle). Doing k = 2 in Python on every machine means one
+--seed gives one set of decoys whether or not ushuffle is installed.
 
-    python shuffle_fasta_2mer.py targets.fasta -n 20 --seed 1 -o decoys.fasta
+The input may be gzipped. The decoy fixture of the Rust tests was made with
+
+    python shuffle_fasta_2mer.py \
+        tests/testdata/fasta/bcl2_first25_uniprotkb_accession_O43236_OR_accession_2025_02_06.fasta.gz \
+        -n 20 --seed 1 | gzip > tests/testdata/fasta/bcl2_25_shuffled_2mer_20x_seed1.fasta.gz
 """
 
 import argparse
+import gzip
 import random
 import sys
 from collections import defaultdict
@@ -27,7 +34,8 @@ def parse_fasta(filepath):
     header = None
     seq_lines = []
 
-    with open(filepath, 'r') as f:
+    opener = gzip.open if str(filepath).endswith('.gz') else open
+    with opener(filepath, 'rt') as f:
         for line in f:
             line = line.rstrip()
             if line.startswith('>'):
@@ -82,12 +90,12 @@ def shuffle_2mer_python(seq, rng):
 
 
 def shuffle_sequence(seq, k=2, rng=None):
-    """Shuffle sequence preserving k-mer composition. The Python fallback does k=2 only."""
-    if ushuffle is not None:
-        return ushuffle.shuffle(seq, len(seq), k)
-    if k != 2:
+    """Shuffle sequence preserving k-mer composition: k = 2 in Python, other k with ushuffle."""
+    if k == 2:
+        return shuffle_2mer_python(seq, rng or random.Random())
+    if ushuffle is None:
         sys.exit(f"k={k} needs ushuffle (pip install ushuffle); the built-in shuffle keeps 2-mers only")
-    return shuffle_2mer_python(seq, rng or random.Random())
+    return ushuffle.shuffle(seq, len(seq), k)
 
 
 def main():
@@ -105,9 +113,8 @@ def main():
                         help='random seed, for a reproducible set of shuffles')
     args = parser.parse_args()
 
-    if args.seed is not None:
-        if ushuffle is not None:
-            ushuffle.set_seed(args.seed)
+    if args.seed is not None and ushuffle is not None:
+        ushuffle.set_seed(args.seed)
     rng = random.Random(args.seed)
     out_fh = sys.stdout if args.output == '-' else open(args.output, 'w')
 
