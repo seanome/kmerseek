@@ -1115,8 +1115,18 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     };
 
     let exact = run(&[], &temp_dir.path().join("exact.csv"))?;
+    // pr_same from the whole proteins: the bits and E-value below are the unit test's.
     let extended = run(
-        &["--extend-mismatch-penalty", "2", "--extend-xdrop", "8", "--ka-k", "0.03"],
+        &[
+            "--extend-mismatch-penalty",
+            "2",
+            "--extend-xdrop",
+            "8",
+            "--ka-k",
+            "0.03",
+            "--pr-same-from",
+            "protein",
+        ],
         &temp_dir.path().join("extended.csv"),
     )?;
 
@@ -1231,12 +1241,12 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
         };
 
     // 200 queries asked for, 25 in the index: all of them, 9838 regions, the line read
-    // off x 7.5..11.5 nats below the relatives.
+    // off x 6.5..10.5 nats below the relatives.
     search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
-        "Karlin-Altschul: K 0.0103, r_database 0.806 (fitted now: 25 database queries, 9838 \
-         regions; r_database 0.806 per nat of lambda_pair S (1 = closed form holds; closed \
-         form 0.481 at the database's match probability 0.500), K 0.0103, fit on x \
-         7.5..11.5, rms 0.086; shuffled-dipeptide reference slope 0.882 over the same bins",
+        "Karlin-Altschul: K 0.0098, r_database 0.844 (fitted now: 25 database queries, 9838 \
+         regions; r_database 0.844 per nat of lambda S (1 = closed form holds; closed \
+         form 0.481 at the database's match probability 0.500), K 0.0098, fit on x \
+         6.5..10.5, rms 0.121; shuffled-dipeptide reference slope 0.860 over the same bins",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
@@ -1265,10 +1275,10 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
     // Shuffled queries have no relatives, so no reference is searched and none is reported.
     search(&["--extend-mismatch-penalty", "3", "--ka-null", "shuffled"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.1043, r_database 0.954 (fitted now: 25 shuffled queries, \
-             9582 regions; r_database 0.954 per nat of lambda_pair S (1 = closed form holds; \
-             closed form 0.609 at the database's match probability 0.500), K 0.1043, fit on \
-             x 8.5..12.5, rms 0.125)\n",
+            "Karlin-Altschul: K 0.1083, r_database 1.008 (fitted now: 25 shuffled queries, \
+             9582 regions; r_database 1.008 per nat of lambda S (1 = closed form holds; \
+             closed form 0.609 at the database's match probability 0.500), K 0.1083, fit on \
+             x 7.5..11.5, counts rise above the line from x 11.5, rms 0.256)\n",
         ),
     );
     Ok(())
@@ -1338,10 +1348,10 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
             "Closed form at the database's own match probability 0.500: K 0.1631",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 25 database queries, 9838 regions; r_database 0.806 per nat of lambda_pair S \
+            "fitted now: 25 database queries, 9838 regions; r_database 0.844 per nat of lambda S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
-             0.500), K 0.0103, fit on x 7.5..11.5, rms 0.086; shuffled-dipeptide reference \
-             slope 0.882 over the same bins",
+             0.500), K 0.0098, fit on x 6.5..10.5, rms 0.121; shuffled-dipeptide reference \
+             slope 0.860 over the same bins",
         ))
         .stderr(predicate::str::contains(
             "Stored in the index for --extend-mismatch-penalty 2 --extend-xdrop 8",
@@ -1364,7 +1374,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
         };
 
     search(&["--extend-mismatch-penalty", "2"])?.success().stderr(predicate::str::contains(
-        "Karlin-Altschul: K 0.0103, r_database 0.806 (stored in the index: 25 database queries, 9838 regions",
+        "Karlin-Altschul: K 0.0098, r_database 0.844 (stored in the index: 25 database queries, 9838 regions",
     ));
     search(&["--extend-mismatch-penalty", "2", "--ka-k", "0.03"])?.success().stderr(
         predicate::str::contains(
@@ -1394,7 +1404,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
     assert!(rows.iter().all(|r| r[source].starts_with("run")));
     search(&["--extend-mismatch-penalty", "3", "--ka-queries", "25"])?.success().stderr(
         predicate::str::contains(
-            "Karlin-Altschul: K 0.0595, r_database 0.891 (fitted now: 25 database queries, 9854 regions; r_database 0.891",
+            "Karlin-Altschul: K 0.0505, r_database 0.916 (fitted now: 25 database queries, 9854 regions; r_database 0.916",
         ),
     );
     Ok(())
@@ -1595,9 +1605,9 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
             "Fitting r_database and K on 3 shuffled sequences (mismatch penalty 2, give-up margin 8)...",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 3 shuffled queries, 1457 regions; r_database 0.753 per nat of lambda_pair S",
+            "fitted now: 3 shuffled queries, 1457 regions; r_database 0.734 per nat of lambda S",
         ))
-        .stderr(predicate::str::contains("K 0.0065, fit on x 6.0..9.5, rms 0.112\n"));
+        .stderr(predicate::str::contains("K 0.0050, fit on x 6.0..9.5, rms 0.111\n"));
 
     let survival = temp_dir.path().join("survival.csv");
     index("3", "database", &survival)?
@@ -1608,13 +1618,13 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
              shuffled-dipeptide...",
         ))
         .stderr(predicate::str::contains(
-            "fitted now: 3 database queries, 1567 regions; r_database 0.826 per nat of lambda_pair S \
+            "fitted now: 3 database queries, 1567 regions; r_database 0.916 per nat of lambda S \
              (1 = closed form holds; closed form 0.481 at the database's match probability \
-             0.500), K 0.0106, fit on x 6.0..9.5, rms 0.125; shuffled-dipeptide reference \
-             slope 0.687 over the same bins",
+             0.500), K 0.0150, fit on x 6.0..9.0, rms 0.072; shuffled-dipeptide reference \
+             slope 0.694 over the same bins",
         ))
         .stderr(predicate::str::contains(
-            "WARNING: the fit has only 7 bins (x 6.0..9.5) below the relatives at x none.",
+            "WARNING: the fit has only 6 bins (x 6.0..9.0) below the relatives at x none.",
         ))
         .stderr(predicate::str::contains(format!(
             "Survival curve written to {}",
@@ -1660,28 +1670,28 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
         ]
     );
     let rows: Vec<csv::StringRecord> = reader.records().collect::<Result<_, _>>()?;
-    assert_eq!(rows.len(), 23, "one row per half-nat bin of x from 5 to 16");
-    assert_eq!((&rows[0][0], &rows[22][0]), ("5.000", "16.000"));
-    // The lowest bin holds every region (1567 seeds and up); the fit window is x 6.0..9.5.
+    assert_eq!(rows.len(), 29, "one row per half-nat bin of x from 2 to 16");
+    assert_eq!((&rows[0][0], &rows[28][0]), ("2.000", "16.000"));
+    // The lowest bin holds every region (1567 seeds and up); the fit window is x 6.0..9.0.
     assert_eq!(&rows[0][1], "1567");
     assert_eq!(&rows[0][4], "false");
     let in_fit: Vec<&str> = rows.iter().filter(|r| &r[4] == "true").map(|r| &r[0]).collect();
-    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500", "9.000"]);
-    // Lowest bin: 1567 regions, the fitted line far above at 2477.4 (the seed floor bends
-    // the curve there), 1525 in the shuffled-dipeptide reference.
-    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("1567", "2477.4225474474306", "1525"));
-    // The top bin is one region, above the fitted line's 0.28, and the reference never got
-    // there. The line is written at full precision so its tail can be plotted on a log
+    assert_eq!(in_fit, ["6.000", "6.500", "7.000", "7.500", "8.000", "8.500"]);
+    // Lowest bin: 1567 regions, the fitted line far above at 34,939 (the seed floor bends
+    // the curve there); the shuffled-dipeptide reference has no count in this bin.
+    assert_eq!((&rows[0][1], &rows[0][2], &rows[0][3]), ("1567", "34938.50998453395", ""));
+    // The top bin is one region, above the fitted line's 0.095, and the reference never
+    // got there. The line is written at full precision so its tail can be plotted on a log
     // axis.
-    assert_eq!((&rows[22][1], &rows[22][2], &rows[22][3]), ("1", "0.2794322398328976", ""));
+    assert_eq!((&rows[28][1], &rows[28][2], &rows[28][3]), ("1", "0.09476199040546565", ""));
     // Fit constants repeat on every row.
     let constants = |r: &csv::StringRecord| r.iter().skip(5).map(str::to_owned).collect::<Vec<_>>();
     assert!(rows.iter().all(|r| constants(r) == constants(&rows[0])));
     assert_eq!(
         constants(&rows[0]),
         [
-            "0.8263608593295924",
-            "0.010609768984711608",
+            "0.9155522737866966",
+            "0.014990945184001661",
             "0.48120853696601995",
             "0.5000011360087127",
             "database",
@@ -1718,9 +1728,11 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     let chain = ["--chain-max-gap", "30", "--chain-max-shift", "10"];
     // Rows by region_evalue_source. At penalty 2 every pair here has a positive lambda
     // (HP pairs sit near pr_same 0.5, below 2/3); at 0.67 none does (the cutoff is 0.401).
-    // Chaining joins two of the 322 extended regions into the one `ka_chain` row.
+    // With pr_same from the whole proteins, chaining joins two of the 322 extended regions
+    // into the one `ka_chain` row; from the region (the default) it joins none here.
+    let protein = ["--pr-same-from", "protein"];
     type Search<'a> = (&'a str, Vec<&'a str>, &'a [(&'a str, usize)]);
-    let searches: [Search; 4] = [
+    let searches: [Search; 5] = [
         ("exact", vec![], &[("run", 330)]),
         ("extended", extend.to_vec(), &[("ka", 322)]),
         // The whole-protein p-value cut, which scales the chance count of shared k-mers
@@ -1729,8 +1741,13 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
         ("no_lambda", no_lambda.to_vec(), &[("run", 69)]),
         (
             "chained",
-            [extend.as_slice(), chain.as_slice()].concat(),
+            [extend.as_slice(), chain.as_slice(), protein.as_slice()].concat(),
             &[("ka", 320), ("ka_chain", 1)],
+        ),
+        (
+            "chained, pr_same from the region",
+            [extend.as_slice(), chain.as_slice()].concat(),
+            &[("ka", 322)],
         ),
     ];
     for (name, extra, expected) in searches {

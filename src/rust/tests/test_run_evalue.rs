@@ -7,7 +7,9 @@ use tempfile::TempDir;
 
 use crate::evalue::{run_evalue, SplitMix64};
 use crate::index::ProteomeIndex;
-use crate::search::{ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE};
+use crate::search::{
+    PrSameScope, ProteinSearcher, SearchFilters, SearchResult, DEFAULT_BATCH_SIZE,
+};
 use crate::sketch::ProteinSketch;
 use crate::tests::test_fixtures::{TEST_DECOYS_2MER_GZ, TEST_FASTA_GZ};
 
@@ -97,12 +99,14 @@ fn exact_search(
     target_fasta: &str,
     moltype: &str,
     ksize: u32,
+    scope: PrSameScope,
 ) -> (Vec<SearchResult>, Vec<ProteinSketch>, Vec<ProteinSketch>) {
     let dir = TempDir::new().unwrap();
     let index =
         ProteomeIndex::new(dir.path().join("t"), ksize, SCALED_ALL_KMERS, moltype, true).unwrap();
     index.process_fasta(target_fasta, 0, DEFAULT_BATCH_SIZE).unwrap();
-    let searcher = ProteinSearcher::new(index).unwrap();
+    let mut searcher = ProteinSearcher::new(index).unwrap();
+    searcher.set_pr_same_scope(scope);
     // process_fasta streams sketches to disk; read them back to recount compositions.
     searcher.index().load_state().unwrap();
     let targets = sorted_by_name(searcher.index());
@@ -172,8 +176,13 @@ fn counted_and_predicted(moltype: &str, ksize: u32, l0s: &[u32]) -> Vec<(u32, us
     let mut rng = SplitMix64::new(RANDOM_SEQUENCE_SEED);
     write_random_fasta(&q_fasta, "query", N_QUERIES, LENGTH, &mut rng);
     write_random_fasta(&t_fasta, "target", N_TARGETS, LENGTH, &mut rng);
-    let (results, queries, targets) =
-        exact_search(q_fasta.to_str().unwrap(), t_fasta.to_str().unwrap(), moltype, ksize);
+    let (results, queries, targets) = exact_search(
+        q_fasta.to_str().unwrap(),
+        t_fasta.to_str().unwrap(),
+        moltype,
+        ksize,
+        PrSameScope::Region,
+    );
     let scanned_runs: Vec<u32> =
         pairs(&queries, &targets).flat_map(|(q, t)| run_lengths(q, t)).collect();
     l0s.iter()
@@ -289,53 +298,86 @@ fn is_own_shuffle(r: &SearchResult) -> bool {
 ///
 /// On the 480 other decoys a calibrated E-value gives 25 x 480 / 500 = 24 query-target
 /// pairs with a best region at E <= 1 and 240 at E <= 10. Pinned as measured, nothing
-/// tuned:
+/// tuned, with Pr(same) from each region (the default) and from the two whole proteins
+/// (`--pr-same-from protein`):
 ///
-/// | alphabet      | k  | E <= | region_run_evalue | region_run_evalue_midp | calibrated |
-/// |---------------|----|------|-------------------|------------------------|------------|
-/// | hp_lehninger2 | 15 | 1    | 6                 | 11                     | 24         |
-/// | hp_lehninger2 | 15 | 10   | 157               | 207                    | 240        |
-/// | hp_lehninger2 | 12 | 1    | 6                 | 11                     | 24         |
-/// | hp_lehninger2 | 12 | 10   | 157               | 207                    | 240        |
-/// | gbmr4         | 10 | 1    | 28                | 38                     | 24         |
-/// | gbmr4         | 10 | 10   | 178               | 246                    | 240        |
-/// | protein20     | 5  | 1    | 7                 | 18                     | 24         |
-/// | protein20     | 5  | 10   | 87                | 125                    | 240        |
+/// | alphabet      | k  | E <= | run, region | mid-p, region | run, proteins | mid-p, proteins | calibrated |
+/// |---------------|----|------|-------------|---------------|---------------|-----------------|------------|
+/// | hp_lehninger2 | 15 | 1    | 4           | 5             | 6             | 11              | 24         |
+/// | hp_lehninger2 | 15 | 10   | 107         | 153           | 157           | 207             | 240        |
+/// | hp_lehninger2 | 12 | 1    | 4           | 5             | 6             | 11              | 24         |
+/// | hp_lehninger2 | 12 | 10   | 107         | 153           | 157           | 207             | 240        |
+/// | gbmr4         | 10 | 1    | 18          | 30            | 28            | 38              | 24         |
+/// | gbmr4         | 10 | 10   | 141         | 177           | 178           | 246             | 240        |
+/// | protein20     | 5  | 1    | 6           | 7             | 7             | 18              | 24         |
+/// | protein20     | 5  | 10   | 66          | 89            | 87            | 125             | 240        |
 ///
-/// The run E-value stays below calibrated at E <= 10, protein20 most; the mid-p value does
-/// too, except at gbmr4 (246 against 240). k changes which pairs share a seed but not a
+/// From the region, both E-values stay below calibrated at E <= 10. These proteins have no
+/// long low-complexity stretch for the region rule to correct, so it only adds the small
+/// extra caution `region_pr_same` describes. From the whole proteins, the run E-value
+/// stays below calibrated at E <= 10, protein20 most; the mid-p value does too, except at
+/// gbmr4 (246 against 240). k changes which pairs share a seed but not a
 /// pair's run E-value, so the two hp_lehninger2 k give the same counts. Run lengths are
 /// whole numbers and each extra position multiplies the run E-value by Pr(same), so the
 /// runs passing E <= 10 have E-values from 10 Pr(same) to 10: from 5 at hp_lehninger2
 /// (Pr(same) about 0.5) and from 0.6 at protein20 (about 0.06). The mid-p value moves the
-/// cut halfway along that step. It recovers part of the shortfall wherever the run E-value is below calibrated, and
-/// overshoots at gbmr4 (E <= 1 and E <= 10). The run E-value at hp_lehninger2, at every
+/// cut halfway along that step. It recovers part of the shortfall wherever the run E-value
+/// is below calibrated, and from the whole proteins overshoots at gbmr4 (E <= 1 and
+/// E <= 10). The run E-value at hp_lehninger2 with Pr(same) from each region, at every
 /// cutoff from 10^-4 to 1,000, is drawn in `docs/images/run_evalue_checks.png`, panel b.
 #[test]
 fn region_run_evalue_on_2mer_shuffled_decoys() {
-    // (alphabet, k, pairs with a region against other decoys, run E-value at <= 1 and
-    // <= 10, mid-p run E-value at <= 1 and <= 10)
+    // (alphabet, k, Pr(same) rule, pairs with a region against other decoys, run E-value at
+    // <= 1 and <= 10, mid-p run E-value at <= 1 and <= 10)
     let expected = [
-        ("hp_lehninger2", 15, 8386, [6, 157], [11, 207]),
-        ("hp_lehninger2", 12, 11940, [6, 157], [11, 207]),
-        ("gbmr4", 10, 11231, [28, 178], [38, 246]),
-        ("protein20", 5, 1262, [7, 87], [18, 125]),
+        ("hp_lehninger2", 15, PrSameScope::Protein, 8386, [6, 157], [11, 207]),
+        ("hp_lehninger2", 12, PrSameScope::Protein, 11940, [6, 157], [11, 207]),
+        ("gbmr4", 10, PrSameScope::Protein, 11231, [28, 178], [38, 246]),
+        ("protein20", 5, PrSameScope::Protein, 1262, [7, 87], [18, 125]),
+        ("hp_lehninger2", 15, PrSameScope::Region, 8386, [4, 107], [5, 153]),
+        ("hp_lehninger2", 12, PrSameScope::Region, 11940, [4, 107], [5, 153]),
+        ("gbmr4", 10, PrSameScope::Region, 11231, [18, 141], [30, 177]),
+        ("protein20", 5, PrSameScope::Region, 1262, [6, 66], [7, 89]),
     ];
     // Every case is measured before any is checked, so one failing run reports them all.
     let measured: Vec<_> = expected
         .iter()
-        .map(|&(moltype, ksize, ..)| {
+        .map(|&(moltype, ksize, scope, ..)| {
             let (results, queries, targets) =
-                exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, moltype, ksize);
+                exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, moltype, ksize, scope);
             assert_eq!((queries.len(), targets.len()), (25, 500));
             let others: Vec<SearchResult> =
                 results.into_iter().filter(|r| !is_own_shuffle(r)).collect();
             let count =
                 |e: fn(&SearchResult) -> f64| [1.0, 10.0].map(|x| pairs_at_or_below(&others, x, e));
-            (moltype, ksize, others.len(), count(best_run_evalue), count(best_run_evalue_midp))
+            let n = others.len();
+            (moltype, ksize, scope, n, count(best_run_evalue), count(best_run_evalue_midp))
         })
         .collect();
     assert_eq!(measured, expected);
+}
+
+/// Decoy pairs at or below each run E-value cutoff, with pr_same from the region and from
+/// the whole proteins, for panel c of `docs/images/region_pr_same_nb344.png`. Run by hand
+/// with `write_region_pr_same_figure_data` (see there).
+#[test]
+#[ignore = "writes figure data into docs/images; run by hand"]
+fn write_region_pr_same_decoy_data() {
+    let dir = Path::new("docs/images/region_pr_same_nb344");
+    std::fs::create_dir_all(dir).unwrap();
+    let mut out = std::fs::File::create(dir.join("decoys_pairs_at_or_below.tsv")).unwrap();
+    writeln!(out, "alphabet\tksize\trule\tevalue_cutoff\tpairs").unwrap();
+    let cutoffs: Vec<f64> = (-16..=12).map(|i| 10f64.powf(f64::from(i) / 4.0)).collect();
+    for (rule, scope) in [("region", PrSameScope::Region), ("protein", PrSameScope::Protein)] {
+        let (results, _, _) =
+            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", 15, scope);
+        let others: Vec<SearchResult> =
+            results.into_iter().filter(|r| !is_own_shuffle(r)).collect();
+        for &x in &cutoffs {
+            let n = pairs_at_or_below(&others, x, best_run_evalue);
+            writeln!(out, "hp_lehninger2\t15\t{rule}\t{x}\t{n}").unwrap();
+        }
+    }
 }
 
 /// Folder, relative to the crate root, for the tables `scripts/plot_run_evalue_checks.py`
@@ -369,9 +411,15 @@ fn write_run_evalue_figure_data() {
     writeln!(decoys, "alphabet\tksize\tn_queries\tevalue_cutoff\tpairs").unwrap();
     // Cutoffs from 10^-4 to 10^3, four per factor of ten.
     let cutoffs: Vec<f64> = (-16..=12).map(|i| 10f64.powf(f64::from(i) / 4.0)).collect();
+    // The figure shows pr_same from the whole proteins, as when it was drawn.
     for ksize in [15, 12] {
-        let (results, queries, _) =
-            exact_search(TEST_FASTA_GZ, TEST_DECOYS_2MER_GZ, "hp_lehninger2", ksize);
+        let (results, queries, _) = exact_search(
+            TEST_FASTA_GZ,
+            TEST_DECOYS_2MER_GZ,
+            "hp_lehninger2",
+            ksize,
+            PrSameScope::Region,
+        );
         let others: Vec<SearchResult> =
             results.into_iter().filter(|r| !is_own_shuffle(r)).collect();
         for &x in &cutoffs {

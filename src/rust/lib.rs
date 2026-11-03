@@ -13,6 +13,7 @@ pub mod metrics;
 pub mod pair;
 pub mod profile;
 pub mod search;
+pub mod seg;
 pub mod signature;
 pub mod significance;
 pub mod sketch;

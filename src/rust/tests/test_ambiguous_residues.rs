@@ -542,6 +542,7 @@ mod tests {
             moltype: "sdm12",
             params,
             k: 0.03,
+            r_database: 1.0,
             ka_lambda: 0.5,
             m: 124.0,
             n_t: 150.0,
