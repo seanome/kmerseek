@@ -160,6 +160,13 @@ mod tests {
             query_hashes: 82,
             shared_with_bovine: 63,
         },
+        Expected {
+            moltype: "hp_pbotc_1st_ed_hpc3",
+            ksize: 27,
+            readings: 98,
+            query_hashes: 98,
+            shared_with_bovine: 79,
+        },
         // cys2 keeps only where the cysteines are. Topi's 8 cysteines (26, 40, 58, 65, 72,
         // 84, 95, 110) have the same spacing as bovine RNase A's (52 to 136, offset by its
         // 26-residue signal peptide), so every window is shared.

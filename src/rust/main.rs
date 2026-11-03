@@ -444,6 +444,10 @@ enum ProteinAlphabet {
     /// HP Physical Biology of the Cell 1st ed (Phillips et al. 2008)
     #[value(name = "hp_pbotc_1st_ed2", alias = "hp-pbotc-1st-ed2")]
     HpPBotC1stEd,
+    /// HPC Physical Biology of the Cell 1st ed 3-letter: hydrophobic/polar/cystine, C split
+    /// into its own class
+    #[value(name = "hp_pbotc_1st_ed_hpc3", aliases = ["hp-pbotc-1st-ed-hpc3", "cys_hp3"])]
+    HpPBotC1stEdHpc,
     /// Cysteine against everything else, 2 classes: a k-mer records only the
     /// cysteine spacing. Not a hydrophobicity scheme
     #[value(name = "cys2")]
@@ -502,6 +506,7 @@ impl From<ProteinAlphabet> for Alphabet {
             ProteinAlphabet::HpLehningerCNonpolar => Alphabet::HpLehningerCNonpolar2,
             ProteinAlphabet::HpLehningerHpc => Alphabet::HpLehningerHpc3,
             ProteinAlphabet::HpPBotC1stEd => Alphabet::HpPBotC1stEd2,
+            ProteinAlphabet::HpPBotC1stEdHpc => Alphabet::HpPBotC1stEdHpc3,
             ProteinAlphabet::Cys2 => Alphabet::Cys2,
             ProteinAlphabet::ReducedGbmr4 => Alphabet::Gbmr4,
             ProteinAlphabet::ReducedPolarity4 => Alphabet::Polarity4,

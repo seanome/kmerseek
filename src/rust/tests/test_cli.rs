@@ -101,7 +101,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     // without editing the list. The count is pinned so that dropping an alphabet from
     // `Alphabet::all()` fails here; raise it when adding one.
     let alphabets: Vec<&str> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
-    assert_eq!(alphabets.len(), 23, "every alphabet must be exercised here");
+    assert_eq!(alphabets.len(), 24, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
