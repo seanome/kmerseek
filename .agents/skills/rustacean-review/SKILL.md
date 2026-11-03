@@ -83,6 +83,13 @@ Nothing else matters if the code is wrong. Look for:
   `try_from`.
 - **Error handling that destroys information** — `.ok()`, `let _ =`, `map_err(|_| ...)`,
   a `?` that converts a specific error into a stringly-typed one.
+- **Recomputing at load what the index already saved** — a search that rebuilds IDF, k-mer
+  strings or any other database-side or target-side value `kmerseek index` computed and
+  stored, instead of reading the stored value. Values that come from the query (its
+  `PreparedQuery` mins, its k-mers) are computed at search time and are fine. It throws away work and lets the two copies drift apart. Blocking unless the
+  PR says why the stored value cannot be used. Added 2026-10-13 from kmerseek PR 137: "Why
+  isn't it just reading the idf that was already computed at index time?" (asked three
+  times there, and before in PR 36: "Can't we use the saved kmers from the index?").
 - **`unsafe` without a `// SAFETY:` comment** stating which invariant makes it sound.
   Suggest `cargo miri test` for anything non-trivial.
 - **Trait-contract violations** — `Hash`/`Eq` disagreeing, `Ord` inconsistent with `PartialOrd`,
@@ -289,6 +296,10 @@ procedure for changed expected values (run both builds, draw the case, post it o
 - Formulas are written out in the doc comment and the PR text: "lambda is the sum of
   database abundances of the k-mers from the region, divided by the region size" (#38);
   "the slope is K and intercept is lambda" (#54).
+- A PR that adds a second score of the same kind (another E-value, another p-value) says in
+  the README which one to use for what, and shows example rows where they disagree. "This is
+  too many e-values... I don't know which one to use. Can you show me some examples?" (PR
+  133, added 2026-10-13).
 - A number that is not a p-value is not named like one (#38).
 - A non-obvious line gets a why-comment (#40, #38: "what does saturating_sub help with
   here?"). A variable name says what the value is for, not that someone "wanted" it (#40).
@@ -463,3 +474,13 @@ Run the `are-you-sure` pass on the code under review and on any fix you wrote (a
 - Write or run a test for each Blocking finding that fails before the fix and passes after.
 - Run `cargo test` and `cargo clippy --all-targets` on the pinned toolchain, and report both.
 - For a performance claim, measure it (a benchmark or `time` on a real index), do not reason it.
+
+## Mapped index boundaries
+
+Added 2026-10-23 after PR 159 accepted valid endpoints with invalid interior
+shard boundaries and posting offsets. Endpoint checks alone did not prevent a
+lookup panic or silently missing hits. When reviewing mapped arrays whose values
+index another array, corrupt an interior value while preserving both endpoints.
+Check descending and out-of-range boundaries, and require an error before lookup.
+If validation adds a full offset-table scan, qualify older startup and memory
+measurements until that version is measured.

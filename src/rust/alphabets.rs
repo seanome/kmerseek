@@ -76,10 +76,19 @@ pub enum Alphabet {
     /// Physical Biology of the Cell, 1st edition.
     HpPBotC1stEd2,
 
+    /// Cysteine against everything else, so a k-mer records only where the cysteines are.
+    Cys2,
+
     /// Solis & Rackovsky 2000, 4 classes.
     Gbmr4,
     /// Ball, Hill & Scott 2014, 4 classes on polarity and charge.
     Polarity4,
+    /// Aromatic, other hydrophobic, charged, polar: the sticker and spacer classes of
+    /// Martin et al. 2020.
+    AroHydChgPol4,
+    /// [`Self::AroHydChgPol4`] with arginine in a class of its own, since tyrosine-arginine
+    /// contacts also drive phase separation (Wang et al. 2018).
+    AroHydArgChgPol5,
     /// Wang & Wang 1999, 5 classes.
     Wwmj5,
     /// Solis & Rackovsky 2000, 7 classes.
@@ -96,6 +105,8 @@ pub enum Alphabet {
     Hsdm17,
     /// Ieremie et al. 2024, 18 classes, learned by a protein language model.
     Uniprot18,
+    /// 18 classes for peptides read by mass spectrometry: I with L, Q with K.
+    Massspec18,
 }
 
 impl Alphabet {
@@ -111,8 +122,11 @@ impl Alphabet {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::Cys2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
+            Alphabet::AroHydChgPol4,
+            Alphabet::AroHydArgChgPol5,
             Alphabet::Wwmj5,
             Alphabet::Gbmr7,
             Alphabet::FuncGroups8,
@@ -121,6 +135,7 @@ impl Alphabet {
             Alphabet::Wass14,
             Alphabet::Hsdm17,
             Alphabet::Uniprot18,
+            Alphabet::Massspec18,
         ]
     }
 
@@ -136,8 +151,11 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => "hp_lehninger_c_nonpolar2",
             Self::HpLehningerHpc3 => "hp_lehninger_hpc3",
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
+            Self::Cys2 => "cys2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
+            Self::AroHydChgPol4 => "aro_hyd_chg_pol4",
+            Self::AroHydArgChgPol5 => "aro_hyd_arg_chg_pol5",
             Self::Wwmj5 => "wwmj5",
             Self::Gbmr7 => "gbmr7",
             Self::FuncGroups8 => "funcgroups8",
@@ -146,6 +164,7 @@ impl Alphabet {
             Self::Wass14 => "wass14",
             Self::Hsdm17 => "hsdm17",
             Self::Uniprot18 => "uniprot18",
+            Self::Massspec18 => "massspec18",
         }
     }
 
@@ -164,14 +183,14 @@ impl Alphabet {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
             Self::HpLehningerHpc3 => 3,
-            Self::Gbmr4 | Self::Polarity4 => 4,
-            Self::Wwmj5 => 5,
+            Self::Gbmr4 | Self::Polarity4 | Self::AroHydChgPol4 => 4,
+            Self::Wwmj5 | Self::AroHydArgChgPol5 => 5,
             Self::Gbmr7 => 7,
             Self::FuncGroups8 => 8,
             Self::Sdm12 | Self::Mmseqs12 => 12,
             Self::Wass14 => 14,
             Self::Hsdm17 => 17,
-            Self::Uniprot18 => 18,
+            Self::Uniprot18 | Self::Massspec18 => 18,
             _ => 2,
         }
     }
@@ -201,8 +220,11 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => &LEHNINGER_C_NONPOLAR_HP,
             Self::HpLehningerHpc3 => &LEHNINGER_HPC,
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
+            Self::Cys2 => &CYS2,
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
+            Self::AroHydChgPol4 => &ARO_HYD_CHG_POL4,
+            Self::AroHydArgChgPol5 => &ARO_HYD_ARG_CHG_POL5,
             Self::Wwmj5 => &WWMJ5,
             Self::Gbmr7 => &GBMR7,
             Self::FuncGroups8 => &FUNCGROUPS8,
@@ -211,6 +233,7 @@ impl Alphabet {
             Self::Wass14 => &WASS14,
             Self::Hsdm17 => &HSDM17,
             Self::Uniprot18 => &UNIPROT18,
+            Self::Massspec18 => &MASSSPEC18,
         })
     }
 
@@ -220,6 +243,8 @@ impl Alphabet {
         Some(match self {
             Self::Gbmr4 => GBMR4_CLUSTERS,
             Self::Polarity4 => POLARITY4_CLUSTERS,
+            Self::AroHydChgPol4 => ARO_HYD_CHG_POL4_CLUSTERS,
+            Self::AroHydArgChgPol5 => ARO_HYD_ARG_CHG_POL5_CLUSTERS,
             Self::Wwmj5 => WWMJ5_CLUSTERS,
             Self::Gbmr7 => GBMR7_CLUSTERS,
             Self::FuncGroups8 => FUNCGROUPS8_CLUSTERS,
@@ -228,6 +253,7 @@ impl Alphabet {
             Self::Wass14 => WASS14_CLUSTERS,
             Self::Hsdm17 => HSDM17_CLUSTERS,
             Self::Uniprot18 => UNIPROT18_CLUSTERS,
+            Self::Massspec18 => MASSSPEC18_CLUSTERS,
             _ => return None,
         })
     }
@@ -391,6 +417,34 @@ static LEHNINGER_HPC: LazyLock<HashMap<u8, u8>> =
 // -----------------------------------------------------------------------------
 static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFILMPVWY", b"DEGHKNQRST"));
+
+// -----------------------------------------------------------------------------
+// Cysteine against everything else.
+//
+// Not a hydrophobicity scheme, so its name does not start with `hp_` and the
+// HP-family tests skip it. The only thing a cys2 k-mer records is which of its
+// positions are cysteine, which is the cysteine spacing of a stretch of sequence
+// and nothing else. Written for toxin peptides, whose families are defined by
+// that spacing: a conotoxin framework such as C-C-CC-C-C is a statement about
+// which positions hold cysteine and how many residues sit between them.
+//
+// Two consequences worth knowing before indexing anything with it. A stretch with
+// no cysteine encodes to a run of one symbol, so every such k-mer in a proteome
+// collapses to the same hash and low-complexity removal drops all of them. And
+// the 19 residues sharing the 'x' symbol are not a chemical class; 'x' means
+// "not cysteine", nothing more.
+//
+//   c: C                         (1 residue)
+//   x: A D E F G H I K L M N P Q R S T V W Y   (19 residues)
+// -----------------------------------------------------------------------------
+static CYS2: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| {
+    let mut m = HashMap::with_capacity(21);
+    for &r in CANONICAL_AA {
+        m.insert(r, if r == b'C' { b'c' } else { b'x' });
+    }
+    m.insert(b'*', b'*'); // stop codon pass-through
+    m
+});
 
 /// The partition of an alphabet that has one, for tests that compare tables directly.
 #[cfg(test)]
@@ -823,6 +877,40 @@ const POLARITY4_CLUSTERS: &[&str] = &["GAVLIFWMP", "STCYNQ", "DE", "HKR"];
 static POLARITY4: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(POLARITY4_CLUSTERS));
 
 // -----------------------------------------------------------------------------
+// ARO_HYD_CHG_POL4 — aromatic, other hydrophobic, charged, polar.
+//
+// Built for disordered regions that phase-separate. Martin et al. (2020, Science
+// 367:694) showed that the number and even spacing of aromatic residues (F, W, Y) in a
+// disordered region set whether it phase-separates: aromatic residues are the "stickers"
+// that bind each other, and the stretches between them are "spacers". So the aromatic
+// residues get a letter of their own instead of joining the other hydrophobic ones.
+// Charged residues are pooled (D, E, K, R) because their pattern is measured separately
+// by kappa (Das & Pappu 2013). This alphabet cannot measure that pattern: a k-mer cannot
+// tell a positive stretch from a negative one. Pooling also puts R with K, although Wang
+// et al. (2018) found that K does not substitute for R; ARO_HYD_ARG_CHG_POL5 below keeps
+// them apart, at the cost of one more letter. C, G, P and H go with the polar residues
+// (S first, since the first residue names the letter): none of them is aromatic or
+// charged at neutral pH, G and P are the most common spacer residues in low-complexity
+// regions, and C is rare in them.
+// -----------------------------------------------------------------------------
+const ARO_HYD_CHG_POL4_CLUSTERS: &[&str] = &["FWY", "AILMV", "DEKR", "SCGHNPQT"];
+static ARO_HYD_CHG_POL4: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_CHG_POL4_CLUSTERS));
+
+// -----------------------------------------------------------------------------
+// ARO_HYD_ARG_CHG_POL5 — ARO_HYD_CHG_POL4 with arginine split out.
+//
+// Wang et al. (2018, Cell 174:688) found that in the FUS family the number of tyrosines
+// and arginines together sets the driving force for phase separation, through
+// tyrosine-arginine contacts, while lysine does not substitute for arginine. So R gets
+// a class of its own and D, E and K stay pooled. Comparing this alphabet with
+// ARO_HYD_CHG_POL4 asks whether the arginine letter adds anything.
+// -----------------------------------------------------------------------------
+const ARO_HYD_ARG_CHG_POL5_CLUSTERS: &[&str] = &["FWY", "AILMV", "R", "DEK", "SCGHNPQT"];
+static ARO_HYD_ARG_CHG_POL5: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_reduced(ARO_HYD_ARG_CHG_POL5_CLUSTERS));
+
+// -----------------------------------------------------------------------------
 // WWMJ5 — Wang & Wang (1999), 5 classes.
 //
 // Derived by minimizing the mismatch within the Miyazawa-Jernigan contact potential
@@ -912,6 +1000,22 @@ const UNIPROT18_CLUSTERS: &[&str] =
     &["A", "R", "N", "D", "C", "Q", "EP", "G", "HL", "I", "K", "M", "F", "S", "T", "W", "Y", "V"];
 static UNIPROT18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(UNIPROT18_CLUSTERS));
 
+// -----------------------------------------------------------------------------
+// MASSSPEC18 — the letters a mass spectrometer can tell apart, 18 classes.
+//
+// A peptide read by tandem mass spectrometry, from a database search or de novo, cannot
+// tell isoleucine from leucine: both are C6H11NO, 113.08406 Da. Glutamine (C5H8N2O2,
+// 128.05858 Da) and lysine (C6H12N2O, 128.09496 Da) differ by 0.03639 Da, less than many
+// instruments resolve in a fragment spectrum, so de novo tools often swap them. Merging
+// those two pairs and keeping the other 16 residues apart means a peptide matches its
+// source protein whichever letter of each pair the spectrum was read as. The masses are
+// the residue formulas summed with Unimod's monoisotopic element masses
+// (https://www.unimod.org/masses.html).
+// -----------------------------------------------------------------------------
+const MASSSPEC18_CLUSTERS: &[&str] =
+    &["A", "C", "D", "E", "F", "G", "H", "IL", "QK", "M", "N", "P", "R", "S", "T", "V", "W", "Y"];
+static MASSSPEC18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(MASSSPEC18_CLUSTERS));
+
 #[cfg(test)]
 mod multi_letter_tests {
     use super::*;
@@ -931,6 +1035,18 @@ mod multi_letter_tests {
     fn test_polarity4_partition() {
         // GAVLIFWMP -> g, STCYNQ -> s, DE -> d, HKR -> h
         assert_eq!(encode_canonical(Alphabet::Polarity4), "gsddgghghggsgshssggs");
+    }
+
+    #[test]
+    fn test_aro_hyd_chg_pol4_partition() {
+        // FWY -> f, AILMV -> a, DEKR -> d, SCGHNPQT -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydChgPol4), "asddfssadaasssdssaff");
+    }
+
+    #[test]
+    fn test_aro_hyd_arg_chg_pol5_partition() {
+        // FWY -> f, AILMV -> a, R -> r, DEK -> d, SCGHNPQT -> s
+        assert_eq!(encode_canonical(Alphabet::AroHydArgChgPol5), "asddfssadaasssrssaff");
     }
 
     #[test]
@@ -981,11 +1097,19 @@ mod multi_letter_tests {
         assert_eq!(encode_canonical(Alphabet::Uniprot18), "acdefghikhmneqrstvwy");
     }
 
+    #[test]
+    fn test_massspec18_partition() {
+        // IL i | QK q | every other residue on its own
+        assert_eq!(encode_canonical(Alphabet::Massspec18), "acdefghiqimnpqrstvwy");
+    }
+
     /// `build_reduced` asserts full coverage and distinct symbols, so constructing every
     /// table is itself the check that no cluster list drifts out of shape.
     #[test]
     fn test_every_alphabet_builds_and_has_declared_size() {
-        let expected_sizes = [4usize, 4, 5, 7, 8, 12, 12, 14, 17, 18];
+        let expected_sizes = [4usize, 4, 4, 5, 5, 7, 8, 12, 12, 14, 17, 18, 18];
+        // zip stops at the shorter side, so a missing size would skip an alphabet.
+        assert_eq!(expected_sizes.len(), Alphabet::multi_letter().count());
         for (alphabet, expected) in Alphabet::multi_letter().zip(expected_sizes) {
             let table = test_partition(*alphabet);
             // 20 canonical residues plus the stop-codon pass-through.
@@ -1112,5 +1236,90 @@ mod sourmash_compat_tests {
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
         }
+    }
+}
+
+#[cfg(test)]
+mod cys2_tests {
+    use super::*;
+
+    /// Encode a peptide through cys2, for tests that compare whole strings.
+    fn encode(peptide: &str) -> String {
+        let table = test_partition(Alphabet::Cys2);
+        peptide.bytes().map(|r| table[&r] as char).collect()
+    }
+
+    #[test]
+    fn only_cysteine_gets_its_own_symbol() {
+        let table = test_partition(Alphabet::Cys2);
+        assert_eq!(table.len(), 21, "20 residues plus the stop codon");
+        assert_eq!(table[&b'C'], b'c');
+        for &residue in CANONICAL_AA {
+            if residue == b'C' {
+                continue;
+            }
+            assert_eq!(
+                table[&residue], b'x',
+                "residue {} should be 'x', meaning not cysteine",
+                residue as char
+            );
+        }
+        assert_eq!(table[&b'*'], b'*', "stop codon passes through");
+    }
+
+    #[test]
+    fn two_classes_named_in_the_moltype() {
+        assert_eq!(Alphabet::Cys2.to_moltype(), "cys2");
+        assert_eq!(Alphabet::from_moltype("cys2"), Some(Alphabet::Cys2));
+        assert_eq!(Alphabet::Cys2.size(), 2);
+
+        let symbols: std::collections::HashSet<u8> = test_partition(Alphabet::Cys2)
+            .iter()
+            .filter(|(residue, _)| **residue != b'*')
+            .map(|(_, symbol)| *symbol)
+            .collect();
+        assert_eq!(symbols.len(), Alphabet::Cys2.size());
+        assert!(Alphabet::Cys2.to_moltype().ends_with(&Alphabet::Cys2.size().to_string()));
+    }
+
+    /// cys2 splits on cysteine, not on hydrophobicity, so it must stay out of the HP
+    /// family. The HP tests assert every scheme agrees on 15 of the 20 residues, and cys2
+    /// puts all 19 non-cysteine residues in one class, which would make that false.
+    #[test]
+    fn not_part_of_the_hp_family() {
+        assert!(!Alphabet::hp_family().any(|a| *a == Alphabet::Cys2));
+        assert!(!Alphabet::Cys2.to_moltype().starts_with("hp_"));
+        assert!(Alphabet::all().contains(&Alphabet::Cys2));
+        assert!(Alphabet::Cys2.clusters().is_none());
+        assert!(!Alphabet::Cys2.uses_sourmash_encoder());
+    }
+
+    /// What the alphabet is for: the encoding of a peptide is its cysteine spacing, so two
+    /// made-up peptides that put cysteine in the same positions encode identically however
+    /// much the residues between them differ, and moving one cysteine changes the encoding.
+    #[test]
+    fn encoding_is_the_cysteine_spacing() {
+        assert_eq!(encode("GGCDERCMNPCC"), "xxcxxxcxxxcc");
+        assert_eq!(encode("AACKLMCWYACC"), "xxcxxxcxxxcc");
+        assert_eq!(
+            encode("GGCDERCMNPCC"),
+            encode("AACKLMCWYACC"),
+            "same cysteine positions, different residues between them"
+        );
+
+        assert_ne!(
+            encode("GGCDERCMNPCC"),
+            encode("GGCDERCMNCPC"),
+            "moving one cysteine must change the encoding"
+        );
+    }
+
+    /// A peptide with no cysteine encodes to a run of one symbol, so every such k-mer in a
+    /// proteome hashes to the same value. Anyone indexing with cys2 needs to know this.
+    #[test]
+    fn a_peptide_without_cysteine_is_one_repeated_symbol() {
+        let encoded = encode("PLANTANDANIMALGENES");
+        assert_eq!(encoded, "x".repeat(19));
+        assert_eq!(encoded.chars().collect::<std::collections::HashSet<_>>().len(), 1);
     }
 }
