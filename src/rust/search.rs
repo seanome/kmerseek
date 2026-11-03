@@ -198,7 +198,8 @@ impl KaParams {
     }
 }
 
-/// Targets whose encoded sequences give the database's match probability during a fit.
+/// Targets whose class sequences (`class_sequence`) give the database's match probability
+/// during a fit.
 const COMPOSITION_SAMPLE: usize = 200;
 
 /// What `ProteinSearcher::calibrate_ka` found.
@@ -1553,8 +1554,8 @@ impl ProteinSearcher {
         for idx in picks {
             let md5 = md5s[idx].clone();
             let Some(target) = self.target_sketch(&md5)? else { continue };
-            if let Some(encoded) = target.get_moltype_sequence() {
-                for b in encoded.bytes() {
+            if let Some(classes) = class_sequence(&target) {
+                for &b in classes {
                     class_counts[b as usize] += 1;
                 }
             }
@@ -2325,12 +2326,9 @@ impl ProteinSearcher {
         // No K (no fit for this index): the regions stay extended and unscored here.
         if let Some(params) = self.extension {
             let _timer = Timer::start(Step::KarlinAltschul);
-            if let (Some(q_enc), Some(t_enc), Some(classes), Some(ka)) = (
-                query.sketch.get_moltype_sequence(),
-                target.get_moltype_sequence(),
-                &classes,
-                params.ka,
-            ) {
+            if let (Some(q_enc), Some(t_enc), Some(classes), Some(ka)) =
+                (class_sequence(query.sketch), class_sequence(target), &classes, params.ka)
+            {
                 let lambda = |pr_same: f64| {
                     karlin_altschul_lambda(pr_same, params.scoring.mismatch_penalty) * ka.r_database
                 };
@@ -2350,8 +2348,8 @@ impl ProteinSearcher {
                 if params.chain_max_gap > 0 && ka_lambda > 0.0 && ka.k > 0.0 {
                     let moltype = query.sketch.moltype().to_string();
                     let pair = ChainContext {
-                        q: q_enc.as_bytes(),
-                        t: t_enc.as_bytes(),
+                        q: q_enc,
+                        t: t_enc,
                         q_raw: query.sketch.get_raw_sequence(),
                         t_raw: target.get_raw_sequence(),
                         moltype: &moltype,
@@ -3410,9 +3408,10 @@ fn drop_masked_seeds(
 /// The pair `chain_regions` works on: its sequences, the extension settings, and the
 /// numbers the sum statistic needs, built once per pair in `ProteinSearcher::compare`.
 pub struct ChainContext<'a> {
-    /// The query's encoded sequence.
+    /// The query's sequence that matches are counted on (`class_sequence`): the encoded
+    /// sequence, or the raw residues for `protein20`.
     pub q: &'a [u8],
-    /// The target's encoded sequence.
+    /// The target's sequence that matches are counted on, as for `q`.
     pub t: &'a [u8],
     /// The query's raw residues, for the chain's `subseq`. None leaves regions unchained.
     pub q_raw: Option<&'a str>,
@@ -7137,8 +7136,9 @@ mod tests {
 #[cfg(test)]
 mod ka_calibration_tests {
     use super::*;
-    use crate::tests::test_fixtures::TEST_FASTA_GZ;
+    use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_FASTA_GZ};
     use approx::assert_relative_eq;
+    use needletail::parse_fastx_file;
     use tempfile::TempDir;
 
     fn shuffled_settings(mismatch_penalty: f64, n_queries: usize) -> KaCalibrationSettings {
@@ -7346,6 +7346,166 @@ mod ka_calibration_tests {
         assert_relative_eq!(k1, 0.011522349930672795 * per_residue, epsilon = 1e-12);
         assert_relative_eq!(r4, 0.8464263063538485, epsilon = 1e-12);
         assert_relative_eq!(k4, 0.015400688613533853 * per_residue, epsilon = 1e-12);
+        Ok(())
+    }
+
+    /// A protein20 index of the 25 BCL2-family proteins at k = `ksize`, scaled 1.
+    fn searcher_on_first25_protein20(ksize: u32) -> Result<(TempDir, ProteinSearcher)> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("index"), ksize, 1, "protein20", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        Ok((temp_dir, ProteinSearcher::new(index)?))
+    }
+
+    /// Notebook 342's protein20 scoring: mismatch penalty 0.14, give-up margin 0.57.
+    fn nb342_protein20_settings() -> KaCalibrationSettings {
+        let mut settings = shuffled_settings(0.14, 25);
+        settings.scoring.xdrop = 0.57;
+        settings
+    }
+
+    /// Sum of squared residue frequencies over every sequence in `fasta`, counted here
+    /// straight from the file rather than through a sketch.
+    fn residue_match_probability(fasta: &str) -> Result<f64> {
+        let mut counts = [0u64; 256];
+        let mut reader = parse_fastx_file(fasta)?;
+        while let Some(record) = reader.next() {
+            for &b in record?.seq().iter() {
+                counts[b as usize] += 1;
+            }
+        }
+        let total = counts.iter().sum::<u64>() as f64;
+        Ok(counts.iter().map(|&c| (c as f64 / total).powi(2)).sum())
+    }
+
+    /// protein20 stores no encoded sequence (its classes are the residues themselves), so
+    /// the database's match probability has to be counted on the raw residues. Read off
+    /// the encoded sequence alone it came out 0 and the closed form had no K, as in
+    /// notebook 342 (2024-kmerseek-analysis PR 152).
+    #[test]
+    fn test_calibration_match_probability_protein20_counts_residues() -> Result<()> {
+        let (_dir, searcher) = searcher_on_first25_protein20(5)?;
+        let (queries, match_probability) =
+            searcher.calibration_queries(DecoyNull::Shuffled, 25, 1, 1)?;
+        assert_eq!(queries.len(), 25);
+        // All 25 targets are sampled (COMPOSITION_SAMPLE is 200), so this is the whole
+        // fixture's composition: 9,288 residues, sum of p^2 over the 20 amino acids.
+        let by_hand = residue_match_probability(TEST_FASTA_GZ)?;
+        assert_relative_eq!(match_probability, by_hand, epsilon = 1e-15);
+        assert_relative_eq!(match_probability, 0.060_755_021_065_774_63, epsilon = 1e-15);
+        // The closed-form lambda at penalty 0.14 is positive now. The closed-form K stays
+        // None at 0.14 for its own reason: it needs a whole-number penalty.
+        let lambda = karlin_altschul_lambda(match_probability, 0.14);
+        assert_relative_eq!(lambda, 1.244_939_013_824_447_8, epsilon = 1e-12);
+        assert_eq!(crate::evalue::karlin_altschul_k_theory(match_probability, 0.14), None);
+        let k_at_1 = crate::evalue::karlin_altschul_k_theory(match_probability, 1.0).unwrap();
+        assert_relative_eq!(k_at_1, 0.821_664_872_727_264_6, epsilon = 1e-12);
+        Ok(())
+    }
+
+    /// Calibration bins every region by its `ka_bits`, which were only set when both
+    /// sequences had an encoded copy. For protein20 every region landed in bin 0, and the
+    /// fit was refused for "fewer than 4 score bins" however many queries ran.
+    #[test]
+    fn test_calibration_bins_protein20_spread_past_zero() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25_protein20(5)?;
+        let settings = nb342_protein20_settings();
+        let (queries, _) = searcher.calibration_queries(settings.null, 25, 1, settings.seed)?;
+        searcher.extension = Some(ExtensionParams {
+            scoring: settings.scoring,
+            ka: Some(KaParams { k: 1.0, r_database: 1.0 }),
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        });
+        let bins = searcher.calibration_bins(&queries);
+        // 64 regions from 25 shuffled queries at k = 5, in half-nat bins 6 to 16.
+        let expected: ScoreBins = [
+            (6, 2),
+            (7, 1),
+            (8, 7),
+            (9, 7),
+            (10, 16),
+            (11, 12),
+            (12, 12),
+            (13, 5),
+            (15, 1),
+            (16, 1),
+        ]
+        .into_iter()
+        .flat_map(|(bin, n)| std::iter::repeat_n(bin as f64 + 0.5, n))
+        .collect();
+        assert_eq!(bins, expected);
+        Ok(())
+    }
+
+    /// At k = 3 the 25 proteins give enough chance regions for a protein20 fit. At k = 5
+    /// they give 64, too few, and the refusal says so; on a whole proteome (notebook 342's
+    /// 239 million regions) k = 5 has plenty.
+    #[test]
+    fn test_calibrate_ka_on_protein20() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25_protein20(3)?;
+        let report = searcher.calibrate_ka(nb342_protein20_settings())?;
+        let fit = report.fitted.expect("17,068 regions at k = 3 fill the bins");
+        assert_eq!((fit.n_queries, fit.n_regions), (25, 17068));
+        assert_eq!((fit.score_lo, fit.score_hi), (7, 10));
+        assert_relative_eq!(fit.match_probability, 0.060_755_021_065_774_63, epsilon = 1e-15);
+        assert_relative_eq!(fit.lambda_analytic, 1.244_939_013_824_447_8, epsilon = 1e-12);
+        assert_relative_eq!(fit.r_database, 2.481_338_458_358_441_5, epsilon = 1e-12);
+        assert_relative_eq!(fit.k, 0.351_821_032_986_057_6, epsilon = 1e-12);
+
+        let (_dir, mut searcher) = searcher_on_first25_protein20(5)?;
+        let (params, source) = searcher.resolve_ka(None, nb342_protein20_settings())?;
+        assert_eq!(params, None);
+        let KaSource::Unfitted(reason) = source else { panic!("{source}") };
+        assert_eq!(
+            reason,
+            "mismatch penalty 0.14, give-up margin 0.57: 25 calibration queries gave 64 \
+             regions, but fewer than 4 score bins held 30 regions each"
+        );
+        Ok(())
+    }
+
+    /// A protein20 search given K scores its regions: `ka_bits` and `ka_evalue` were left
+    /// empty because the pair had no encoded sequences, and every `region_evalue` was inf.
+    /// BCL2 against BCL-xL shares the BH1 stretch ELFRDGVNWGRIVAFF (BCL2 136-151, BCL-xL
+    /// 129-144, 1-based).
+    #[test]
+    fn test_protein20_search_scores_regions() -> Result<()> {
+        let (_dir, mut searcher) = searcher_on_first25_protein20(5)?;
+        let ka = KaParams { k: 0.000117, r_database: 1.0 };
+        searcher.set_extension(Some(ExtensionParams {
+            scoring: nb342_protein20_settings().scoring,
+            ka: Some(ka),
+            chain_max_gap: 0,
+            chain_max_shift: 0,
+        }));
+        let mut reader = parse_fastx_file(TEST_BLC2_FASTA)?;
+        let record = reader.next().expect("one record")?;
+        let (name, seq) = (String::from_utf8(record.id().to_vec())?, record.seq().to_vec());
+        let query = ProteinSketch::from_protein_sequence(
+            &name,
+            std::str::from_utf8(&seq)?,
+            5,
+            1,
+            "protein20",
+        )?;
+        let results = searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+        let pair = results.iter().find(|r| r.target_name.contains("B2CL1_HUMAN")).unwrap();
+        let region = pair.matched_regions.iter().find(|r| r.start == 135).unwrap();
+        assert_eq!((region.end, region.target_start, region.target_end), (151, 128, 144));
+        assert_eq!((region.length, region.n_mismatches), (16, 0));
+        // K m n e^(-lambda S): 16 matches, BCL2's 239 residues, the fixture's 9,288, and
+        // lambda from the region's own pr_same.
+        let pr_same = region.pr_same.unwrap();
+        assert_relative_eq!(pr_same, 0.062_438_114_287_659_5, epsilon = 1e-12);
+        let lambda = karlin_altschul_lambda(pr_same, 0.14);
+        let by_hand = 0.000117 * 239.0 * 9288.0 * (-lambda * 16.0).exp();
+        assert_relative_eq!(region.ka_evalue.unwrap(), by_hand, epsilon = 1e-18);
+        assert_relative_eq!(region.ka_evalue.unwrap(), 1.166_629_284_634_916_7e-6, epsilon = 1e-18);
+        assert_eq!(
+            (region.evalue, region.evalue_source),
+            (region.ka_evalue, Some(EvalueSource::Ka))
+        );
         Ok(())
     }
 }
