@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fmt::{Display, Formatter};
 use std::path::Path;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
 
 use anyhow::Result;
@@ -15,8 +16,8 @@ use statrs::function::factorial::ln_factorial;
 use crate::aminoacid::encoded_residues_agree;
 use crate::errors::{IndexError, IndexResult};
 use crate::evalue::{
-    fit_bins, fit_bins_with_reference, make_decoy, DecoyNull, KaCalibration, ScoreBins, SplitMix64,
-    BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
+    fit_bins, fit_bins_with_reference, make_decoy, run_evalue, run_evalue_midp, DecoyNull,
+    EvalueSource, KaCalibration, ScoreBins, SplitMix64, BIN_WIDTH, MIN_BIN_COUNT, MIN_FIT_POINTS,
 };
 use crate::hash_functions::residue_encoder;
 use crate::index::{ProteomeIndex, SearchCache};
@@ -157,7 +158,10 @@ pub struct ExtensionParams {
     pub scoring: ExtensionScoring,
     /// K and r_database for the E-value: from the fit stored in the index for this
     /// `scoring`, a fit run before the search, or `--ka-k` (`ProteinSearcher::resolve_ka`).
-    pub ka: KaParams,
+    /// None when there is no fit: regions are still extended, `region_ka_bits` and
+    /// `region_ka_evalue` stay empty, no region is chained, and `region_evalue` is
+    /// `region_run_evalue`, which needs no K.
+    pub ka: Option<KaParams>,
     /// Chain colinear regions at most this many residues apart (on the query) into one
     /// region scored with Karlin-Altschul sum statistics. 0 leaves every region on its own.
     /// See `chain_regions`.
@@ -255,6 +259,8 @@ pub enum KaSource {
     Index(Box<KaCalibration>),
     /// A fit run just now, before the search.
     Fitted(Box<KaCalibration>),
+    /// No fit exists and none could be made; the reason says why.
+    Unfitted(String),
 }
 
 impl Display for KaSource {
@@ -264,6 +270,11 @@ impl Display for KaSource {
             KaSource::GivenFit => write!(f, "--ka-k and --ka-r-database"),
             KaSource::Index(fit) => write!(f, "stored in the index: {fit}"),
             KaSource::Fitted(fit) => write!(f, "fitted now: {fit}"),
+            KaSource::Unfitted(reason) => write!(
+                f,
+                "no fit ({reason}); regions are extended but not chained, region_ka_bits \
+                 and region_ka_evalue are left empty, and region_evalue is region_run_evalue"
+            ),
         }
     }
 }
@@ -313,6 +324,85 @@ fn class_composition(encoded: &[u8]) -> ClassComposition {
 /// Probability that two positions drawn from these compositions fall in the same class.
 fn match_probability(p: &ClassComposition, q: &ClassComposition) -> f64 {
     p.iter().zip(q).map(|(a, b)| a * b).sum()
+}
+
+/// The sequence a match is counted on: the encoded sequence, or the raw residues for
+/// `protein`, which stores no encoded one. None when the sketch stores no sequence, and for
+/// any other alphabet when the encoded one is missing: counting a reduced alphabet's matches
+/// on amino-acid letters would give a pr_same near 0 and wrong runs, with no error.
+fn class_sequence(sketch: &ProteinSketch) -> Option<&[u8]> {
+    let encoded = sketch.get_moltype_sequence();
+    // `MolType::new` stores sourmash's `protein` as `protein20`.
+    let sequence = if sketch.moltype().get() == "protein20" {
+        encoded.or_else(|| sketch.get_raw_sequence())
+    } else {
+        encoded
+    };
+    sequence.map(str::as_bytes)
+}
+
+/// `match_probability` of a query and one target. The target's composition is counted
+/// here, once per pair: one pass over a few hundred bytes, next to `find_matched_regions`'
+/// walk over both sequences.
+fn pair_pr_same(query: &PreparedQuery<'_>, target: &ProteinSketch) -> Option<f64> {
+    let q_composition = query.composition.as_ref()?;
+    Some(match_probability(q_composition, &class_composition(class_sequence(target)?)))
+}
+
+/// Set once the first out-of-range region has been reported (see `measure_runs`).
+static WARNED_REGION_OUTSIDE_SEQUENCE: AtomicBool = AtomicBool::new(false);
+
+/// Set `run_length` on every region, before any chaining, while each region still sits on
+/// one diagonal. A region whose span does not fit inside both stored sequences keeps
+/// `run_length` 0, which leaves it without a run E-value, and is reported once on stderr.
+fn measure_runs(regions: &mut [MatchedRegion], query: &ProteinSketch, target: &ProteinSketch) {
+    let (Some(q), Some(t)) = (class_sequence(query), class_sequence(target)) else {
+        return;
+    };
+    let agree = residues_agree(&query.moltype().to_string());
+    for region in regions.iter_mut() {
+        match longest_agreeing_run(q, t, region, &agree) {
+            Some(run) => region.run_length = run,
+            None => {
+                // One warning per process: truncated stored sequences would otherwise print
+                // a line per region per pair and bury the progress and `Total matches` lines.
+                if !WARNED_REGION_OUTSIDE_SEQUENCE.swap(true, Ordering::Relaxed) {
+                    eprintln!(
+                        "Warning: region {}..{} on target {}..{} of {} vs {} lies outside the \
+                         stored sequences ({} and {} long); it gets no run E-value. Further \
+                         regions like it are not reported",
+                        region.start,
+                        region.end,
+                        region.target_start,
+                        region.target_end,
+                        query.signature().name,
+                        target.signature().name,
+                        q.len(),
+                        t.len()
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Longest stretch of agreeing positions inside `region`'s span, walking its diagonal from
+/// (`start`, `target_start`). None when the span runs past the end of either sequence.
+fn longest_agreeing_run(
+    q: &[u8],
+    t: &[u8],
+    region: &MatchedRegion,
+    agree: &impl Fn(u8, u8) -> bool,
+) -> Option<u32> {
+    let q_span = q.get(region.start as usize..region.end as usize)?;
+    let t_end = region.target_start as usize + q_span.len();
+    let t_span = t.get(region.target_start as usize..t_end)?;
+    let (mut best, mut current) = (0, 0);
+    for (&a, &b) in q_span.iter().zip(t_span) {
+        current = if agree(a, b) { current + 1 } else { 0 };
+        best = best.max(current);
+    }
+    Some(best)
 }
 
 /// The Karlin-Altschul lambda for +1 / -penalty scoring when a random pair of positions
@@ -448,10 +538,25 @@ pub struct SearchResultCsv {
     /// Karlin-Altschul bit score of the region (see MatchedRegion::ka_bits). 0 without
     /// `--extend-mismatch-penalty`.
     pub region_ka_bits: f64,
-    /// E-value of the region against the searched database (see MatchedRegion::evalue).
-    pub region_evalue: f64,
+    /// Karlin-Altschul E-value of an extended region (see MatchedRegion::ka_evalue). Empty
+    /// when the region was not extended or the pair has no positive lambda.
+    pub region_ka_evalue: Option<f64>,
     /// Number of extended regions chained into this row (see MatchedRegion::n_chained).
     pub region_n_chained: u32,
+    /// Longest run of agreeing positions in the region (see MatchedRegion::run_length).
+    pub region_run_length: u32,
+    /// Chance that two positions of this pair share a class (see MatchedRegion::pr_same).
+    pub region_pr_same: Option<f64>,
+    /// Expected number of runs at least region_run_length long by chance (see
+    /// MatchedRegion::run_evalue).
+    pub region_run_evalue: Option<f64>,
+    /// region_run_evalue x (1 + region_pr_same) / 2 (see MatchedRegion::run_evalue_midp).
+    pub region_run_evalue_midp: Option<f64>,
+    /// region_ka_evalue when present, otherwise region_run_evalue (see
+    /// MatchedRegion::evalue). Empty only when both are.
+    pub region_evalue: Option<f64>,
+    /// `ka`, `ka_chain` or `run`: which E-value region_evalue is.
+    pub region_evalue_source: Option<EvalueSource>,
 }
 
 impl SearchResultCsv {
@@ -521,8 +626,14 @@ impl SearchResultCsv {
             region_mean_idf: region.mean_idf,
             region_n_mismatches: region.n_mismatches,
             region_ka_bits: region.ka_bits,
-            region_evalue: region.evalue,
+            region_ka_evalue: region.ka_evalue,
             region_n_chained: region.n_chained,
+            region_run_length: region.run_length,
+            region_pr_same: region.pr_same,
+            region_run_evalue: region.run_evalue,
+            region_run_evalue_midp: region.run_evalue_midp,
+            region_evalue: region.evalue,
+            region_evalue_source: region.evalue_source,
         }
     }
 }
@@ -792,13 +903,50 @@ pub struct MatchedRegion {
     /// that stands alone, which is every region unless `--chain-max-gap` is set.
     pub n_chained: u32,
 
-    /// E-value for `ka_bits` against the searched database: K * m * n * exp(-lambda * S), with
-    /// m the query's encoded length and n = `db_n_kmers`, the number of distinct sketched
-    /// hashes per target summed over targets (about residues / scaled). K is `KaParams::k`,
-    /// fitted on the index for the alphabet, penalty, give-up margin and `--scaled` in use:
-    /// K absorbs the scaled factor, so a K measured at one `--scaled` does not carry to
-    /// another. Infinity without extension or DB context.
-    pub evalue: f64,
+    /// Karlin-Altschul E-value for `ka_bits` against the searched database:
+    /// K * m * n * exp(-lambda * S), with m the query's encoded length and n the database's
+    /// residues (`ProteinSearcher::db_n_residues`), the same n as `run_evalue`. K is
+    /// `KaParams::k`, fitted on the index for the alphabet, penalty, give-up margin and
+    /// `--scaled` in use, with the same n: K absorbs the scaled factor, so a K measured at
+    /// one `--scaled` does not carry to another. For a chain it is the sum
+    /// P-value times the number of targets (see `chain_regions`). None without extension,
+    /// without DB context, or when the pair has no positive lambda: then no score is
+    /// surprising and there is no number to report.
+    pub ka_evalue: Option<f64>,
+
+    /// Length of the longest run of agreeing positions inside the region, on its diagonal:
+    /// L in `run_evalue`. Agreement is the rule exact regions are found with
+    /// (`residues_agree`), so for an exact region this is `length`. For an extended region
+    /// it is the longest stretch with no mismatch. For a chain it is the longest of its
+    /// members'.
+    pub run_length: u32,
+
+    /// Chance that one query position and one target position fall in the same class, from
+    /// this pair's class compositions (`match_probability`). The same for every region of a
+    /// pair. None when either sequence is not stored.
+    pub pr_same: Option<f64>,
+
+    /// Expected number of runs at least `run_length` long between an unrelated query and
+    /// the database: pr_same^run_length ((1 - pr_same) m n + n_targets (m - 1) + n), with m
+    /// the query length and n the database's residues (`ProteinSearcher::db_n_residues`).
+    /// See `evalue::run_evalue`. None without `pr_same`, or when `run_length` is 0 because
+    /// the region could not be measured (see `measure_runs`).
+    pub run_evalue: Option<f64>,
+
+    /// `run_evalue` x (1 + pr_same) / 2, the mid-p run E-value (`evalue::run_evalue_midp`).
+    /// A cut on `run_evalue` lets through fewer chance runs than it says, because run lengths
+    /// are whole numbers; this moves the cut halfway along one step. Reported beside
+    /// `run_evalue`, never in `evalue`. None whenever `run_evalue` is.
+    pub run_evalue_midp: Option<f64>,
+
+    /// The E-value to rank and filter by: `ka_evalue` when there is one, otherwise
+    /// `run_evalue`. Never the smaller of the two, since picking the better of two tests
+    /// makes a region look more significant than either test says. None only when both
+    /// are.
+    pub evalue: Option<f64>,
+
+    /// Which of the two `evalue` is (see `EvalueSource`).
+    pub evalue_source: Option<EvalueSource>,
 }
 
 /// Expected number of k-mers a query shares by chance with an unrelated target:
@@ -960,8 +1108,24 @@ impl MatchedRegion {
             mean_idf: 0.0,
             ka_bits: 0.0,
             n_chained: 1,
-            evalue: f64::INFINITY,
+            ka_evalue: None,
+            run_length: 0,
+            pr_same: None,
+            run_evalue: None,
+            run_evalue_midp: None,
+            evalue: None,
+            evalue_source: None,
         }
+    }
+
+    /// Set `evalue` and `evalue_source` from `ka_evalue` and `run_evalue`.
+    fn choose_evalue(&mut self) {
+        let ka_source = if self.n_chained > 1 { EvalueSource::KaChain } else { EvalueSource::Ka };
+        (self.evalue, self.evalue_source) = match (self.ka_evalue, self.run_evalue) {
+            (Some(e), _) => (Some(e), Some(ka_source)),
+            (None, Some(e)) => (Some(e), Some(EvalueSource::Run)),
+            (None, None) => (None, None),
+        };
     }
 }
 
@@ -1079,6 +1243,13 @@ pub struct ProteinSearcher {
     /// result, rather than per comparison, since summing it fresh would cost O(unique k-mers)
     /// on every candidate pair.
     db_n_kmers: usize,
+    /// Residues in the database, n in `run_evalue` and in the Karlin-Altschul E-value and
+    /// fit: `ProteomeIndex::total_residues`, counted
+    /// when the index was built. Estimating it from the k-mer count instead came out low,
+    /// since a k-mer that repeats within a target is counted once and low-complexity k-mers
+    /// are left out: 0.47 of the real count at hp k=8 on the 25-protein test set, which made
+    /// every run E-value half what it should be.
+    db_n_residues: f64,
     /// How many k-mer hashes each target's sketch holds, by target index: its protein ID list
     /// count, which equals the `target_mins.len()` `compare` uses for the chance overlap.
     /// Counted on first use, since it reads every protein ID list and only
@@ -1161,7 +1332,7 @@ impl ProteinSearcher {
         // K = 1 and r_database = 1, so a region's `ka_bits` x ln 2 is lambda_pair S.
         self.extension = Some(ExtensionParams {
             scoring: settings.scoring,
-            ka: KaParams { k: 1.0, r_database: 1.0 },
+            ka: Some(KaParams { k: 1.0, r_database: 1.0 }),
             chain_max_gap: 0,
             chain_max_shift: 0,
         });
@@ -1192,7 +1363,7 @@ impl ProteinSearcher {
         let n_queries = queries.len();
         let query_residues: u64 =
             queries.iter().map(|(_, q)| q.get_raw_sequence().map_or(0, |r| r.len() as u64)).sum();
-        let database_kmers = self.db_n_kmers as u64;
+        let database_residues = self.db_n_residues as u64;
         let lambda_analytic = karlin_altschul_lambda(match_probability, scoring.mismatch_penalty);
         let fitted = fit.map(|fit| KaCalibration {
             scoring,
@@ -1200,7 +1371,7 @@ impl ProteinSearcher {
             seed,
             n_queries,
             query_residues,
-            database_kmers,
+            database_residues,
             n_regions: bins.n_regions() as usize,
             match_probability,
             lambda_analytic,
@@ -1209,7 +1380,7 @@ impl ProteinSearcher {
             // ln(regions in the bin at x) = ln(K L N (1 - e^(-r_database w))) - r_database x,
             // and r_database w is the fit's slope per bin.
             k: fit.ln_intercept.exp()
-                / (query_residues as f64 * database_kmers as f64 * (1.0 - (-fit.lambda).exp())),
+                / (query_residues as f64 * database_residues as f64 * (1.0 - (-fit.lambda).exp())),
             bin_width: BIN_WIDTH,
             score_lo: fit.score_lo,
             score_hi: fit.score_hi,
@@ -1358,52 +1529,52 @@ impl ProteinSearcher {
     /// came from, in order of preference: `explicit` (`--ka-k`, with `--ka-r-database` or
     /// else the closed-form lambda, r_database 1); a fit stored in the index for this
     /// scoring, whatever null it used; a fresh fit on `settings.n_queries` calibration
-    /// queries if that is nonzero. Otherwise an error: an E-value without a fit for its
-    /// own index is not printed.
+    /// queries if that is nonzero. Otherwise no K, with the reason in `KaSource::Unfitted`:
+    /// the search still extends regions but prints no Karlin-Altschul E-value, because an
+    /// E-value without a fit for its own index is not printed.
     pub fn resolve_ka(
         &mut self,
         explicit: Option<KaParams>,
         settings: KaCalibrationSettings,
-    ) -> IndexResult<(KaParams, KaSource)> {
+    ) -> IndexResult<(Option<KaParams>, KaSource)> {
         if let Some(params) = explicit {
             let source =
                 if params.r_database == 1.0 { KaSource::Given } else { KaSource::GivenFit };
-            return Ok((params, source));
+            return Ok((Some(params), source));
         }
         if let Some(stored) = self.index.ka_calibration(settings.scoring)? {
-            return Ok((stored.ka_params(), KaSource::Index(Box::new(stored))));
+            return Ok((Some(stored.ka_params()), KaSource::Index(Box::new(stored))));
         }
         let ExtensionScoring { mismatch_penalty, xdrop } = settings.scoring;
         if settings.n_queries == 0 {
-            return Err(anyhow::anyhow!(
-                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
-                 margin {xdrop}, and --ka-queries 0 forbids fitting one now. Rebuild the \
-                 index with that penalty and give-up margin, search with --ka-queries set, or \
-                 pass --ka-k."
-            )
-            .into());
+            let reason = format!(
+                "the index has none for mismatch penalty {mismatch_penalty}, give-up margin \
+                 {xdrop}, and --ka-queries 0 forbids fitting one now"
+            );
+            return Ok((None, KaSource::Unfitted(reason)));
         }
         let report = self.calibrate_ka(settings)?;
         match report.fitted {
-            Some(fit) => Ok((fit.ka_params(), KaSource::Fitted(Box::new(fit)))),
+            Some(fit) => Ok((Some(fit.ka_params()), KaSource::Fitted(Box::new(fit)))),
             // decoy_from_target needs a stored raw sequence, so no queries at all means the
             // index has none to build them from, and more --ka-queries cannot help.
+            // Extension needs the raw sequences too, so a search that went on would extend
+            // nothing; stop here and say why.
             None if report.n_queries == 0 => Err(anyhow::anyhow!(
                 "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
                  margin {xdrop}: the index stores no raw sequences to build calibration \
                  queries from, so no fit can be made on it. Pass --ka-k."
             )
             .into()),
-            None => Err(anyhow::anyhow!(
-                "no Karlin-Altschul fit for mismatch penalty {mismatch_penalty}, give-up \
-                 margin {xdrop}: {} calibration queries gave {} regions, fewer than the \
-                 {MIN_FIT_POINTS} score bins of {MIN_BIN_COUNT} regions the fit needs. Rebuild \
-                 the index with --ka-queries set higher, search with --ka-queries, or pass \
-                 --ka-k.",
-                report.n_queries,
-                report.n_regions,
-            )
-            .into()),
+            None => {
+                let reason = format!(
+                    "mismatch penalty {mismatch_penalty}, give-up margin {xdrop}: {} \
+                     calibration queries gave {} regions, but fewer than {MIN_FIT_POINTS} score \
+                     bins held {MIN_BIN_COUNT} regions each",
+                    report.n_queries, report.n_regions,
+                );
+                Ok((None, KaSource::Unfitted(reason)))
+            }
         }
     }
 
@@ -1434,6 +1605,7 @@ impl ProteinSearcher {
     fn from_cache(index: ProteomeIndex, cache: SearchCache) -> IndexResult<Self> {
         let kmer_protein_index = Arc::new(cache.kmer_protein_index);
         let db_n_kmers = kmer_protein_index.n_kmer_protein_pairs();
+        let db_n_residues = index.total_residues() as f64;
         let stats = SearchStats {
             total_signatures: cache.target_list.len(),
             kmer_protein_index: kmer_protein_index.clone(),
@@ -1447,6 +1619,7 @@ impl ProteinSearcher {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers,
+            db_n_residues,
             extension: None,
         })
     }
@@ -1493,7 +1666,7 @@ impl ProteinSearcher {
             ),
             tfidf: self.calculate_tfidf(query),
             position_prefix: self.build_position_prefix(query),
-            composition: query.get_moltype_sequence().map(|enc| class_composition(enc.as_bytes())),
+            composition: class_sequence(query).map(class_composition),
             db_frequency: self.query_db_frequency(query),
             total_signatures: self.stats.total_signatures,
         }
@@ -1997,32 +2170,35 @@ impl ProteinSearcher {
         }
 
         drop(scoring_timer);
+        let pr_same = pair_pr_same(query, target);
+        measure_runs(&mut result.matched_regions, query.sketch, target);
+        // Query length for both E-values, in the positions matches are counted on.
+        let m = class_sequence(query.sketch).map_or(0, <[u8]>::len) as f64;
 
         // Karlin-Altschul bits and E-value per region, on the pair's own class compositions.
         // Only meaningful with a mismatch penalty, which is the score's mismatch term.
+        // No K (no fit for this index): the regions stay extended and unscored here.
         if let Some(params) = self.extension {
             let _timer = Timer::start(Step::KarlinAltschul);
-            if let (Some(q_enc), Some(t_enc), Some(q_composition)) = (
+            if let (Some(q_enc), Some(t_enc), Some(a), Some(ka)) = (
                 query.sketch.get_moltype_sequence(),
                 target.get_moltype_sequence(),
-                query.composition.as_ref(),
+                pr_same,
+                params.ka,
             ) {
-                let match_prob =
-                    match_probability(q_composition, &class_composition(t_enc.as_bytes()));
-                let ka_lambda = karlin_altschul_lambda(match_prob, params.scoring.mismatch_penalty)
-                    * params.ka.r_database;
-                let m = q_enc.len() as f64;
-                let n = self.db_n_kmers as f64;
+                let ka_lambda =
+                    karlin_altschul_lambda(a, params.scoring.mismatch_penalty) * ka.r_database;
+                let n = self.db_n_residues;
                 for region in result.matched_regions.iter_mut() {
                     let matches = region.length as f64 - region.n_mismatches as f64;
                     let raw =
                         matches - params.scoring.mismatch_penalty * region.n_mismatches as f64;
-                    if ka_lambda > 0.0 && params.ka.k > 0.0 {
-                        region.ka_bits = params.ka.bits(ka_lambda, raw);
-                        region.evalue = params.ka.evalue(ka_lambda, raw, m, n);
+                    if ka_lambda > 0.0 && ka.k > 0.0 {
+                        region.ka_bits = ka.bits(ka_lambda, raw);
+                        region.ka_evalue = Some(ka.evalue(ka_lambda, raw, m, n));
                     }
                 }
-                if params.chain_max_gap > 0 && ka_lambda > 0.0 && params.ka.k > 0.0 {
+                if params.chain_max_gap > 0 && ka_lambda > 0.0 && ka.k > 0.0 {
                     let moltype = query.sketch.moltype().to_string();
                     let pair = ChainContext {
                         q: q_enc.as_bytes(),
@@ -2031,6 +2207,7 @@ impl ProteinSearcher {
                         t_raw: target.get_raw_sequence(),
                         moltype: &moltype,
                         params,
+                        k: ka.k,
                         ka_lambda,
                         m,
                         n_t: t_enc.len() as f64,
@@ -2041,6 +2218,8 @@ impl ProteinSearcher {
                 }
             }
         }
+
+        self.score_runs(&mut result.matched_regions, pr_same, m);
 
         // Either scope clearing its cap keeps the pair - see SearchFilters::scopes_pass.
         // Bigger poisson_score is more surprising, so the best region is the highest-scoring
@@ -2088,6 +2267,22 @@ impl ProteinSearcher {
         result.run_n_queries = total_queries;
 
         Some(result)
+    }
+
+    /// Fill `pr_same`, `run_evalue`, and the `evalue` chosen from it and `ka_evalue`, on
+    /// every region of one pair.
+    fn score_runs(&self, regions: &mut [MatchedRegion], pr_same: Option<f64>, m: f64) {
+        let n_targets = self.stats.total_signatures as f64;
+        for region in regions.iter_mut() {
+            region.pr_same = pr_same;
+            region.run_evalue = pr_same
+                .filter(|_| region.run_length > 0)
+                .map(|p| run_evalue(p, region.run_length, m, self.db_n_residues, n_targets));
+            region.run_evalue_midp = pr_same
+                .filter(|_| region.run_length > 0)
+                .map(|p| run_evalue_midp(p, region.run_length, m, self.db_n_residues, n_targets));
+            region.choose_evalue();
+        }
     }
 
     /// Set query-proteome k-mer frequencies for two-pass joint_kmer_freq computation.
@@ -2971,8 +3166,10 @@ pub struct ChainContext<'a> {
     /// The alphabet `q` and `t` are encoded in, so a chain's recount lets an ambiguous
     /// residue agree with either class it stands for, as the seeds did.
     pub moltype: &'a str,
-    /// Mismatch penalty, K and the chaining caps.
+    /// Mismatch penalty and the chaining caps.
     pub params: ExtensionParams,
+    /// Karlin-Altschul K; a chain is only formed when there is one.
+    pub k: f64,
     /// This pair's lambda, r_database applied.
     pub ka_lambda: f64,
     /// Query length in residues, m.
@@ -3002,7 +3199,8 @@ pub struct ChainContext<'a> {
 /// of targets: each member's normalised score is lambda S_i - ln(K m n_t) with n_t the
 /// target length, so for a single region this reduces to the per-region E within the
 /// approximation n = N n_t. So a chained row's `evalue` uses N n_t for the database size
-/// and an unchained row's uses `db_n_kmers`; the two are close but not the same formula.
+/// and an unchained row's uses the database's residues n; the two are close but not the
+/// same formula.
 ///
 /// Members must each have a positive normalised score: the sum statistic assumes it, and
 /// a member at or below 0 lowers the sum, which would give the chain a worse E-value than
@@ -3038,7 +3236,7 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
     let mut out: Vec<MatchedRegion> = Vec::with_capacity(sorted.len());
     let mut chain: Vec<MatchedRegion> = Vec::new();
     let ln_mn = (pair.m * pair.n_t).ln();
-    let ln_kmn = params.ka.k.ln() + ln_mn;
+    let ln_kmn = pair.k.ln() + ln_mn;
     // lambda S_i - ln(K m n_t): a member's score in nats less the size of the search.
     let normalised = |r: &MatchedRegion| pair.ka_lambda * raw_score(r) - ln_kmn;
     // Called only with a member in the chain: every call site checks the chain is not
@@ -3070,10 +3268,11 @@ pub fn chain_regions(regions: Vec<MatchedRegion>, pair: &ChainContext<'_>) -> Ve
             chain.iter().map(|x| x.n_mismatches).sum()
         };
         merged.n_chained = r;
+        merged.run_length = chain.iter().map(|x| x.run_length).max().unwrap_or(0);
         merged.subseq = q_raw[qs..qe].to_string();
         merged.target_subseq = t_raw[ts..te].to_string();
         merged.moltype_seq = String::from_utf8_lossy(&t[ts..te]).into_owned();
-        merged.evalue = ln_p.exp() * pair.n_targets;
+        merged.ka_evalue = Some(ln_p.exp() * pair.n_targets);
         // Bits on the same scale as a single region, whose bits are (lambda S - ln K) / ln 2.
         // For one member -ln P = lambda S - ln(K m n_t), so adding ln(m n_t) back puts the
         // size of the search where a single region has it: in the E-value, not the bits.
@@ -3132,7 +3331,7 @@ impl ProteinSearcher {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sketch::ProteinSketch;
+    use crate::sketch::{ProteinSketch, ProteinSketchStore};
     use crate::tests::test_fixtures::{
         BCL2_1_32, BCL2_1_32_KMERS_K5, TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ,
     };
@@ -4128,7 +4327,7 @@ mod tests {
     fn extension(mismatch_penalty: f64, xdrop: f64) -> ExtensionParams {
         ExtensionParams {
             scoring: ExtensionScoring { mismatch_penalty, xdrop },
-            ka: KaParams { k: 0.1, r_database: 1.0 },
+            ka: Some(KaParams { k: 0.1, r_database: 1.0 }),
             chain_max_gap: 0,
             chain_max_shift: 0,
         }
@@ -4189,7 +4388,7 @@ mod tests {
         assert_eq!(exact.len(), 2);
         let strict = ExtensionParams {
             scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
-            ka: KaParams { k: 0.03, r_database: 1.0 },
+            ka: Some(KaParams { k: 0.03, r_database: 1.0 }),
             chain_max_gap: 5,
             chain_max_shift: 0,
         };
@@ -4205,6 +4404,7 @@ mod tests {
             t_raw: t.get_raw_sequence(),
             moltype: "hp",
             params: strict,
+            k: 0.03,
             ka_lambda: 0.5,
             m: 25.0,
             n_t: 25.0,
@@ -4224,7 +4424,7 @@ mod tests {
         // ln(m n_t) - ln P over ln 2.
         let t_sum = 2.0 * (0.5 * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
         let p = (-t_sum).exp() * t_sum / 2.0;
-        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), p * 100.0, epsilon = 1e-12);
         assert_relative_eq!(
             c.ka_bits,
             (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
@@ -4268,6 +4468,7 @@ mod tests {
             t_raw: t.get_raw_sequence(),
             moltype: "hp",
             params,
+            k: 0.1,
             ka_lambda: 2.0,
             m: 25.0,
             n_t: 25.0,
@@ -4336,7 +4537,7 @@ mod tests {
         assert_eq!(region_span(&exact[1]), (10, 25, 9, 24, 8, 0));
         let params = ExtensionParams {
             scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
-            ka: KaParams { k: 0.03, r_database: 1.0 },
+            ka: Some(KaParams { k: 0.03, r_database: 1.0 }),
             chain_max_gap: 5,
             chain_max_shift: 1,
         };
@@ -4349,6 +4550,7 @@ mod tests {
                 t_raw: t.get_raw_sequence(),
                 moltype: "hp",
                 params,
+                k: 0.03,
                 ka_lambda: 0.5,
                 m: 25.0,
                 n_t: 24.0,
@@ -4370,8 +4572,8 @@ mod tests {
         // n_t) with S its run length (no mismatches), and P(T >= t) = e^-t t / 2 for r = 2.
         let t_sum = 0.5 * (9.0 + 15.0) - 2.0 * (0.03 * 25.0 * 24.0f64).ln();
         let p = (-t_sum).exp() * t_sum / 2.0;
-        assert_relative_eq!(c.evalue, p * 100.0, epsilon = 1e-12);
-        assert_relative_eq!(c.evalue, 0.619_041_406_804_322, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), p * 100.0, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), 0.619_041_406_804_322, epsilon = 1e-12);
         // Bits put the search size back: ln(m n_t) - ln P, in bits.
         assert_relative_eq!(
             c.ka_bits,
@@ -4403,7 +4605,7 @@ mod tests {
         let (q, _) = one_flip_pair();
         let strict = ExtensionParams {
             scoring: ExtensionScoring { mismatch_penalty: 9.0, xdrop: 8.0 },
-            ka: KaParams { k: 0.03, r_database: 1.0 },
+            ka: Some(KaParams { k: 0.03, r_database: 1.0 }),
             chain_max_gap: 0,
             chain_max_shift: 0,
         };
@@ -4427,8 +4629,8 @@ mod tests {
         let lambda = karlin_altschul_lambda(314.0 / 625.0, 9.0);
         let t_sum = 2.0 * (lambda * 12.0 - (0.03 * 25.0 * 25.0f64).ln());
         let p = (-t_sum).exp() * t_sum / 2.0;
-        assert_relative_eq!(c.evalue, p, epsilon = 1e-12);
-        assert_relative_eq!(c.evalue, 0.000_128_092_796_225_336_54, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), p, epsilon = 1e-12);
+        assert_relative_eq!(c.ka_evalue.unwrap(), 0.000_128_092_796_225_336_54, epsilon = 1e-12);
         assert_relative_eq!(
             c.ka_bits,
             (625f64.ln() - p.ln()) / std::f64::consts::LN_2,
@@ -4533,6 +4735,7 @@ mod tests {
                 t_raw,
                 moltype: "hp",
                 params,
+                k: 0.1,
                 ka_lambda: 0.5,
                 m: 25.0,
                 n_t: 25.0,
@@ -4861,6 +5064,7 @@ mod tests {
             query_kmer_frequencies: None,
             total_queries: 0,
             db_n_kmers: 0,
+            db_n_residues: 0.0,
             target_n_hashes: OnceLock::new(),
             extension: None,
         };
@@ -5512,6 +5716,177 @@ mod tests {
                 assert_eq!(region.n_shared, region.length - ksize + 1);
             }
         }
+    }
+
+    /// CED-9 against the 25 BCL-2-like proteins, exact search at hp_lehninger2 k=15. BCL2
+    /// shares one 19-residue region with CED-9. An exact region is one unbroken run, so its
+    /// run length is its length. pr_same is recounted here from the two HP strings, and the
+    /// run E-value from the formula with m = 280 CED-9 residues, n the 9,288 residues of the
+    /// 25 targets (summed here from their stored sequences), and 25 targets.
+    #[test]
+    fn region_run_evalue_on_exact_regions_uses_the_whole_region() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let searcher = ProteinSearcher::new(index)?;
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let query = query_index.get_signatures().iter().next().unwrap().value().clone();
+        let results = searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+        let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+        let target = searcher.index.get_signature_by_md5(&bcl2.target_md5)?.unwrap();
+        let h_fraction =
+            |enc: &str| enc.bytes().filter(|&b| b == b'h').count() as f64 / enc.len() as f64;
+        let (hq, ht) = (
+            h_fraction(query.get_moltype_sequence().unwrap()),
+            h_fraction(target.get_moltype_sequence().unwrap()),
+        );
+        let pr_same = hq * ht + (1.0 - hq) * (1.0 - ht);
+        // n, counted here from the FASTA rather than from the index.
+        let mut reader = needletail::parse_fastx_file(TEST_FASTA_GZ)?;
+        let mut n = 0;
+        while let Some(record) = reader.next() {
+            n += record?.num_bases();
+        }
+        assert_eq!((n, searcher.index.total_residues()), (9288, 9288));
+        let n = n as f64;
+        assert_eq!(bcl2.matched_regions.len(), 1);
+        let region = &bcl2.matched_regions[0];
+        assert_eq!((region.length, region.run_length), (19, 19));
+        assert_relative_eq!(region.pr_same.unwrap(), pr_same, epsilon = 1e-12);
+        assert_relative_eq!(pr_same, 0.502_375_971_309_025_7, epsilon = 1e-12);
+        let expected = ((1.0 - pr_same) * 280.0 * n + 25.0 * 279.0 + n) * pr_same.powi(19);
+        assert_relative_eq!(region.run_evalue.unwrap(), expected, max_relative = 1e-12);
+        assert_relative_eq!(region.run_evalue.unwrap(), 2.734_975_961_520_32, epsilon = 1e-9);
+        Ok(())
+    }
+
+    /// CED-9 against the 25 BCL-2-like proteins, extended at hp_lehninger2 k=15. The pair
+    /// CED-9/BCL2 has pr_same 0.502. At mismatch penalty 0.67 a positive lambda needs pr_same
+    /// below 0.67 / 1.67 = 0.401, so there is none: no Karlin-Altschul E-value, and
+    /// region_evalue falls back to the run E-value. At penalty 2 the cutoff is 2/3, lambda is
+    /// positive, and region_evalue is the Karlin-Altschul one.
+    #[test]
+    fn region_evalue_falls_back_to_run_evalue_without_a_positive_lambda() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index = ProteomeIndex::new(temp_dir.path().join("t"), 15, 1, "hp_lehninger2", true)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, DEFAULT_BATCH_SIZE)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        let query_index =
+            ProteomeIndex::new(temp_dir.path().join("q"), 15, 1, "hp_lehninger2", true)?;
+        query_index.process_fasta(TEST_CED9_FASTA, 0, DEFAULT_BATCH_SIZE)?;
+        query_index.load_state()?;
+        let query = query_index.get_signatures().iter().next().unwrap().value().clone();
+        let mut best_bcl2_region = |mismatch_penalty: f64| -> Result<MatchedRegion> {
+            searcher.set_extension(Some(ExtensionParams {
+                scoring: ExtensionScoring { mismatch_penalty, xdrop: 8.0 },
+                ka: Some(KaParams { k: 0.03, r_database: 1.0 }),
+                chain_max_gap: 0,
+                chain_max_shift: 0,
+            }));
+            let results =
+                searcher.search(std::slice::from_ref(&query), &SearchFilters::default())?;
+            let bcl2 = results.iter().find(|r| r.target_name.contains("BCL2_HUMAN")).unwrap();
+            Ok(bcl2.matched_regions.iter().max_by_key(|r| r.run_length).unwrap().clone())
+        };
+
+        let flat = best_bcl2_region(0.67)?;
+        assert_relative_eq!(flat.pr_same.unwrap(), 0.502_375_971_309_025_7, epsilon = 1e-12);
+        // Extension at this penalty runs far past the seed, but the longest stretch without a
+        // mismatch is still the 19-residue exact region, with the exact search's run E-value.
+        assert_eq!((flat.length, flat.n_mismatches, flat.run_length), (99, 41, 19));
+        assert_relative_eq!(flat.run_evalue.unwrap(), 2.734_975_961_520_32, epsilon = 1e-9);
+        assert_eq!(flat.ka_evalue, None);
+        assert_eq!(flat.evalue, flat.run_evalue);
+        assert_eq!(flat.evalue_source, Some(EvalueSource::Run));
+
+        let steep = best_bcl2_region(2.0)?;
+        // K m n e^(-lambda S) with n the 9,288 database residues: the same region, K and n as
+        // test_cli_search_extend_mismatch_penalty at k=12, so the same E-value.
+        assert_relative_eq!(steep.ka_evalue.unwrap(), 5.917_627_122_005_681_5, epsilon = 1e-9);
+        assert_eq!((steep.length, steep.n_mismatches, steep.run_length), (26, 2, 19));
+        assert_eq!(steep.evalue, steep.ka_evalue);
+        assert_eq!(steep.evalue_source, Some(EvalueSource::Ka));
+        Ok(())
+    }
+
+    /// A Karlin-Altschul E-value wins over the run E-value, and is labelled `ka_chain` when
+    /// the row is a chain of regions, whose E-value is computed another way.
+    #[test]
+    fn choose_evalue_labels_each_source() {
+        let unscored = MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap());
+        let with = |ka: Option<f64>, run: Option<f64>, n_chained: u32| {
+            let mut r =
+                MatchedRegion { ka_evalue: ka, run_evalue: run, n_chained, ..unscored.clone() };
+            r.choose_evalue();
+            (r.evalue, r.evalue_source)
+        };
+        assert_eq!(with(None, Some(3.0), 1), (Some(3.0), Some(EvalueSource::Run)));
+        assert_eq!(with(Some(2.0), Some(3.0), 1), (Some(2.0), Some(EvalueSource::Ka)));
+        assert_eq!(with(Some(2.0), Some(3.0), 2), (Some(2.0), Some(EvalueSource::KaChain)));
+        assert_eq!(with(None, None, 1), (None, None));
+    }
+
+    /// An extended region's run is its longest stretch without a mismatch: here positions
+    /// 0-4 agree (hhpph), 5 does not (h against p), and 6-7 agree again, so 5.
+    #[test]
+    fn longest_agreeing_run_stops_at_a_mismatch() {
+        let agree = residues_agree("hp_lehninger2");
+        let region = MatchedRegion {
+            start: 0,
+            end: 8,
+            target_start: 2,
+            target_end: 10,
+            ..MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap())
+        };
+        assert_eq!(longest_agreeing_run(b"hhpphhhp", b"pphhpphphp", &region, &agree), Some(5));
+    }
+
+    /// A span past the end of either sequence cannot be measured: None, not a run of 0,
+    /// which would give a huge run E-value with no sign anything was wrong.
+    #[test]
+    fn longest_agreeing_run_refuses_a_span_outside_the_sequences() {
+        let agree = residues_agree("hp_lehninger2");
+        let unscored = MatchedRegion::unscored("q", "t", &MolType::new("hp_lehninger2").unwrap());
+        let span = |start, end, target_start| MatchedRegion {
+            start,
+            end,
+            target_start,
+            target_end: target_start + (end - start),
+            ..unscored.clone()
+        };
+        let (q, t) = (b"hhpphhhp".as_slice(), b"pphhpphphp".as_slice());
+        // Query end 9 is past the 8-residue query.
+        assert_eq!(longest_agreeing_run(q, t, &span(0, 9, 0), &agree), None);
+        // Target 4..12 is past the 10-residue target.
+        assert_eq!(longest_agreeing_run(q, t, &span(0, 8, 4), &agree), None);
+        // Target 2..10 ends exactly at the target's end.
+        assert_eq!(longest_agreeing_run(q, t, &span(0, 8, 2), &agree), Some(5));
+    }
+
+    /// A reduced alphabet's matches are counted on its encoded letters only. Without them
+    /// there is no class sequence, rather than the amino-acid letters, which would give a
+    /// pr_same near 0. `protein` stores no encoded sequence and uses the raw one.
+    #[test]
+    fn class_sequence_falls_back_to_raw_residues_only_for_protein() -> Result<()> {
+        let with_raw_only = |moltype: &str| -> Result<ProteinSketch> {
+            let mut sketch = ProteinSketch::new("x", 5, 1, moltype)?;
+            sketch.set_efficient_data(ProteinSketchStore::new(
+                "x".into(),
+                crate::sketch::sequence_key("MKVLAAGIVG"),
+                vec![],
+                None,
+                HashMap::new(),
+                Some("MKVLAAGIVG".into()),
+                None,
+            ));
+            Ok(sketch)
+        };
+        assert_eq!(class_sequence(&with_raw_only("protein")?), Some(b"MKVLAAGIVG".as_slice()));
+        assert_eq!(class_sequence(&with_raw_only("hp_lehninger2")?), None);
+        Ok(())
     }
 
     /// The same 5 shared k-mers that read as a weak whole-protein match (containment ~0.019
@@ -6172,7 +6547,7 @@ mod ka_calibration_tests {
     /// Queries drawn for the `calibration_bins` tests: all 25 proteins of the fixture.
     const BINS_TEST_N_QUERIES: usize = 25;
     /// The comparison below is exact, so this only guards against comparing two empty
-    /// bins. 25 shuffled queries at penalty 2 give 9,561 regions in the fit test below.
+    /// bins. 25 shuffled queries at penalty 2 give 9,576 regions in the fit test below.
     const BINS_TEST_MIN_REGIONS: u64 = 1000;
 
     /// `calibration_bins` counts regions as each target is compared. It must give the bins
@@ -6186,7 +6561,7 @@ mod ka_calibration_tests {
                 mismatch_penalty: BINS_TEST_MISMATCH_PENALTY,
                 xdrop: DEFAULT_XDROP,
             },
-            ka: KaParams { k: 1.0, r_database: 1.0 },
+            ka: Some(KaParams { k: 1.0, r_database: 1.0 }),
             chain_max_gap: 0,
             chain_max_shift: 0,
         });
@@ -6225,6 +6600,27 @@ mod ka_calibration_tests {
         check_calibration_bins_match_search_one(2)
     }
 
+    /// An index built without raw sequences has nothing to make calibration queries from,
+    /// and nothing to extend either, so asking for a fit stops the search with the reason.
+    #[test]
+    fn test_resolve_ka_refuses_an_index_without_raw_sequences() -> Result<()> {
+        let temp_dir = TempDir::new()?;
+        let index =
+            ProteomeIndex::new(temp_dir.path().join("index"), 12, 1, "hp_lehninger2", false)?;
+        index.process_fasta(TEST_FASTA_GZ, 0, 1000)?;
+        let mut searcher = ProteinSearcher::new(index)?;
+        let err = searcher.resolve_ka(None, shuffled_settings(2.0, 25)).unwrap_err();
+        println!("{err}");
+        assert_eq!(
+            err.to_string(),
+            "Anyhow error: no Karlin-Altschul fit for mismatch penalty 2, give-up margin 8: the \
+             index stores \
+             no raw sequences to build calibration queries from, so no fit can be made on it. \
+             Pass --ka-k."
+        );
+        Ok(())
+    }
+
     /// The fit is reproducible from the seed, is stored under its scoring and found again
     /// by `resolve_ka`, which otherwise runs it when asked and refuses when not allowed
     /// to, and `--ka-k` wins over it.
@@ -6236,15 +6632,16 @@ mod ka_calibration_tests {
             report.fitted.clone().expect("25 shuffled BCL2 queries give thousands of regions");
         assert_eq!(searcher.extension, None, "calibration restores the extension setting");
         // 25 shuffled queries against the 25 BCL2-family proteins at hp k=12, penalty 2:
-        // 9,288 query residues against 8,340 database k-mers, no homolog excess, the line
+        // 9,288 query residues against the database's 9,288 residues, no homolog excess, the line
         // read off the top 8 bins of x = lambda_pair S (half a nat each) with at least 30
         // regions, x 7.5 to 11.5 nats.
         assert_eq!((fit.n_queries, fit.n_regions), (25, 9576));
-        assert_eq!((fit.query_residues, fit.database_kmers), (9288, 8340));
+        assert_eq!((fit.query_residues, fit.database_residues), (9288, 9288));
         assert_eq!((fit.score_lo, fit.score_hi, fit.bend_score), (15, 22, None));
         assert_eq!(fit.x_range(), (7.5, 11.5));
         assert!((fit.r_database - 0.846_869_675_267_072).abs() < 1e-12, "{}", fit.r_database);
-        assert!((fit.k - 0.015_285_759_225_763_968).abs() < 1e-12, "{}", fit.k);
+        // The same line as when N was the 8,340 database k-mers, divided by 9,288 instead.
+        assert!((fit.k - 0.015_285_759_225_763_968 * 8340.0 / 9288.0).abs() < 1e-12, "{}", fit.k);
         assert!((fit.rms_residual - 0.084_113_149_881_278_44).abs() < 1e-12);
         // The BCL2 family is half hydrophobic in the Lehninger classes, so a = 0.5 and the
         // closed-form lambda is ln of the golden ratio.
@@ -6257,32 +6654,34 @@ mod ka_calibration_tests {
         assert_eq!(again, report);
 
         let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 25))?;
-        assert_eq!(params, fit.ka_params());
+        assert_eq!(params, Some(fit.ka_params()));
         assert_eq!(source, KaSource::Fitted(Box::new(fit.clone())));
 
         searcher.index().put_ka_calibration(&fit)?;
         let (params, source) = searcher.resolve_ka(None, shuffled_settings(2.0, 0))?;
-        assert_eq!(params, fit.ka_params());
+        assert_eq!(params, Some(fit.ka_params()));
         assert_eq!(source, KaSource::Index(Box::new(fit.clone())));
 
         let given = KaParams { k: 0.03, r_database: 1.0 };
         let (params, source) = searcher.resolve_ka(Some(given), shuffled_settings(2.0, 0))?;
-        assert_eq!((params, source), (given, KaSource::Given));
+        assert_eq!((params, source), (Some(given), KaSource::Given));
 
         // A whole fit given by hand wins over the stored one and is used as given.
         let other = KaParams { k: 0.0115, r_database: 0.806 };
         let (params, source) = searcher.resolve_ka(Some(other), shuffled_settings(2.0, 0))?;
-        assert_eq!((params, source), (other, KaSource::GivenFit));
+        assert_eq!((params, source), (Some(other), KaSource::GivenFit));
 
-        // No stored fit for penalty 3, no queries allowed and no K given: refused, not
-        // guessed.
-        let err = searcher.resolve_ka(None, shuffled_settings(3.0, 0)).unwrap_err();
+        // No stored fit for penalty 3, no queries allowed and no K given: no K, not a
+        // guessed one, and the reason is kept.
+        let (params, source) = searcher.resolve_ka(None, shuffled_settings(3.0, 0))?;
+        assert_eq!(params, None);
+        let KaSource::Unfitted(reason) = source else { panic!("{source}") };
         assert!(
-            err.to_string().contains(
-                "no Karlin-Altschul fit for mismatch penalty 3, give-up margin 8, and \
+            reason.contains(
+                "the index has none for mismatch penalty 3, give-up margin 8, and \
                  --ka-queries 0 forbids fitting one now"
             ),
-            "{err}"
+            "{reason}"
         );
         Ok(())
     }
@@ -6321,9 +6720,11 @@ mod ka_calibration_tests {
         };
         let ((r1, k1), (r4, k4)) = (fit(&one), fit(&four));
         assert_relative_eq!(r1, 0.8055981514319699, epsilon = 1e-12);
-        assert_relative_eq!(k1, 0.011522349930672795, epsilon = 1e-12);
+        // K is the fitted height over N = 9,288 database residues; it was over 8,340 k-mers.
+        let per_residue = 8340.0 / 9288.0;
+        assert_relative_eq!(k1, 0.011522349930672795 * per_residue, epsilon = 1e-12);
         assert_relative_eq!(r4, 0.8464263063538485, epsilon = 1e-12);
-        assert_relative_eq!(k4, 0.015400688613533853, epsilon = 1e-12);
+        assert_relative_eq!(k4, 0.015400688613533853 * per_residue, epsilon = 1e-12);
         Ok(())
     }
 }
