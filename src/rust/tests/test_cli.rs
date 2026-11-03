@@ -98,7 +98,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     // without editing the list. The count is pinned so that dropping an alphabet from
     // `Alphabet::all()` fails here; raise it when adding one.
     let alphabets: Vec<&str> = Alphabet::all().iter().map(Alphabet::to_moltype).collect();
-    assert_eq!(alphabets.len(), 22, "every alphabet must be exercised here");
+    assert_eq!(alphabets.len(), 23, "every alphabet must be exercised here");
 
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
@@ -120,6 +120,33 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
 
         // Check that the output database was created
         assert!(output_path.exists());
+
+        // Search the database just built, so an alphabet that indexes but is missing from
+        // the detected-alphabet match in main.rs fails here.
+        let results_path = temp_dir.path().join(format!("test_results_{}.csv", alphabet));
+        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        search_cmd.args([
+            "search",
+            "--query",
+            TEST_CED9_FASTA,
+            "--target",
+            output_path.to_str().unwrap(),
+            "--output",
+            results_path.to_str().unwrap(),
+            "--ksize",
+            "8",
+            "--alphabet",
+            alphabet,
+            "--min-shared-kmers",
+            "0",
+            "--max-pvalue",
+            "1",
+        ]);
+        // The database holds only Ced9, the query itself, and a search always skips a
+        // query's identical entry, so there are no result rows to check. Success, with the
+        // query read, shows the stored alphabet was recognized.
+        search_cmd.assert().success().stderr(predicate::str::contains("Total queries: 1"));
+        assert!(results_path.exists(), "no results file for {}", alphabet);
     }
 
     Ok(())
