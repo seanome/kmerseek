@@ -454,6 +454,7 @@ fn benchmark_search_throughput(c: &mut Criterion) {
             // benchmark: batch search at several batch sizes (simulated by repeating query)
             // Each result is dropped before the next search: ced9 at hp_lehninger2 k=10 returns
             // about 80 MB per search, so holding 500 of them took 39 GB and stopped the CI runner.
+            // So there is no 500-query batch: the `search_batch500_*` series ends in the history.
             for n_queries in [10usize, 100] {
                 let queries: Vec<ProteinSketch> = vec![query_sig.clone(); n_queries];
                 let bench_name = format!("search_batch{n_queries}_{moltype}_k{ksize}");
