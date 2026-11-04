@@ -154,6 +154,10 @@ jobs:
     runs-on: ubuntu-latest
     needs: test
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    timeout-minutes: 45
+    # The job's token is read-only by default; a commit comment on an alert needs write.
+    permissions:
+      contents: write
 
     steps:
       - uses: actions/checkout@v4
@@ -168,6 +172,13 @@ jobs:
         with:
           key: bench
 
+      - name: Restore earlier benchmark results
+        uses: actions/cache@v4
+        with:
+          path: ./benchmark-history
+          key: benchmark-history-${{ github.run_id }}
+          restore-keys: benchmark-history-
+
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -176,19 +187,28 @@ jobs:
       - name: Run benchmarks
         # Only the Criterion bench in benches/benchmark.rs: `cargo bench` with no target also
         # runs the library's test harness, which rejects Criterion's options. `bencher` is
-        # the output format the "cargo" tool of github-action-benchmark reads.
+        # the output format the "cargo" tool of github-action-benchmark reads. Criterion's
+        # default of 100 samples per benchmark takes over an hour here.
         run: |
           cargo bench --verbose --no-default-features --bench benchmark \
-            -- --output-format bencher > benchmark_results.txt
+            -- --output-format bencher --sample-size 10 --warm-up-time 1 --measurement-time 2 \
+            > benchmark_results.txt
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-results
+          path: benchmark_results.txt
 
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: "cargo"
           output-file-path: benchmark_results.txt
+          # Kept in the Actions cache: the repo has no gh-pages branch to push to, because
+          # GitHub Pages deploys from a workflow.
+          external-data-json-path: ./benchmark-history/benchmark-data.json
           github-token: ${{ secrets.GITHUB_TOKEN }}
-          auto-push: true
           comment-on-alert: true
           alert-threshold: "150%"
           fail-on-alert: false
-          benchmark-data-dir-path: "dev/bench"
