@@ -35,10 +35,14 @@ BEFORE = pf.OKABE_ITO["vermillion"]
 AFTER = pf.OKABE_ITO["blue"]
 BIN_WIDTH = 0.5  # nats, `evalue::BIN_WIDTH`
 
-# kmerseek's match probability before and after the fix (from the tests).
+# Copied by hand from src/rust/search.rs, so update them if those tests change.
+# KMERSEEK_AFTER: `test_calibration_match_probability_protein20_counts_residues`.
+# KMERSEEK_BEFORE: the 0 that test's doc comment describes (no test asserts it any more).
 KMERSEEK_BEFORE = 0.0
 KMERSEEK_AFTER = 0.060_755_021_065_774_63
-# Calibration bins (bin index, regions) from the tests: 25 shuffled queries, 64 regions.
+# Calibration bins (bin index, regions): 25 shuffled queries, 64 regions.
+# BINS_AFTER is the `expected` map in `test_calibration_bins_protein20_spread_past_zero`.
+# BINS_BEFORE is the "every region landed in bin 0" its doc comment describes.
 BINS_BEFORE = {0: 64}
 BINS_AFTER = {6: 2, 7: 1, 8: 7, 9: 7, 10: 16, 11: 12, 12: 12, 13: 5, 15: 1, 16: 1}
 
