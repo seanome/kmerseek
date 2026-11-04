@@ -7406,6 +7406,9 @@ mod ka_calibration_tests {
     /// Calibration bins every region by its `ka_bits`, which were only set when both
     /// sequences had an encoded copy. For protein20 every region landed in bin 0, and the
     /// fit was refused for "fewer than 4 score bins" however many queries ran.
+    ///
+    /// `scripts/plot_protein20_calibration.py` draws these bins as
+    /// `docs/images/protein20_calibration_bcl2_first25_k5.*`. Update both if they change.
     #[test]
     fn test_calibration_bins_protein20_spread_past_zero() -> Result<()> {
         let (_dir, mut searcher) = searcher_on_first25_protein20(5)?;
