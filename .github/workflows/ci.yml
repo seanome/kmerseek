@@ -170,7 +170,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils
+          sudo apt-get install -y binutils time
 
       - name: Run benchmarks
         # Only the Criterion benches (benches/benchmark.rs and benches/benchmark_cli.rs):
