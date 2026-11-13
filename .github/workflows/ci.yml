@@ -34,7 +34,7 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils
+          sudo apt-get install -y binutils time
 
       - name: Build
         run: cargo build --verbose --no-default-features
@@ -182,15 +182,16 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y binutils
+          sudo apt-get install -y binutils time
 
       - name: Run benchmarks
-        # Only the Criterion bench in benches/benchmark.rs: `cargo bench` with no target also
-        # runs the library's test harness, which rejects Criterion's options. `bencher` is
-        # the output format the "cargo" tool of github-action-benchmark reads. Criterion's
-        # default of 100 samples per benchmark takes over an hour here.
+        # Only the Criterion benches (benches/benchmark.rs and benches/benchmark_cli.rs):
+        # `cargo bench` with no target also runs the library's test harness, which rejects
+        # Criterion's options. `bencher` is the output format the "cargo" tool of
+        # github-action-benchmark reads. benchmark_cli needs GNU time at /usr/bin/time.
+        # Criterion's default of 100 samples per benchmark takes over an hour here.
         run: |
-          cargo bench --verbose --no-default-features --bench benchmark \
+          cargo bench --verbose --no-default-features --bench benchmark --bench benchmark_cli \
             -- --output-format bencher --sample-size 10 --warm-up-time 1 --measurement-time 2 \
             > benchmark_results.txt
 
