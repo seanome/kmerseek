@@ -10,6 +10,27 @@ use crate::alphabets::Alphabet;
 use crate::search::SearchResultCsv;
 use crate::tests::test_fixtures::{TEST_BLC2_FASTA, TEST_CED9_FASTA, TEST_FASTA_GZ};
 
+/// The `kmerseek` binary that `cargo build` wrote, as a command ready for arguments.
+///
+/// `assert_cmd` finds the binary from the test executable's own path, which works while
+/// test executables sit next to it in `target/<profile>/deps/`. From Rust 1.100 Cargo keeps
+/// test executables under `target/<profile>/build/kmerseek/<hash>/out/`, so that guess
+/// points at a folder with no binary in it, and every test here failed with a
+/// `NotFoundError`. When the guess does not exist this falls back to
+/// `target/<profile>/kmerseek` (or under `CARGO_TARGET_DIR` when that is set), which is
+/// where Cargo still puts the binary.
+fn kmerseek() -> Command {
+    let guess = assert_cmd::cargo::cargo_bin("kmerseek");
+    if guess.exists() {
+        return Command::new(guess);
+    }
+    let target = std::env::var_os("CARGO_TARGET_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("target"));
+    let profile = if cfg!(debug_assertions) { "debug" } else { "release" };
+    Command::new(target.join(profile).join(format!("kmerseek{}", std::env::consts::EXE_SUFFIX)))
+}
+
 /// Rows `kmerseek search` writes for CED9 against the 25-protein fixture at hp k=12 with
 /// `--max-pvalue 0.7` and every other filter open. The p-value cap drops the pairs not
 /// enriched above chance in this small, BCL2-heavy set. The long non-BCL2 proteins ASPP2
@@ -22,7 +43,7 @@ const CED9_ROWS_HP_K12_MAX_PVALUE_0_7_EXTENDED: usize = 188;
 
 #[test]
 fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.arg("--help");
     cmd.assert().success().stdout(predicate::str::contains(
         "Efficient protein domain annotation search with reduced amino acid k-mers",
@@ -33,7 +54,7 @@ fn test_cli_help() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_cli_index_help() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args(["index", "--help"]);
     cmd.assert().success().stdout(predicate::str::contains("Index a FASTA file"));
 
@@ -45,7 +66,7 @@ fn test_cli_index_basic() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("test_output.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "index",
         "--input",
@@ -71,7 +92,7 @@ fn test_cli_index_gzipped() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("test_output_gz.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "index",
         "--input",
@@ -106,7 +127,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
     for alphabet in &alphabets {
         let output_path = temp_dir.path().join(format!("test_output_{}.db", alphabet));
 
-        let mut cmd = Command::cargo_bin("kmerseek")?;
+        let mut cmd = kmerseek();
         cmd.args([
             "index",
             "--input",
@@ -127,7 +148,7 @@ fn test_cli_index_every_alphabet() -> Result<(), Box<dyn std::error::Error>> {
         // Search the database just built, so an alphabet that indexes but is missing from
         // the detected-alphabet match in main.rs fails here.
         let results_path = temp_dir.path().join(format!("test_results_{}.csv", alphabet));
-        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        let mut search_cmd = kmerseek();
         search_cmd.args([
             "search",
             "--query",
@@ -162,7 +183,7 @@ fn test_cli_index_rejects_zero_ksize() -> Result<(), Box<dyn std::error::Error>>
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("zero_ksize.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "index",
         "--input",
@@ -196,7 +217,7 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
     for (flag, expected) in [(true, "true"), (false, "false")] {
         let index_path = temp_dir.path().join(format!("lc_{}.db", flag));
 
-        let mut index_cmd = Command::cargo_bin("kmerseek")?;
+        let mut index_cmd = kmerseek();
         index_cmd.args([
             "index",
             "--input",
@@ -217,7 +238,7 @@ fn test_cli_remove_low_complexity_round_trips_to_search() -> Result<(), Box<dyn 
             .stderr(predicate::str::contains("Indexing completed successfully!"));
 
         // Search must recover the setting from the index, with no flag passed here.
-        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        let mut search_cmd = kmerseek();
         search_cmd.args([
             "search",
             "--query",
@@ -255,7 +276,7 @@ fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn 
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("kept.db");
 
-    let mut index_cmd = Command::cargo_bin("kmerseek")?;
+    let mut index_cmd = kmerseek();
     index_cmd.args([
         "index",
         "--input",
@@ -269,7 +290,7 @@ fn test_cli_search_remove_low_complexity_override_warns() -> Result<(), Box<dyn 
     ]);
     index_cmd.assert().success();
 
-    let mut search_cmd = Command::cargo_bin("kmerseek")?;
+    let mut search_cmd = kmerseek();
     search_cmd.args([
         "search",
         "--query",
@@ -305,7 +326,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
         let index_path = temp_dir.path().join(format!("csv_{flag}.db"));
         let csv_path = temp_dir.path().join(format!("csv_{flag}.csv"));
 
-        let mut index_cmd = Command::cargo_bin("kmerseek")?;
+        let mut index_cmd = kmerseek();
         index_cmd.args([
             "index",
             "--input",
@@ -322,7 +343,7 @@ fn test_cli_search_csv_records_remove_low_complexity() -> Result<(), Box<dyn std
         }
         index_cmd.assert().success();
 
-        let mut search_cmd = Command::cargo_bin("kmerseek")?;
+        let mut search_cmd = kmerseek();
         search_cmd.args([
             "search",
             // Exact runs: the index holds a Karlin-Altschul fit, so an omitted penalty
@@ -377,7 +398,7 @@ fn test_cli_remove_low_complexity_auto_filename_does_not_collide(
     std::fs::copy(TEST_CED9_FASTA, &fasta)?;
 
     for flag in [false, true] {
-        let mut cmd = Command::cargo_bin("kmerseek")?;
+        let mut cmd = kmerseek();
         cmd.args([
             "index",
             "--input",
@@ -410,7 +431,7 @@ fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output_path = temp_dir.path().join("test_error.db");
 
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "index",
         "--input",
@@ -432,7 +453,7 @@ fn test_cli_index_nonexistent_file() -> Result<(), Box<dyn std::error::Error>> {
 
 #[test]
 fn test_cli_index_missing_required_args() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args(["index", "--ksize", "5"]);
 
     cmd.assert().failure().stderr(predicate::str::contains("required"));
@@ -450,14 +471,14 @@ fn search_stderr_with_ka_queries(
     let index_path = temp_dir.path().join("target_index.db");
     let index_path = index_path.to_str().unwrap();
     let common = ["--ksize", "12", "--alphabet", "hp_lehninger2"];
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
         .args(common)
         .args(["--ka-queries", ka_queries])
         .assert()
         .success();
     let output_csv = temp_dir.path().join("hits.csv");
-    let search = Command::cargo_bin("kmerseek")?
+    let search = kmerseek()
         .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
         .args(["--output", output_csv.to_str().unwrap()])
         .args(common)
@@ -476,7 +497,7 @@ fn test_cli_search_rejects_a_bad_extension_flag() -> Result<(), Box<dyn std::err
     let index_path = temp_dir.path().join("target_index.db");
     let index_path = index_path.to_str().unwrap();
     let common = ["--ksize", "12", "--alphabet", "hp_lehninger2"];
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
         .args(common)
         .args(["--ka-queries", "0"])
@@ -501,7 +522,7 @@ fn test_cli_search_rejects_a_bad_extension_flag() -> Result<(), Box<dyn std::err
         ),
     ];
     for (args, message) in cases {
-        Command::cargo_bin("kmerseek")?
+        kmerseek()
             .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
             .args(["--output", temp_dir.path().join("hits.csv").to_str().unwrap()])
             .args(common)
@@ -512,7 +533,7 @@ fn test_cli_search_rejects_a_bad_extension_flag() -> Result<(), Box<dyn std::err
     }
     // The flags are checked before the target is opened: with a target that does not exist,
     // the flag message is still the one reported, not an open error.
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["search", "--query", TEST_CED9_FASTA])
         .args(["--target", temp_dir.path().join("missing.db").to_str().unwrap()])
         .args(["--output", temp_dir.path().join("hits.csv").to_str().unwrap()])
@@ -568,7 +589,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 1: Create target index from bcl2_first25 FASTA
     let target_index_path = temp_dir.path().join("target_index.db");
-    let mut index_cmd = Command::cargo_bin("kmerseek")?;
+    let mut index_cmd = kmerseek();
     index_cmd.args([
         "index",
         "--input",
@@ -589,7 +610,7 @@ fn test_cli_search_bcl2_ced9() -> Result<(), Box<dyn std::error::Error>> {
 
     // Step 2: Run search with CED9 as query
     let output_csv = temp_dir.path().join("search_results.csv");
-    let mut search_cmd = Command::cargo_bin("kmerseek")?;
+    let mut search_cmd = kmerseek();
     // WHY: This test validates known ground-truth values for the BCL2/CED9 match (see
     // n_intersecting_hashes/containment/etc. assertions below). The search command's default
     // p-value cutoff (0.05) doesn't work here: this fixture database is only 25 sequences, all
@@ -716,7 +737,7 @@ fn test_cli_search_output_is_reproducible() -> Result<(), Box<dyn std::error::Er
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("target_index.db");
     let index_path = index_path.to_str().unwrap();
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
         .args(["--ksize", "12", "--alphabet", "hp_lehninger2"])
         .assert()
@@ -724,7 +745,7 @@ fn test_cli_search_output_is_reproducible() -> Result<(), Box<dyn std::error::Er
 
     let search = |name: &str| -> Result<String, Box<dyn std::error::Error>> {
         let csv = temp_dir.path().join(name);
-        Command::cargo_bin("kmerseek")?
+        kmerseek()
             .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
             .args(["--output", csv.to_str().unwrap()])
             .args(["--ksize", "12", "--alphabet", "hp_lehninger2"])
@@ -752,7 +773,7 @@ fn index_and_search_bcl2(
 ) -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let target_index_path = temp_dir.path().join("target.db");
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "index",
             "--input",
@@ -771,7 +792,7 @@ fn index_and_search_bcl2(
         .stderr(predicate::str::contains(format!("Scaled: {scaled}")));
 
     let output_csv = temp_dir.path().join("hits.csv");
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "search",
             // Exact runs: the index holds a Karlin-Altschul fit, so an omitted penalty
@@ -901,7 +922,7 @@ fn test_cli_query_is_index_rejects_scaled_mismatch() -> Result<(), Box<dyn std::
     let mut dbs = Vec::new();
     for scaled in ["1", "5"] {
         let db = temp_dir.path().join(format!("scaled_{scaled}.db"));
-        Command::cargo_bin("kmerseek")?
+        kmerseek()
             .args([
                 "index",
                 "--input",
@@ -919,7 +940,7 @@ fn test_cli_query_is_index_rejects_scaled_mismatch() -> Result<(), Box<dyn std::
             .success();
         dbs.push(db);
     }
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "search",
             "--query",
@@ -949,7 +970,7 @@ fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>>
     let temp_dir = tempdir()?;
     for (value, message) in [("0", "must be greater than 0"), ("11", "Scaled value too large")] {
         let db = temp_dir.path().join(format!("scaled_{value}.db"));
-        Command::cargo_bin("kmerseek")?
+        kmerseek()
             .args([
                 "index",
                 "--input",
@@ -971,7 +992,7 @@ fn test_cli_index_rejects_bad_scaled() -> Result<(), Box<dyn std::error::Error>>
 fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let output = temp_dir.path().join("pair.json");
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "pair",
         "--query",
@@ -1008,7 +1029,7 @@ fn test_cli_pair_bcl2_ced9_writes_json() -> Result<(), Box<dyn std::error::Error
 
 #[test]
 fn test_cli_pair_stdout_and_named_record() -> Result<(), Box<dyn std::error::Error>> {
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "pair",
         "--query",
@@ -1070,7 +1091,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     let temp_dir = tempdir()?;
     let target_index_path = temp_dir.path().join("target_index.db");
     // Every search below passes --ka-k, so the index's own fit would never be read.
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "index",
             "--input",
@@ -1090,7 +1111,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     let run = |extra: &[&str],
                out: &std::path::Path|
      -> Result<Vec<SearchResultCsv>, Box<dyn std::error::Error>> {
-        let mut cmd = Command::cargo_bin("kmerseek")?;
+        let mut cmd = kmerseek();
         cmd.args([
             "search",
             "--query",
@@ -1168,7 +1189,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
     assert_eq!((seed.region_n_shared_kmers, seed.region_n_mismatches), (8, 0));
 
     // A negative give-up margin is refused, not silently run.
-    let mut cmd = Command::cargo_bin("kmerseek")?;
+    let mut cmd = kmerseek();
     cmd.args([
         "search",
         "--query",
@@ -1206,7 +1227,7 @@ fn test_cli_search_extend_mismatch_penalty() -> Result<(), Box<dyn std::error::E
 fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("target_index.db");
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "index",
             "--input",
@@ -1226,7 +1247,7 @@ fn test_cli_search_fits_ka_when_no_k_is_given() -> Result<(), Box<dyn std::error
 
     let search =
         |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
-            let mut cmd = Command::cargo_bin("kmerseek")?;
+            let mut cmd = kmerseek();
             cmd.args([
                 "search",
                 "--query",
@@ -1294,7 +1315,7 @@ fn test_cli_index_refuses_bad_extension_scoring() -> Result<(), Box<dyn std::err
         ("--extend-xdrop=-1", "--extend-xdrop must be 0 or more (got -1)"),
         ("--extend-mismatch-penalty=0", "--extend-mismatch-penalty must be above 0 (got 0)"),
     ] {
-        Command::cargo_bin("kmerseek")?
+        kmerseek()
             .args([
                 "index",
                 "--input",
@@ -1323,7 +1344,7 @@ fn test_cli_index_refuses_bad_extension_scoring() -> Result<(), Box<dyn std::err
 fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("target_index.db");
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "index",
             "--input",
@@ -1359,7 +1380,7 @@ fn test_cli_ka_fit_at_index_time_is_reused() -> Result<(), Box<dyn std::error::E
 
     let search =
         |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
-            let mut cmd = Command::cargo_bin("kmerseek")?;
+            let mut cmd = kmerseek();
             cmd.args([
                 "search",
                 "--query",
@@ -1419,7 +1440,7 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("target_index.db");
     let survival = temp_dir.path().join("survival.csv");
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args([
             "index",
             "--input",
@@ -1464,7 +1485,7 @@ fn test_cli_ka_r_database_reproduces_the_stored_fit() -> Result<(), Box<dyn std:
     let penalty = crate::search::DEFAULT_MISMATCH_PENALTY.to_string();
     let xdrop = crate::search::DEFAULT_XDROP.to_string();
     let search = |out: &std::path::Path, extra: &[&str]| {
-        let mut cmd = Command::cargo_bin("kmerseek")?;
+        let mut cmd = kmerseek();
         cmd.args([
             "search",
             "--query",
@@ -1528,7 +1549,7 @@ fn test_cli_ka_bad_values_fail_with_scoring_off() -> Result<(), Box<dyn std::err
     let missing_index = temp_dir.path().join("no_such_index.db");
     let out = temp_dir.path().join("out.csv");
     let run = |extra: &[&str]| {
-        let mut cmd = Command::cargo_bin("kmerseek")?;
+        let mut cmd = kmerseek();
         cmd.args([
             "search",
             "--query",
@@ -1560,7 +1581,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
     let index = |n_queries: &str, null: &str, survival: &std::path::Path| {
         let stem = survival.file_stem().unwrap().to_str().unwrap();
         let out = temp_dir.path().join(format!("index_{n_queries}_{null}_{stem}.db"));
-        let mut cmd = Command::cargo_bin("kmerseek")?;
+        let mut cmd = kmerseek();
         cmd.args([
             "index",
             "--input",
@@ -1717,7 +1738,7 @@ fn test_cli_ka_fit_on_few_queries_warns_and_writes_the_survival_curve(
 fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     let temp_dir = tempdir()?;
     let target_index_path = temp_dir.path().join("target_index.db");
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["index", "--input", TEST_FASTA_GZ, "--output"])
         .arg(&target_index_path)
         .args(["--ksize", "12", "--alphabet", "hp", "--ka-queries", "0"])
@@ -1752,7 +1773,7 @@ fn test_cli_search_writes_no_inf() -> Result<(), Box<dyn std::error::Error>> {
     ];
     for (name, extra, expected) in searches {
         let out = temp_dir.path().join(format!("{name}.csv"));
-        Command::cargo_bin("kmerseek")?
+        kmerseek()
             .args(["search", "--query", TEST_CED9_FASTA, "--target"])
             .arg(&target_index_path)
             .arg("--output")
@@ -1795,13 +1816,13 @@ fn test_cli_calibrate_stores_a_second_penalty() -> Result<(), Box<dyn std::error
     let temp_dir = tempdir()?;
     let index_path = temp_dir.path().join("target_index.db");
     let index_path = index_path.to_str().unwrap();
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["index", "--input", TEST_FASTA_GZ, "--output", index_path])
         .args(["--ksize", "12", "--alphabet", "hp_lehninger2", "--ka-queries", "0"])
         .assert()
         .success();
 
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["calibrate", "--target", index_path])
         .args(["--extend-mismatch-penalty", "1.5", "--extend-xdrop", "6", "--ka-queries", "25"])
         .assert()
@@ -1812,7 +1833,7 @@ fn test_cli_calibrate_stores_a_second_penalty() -> Result<(), Box<dyn std::error
 
     let search =
         |extra: &[&str]| -> Result<assert_cmd::assert::Assert, Box<dyn std::error::Error>> {
-            Ok(Command::cargo_bin("kmerseek")?
+            Ok(kmerseek()
                 .args(["search", "--query", TEST_CED9_FASTA, "--target", index_path])
                 .args(["--output", temp_dir.path().join("out.csv").to_str().unwrap()])
                 .args(["--ka-queries", "0"])
@@ -1827,13 +1848,13 @@ fn test_cli_calibrate_stores_a_second_penalty() -> Result<(), Box<dyn std::error
     ));
 
     // --ka-queries 0 asks to fit nothing, which calibrate cannot do.
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["calibrate", "--target", index_path, "--ka-queries", "0"])
         .assert()
         .failure()
         .stderr(predicate::str::contains("--ka-queries must be at least 1"));
     // A bad penalty is refused before the index is opened, with the index's wording.
-    Command::cargo_bin("kmerseek")?
+    kmerseek()
         .args(["calibrate", "--target", index_path, "--extend-mismatch-penalty=-1"])
         .assert()
         .failure()
