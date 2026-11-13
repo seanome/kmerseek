@@ -1,0 +1,17 @@
+# Build settings that every `cargo` command in this repository picks up.
+
+[env]
+# RocksDB 9.9.3 (bundled in librocksdb-sys 0.17.1, behind rocksdb 0.23) uses uint64_t in
+# its headers without including <cstdint>. GCC 15 no longer pulls that header in through
+# others, so the C++ build fails with "'uint64_t' does not name a type"
+# (rocksdb/include/rocksdb/trace_record.h, among others). GitHub's ubuntu-latest became
+# Ubuntu 26.04 with GCC 15 in November 2026, which turned CI red on main.
+#
+# Including <cstdint> in every C++ file fixes it without changing the RocksDB version,
+# so the on-disk index format stays the same. Checked 2026-11-13 with gcc:15 (15.3.0):
+# trace_record.h gives 37 errors without the flag and none with it.
+#
+# A CXXFLAGS already set in the environment (a conda env sets one) takes precedence over
+# this value; add "-include cstdint" to it there if the same error appears.
+# Remove this once rocksdb is bumped to a version whose bundled RocksDB includes <cstdint>.
+CXXFLAGS = "-include cstdint"
