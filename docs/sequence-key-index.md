@@ -29,9 +29,9 @@ in search output.
   explicitly reloading the index refreshes it from disk.
 - Read the primary name from a small `name_<key>` record when ingesting a duplicate
   from an earlier batch. Do not deserialize the full protein sketch for its name.
-- Stage signature records, alias records, target chunks and posting runs in one
+- Stage signature records, alias records, target chunks and protein ID lists in one
   database batch. Update in-memory state and retained signatures only after the
-  write succeeds. Staging copies the bounded posting and target buffers and holds
+  write succeeds. Staging copies the bounded k-mer-to-protein index buffers and target buffers and holds
   the current batch's writes; it does not clone the complete index.
 - Require a sequence key in both storage constructors and reject malformed keys
   when loading a stored sketch. Reject a second sequence added to the same sketch

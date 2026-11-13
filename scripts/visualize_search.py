@@ -146,11 +146,31 @@ def protein_key(header):
 
 def ranking(rows):
     """{target_name: (statistic, is_evalue)} for ordering rows: region_evalue when the CSV
-    carries it, else the BH q-value of the best region's tail probability."""
+    carries it, else the BH q-value of the best region's tail probability. An empty
+    region_evalue (no E-value could be computed) ranks last."""
     best = _target_best_rows(rows)
     if "region_evalue" in rows[0]:
-        return {t: float(r["region_evalue"]) for t, r in best.items()}, True
+        return {t: float(r["region_evalue"] or "inf") for t, r in best.items()}, True
     return benjamini_hochberg(_target_tail_probabilities(rows)), False
+
+
+def score_columns(rows):
+    """The page's score columns, the ranking one first. A search run with extension has a
+    Karlin-Altschul E-value and bit score per region; without it the page shows the single
+    ranking statistic (stat_name), so this is empty."""
+    if "region_evalue" not in rows[0] or "region_ka_bits" not in rows[0]:
+        return []
+    return [
+        {"key": "stat", "label": "E-value", "note": "E-value of the best region: Karlin-Altschul for an extended region, the run E-value otherwise (region_evalue_source)", "better": "low"},
+        {"key": "bits", "label": "bits", "note": "Karlin-Altschul bit score of the best region", "better": "high"},
+    ]
+
+
+def region_bits(row):
+    """The row's bit score, or None when it has none: 0 bits means the region was not
+    extended, so it has no Karlin-Altschul score."""
+    bits = float(row.get("region_ka_bits") or 0)
+    return bits or None
 
 
 def fold_entries(rows):
@@ -246,6 +266,7 @@ def protein_row(rank, target_name, others, stat, row, model):
         "tm_score": model["structure"]["tm_score_query"] if model.get("structure") else None,
         "n_shared": int(row["n_intersecting_hashes"]),
         "stat": stat,
+        "bits": region_bits(row),
         "runs": [run_bar(b) for b in model["runs"]],
         "model": model,
     }
@@ -320,7 +341,8 @@ class SearchReport:
             "alphabet": protein_rows[0]["model"]["alphabet"] if protein_rows else rows[0]["moltype"],
             "classes": protein_rows[0]["model"]["classes"] if protein_rows else [],
             "stat_name": "E-value" if is_evalue else "q-value",
-            "stat_note": "Karlin-Altschul E-value of the best region" if is_evalue else "Benjamini-Hochberg corrected tail probability of the best region",
+            "stat_note": "E-value of the best region: Karlin-Altschul for an extended region, the run E-value otherwise (region_evalue_source)" if is_evalue else "Benjamini-Hochberg corrected tail probability of the best region",
+            "score_columns": score_columns(rows),
             "n_entries": len(_target_best_rows(rows)),
             "n_proteins": len(fold_entries(rows)),
             "solid_identical": self.args.solid_identical,

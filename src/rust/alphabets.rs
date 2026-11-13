@@ -5,7 +5,7 @@
 //!
 //! Two families make up most of the list. The HP tables split the residues into
 //! hydrophobic and polar, differing only on the borderline residues C, G, P, W and Y, plus
-//! one three-class variant that gives cysteine its own symbol. The multi-letter alphabets
+//! two three-class variants that give cysteine its own symbol. The multi-letter alphabets
 //! keep 4 to 18 classes and come from the fold-recognition literature.
 //!
 //! [`alphabet_table`] gives the table to pre-encode a sequence with. It returns `None` for
@@ -75,6 +75,11 @@ pub enum Alphabet {
     HpLehningerHpc3,
     /// Physical Biology of the Cell, 1st edition.
     HpPBotC1stEd2,
+    /// Physical Biology of the Cell, 1st edition, with C in a third class of its own.
+    HpPBotC1stEdHpc3,
+
+    /// Cysteine against everything else, so a k-mer records only where the cysteines are.
+    Cys2,
 
     /// Solis & Rackovsky 2000, 4 classes.
     Gbmr4,
@@ -107,7 +112,10 @@ pub enum Alphabet {
 }
 
 impl Alphabet {
-    /// Every alphabet kmerseek can index with.
+    /// Every alphabet kmerseek can index with. Error messages, tests and the CLI read their
+    /// alphabet lists from here. To add an alphabet: add the variant here and its arms in
+    /// this file, then one `ProteinAlphabet` variant and one `From` arm in `main.rs`.
+    /// `every_alphabet_has_a_cli_value` in `main.rs` fails if the `main.rs` part is missing.
     pub fn all() -> &'static [Alphabet] {
         &[
             Alphabet::Protein20,
@@ -119,6 +127,8 @@ impl Alphabet {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::HpPBotC1stEdHpc3,
+            Alphabet::Cys2,
             Alphabet::Gbmr4,
             Alphabet::Polarity4,
             Alphabet::AroHydChgPol4,
@@ -147,6 +157,8 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => "hp_lehninger_c_nonpolar2",
             Self::HpLehningerHpc3 => "hp_lehninger_hpc3",
             Self::HpPBotC1stEd2 => "hp_pbotc_1st_ed2",
+            Self::HpPBotC1stEdHpc3 => "hp_pbotc_1st_ed_hpc3",
+            Self::Cys2 => "cys2",
             Self::Gbmr4 => "gbmr4",
             Self::Polarity4 => "polarity4",
             Self::AroHydChgPol4 => "aro_hyd_chg_pol4",
@@ -163,6 +175,12 @@ impl Alphabet {
         }
     }
 
+    /// Every moltype in [`Self::all`] order, joined by ", ", for "expected one of" errors.
+    pub fn moltype_names() -> String {
+        let names: Vec<&str> = Self::all().iter().map(Alphabet::to_moltype).collect();
+        names.join(", ")
+    }
+
     /// Parse a moltype. Returns `None` for anything unrecognized.
     ///
     /// Takes kmerseek names only. sourmash's `protein`, `dayhoff` and `hp` arrive here
@@ -177,7 +195,7 @@ impl Alphabet {
         match self {
             Self::Protein20 => 20,
             Self::Dayhoff6 => 6,
-            Self::HpLehningerHpc3 => 3,
+            Self::HpLehningerHpc3 | Self::HpPBotC1stEdHpc3 => 3,
             Self::Gbmr4 | Self::Polarity4 | Self::AroHydChgPol4 => 4,
             Self::Wwmj5 | Self::AroHydArgChgPol5 => 5,
             Self::Gbmr7 => 7,
@@ -215,6 +233,8 @@ impl Alphabet {
             Self::HpLehningerCNonpolar2 => &LEHNINGER_C_NONPOLAR_HP,
             Self::HpLehningerHpc3 => &LEHNINGER_HPC,
             Self::HpPBotC1stEd2 => &PBOTC_1ST_ED_HP,
+            Self::HpPBotC1stEdHpc3 => &PBOTC_1ST_ED_HPC,
+            Self::Cys2 => &CYS2,
             Self::Gbmr4 => &GBMR4,
             Self::Polarity4 => &POLARITY4,
             Self::AroHydChgPol4 => &ARO_HYD_CHG_POL4,
@@ -263,12 +283,24 @@ impl Alphabet {
     }
 }
 
-fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
-    assert_eq!(
-        h_residues.len() + p_residues.len(),
-        20,
-        "HP table must cover all 20 canonical amino acids"
+/// Whether the residue lists together hold each of the 20 canonical residues exactly once.
+/// A length check alone passes a list with one residue repeated and another missing.
+fn covers_canonical_once(classes: &[&[u8]]) -> bool {
+    let mut all: Vec<u8> = classes.concat();
+    all.sort_unstable();
+    all == CANONICAL_AA
+}
+
+/// Panics unless `covers_canonical_once` holds, naming the kind of table.
+fn assert_covers_canonical(table: &str, classes: &[&[u8]]) {
+    assert!(
+        covers_canonical_once(classes),
+        "{table} table must cover each of the 20 canonical amino acids exactly once"
     );
+}
+
+fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
+    assert_covers_canonical("HP", &[h_residues, p_residues]);
     let mut m = HashMap::with_capacity(21);
     for &r in h_residues {
         m.insert(r, b'h');
@@ -280,12 +312,23 @@ fn build_hp(h_residues: &[u8], p_residues: &[u8]) -> HashMap<u8, u8> {
     m
 }
 
+/// Builds a two-class table. `a` and `b` are the class symbols; `a_residues` and
+/// `b_residues` are the residues in each class.
+fn build_two_class(a_residues: &[u8], a: u8, b_residues: &[u8], b: u8) -> HashMap<u8, u8> {
+    assert_covers_canonical("two-class", &[a_residues, b_residues]);
+    let mut m = HashMap::with_capacity(21);
+    for &r in a_residues {
+        m.insert(r, a);
+    }
+    for &r in b_residues {
+        m.insert(r, b);
+    }
+    m.insert(b'*', b'*'); // stop codon pass-through
+    m
+}
+
 fn build_hpc(h_residues: &[u8], p_residues: &[u8], c_residues: &[u8]) -> HashMap<u8, u8> {
-    assert_eq!(
-        h_residues.len() + p_residues.len() + c_residues.len(),
-        20,
-        "HPC table must cover all 20 canonical amino acids"
-    );
+    assert_covers_canonical("HPC", &[h_residues, p_residues, c_residues]);
     let mut m = HashMap::with_capacity(21);
     for &r in h_residues {
         m.insert(r, b'h');
@@ -412,10 +455,58 @@ static LEHNINGER_HPC: LazyLock<HashMap<u8, u8>> =
 static PBOTC_1ST_ED_HP: LazyLock<HashMap<u8, u8>> =
     LazyLock::new(|| build_hp(b"ACFILMPVWY", b"DEGHKNQRST"));
 
+// -----------------------------------------------------------------------------
+// PBotC 1st ed HPC: 3-letter extension of PBotC1stEd, built the same way as
+// LehningerHpc. Keeps the PBotC split for the other 19 residues and gives
+// cysteine its own symbol, so a cysteine does not match an ordinary
+// hydrophobic residue. Cys and Tyr are both drawn in parentheses in the original
+// figure, indicating borderline H status. Only Cys gets its own class here, the
+// same residue the cys2 and Lehninger HPC alphabets single out; Tyr stays in h.
+//
+//   h: A F I L M P V W Y         (9 residues; = PBotC 1st ed's h, C excluded)
+//   p: D E G H K N Q R S T       (10 residues; = PBotC 1st ed's p)
+//   c: C                         (1 residue)
+//
+// The h/p split is Phillips et al. 2008 (Physical Biology of the Cell, 1st ed.,
+// Garland Science), Figure 8.30. Moving C into a class of its own is not in
+// that figure.
+// -----------------------------------------------------------------------------
+static PBOTC_1ST_ED_HPC: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_hpc(b"AFILMPVWY", b"DEGHKNQRST", b"C"));
+
+// -----------------------------------------------------------------------------
+// Cysteine against everything else.
+//
+// Not a hydrophobicity scheme, so its name does not start with `hp_` and the
+// HP-family tests skip it. The only thing a cys2 k-mer records is which of its
+// positions are cysteine, which is the cysteine spacing of a stretch of sequence
+// and nothing else. Written for toxin peptides, whose families are defined by
+// that spacing: a conotoxin framework such as C-C-CC-C-C is a statement about
+// which positions hold cysteine and how many residues sit between them.
+//
+// Two consequences worth knowing before indexing anything with it. A stretch with
+// no cysteine encodes to a run of one symbol, so every such k-mer in a proteome
+// collapses to the same hash and low-complexity removal drops all of them. And
+// the 19 residues sharing the 'x' symbol are not a chemical class; 'x' means
+// "not cysteine", nothing more.
+//
+//   c: C                         (1 residue)
+//   x: A D E F G H I K L M N P Q R S T V W Y   (19 residues)
+// -----------------------------------------------------------------------------
+static CYS2: LazyLock<HashMap<u8, u8>> =
+    LazyLock::new(|| build_two_class(b"C", b'c', b"ADEFGHIKLMNPQRSTVWY", b'x'));
+
 /// The partition of an alphabet that has one, for tests that compare tables directly.
 #[cfg(test)]
 fn test_partition(alphabet: Alphabet) -> &'static HashMap<u8, u8> {
     alphabet.partition().expect("these alphabets all reduce")
+}
+
+/// Encode a peptide through an alphabet, for tests that compare whole strings.
+#[cfg(test)]
+fn encode(alphabet: Alphabet, peptide: &[u8]) -> String {
+    let table = test_partition(alphabet);
+    peptide.iter().map(|r| table[r] as char).collect()
 }
 
 #[cfg(test)]
@@ -512,6 +603,11 @@ mod hp_tests {
             b'c',
             "LehningerHpc: C is cystine, its own class distinct from h/p"
         );
+        assert_eq!(
+            test_partition(Alphabet::HpPBotC1stEdHpc3)[&b'C'],
+            b'c',
+            "PBotC1stEdHpc: C is cystine, its own class distinct from h/p"
+        );
     }
 
     #[test]
@@ -553,6 +649,11 @@ mod hp_tests {
             test_partition(Alphabet::HpPBotC1stEd2)[&b'G'],
             b'p',
             "PBotC1stEd: G polar (Phillips et al. 2008, Fig. 8.30)"
+        );
+        assert_eq!(
+            test_partition(Alphabet::HpPBotC1stEdHpc3)[&b'G'],
+            b'p',
+            "PBotC1stEdHpc: G inherits PBotC1stEd placement"
         );
     }
 
@@ -615,6 +716,7 @@ mod hp_tests {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::HpPBotC1stEdHpc3,
         ] {
             assert_eq!(test_partition(alpha)[&b'W'], b'h', "{:?}: W hydrophobic (aromatic)", alpha);
         }
@@ -637,6 +739,7 @@ mod hp_tests {
             Alphabet::HpLehningerCNonpolar2,
             Alphabet::HpLehningerHpc3,
             Alphabet::HpPBotC1stEd2,
+            Alphabet::HpPBotC1stEdHpc3,
         ] {
             assert_eq!(test_partition(alpha)[&b'Y'], b'h', "{:?}: Y hydrophobic (aromatic)", alpha);
         }
@@ -663,6 +766,7 @@ mod hp_tests {
             (Alphabet::HpLehningerCNonpolar2, "hp_lehninger_c_nonpolar2"),
             (Alphabet::HpLehningerHpc3, "hp_lehninger_hpc3"),
             (Alphabet::HpPBotC1stEd2, "hp_pbotc_1st_ed2"),
+            (Alphabet::HpPBotC1stEdHpc3, "hp_pbotc_1st_ed_hpc3"),
         ];
 
         for (alphabet, moltype) in expected {
@@ -983,6 +1087,61 @@ const MASSSPEC18_CLUSTERS: &[&str] =
 static MASSSPEC18: LazyLock<HashMap<u8, u8>> = LazyLock::new(|| build_reduced(MASSSPEC18_CLUSTERS));
 
 #[cfg(test)]
+mod pbotc_hpc_tests {
+    use super::*;
+
+    /// 20 letters in total, but A appears twice and Y is missing, so a length check passes
+    /// and the coverage check, which `build_two_class` asserts, does not. cys2's own split
+    /// passes it.
+    #[test]
+    fn test_coverage_check_rejects_repeated_and_missing_residue() {
+        assert!(!covers_canonical_once(&[b"AACDEFGHIK", b"LMNPQRSTVW"]));
+        assert!(covers_canonical_once(&[b"C", b"ADEFGHIKLMNPQRSTVWY"]));
+    }
+
+    /// Omega-conotoxin MVIIA (ziconotide, UniProt P05484), the mature 25-residue peptide.
+    /// Its six cysteines are the framework written C-C-CC-C-C.
+    const MVIIA: &[u8] = b"CKGKGAKCSRLMYDCCTGSCRSGKC";
+
+    /// Cysteine is the only residue the two place differently, which is the whole point of
+    /// the three-class variant: every other residue keeps the class PBotC 1st ed gives it.
+    #[test]
+    fn pbotc_hpc_differs_from_pbotc_only_at_cysteine() {
+        let (two, three) =
+            (test_partition(Alphabet::HpPBotC1stEd2), test_partition(Alphabet::HpPBotC1stEdHpc3));
+        for &residue in CANONICAL_AA {
+            if residue == b'C' {
+                assert_eq!((two[&residue], three[&residue]), (b'h', b'c'));
+            } else {
+                assert_eq!(two[&residue], three[&residue], "{}", residue as char);
+            }
+        }
+    }
+
+    /// On a real conotoxin the two readings differ at exactly the six cysteines, and those
+    /// six sit where cys2 puts them, so the three-class alphabet carries the framework and
+    /// the hydrophobic/polar pattern of the stretches between the cysteines at once.
+    #[test]
+    fn pbotc_hpc_keeps_the_framework_and_the_residues_between() {
+        // Worked by hand, with h = AFILMPVWY, p = DEGHKNQRST, c = C:
+        //   residues  C K G K G A K C S R L M Y D C C T G S C R S G K C
+        //   two       h p p p p h p h p p h h h p h h p p p h p p p p h
+        //   three     c p p p p h p c p p h h h p c c p p p c p p p p c
+        //   cys2      c x x x x x x c x x x x x x c c x x x c x x x x c
+        let two = encode(Alphabet::HpPBotC1stEd2, MVIIA);
+        let three = encode(Alphabet::HpPBotC1stEdHpc3, MVIIA);
+        assert_eq!(two, "hpppphphpphhhphhppphpppph");
+        assert_eq!(three, "cpppphpcpphhhpccpppcppppc");
+        let cys = encode(Alphabet::Cys2, MVIIA);
+        assert_eq!(cys, "cxxxxxxcxxxxxxccxxxcxxxxc");
+        for (hpc, only_cysteine) in three.chars().zip(cys.chars()) {
+            assert_eq!(hpc == 'c', only_cysteine == 'c');
+        }
+        assert_eq!(three.chars().filter(|symbol| *symbol == 'c').count(), 6);
+    }
+}
+
+#[cfg(test)]
 mod multi_letter_tests {
     use super::*;
 
@@ -1202,5 +1361,101 @@ mod sourmash_compat_tests {
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
             assert!(Alphabet::from_moltype(moltype).is_none(), "{moltype}");
         }
+    }
+}
+
+#[cfg(test)]
+mod moltype_names_tests {
+    use super::*;
+
+    /// The list printed in "expected one of" errors, in `Alphabet::all()` order.
+    #[test]
+    fn moltype_names_lists_every_alphabet_in_order() {
+        assert_eq!(
+            Alphabet::moltype_names(),
+            "protein20, dayhoff6, hp_lehninger2, hp_thomas_dill2, hp_kyte_doolittle2, \
+             hp_thomas_dill_no_c2, hp_lehninger_c_nonpolar2, hp_lehninger_hpc3, \
+             hp_pbotc_1st_ed2, hp_pbotc_1st_ed_hpc3, cys2, gbmr4, polarity4, aro_hyd_chg_pol4, aro_hyd_arg_chg_pol5, \
+             wwmj5, gbmr7, funcgroups8, sdm12, mmseqs12, wass14, hsdm17, uniprot18, massspec18"
+        );
+    }
+}
+
+#[cfg(test)]
+mod cys2_tests {
+    use super::*;
+
+    #[test]
+    fn only_cysteine_gets_its_own_symbol() {
+        let table = test_partition(Alphabet::Cys2);
+        assert_eq!(table.len(), 21, "20 residues plus the stop codon");
+        assert_eq!(table[&b'C'], b'c');
+        for &residue in CANONICAL_AA {
+            if residue == b'C' {
+                continue;
+            }
+            assert_eq!(
+                table[&residue], b'x',
+                "residue {} should be 'x', meaning not cysteine",
+                residue as char
+            );
+        }
+        assert_eq!(table[&b'*'], b'*', "stop codon passes through");
+    }
+
+    #[test]
+    fn two_classes_named_in_the_moltype() {
+        assert_eq!(Alphabet::Cys2.to_moltype(), "cys2");
+        assert_eq!(Alphabet::from_moltype("cys2"), Some(Alphabet::Cys2));
+        assert_eq!(Alphabet::Cys2.size(), 2);
+
+        let symbols: std::collections::HashSet<u8> = test_partition(Alphabet::Cys2)
+            .iter()
+            .filter(|(residue, _)| **residue != b'*')
+            .map(|(_, symbol)| *symbol)
+            .collect();
+        assert_eq!(symbols.len(), Alphabet::Cys2.size());
+        assert!(Alphabet::Cys2.to_moltype().ends_with(&Alphabet::Cys2.size().to_string()));
+    }
+
+    /// cys2 splits on cysteine, not on hydrophobicity, so it must stay out of the HP
+    /// family. The HP tests assert every scheme agrees on 15 of the 20 residues, and cys2
+    /// puts all 19 non-cysteine residues in one class, which would make that false.
+    #[test]
+    fn not_part_of_the_hp_family() {
+        assert!(!Alphabet::hp_family().any(|a| *a == Alphabet::Cys2));
+        assert!(!Alphabet::Cys2.to_moltype().starts_with("hp_"));
+        assert!(Alphabet::all().contains(&Alphabet::Cys2));
+        assert!(Alphabet::Cys2.clusters().is_none());
+        assert!(!Alphabet::Cys2.uses_sourmash_encoder());
+    }
+
+    /// What the alphabet is for: the encoding of a peptide is its cysteine spacing, so two
+    /// made-up peptides that put cysteine in the same positions encode identically however
+    /// much the residues between them differ, and moving one cysteine changes the encoding.
+    #[test]
+    fn encoding_is_the_cysteine_spacing() {
+        assert_eq!(encode(Alphabet::Cys2, b"GGCDERCMNPCC"), "xxcxxxcxxxcc");
+        assert_eq!(encode(Alphabet::Cys2, b"AACKLMCWYACC"), "xxcxxxcxxxcc");
+        assert_eq!(
+            encode(Alphabet::Cys2, b"GGCDERCMNPCC"),
+            encode(Alphabet::Cys2, b"AACKLMCWYACC"),
+            "same cysteine positions, different residues between them"
+        );
+
+        assert_ne!(
+            encode(Alphabet::Cys2, b"GGCDERCMNPCC"),
+            encode(Alphabet::Cys2, b"GGCDERCMNCPC"),
+            "moving one cysteine must change the encoding"
+        );
+    }
+
+    /// A peptide with no cysteine encodes to a run of one symbol, so every such k-mer in a
+    /// proteome hashes to the same value. Anyone indexing with cys2 needs to know this.
+    #[test]
+    fn a_peptide_without_cysteine_is_one_repeated_symbol() {
+        let encoded = encode(Alphabet::Cys2, b"PLANTANDANIMALGENES");
+        assert_eq!(encoded, "x".repeat(19));
+        assert_eq!(encoded.chars().collect::<std::collections::HashSet<_>>().len(), 1);
     }
 }

@@ -3,16 +3,16 @@
 //! the figures.
 //!
 //! E = K m n e^(-lambda S) counts the regions with score >= S expected between an
-//! unrelated query of m residues and a database of n residues. lambda is solved per pair
-//! from the two class compositions (`search::karlin_altschul_lambda`), so a pair of two
-//! hydrophobic sequences, whose agreement is what their compositions do by chance, gets
-//! lambda 0 and no significance. K, and whether that per-pair lambda has the right scale,
+//! unrelated query of m residues and a database of n residues. lambda is solved per region
+//! from its pr_same (`search::karlin_altschul_lambda`), so a region between two
+//! hydrophobic stretches, whose agreement is what their compositions do by chance, gets
+//! lambda 0 and no significance. K, and whether that closed-form lambda has the right scale,
 //! can be read off a search: a few hundred sequences are searched against the index and
-//! every region's score in nats, x = lambda_pair S, is binned. Under the model the count
+//! every region's score in nats, x = lambda S, is binned. Under the model the count
 //! at x is K L N (1 - e^-w) e^-x, L the calibration residues, N the database residues and
 //! w the bin width, so ln(count) against x is a line of slope -1 and intercept
 //! ln(K L N (1 - e^-w)) (Altschul & Gish 1996; Pearson 1998). Minus the fitted slope is
-//! r_database, the factor every pair's lambda is multiplied by at search time; 1 means
+//! r_database, the factor every region's lambda is multiplied by at search time; 1 means
 //! the closed form holds. Related pairs lift the counts at high x; the fit stops below
 //! that, where the real curve starts to rise above the same queries shuffled. The fit
 //! goes to the count at each x, not the count at or above it, because a plateau of
@@ -35,19 +35,21 @@
 //! integer step, the record of a fit (`KaCalibration`), and the code that makes decoys.
 //! `ProteinSearcher::calibrate_ka` produces the scores and the record.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::errors::IndexResult;
 use crate::index::ProteomeIndex;
 use crate::search::{
     karlin_altschul_lambda, ExtensionScoring, KaCalibrationReport, KaCalibrationSettings, KaParams,
-    KaSource, ProteinSearcher,
+    KaSource, ProteinSearcher, DEFAULT_MISMATCH_PENALTY,
 };
 
 /// One fitted (r_database, K), stored in the index under `ka_calibration` and looked up
 /// at search time by its `scoring`. The seed length and alphabet are the index's.
 ///
-/// The fit is a straight line through ln(regions in each bin of x = lambda_pair S).
+/// The fit is a straight line through ln(regions in each bin of x = lambda S).
 /// Minus its slope is `r_database`; its height gives `k` (see `line_through`). Bins are
 /// `bin_width` nats wide, so every field named "score" below is a bin index: bin b covers
 /// x in [b w, (b + 1) w).
@@ -64,9 +66,9 @@ pub struct KaCalibration {
     pub n_queries: usize,
     /// Residues in the calibration queries added up: L in ln(K L N).
     pub query_residues: u64,
-    /// The database size the E-value uses for n: the index's k-mer count stands in for its
-    /// residue count.
-    pub database_kmers: u64,
+    /// Residues in the database (`ProteomeIndex::total_residues`): N in ln(K L N), and n in
+    /// every Karlin-Altschul E-value searched with this fit.
+    pub database_residues: u64,
     /// Regions the calibration queries produced, at any score.
     pub n_regions: usize,
     /// Chance that two positions drawn from the sampled database sequences share a class
@@ -75,9 +77,9 @@ pub struct KaCalibration {
     pub match_probability: f64,
     /// The closed-form lambda at `match_probability`, for reporting next to `r_database`.
     pub lambda_analytic: f64,
-    /// Minus the slope of ln(count) against x = lambda_pair S, per nat. 1 means the
-    /// closed-form per-pair lambda has the right scale; a search multiplies every pair's
-    /// lambda by this.
+    /// Minus the slope of ln(count) against x = lambda S, per nat. 1 means the
+    /// closed-form lambda has the right scale; a search multiplies every region's lambda
+    /// by this.
     pub r_database: f64,
     /// Karlin-Altschul K: the line's height with the query residues, database size and bin
     /// width divided out.
@@ -114,7 +116,7 @@ impl KaCalibration {
         KaParams { k: self.k, r_database: self.r_database }
     }
 
-    /// The fit window in nats of x = lambda_pair S.
+    /// The fit window in nats of x = lambda S.
     pub fn x_range(&self) -> (f64, f64) {
         (self.score_lo as f64 * self.bin_width, (self.score_hi + 1) as f64 * self.bin_width)
     }
@@ -135,7 +137,7 @@ impl KaCalibration {
             seed: 0,
             n_queries: 0,
             query_residues: 0,
-            database_kmers: 0,
+            database_residues: 0,
             n_regions: 0,
             match_probability: 0.0,
             lambda_analytic: 0.0,
@@ -159,7 +161,7 @@ impl std::fmt::Display for KaCalibration {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} {} queries, {} regions; r_database {:.3} per nat of lambda_pair S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
+            "{} {} queries, {} regions; r_database {:.3} per nat of lambda S (1 = closed form holds; closed form {:.3} at the database's match probability {:.3}), K {:.4}, fit on x {:.1}..{:.1}",
             self.n_queries,
             self.null,
             self.n_regions,
@@ -191,7 +193,7 @@ impl std::fmt::Display for KaCalibration {
     }
 }
 
-/// Width of one bin of the normalised score x = lambda_pair S, in nats. Half a nat is about
+/// Width of one bin of the normalised score x = lambda S, in nats. Half a nat is about
 /// one raw score unit at lambda 0.45.
 pub const BIN_WIDTH: f64 = 0.5;
 
@@ -243,47 +245,95 @@ pub struct ScoreFit {
     pub reference_lambda: Option<f64>,
 }
 
+/// Regions counted per score bin. Bin s holds every score in [s, s + 1), scores being in
+/// units of `BIN_WIDTH`; a fractional score falls into the bin below.
+///
+/// Everything the fit reads is a count per bin, so a calibration counts its regions into
+/// this as it finds them rather than keeping every score. It holds one entry per bin used,
+/// a few hundred, however many regions the calibration queries meet: under cys2 on a full
+/// Swiss-Prot that is billions.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ScoreBins(BTreeMap<i64, u64>);
+
+impl ScoreBins {
+    /// Count one region's score. A score that is not finite is left out: `as i64` would
+    /// saturate it to the end of the integer range and `per_bin` would try to span that.
+    /// A finite score past about 9e18 saturates the same way and is not stopped here;
+    /// `per_bin` allocates one entry for every bin from the lowest to the highest used.
+    pub fn add(&mut self, score: f64) {
+        if score.is_finite() {
+            *self.0.entry(score.floor() as i64).or_insert(0) += 1;
+        }
+    }
+
+    /// Both sets of counts in one, for counts made in parallel.
+    #[must_use]
+    pub fn merge(self, other: Self) -> Self {
+        let (mut into, from) =
+            if self.0.len() >= other.0.len() { (self, other) } else { (other, self) };
+        for (bin, count) in from.0 {
+            *into.0.entry(bin).or_insert(0) += count;
+        }
+        into
+    }
+
+    /// Regions counted.
+    pub fn n_regions(&self) -> u64 {
+        self.0.values().sum()
+    }
+
+    /// Regions with score exactly s (in the bin s), for every s from the lowest bin used to
+    /// the highest, empty bins included as 0.
+    pub fn per_bin(&self) -> Vec<(i64, u64)> {
+        let (Some((&lo, _)), Some((&hi, _))) = (self.0.first_key_value(), self.0.last_key_value())
+        else {
+            return Vec::new();
+        };
+        (lo..=hi).map(|s| (s, self.0.get(&s).copied().unwrap_or(0))).collect()
+    }
+
+    /// Regions with score >= s, for every s from the lowest bin used to the highest.
+    pub fn survival(&self) -> Vec<(i64, u64)> {
+        let mut running = 0u64;
+        let mut out: Vec<(i64, u64)> = self
+            .per_bin()
+            .into_iter()
+            .rev()
+            .map(|(s, c)| {
+                running += c;
+                (s, running)
+            })
+            .collect();
+        out.reverse();
+        out
+    }
+}
+
+impl FromIterator<f64> for ScoreBins {
+    fn from_iter<I: IntoIterator<Item = f64>>(scores: I) -> Self {
+        let mut bins = Self::default();
+        for score in scores {
+            bins.add(score);
+        }
+        bins
+    }
+}
+
 /// Count of regions with score >= s for every integer s from the smallest to the largest
-/// score in `scores`. Fractional scores (a non-integer penalty) fall into the bin below.
-/// A score that is not finite is left out: `as i64` would saturate it to the end of the
-/// integer range and the bin vector would try to span that.
+/// score in `scores`; see `ScoreBins::survival`.
 pub fn survival_counts(scores: &[f64]) -> Vec<(i64, u64)> {
-    let bins: Vec<i64> =
-        scores.iter().filter(|s| s.is_finite()).map(|s| s.floor() as i64).collect();
-    let (Some(&lo), Some(&hi)) = (bins.iter().min(), bins.iter().max()) else {
-        return Vec::new();
-    };
-    let mut per_bin = vec![0u64; (hi - lo + 1) as usize];
-    for b in bins {
-        per_bin[(b - lo) as usize] += 1;
-    }
-    let mut running = 0u64;
-    let mut out: Vec<(i64, u64)> = Vec::with_capacity(per_bin.len());
-    for (i, c) in per_bin.iter().enumerate().rev() {
-        running += c;
-        out.push((lo + i as i64, running));
-    }
-    out.reverse();
-    out
+    scores.iter().copied().collect::<ScoreBins>().survival()
 }
 
 /// Count of regions with score exactly s (fractional scores in the bin below), for every
-/// integer s from the smallest to the largest score in `scores`.
+/// integer s from the smallest to the largest score in `scores`; see `ScoreBins::per_bin`.
 pub fn bin_counts(scores: &[f64]) -> Vec<(i64, u64)> {
-    let survival = survival_counts(scores);
-    survival
-        .iter()
-        .enumerate()
-        .map(|(i, &(s, at_least))| {
-            let above = survival.get(i + 1).map_or(0, |&(_, c)| c);
-            (s, at_least - above)
-        })
-        .collect()
+    scores.iter().copied().collect::<ScoreBins>().per_bin()
 }
 
 /// The bin of x in [0, `BIN_WIDTH`). It collects every region that has no score: a pair
 /// with no positive lambda leaves `ka_bits` at 0, and a negative score is rounded up to
-/// 0. Pairs whose lambda is small but positive land here too, since x = lambda_pair S
+/// 0. Pairs whose lambda is small but positive land here too, since x = lambda S
 /// stays near zero however long the region is. None of these say how scores decay, so
 /// this bin is barred from being the peak; see `tail_bins`.
 const DEGENERATE_BIN: i64 = 0;
@@ -351,8 +401,13 @@ fn rms_residual(points: &[(i64, u64)], slope: f64, intercept: f64) -> f64 {
 /// line is then read off the highest `FIT_WINDOW` bins that made it in, the ones nearest
 /// the scores that decide a hit. None when fewer than `MIN_FIT_POINTS` bins qualify.
 pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
+    fit_bins(&scores.iter().copied().collect())
+}
+
+/// `fit_scores` on scores already counted per bin.
+pub fn fit_bins(bins: &ScoreBins) -> Option<ScoreFit> {
     let usable: Vec<(i64, u64)> =
-        tail_bins(&bin_counts(scores)).into_iter().filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
+        tail_bins(&bins.per_bin()).into_iter().filter(|&(_, c)| c >= MIN_BIN_COUNT).collect();
     if usable.len() < MIN_FIT_POINTS {
         return None;
     }
@@ -380,7 +435,7 @@ pub fn fit_scores(scores: &[f64]) -> Option<ScoreFit> {
         score_hi: window[window.len() - 1].0,
         bend_score,
         rms_residual: rms_residual(window, slope, ln_intercept),
-        survival: survival_counts(scores),
+        survival: bins.survival(),
         reference_survival: Vec::new(),
         reference_lambda: None,
     })
@@ -404,9 +459,14 @@ const REFERENCE_BASE: usize = 8;
 /// which the step test could not.
 /// The line is then read off the highest `FIT_WINDOW` accepted bins, as in `fit_scores`.
 pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<ScoreFit> {
+    fit_bins_with_reference(&scores.iter().copied().collect(), &reference.iter().copied().collect())
+}
+
+/// `fit_scores_with_reference` on scores already counted per bin.
+pub fn fit_bins_with_reference(bins: &ScoreBins, reference: &ScoreBins) -> Option<ScoreFit> {
     let reference_bins: std::collections::HashMap<i64, u64> =
-        bin_counts(reference).into_iter().collect();
-    let usable: Vec<(i64, u64, u64)> = tail_bins(&bin_counts(scores))
+        reference.per_bin().into_iter().collect();
+    let usable: Vec<(i64, u64, u64)> = tail_bins(&bins.per_bin())
         .into_iter()
         .filter_map(|(s, c)| {
             let r = *reference_bins.get(&s)?;
@@ -450,8 +510,8 @@ pub fn fit_scores_with_reference(scores: &[f64], reference: &[f64]) -> Option<Sc
         score_hi: window[window.len() - 1].0,
         bend_score,
         rms_residual: rms_residual(&window, slope, ln_intercept),
-        survival: survival_counts(scores),
-        reference_survival: survival_counts(reference),
+        survival: bins.survival(),
+        reference_survival: reference.survival(),
         reference_lambda: Some(-line_through(&reference_window).0),
     })
 }
@@ -493,6 +553,78 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
     Some(mean_score_tilted * (1.0 - (-lambda).exp()))
 }
 
+/// Which E-value a region's `region_evalue` is, written in `region_evalue_source`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum EvalueSource {
+    /// `region_ka_evalue` of one extended region whose pair has a positive lambda:
+    /// K m n exp(-lambda S), with n the database's residues.
+    Ka,
+    /// `region_ka_evalue` of a chain of extended regions: the sum P-value times the number
+    /// of targets (see `search::chain_regions`). Close to `Ka` on the same evidence, not
+    /// equal.
+    KaChain,
+    /// `region_run_evalue`.
+    Run,
+}
+
+/// Expected number of runs of at least `run_length` class-identical positions between an
+/// unrelated query of `m` residues and a database of `n` residues in `n_targets` sequences:
+///
+/// E_run = pr_same^run_length ((1 - pr_same) m n + n_targets (m - 1) + n)
+///
+/// `pr_same` is the chance that one query position and one target position fall in the
+/// same class, counted from the region (`search::region_pr_same`). A run is
+/// counted once, where it starts. Inside a diagonal a run starts where the position before
+/// it disagrees, chance 1 - pr_same, which gives the first term: the Karlin-Altschul
+/// E-value for +1 per match with no mismatch allowed, with lambda ln(1 / pr_same) and K
+/// 1 - pr_same. The first position of a diagonal has no position before it, so a run can
+/// start there with no disagreement; a query of m residues against a target of t has
+/// m + t - 1 diagonals, n_targets (m - 1) + n over the database. That second term is small
+/// for ordinary pr_same and takes over as pr_same nears 1, where almost no position inside
+/// a diagonal starts a run but every diagonal still holds one. Counting every cell of the
+/// grid as a possible start, including the last L - 1 of each diagonal, makes the value a
+/// little high, never low. Positions are drawn independently, so real proteins, whose
+/// classes repeat in patterns, give more long runs than this predicts.
+pub fn run_evalue(pr_same: f64, run_length: u32, m: f64, n: f64, n_targets: f64) -> f64 {
+    let starts = (1.0 - pr_same) * m * n + n_targets * (m - 1.0) + n;
+    starts * pr_same.powi(run_length as i32)
+}
+
+/// The mid-p run E-value: the average of the expected counts of runs of at least
+/// `run_length` and of more than `run_length`:
+///
+/// E_mid = E_run (1 + pr_same) / 2
+///
+/// Run lengths are whole numbers, and each extra position multiplies `run_evalue` by
+/// `pr_same`. So the runs that pass a cut `E_run <= x` have E-values anywhere from
+/// `pr_same x` to `x`, and fewer than `x` chance runs get through: on dipeptide-shuffled
+/// decoys at hp_lehninger2 k=15, 157 query-target pairs pass `E_run <= 10` where 240 would
+/// be calibrated. The mid-p value (Lancaster 1961) puts the cut halfway along that step.
+/// It moves the count toward calibrated but does not reach it everywhere, and it can
+/// overshoot (gbmr4 at E <= 1): see `region_run_evalue_on_2mer_shuffled_decoys`.
+pub fn run_evalue_midp(pr_same: f64, run_length: u32, m: f64, n: f64, n_targets: f64) -> f64 {
+    run_evalue(pr_same, run_length, m, n, n_targets) * (1.0 + pr_same) / 2.0
+}
+
+/// The mismatch penalty and give-up margin a search extends with when it is not given
+/// `--extend-mismatch-penalty`: those of a fit stored in the index, so the search needs no
+/// fit of its own. With `xdrop` given, only fits for that give-up margin count. Among the
+/// fits that count, the one at `DEFAULT_MISMATCH_PENALTY` wins, then the first stored.
+/// None when no fit counts, and the search then keeps regions exact.
+pub fn scoring_from_stored_fits(
+    fits: &[KaCalibration],
+    xdrop: Option<f64>,
+) -> Option<ExtensionScoring> {
+    let mut usable = fits.iter().map(|f| f.scoring).filter(|s| xdrop.is_none_or(|x| s.xdrop == x));
+    let first = usable.next()?;
+    Some(if first.mismatch_penalty == DEFAULT_MISMATCH_PENALTY {
+        first
+    } else {
+        usable.find(|s| s.mismatch_penalty == DEFAULT_MISMATCH_PENALTY).unwrap_or(first)
+    })
+}
+
 /// Which sequences are searched to fit r_database and K: the database sequences
 /// themselves (`Database`), or decoys made from them (`Shuffled`, `ShuffledDipeptide`,
 /// `Reversed`). A decoy keeps some of a real protein's make-up, such as its composition
@@ -504,8 +636,8 @@ pub fn karlin_altschul_k_theory(match_prob: f64, penalty: f64) -> Option<f64> {
 /// null against SCOPe40, a Swiss-Prot sample and a UniRef50 sample) and
 /// `docs/images/ka_fit_scope40_four_nulls.png`. In short: on SCOPe40 domains the three
 /// scrambled nulls agree (r_database 1.04) and real domains give 0.95; on the Swiss-Prot
-/// sample real sequences give 0.87, a plain shuffle 1.0, and keeping dipeptides already
-/// pulls the shuffle to 0.94, so hydrophobic runs alone explain about half of the gap.
+/// sample real sequences give 0.88, a plain shuffle 0.99, and keeping dipeptides pulls the
+/// shuffle to 0.95, so hydrophobic runs alone explain about two fifths of the gap.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, clap::ValueEnum)]
 pub enum DecoyNull {
     /// Database sequences as they are, searched against the index. Everything real stays
@@ -767,7 +899,7 @@ fn refused_fit_message(report: &KaCalibrationReport) -> String {
     )
 }
 
-/// One row per bin of x = lambda_pair S: the count of regions at or above it, the fitted
+/// One row per bin of x = lambda S: the count of regions at or above it, the fitted
 /// line's count, the reference count, and whether the bin was inside the fit window.
 /// `scripts/plot_ka_survival.py` draws it.
 pub fn write_survival_csv(
@@ -794,14 +926,14 @@ pub fn write_survival_csv(
         "n_reference_queries",
         "n_reference_regions",
         "query_residues",
-        "database_kmers",
+        "database_residues",
         "bin_width",
     ])?;
     // The fit is a line through ln(regions in the bin at x); its survival is the same line
     // divided by (1 - e^(-r_database w)).
     let per_bin = 1.0 - (-fit.r_database * fit.bin_width).exp();
     let ln_intercept =
-        (fit.k * fit.query_residues as f64 * fit.database_kmers as f64 * per_bin).ln();
+        (fit.k * fit.query_residues as f64 * fit.database_residues as f64 * per_bin).ln();
     let reference: std::collections::HashMap<i64, u64> =
         fit.reference_survival.iter().copied().collect();
     for &(bin, count) in &fit.survival {
@@ -827,7 +959,7 @@ pub fn write_survival_csv(
             report.n_reference_queries.to_string(),
             report.n_reference_regions.to_string(),
             fit.query_residues.to_string(),
-            fit.database_kmers.to_string(),
+            fit.database_residues.to_string(),
             fit.bin_width.to_string(),
         ])?;
     }
@@ -840,6 +972,67 @@ mod tests {
     use super::*;
     use crate::tests::test_fixtures::TEST_BLC2_FASTA;
     use serde_json::{json, Value};
+
+    /// E_run = pr_same^L ((1 - pr_same) m n + n_targets (m - 1) + n), worked by hand. A
+    /// 300-residue query against 10 targets of 300 residues has 10 x 299 + 3,000 = 5,990
+    /// diagonals. Two equal classes at L = 16: (0.5 x 900,000 + 5,990) / 2^16. Four equal
+    /// classes at L = 8: (0.75 x 900,000 + 5,990) / 4^8. At pr_same 1 no run starts inside
+    /// a diagonal, and every diagonal is one run: 99 + 1,000 = 1,099 for a 100-residue query
+    /// against one 1,000-residue target.
+    #[test]
+    fn test_run_evalue_by_hand() {
+        assert_eq!(run_evalue(0.5, 16, 300.0, 3000.0, 10.0), 6.957_855_224_609_375);
+        assert_eq!(run_evalue(0.25, 8, 300.0, 3000.0, 10.0), 10.391_082_763_671_875);
+        assert_eq!(run_evalue(1.0, 100, 100.0, 1000.0, 1.0), 1099.0);
+    }
+
+    /// E_mid = E_run (1 + pr_same) / 2, from the two `run_evalue` values worked by hand in
+    /// `test_run_evalue_by_hand`: 6.957... x 0.75 at two equal classes, and 10.391... x 0.625
+    /// at four.
+    #[test]
+    fn test_run_evalue_midp_by_hand() {
+        assert_eq!(run_evalue_midp(0.5, 16, 300.0, 3000.0, 10.0), 5.218_391_418_457_031);
+        assert_eq!(run_evalue_midp(0.25, 8, 300.0, 3000.0, 10.0), 6.494_426_727_294_922);
+    }
+
+    /// The exact expected number of runs of at least L on one diagonal of D positions, D >= L,
+    /// is pr_same^L (1 + (D - L)(1 - pr_same)): the first position starts a run with no
+    /// disagreement before it, and each of the next D - L needs one. Summed over every
+    /// diagonal of an m x t grid, it is never above `run_evalue`, which also counts the
+    /// last L - 1 positions of each diagonal as starts.
+    #[test]
+    fn test_run_evalue_never_below_the_exact_count() {
+        let exact = |p: f64, l: usize, m: usize, t: usize| -> f64 {
+            (0..m + t - 1)
+                .map(|d| {
+                    // Diagonal d starts at query position max(0, d - (t - 1)).
+                    let (q0, t0) = (d.saturating_sub(t - 1), (t - 1).saturating_sub(d));
+                    (m - q0).min(t - t0)
+                })
+                .filter(|&len| len >= l)
+                .map(|len| p.powi(l as i32) * (1.0 + (len - l) as f64 * (1.0 - p)))
+                .sum()
+        };
+        for (p, l, m, t) in
+            [(0.5, 5, 30, 40), (0.5, 19, 280, 400), (0.95, 20, 30, 40), (1.0, 10, 50, 60)]
+        {
+            let formula = run_evalue(p, l as u32, m as f64, t as f64, 1.0);
+            let truth = exact(p, l, m, t);
+            assert!(formula >= truth - 1e-12, "p={p} L={l}: {formula} < {truth}");
+        }
+        // At a protein's size the extra count is small: 12% at pr_same 0.5, L 19.
+        let (formula, truth) = (run_evalue(0.5, 19, 280.0, 400.0, 1.0), exact(0.5, 19, 280, 400));
+        assert!(formula / truth < 1.15, "{formula} / {truth}");
+    }
+
+    /// No step in pr_same: 0.989 and 0.991 give E-values within 12% of each other, where
+    /// dropping the (1 - pr_same) factor above 0.99 used to make them 100 times apart.
+    #[test]
+    fn test_run_evalue_is_smooth_near_pr_same_one() {
+        let below = run_evalue(0.989, 100, 100.0, 1000.0, 1.0);
+        let above = run_evalue(0.991, 100, 100.0, 1000.0, 1.0);
+        assert!((above / below - 1.0).abs() < 0.12, "{below} vs {above}");
+    }
 
     /// Steps of +1 with probability p and -1 with probability q = 1 - p, p < q. Karlin &
     /// Altschul 1990 (PNAS 87:2264) give lambda as the root of p e^lambda + q e^-lambda = 1,
@@ -1122,6 +1315,44 @@ mod tests {
         assert_eq!(fit_scores(&vec![0.25; 5_000]), None);
     }
 
+    /// The calibration counts each query's regions separately and in parallel, then adds
+    /// the counts up. Counts made in parts and merged in any order must give the same bins,
+    /// survival curve and fit as the scores kept in one list, which is what the fit read
+    /// before it took `ScoreBins`. Fractional and non-finite scores are in the mix, since
+    /// both are binned by a rule (floor, and left out) that the parts must follow too.
+    #[test]
+    fn test_score_bins_in_parts_match_one_list() {
+        const N_SEED: f64 = 4000.0;
+        const SEED_SCORE: i64 = 12;
+        const TRUE_LAMBDA: f64 = 0.4;
+        let at_least =
+            |x: i64| (N_SEED * (-TRUE_LAMBDA * (x - SEED_SCORE) as f64).exp()).round() as i64;
+        let mut scores = Vec::new();
+        for s in SEED_SCORE..=30 {
+            let exactly = (at_least(s) - at_least(s + 1)).max(0) as usize;
+            // Spread each bin's regions over [s, s + 1) so flooring is exercised.
+            scores.extend((0..exactly).map(|i| s as f64 + (i % 10) as f64 / 10.0));
+        }
+        scores.extend([f64::INFINITY, f64::NAN, f64::NEG_INFINITY]);
+        let whole: ScoreBins = scores.iter().copied().collect();
+        // Three uneven parts, merged in an order different from the one they were cut in.
+        let (a, rest) = scores.split_at(scores.len() / 7);
+        let (b, c) = rest.split_at(rest.len() / 2);
+        let part = |xs: &[f64]| xs.iter().copied().collect::<ScoreBins>();
+        let merged = part(c).merge(part(a)).merge(part(b));
+        assert_eq!(merged, whole);
+        assert_eq!(merged.n_regions(), scores.len() as u64 - 3);
+        assert_eq!(merged.per_bin(), bin_counts(&scores));
+        assert_eq!(merged.survival(), survival_counts(&scores));
+        assert_eq!(fit_bins(&merged), fit_scores(&scores));
+        assert!(fit_bins(&merged).is_some());
+        assert_eq!(
+            fit_bins_with_reference(&merged, &whole),
+            fit_scores_with_reference(&scores, &scores)
+        );
+        assert_eq!(ScoreBins::default().per_bin(), Vec::new());
+    }
+
     /// Drawn in `docs/images/fit_scores_tests/survival_and_bin_counts.png`.
     #[test]
     fn test_bin_counts() {
@@ -1206,6 +1437,38 @@ mod tests {
         assert_eq!(fit.n_fit_points(), 8);
         assert_eq!(fit.x_range(), (7.5, 11.5));
         assert_eq!(fit.ka_params(), KaParams { k: 0.0115, r_database: 0.806 });
+    }
+
+    fn stored(mismatch_penalty: f64, xdrop: f64) -> KaCalibration {
+        KaCalibration::placeholder(ExtensionScoring { mismatch_penalty, xdrop }, 0.1)
+    }
+
+    #[test]
+    fn test_scoring_from_stored_fits_prefers_the_default_penalty() {
+        let fits = [stored(3.0, 8.0), stored(2.0, 8.0), stored(2.0, 12.0)];
+        assert_eq!(
+            scoring_from_stored_fits(&fits, None),
+            Some(ExtensionScoring { mismatch_penalty: 2.0, xdrop: 8.0 })
+        );
+        assert_eq!(
+            scoring_from_stored_fits(&fits, Some(12.0)),
+            Some(ExtensionScoring { mismatch_penalty: 2.0, xdrop: 12.0 })
+        );
+    }
+
+    #[test]
+    fn test_scoring_from_stored_fits_falls_back_to_the_first_fit() {
+        let fits = [stored(3.0, 8.0), stored(1.0, 8.0)];
+        assert_eq!(
+            scoring_from_stored_fits(&fits, None),
+            Some(ExtensionScoring { mismatch_penalty: 3.0, xdrop: 8.0 })
+        );
+    }
+
+    #[test]
+    fn test_scoring_from_stored_fits_none_without_a_usable_fit() {
+        assert_eq!(scoring_from_stored_fits(&[], None), None);
+        assert_eq!(scoring_from_stored_fits(&[stored(2.0, 8.0)], Some(5.0)), None);
     }
 
     #[test]

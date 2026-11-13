@@ -1,0 +1,10 @@
+case	rule	pr_same	run_length	length	run_evalue	ka_evalue	evalue
+DSPP decoy x TBC1D10B	protein	4.7737e-1	60	60	4.1935e-10	3.5685e-4	3.5685e-4
+DSPP decoy x TBC1D10B	region	7.1465e-1	60	60	7.5151e0	NA	7.5151e0
+DSPP decoy x TBC1D10B	protein + SEG	NA	0	0	NA	NA	NA
+ELN decoy x FMN2	protein	5.6473e-1	33	407	2.5394e1	1.6133e-18	1.6133e-18
+ELN decoy x FMN2	region	8.0551e-1	33	407	1.4069e6	NA	1.4069e6
+ELN decoy x FMN2	protein + SEG	NA	0	0	NA	NA	NA
+CED-9 x BCL2	protein	5.0238e-1	19	26	3.3496e3	2.3247e3	2.3247e3
+CED-9 x BCL2	region	5.1353e-1	19	26	4.9706e3	3.7369e3	3.7369e3
+CED-9 x BCL2	protein + SEG	5.0238e-1	19	26	3.3496e3	2.3247e3	2.3247e3

@@ -68,6 +68,31 @@ def test_ranking_falls_back_to_q_value_without_region_evalue(rows):
     assert stat[fbx10] == pytest.approx(1.36e-5, rel=0.05)
 
 
+def test_ranking_puts_an_empty_region_evalue_last(rows):
+    _, rows = rows
+    with_evalue = [dict(r, region_evalue="1e-3") for r in rows]
+    fbx10 = next(r["target_name"] for r in rows if "FBX10_HUMAN" in r["target_name"])
+    with_evalue = [dict(r, region_evalue="") if r["target_name"] == fbx10 else r for r in with_evalue]
+    stat, is_evalue = vs.ranking(with_evalue)
+    assert is_evalue
+    assert stat[fbx10] == float("inf")
+    assert sorted(set(stat.values())) == [1e-3, float("inf")]
+
+
+def test_bits_column_only_with_extension(rows):
+    """The fixture search ran without extension, so it has no E-value or bits columns. The
+    two values added here are a real extended kmerseek row: Botryllus BHF against
+    PG03_MYCTO, gbmr4 k = 19, in protein-function-annotation-leaderboard's test inputs."""
+    _, rows = rows
+    assert vs.score_columns(rows) == []
+    assert vs.region_bits(rows[0]) is None
+    extended = [dict(r, region_evalue="0.00483513525031053", region_ka_bits="42.987877375018655") for r in rows]
+    columns = vs.score_columns(extended)
+    assert [(c["key"], c["label"], c["better"]) for c in columns] == [("stat", "E-value", "low"), ("bits", "bits", "high")]
+    assert vs.region_bits(extended[0]) == 42.987877375018655
+    assert vs.region_bits(dict(rows[0], region_ka_bits="0.0")) is None
+
+
 def test_rank_proteins_orders_by_statistic_and_caps(rows):
     _, rows = rows
     ranked = vs.rank_proteins(rows, max_rows=100)
@@ -123,9 +148,11 @@ def test_report_end_to_end(rows, tmp_path):
     assert report["query"]["label"] == "CED9_CAEEL"
     assert report["query"]["domains"] == [{"name": "BH4", "start": 76, "end": 101}, {"name": "Bcl-2", "start": 116, "end": 221}]
     assert report["stat_name"] == "q-value"
+    assert report["score_columns"] == []  # the fixture search ran without extension
     assert (report["n_entries"], report["n_proteins"], len(report["rows"])) == (24, 24, 12)
     bcl2 = next(r for r in report["rows"] if r["label"] == "BCL2_HUMAN")
     assert (bcl2["length"], bcl2["n_runs"], bcl2["best_length"], bcl2["best_identical"], bcl2["n_shared"]) == (239, 6, 19, 5, 24)
+    assert bcl2["bits"] is None
     assert bcl2["runs"][0] == {"number": 1, "query_start": 162, "query_end": 181, "target_start": 138, "target_end": 157, "length": 19, "identical": 5, "polar": 5}
     html = vs.render_report(report)
     assert "<title>CED9_CAEEL kmerseek hits</title>" in html
